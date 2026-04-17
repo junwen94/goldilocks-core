@@ -37,7 +37,7 @@ The current codebase focuses on:
 Clone the repository and install the development dependencies with `uv`:
 
 ```bash
-git clone git@github.com:junwen94/goldilocks-core.git
+git clone git@github.com:stfc/goldilocks-core.git
 cd goldilocks-core
 uv sync
 ```
