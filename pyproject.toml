@@ -5,6 +5,7 @@ description = "Materials machine learning tools for recommending DFT calculation
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "matminer>=0.10.1",
     "numpy>=2.4.4",
     "pymatgen>=2026.3.23",
 ]
