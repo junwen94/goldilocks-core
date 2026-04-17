@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 from pymatgen.core import Structure
+from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 from goldilocks_core.helpers.types import KMeshEntry
 
@@ -132,6 +133,18 @@ def mesh_to_k_pra(
     return float(n_atoms * n_kpoints)
 
 
+def mesh_to_n_reduced_kpoints(
+    structure: Structure,
+    mesh: tuple[int, int, int],
+    *,
+    is_shift: tuple[float, float, float] = (0, 0, 0),
+) -> int:
+    """Compute the number of symmetry-reduced k-points for a mesh."""
+    sga = SpacegroupAnalyzer(structure)
+    ir_kpoints = sga.get_ir_reciprocal_mesh(mesh=mesh, is_shift=is_shift)
+    return len(ir_kpoints)
+
+
 def build_kmesh_entries(
     structure: Structure,
     candidate_distances: list[float],
@@ -141,8 +154,6 @@ def build_kmesh_entries(
     entries: list[KMeshEntry] = []
 
     for index, (mesh, k_distance_interval) in enumerate(intervals, start=1):
-        n_kpoints = mesh[0] * mesh[1] * mesh[2]
-
         try:
             k_line_density_interval = mesh_to_k_line_density_interval(structure, mesh)
         except ValueError:
@@ -152,10 +163,10 @@ def build_kmesh_entries(
             KMeshEntry(
                 k_index=index,
                 mesh=mesh,
+                n_reduced_kpoints=mesh_to_n_reduced_kpoints(structure, mesh),
                 k_distance_interval=k_distance_interval,
                 k_line_density_interval=k_line_density_interval,
                 k_pra=mesh_to_k_pra(structure, mesh),
-                n_reduced_kpoints=n_kpoints,
             )
         )
 
