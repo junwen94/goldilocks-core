@@ -6,6 +6,8 @@ import math
 
 from pymatgen.core import Structure
 
+from goldilocks_core.helpers.types import KMeshEntry
+
 
 def k_distance_to_mesh(
     structure: Structure,
@@ -62,7 +64,7 @@ def generate_candidate_k_distances(
 def build_k_distance_intervals(
     structure: Structure,
     candidate_distances: list[float],
-) -> list[tuple[tuple[int, int, int], float, float]]:
+) -> list[tuple[tuple[int, int, int], tuple[float, float]]]:
     """Build finite k-distance intervals and their corresponding meshes.
 
     Notes
@@ -71,16 +73,90 @@ def build_k_distance_intervals(
     intervals between adjacent candidate k-distances. The lower tail below the
     smallest candidate distance is intentionally not included.
     """
-    intervals: list[tuple[tuple[int, int, int], float, float]] = []
+    intervals: list[tuple[tuple[int, int, int], tuple[float, float]]] = []
 
     max_candidate = candidate_distances[0]
     top_probe = max_candidate + 1.0
     top_mesh = k_distance_to_mesh(structure, top_probe)
-    intervals.append((top_mesh, max_candidate, math.inf))
+    intervals.append((top_mesh, (max_candidate, math.inf)))
 
     for upper, lower in zip(candidate_distances[:-1], candidate_distances[1:]):
         probe = 0.5 * (upper + lower)
         mesh = k_distance_to_mesh(structure, probe)
-        intervals.append((mesh, lower, upper))
+        intervals.append((mesh, (lower, upper)))
 
     return intervals
+
+
+def mesh_to_k_line_density_interval(
+    structure: Structure,
+    mesh: tuple[int, int, int],
+) -> tuple[float, float]:
+    """Infer the admissible k-line-density interval for a mesh."""
+    reciprocal_lattice = structure.lattice.reciprocal_lattice_crystallographic
+    reciprocal_lengths = (
+        reciprocal_lattice.a,
+        reciprocal_lattice.b,
+        reciprocal_lattice.c,
+    )
+
+    lower_bounds = [
+        max(0.0, (n_k - 0.5) / b_length)
+        for n_k, b_length in zip(mesh, reciprocal_lengths, strict=True)
+    ]
+    upper_bounds = [
+        (n_k + 0.5) / b_length
+        for n_k, b_length in zip(mesh, reciprocal_lengths, strict=True)
+    ]
+
+    lower = max(lower_bounds)
+    upper = min(upper_bounds)
+
+    if lower > upper:
+        raise ValueError(
+            "Mesh does not correspond to a valid scalar "
+            f"k-line-density interval: {mesh}."
+        )
+
+    return (float(lower), float(upper))
+
+
+def mesh_to_k_pra(
+    structure: Structure,
+    mesh: tuple[int, int, int],
+) -> float:
+    """Compute the k-points-per-reciprocal-atom value for a mesh."""
+    n_atoms = len(structure)
+    n_kpoints = mesh[0] * mesh[1] * mesh[2]
+
+    return float(n_atoms * n_kpoints)
+
+
+def build_kmesh_entries(
+    structure: Structure,
+    candidate_distances: list[float],
+) -> list[KMeshEntry]:
+    """Build indexed k-mesh entries from candidate k-distance values."""
+    intervals = build_k_distance_intervals(structure, candidate_distances)
+    entries: list[KMeshEntry] = []
+
+    for index, (mesh, k_distance_interval) in enumerate(intervals, start=1):
+        n_kpoints = mesh[0] * mesh[1] * mesh[2]
+
+        try:
+            k_line_density_interval = mesh_to_k_line_density_interval(structure, mesh)
+        except ValueError:
+            k_line_density_interval = None
+
+        entries.append(
+            KMeshEntry(
+                k_index=index,
+                mesh=mesh,
+                k_distance_interval=k_distance_interval,
+                k_line_density_interval=k_line_density_interval,
+                k_pra=mesh_to_k_pra(structure, mesh),
+                n_reduced_kpoints=n_kpoints,
+            )
+        )
+
+    return entries

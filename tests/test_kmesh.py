@@ -4,6 +4,7 @@ from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.processing.kmesh import (
     build_k_distance_intervals,
+    build_kmesh_entries,
     generate_candidate_k_distances,
     k_distance_to_mesh,
 )
@@ -53,7 +54,27 @@ def test_build_k_distance_intervals_records_mesh_intervals() -> None:
 
     assert len(intervals) > 0
     assert intervals[0][0] == (1, 1, 1)
-    assert math.isinf(intervals[0][2])
-    assert any(mesh == (2, 2, 2) for mesh, _, _ in intervals)
-    assert any(mesh == (3, 3, 3) for mesh, _, _ in intervals)
-    assert any(mesh == (4, 4, 4) for mesh, _, _ in intervals)
+    assert math.isinf(intervals[0][1][1])
+    assert any(mesh == (2, 2, 2) for mesh, _ in intervals)
+    assert any(mesh == (3, 3, 3) for mesh, _ in intervals)
+    assert any(mesh == (4, 4, 4) for mesh, _ in intervals)
+
+
+def test_build_kmesh_entries_returns_indexed_entries() -> None:
+    """Build indexed KMeshEntry objects from candidate k-distances."""
+    structure = Structure(
+        lattice=Lattice.cubic(3.5),
+        species=["Si"],
+        coords=[[0.0, 0.0, 0.0]],
+    )
+
+    candidates = generate_candidate_k_distances(structure, max_index=4)
+    entries = build_kmesh_entries(structure, candidates)
+
+    assert len(entries) > 0
+    assert entries[0].k_index == 1
+    assert entries[0].mesh == (1, 1, 1)
+    assert math.isinf(entries[0].k_distance_interval[1])
+    assert entries[0].k_pra == 1.0
+    assert entries[0].n_reduced_kpoints == 1
+    assert entries[0].k_line_density_interval is not None

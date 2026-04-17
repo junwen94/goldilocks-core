@@ -88,3 +88,15 @@ class ModelSpec:
     source: ModelSource
     location: str
     revision: str | None = None
+
+
+@dataclass(frozen=True)
+class KMeshEntry:
+    """One indexed k-mesh entry produced from a structure scan."""
+
+    k_index: int
+    mesh: tuple[int, int, int]
+    k_distance_interval: tuple[float, float]
+    k_line_density_interval: tuple[float, float] | None
+    k_pra: float
+    n_reduced_kpoints: int
