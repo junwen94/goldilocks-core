@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from goldilocks_core.helpers.types import StructureFeatureVector
 
 
@@ -19,5 +21,21 @@ def predict(model: object, features: StructureFeatureVector) -> float:
     -------
     float
         Predicted scalar output from the model.
+
+    Raises
+    ------
+    AttributeError
+        If the model does not provide a ``predict`` method.
+    ValueError
+        If the model prediction does not return at least one value.
     """
-    raise NotImplementedError("Model inference is not implemented yet.")
+    if not hasattr(model, "predict"):
+        raise AttributeError("Loaded model does not provide a 'predict' method.")
+
+    predictions = model.predict(features.values.reshape(1, -1))
+    predictions = np.asarray(predictions, dtype=float)
+
+    if predictions.size == 0:
+        raise ValueError("Model prediction returned no values.")
+
+    return float(predictions[0])

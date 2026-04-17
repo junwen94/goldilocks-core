@@ -265,6 +265,7 @@ name = "goldilocks-core"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "joblib" },
     { name = "matminer" },
     { name = "numpy" },
     { name = "pymatgen" },
@@ -279,6 +280,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "joblib", specifier = ">=1.5.3" },
     { name = "matminer", specifier = ">=0.10.1" },
     { name = "numpy", specifier = ">=2.4.4" },
     { name = "pymatgen", specifier = ">=2026.3.23" },
