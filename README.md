@@ -34,9 +34,11 @@ The current codebase focuses on:
 
 ## Installation
 
-Create a virtual environment and install the project dependencies with `uv`:
+Clone the repository and install the development dependencies with `uv`:
 
 ```bash
+git clone git@github.com:junwen94/goldilocks-core.git
+cd goldilocks-core
 uv sync
 ```
 
@@ -46,5 +48,11 @@ Run the test suite with:
 ```bash
 uv run pytest
 ```
-
-
+Run linting with:
+```bash
+uv run ruff check .
+```
+Run pre-commit checks with:
+```bash
+uv run pre-commit run --all-files
+```
