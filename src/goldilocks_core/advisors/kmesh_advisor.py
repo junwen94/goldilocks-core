@@ -6,13 +6,13 @@ import math
 
 from pymatgen.core import Structure
 
-from goldilocks_core.ml.features import extract_cslr_features
-from goldilocks_core.ml.inference import predict
-from goldilocks_core.ml.models import load_model
-from goldilocks_core.processing.kmesh import (
+from goldilocks_core.kmesh import (
     build_kmesh_entries,
     generate_candidate_k_distances,
 )
+from goldilocks_core.ml.features import extract_cslr_features
+from goldilocks_core.ml.inference import predict
+from goldilocks_core.ml.models import load_model
 from goldilocks_core.shared.types import (
     AccuracyLevel,
     KMeshEntry,
