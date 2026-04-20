@@ -1,7 +1,7 @@
 from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.advisors.kmesh_advisor import advise_kpoints
-from goldilocks_core.helpers.types import ModelSpec
+from goldilocks_core.shared.types import ModelSpec
 
 
 class DummyModel:

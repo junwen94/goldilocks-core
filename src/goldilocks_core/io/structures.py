@@ -1,4 +1,4 @@
-"""Helpers for loading and analyzing structures."""
+"""Structure input and analysis utilities."""
 
 from __future__ import annotations
 
