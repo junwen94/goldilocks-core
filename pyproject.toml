@@ -11,12 +11,18 @@ dependencies = [
     "pymatgen>=2026.3.23",
 ]
 
+[project.scripts]
+goldilocks-kmesh = "goldilocks_core.cli.cli_kmesh:main"
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.5.1",
     "pytest>=9.0.3",
     "ruff>=0.15.11",
 ]
+
+[tool.uv]
+package = true
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
