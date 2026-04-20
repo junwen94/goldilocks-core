@@ -125,6 +125,21 @@ The role of LLMs is intentionally flexible:
 - they may be used inside the package
 - or they may be accessed through external MCP-based integrations
 
+## K-Mesh Advisor Flow
+The current k-mesh advisor follows a layered flow:
+
+1. A `pymatgen.Structure` is converted into a CSLR feature vector.
+2. A trained ML model predicts a `k_index`.
+3. The predicted `k_index` is mapped onto a precomputed list of `KMeshEntry` objects for that structure.
+4. The selected `KMeshEntry` provides the recommended k-mesh and associated metadata.
+5. The final user-facing result is returned as a `KPointsAdvice`.
+
+This design keeps model prediction separate from k-mesh construction logic:
+- `ml/` handles feature extraction, model loading, and prediction
+- `processing/kmesh.py` handles k-distance scanning and `KMeshEntry` construction
+- `advisors/` turns model output into a final recommendation
+
+
 ## Initial design principles
 The package should follow these principles:
 - simple and explicit APIs
