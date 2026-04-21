@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from goldilocks_core.pseudo.metadata import PseudoMetadata
+from goldilocks_core.pseudo.pp_metadata import PseudoMetadata
 
 _TRUE_VALUES = {"T", "TRUE", "Y", "YES", "1"}
 _FALSE_VALUES = {"F", "FALSE", "N", "NO", "0"}
