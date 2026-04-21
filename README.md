@@ -1,58 +1,230 @@
 # goldilocks-core
 
-`goldilocks-core` is a materials machine-learning package for analyzing crystal structures and recommending suitable DFT calculation inputs.
+`goldilocks-core` is a research-grade Python package for organizing and recommending DFT calculation inputs from structures, machine-learning models, and parsed pseudopotentials.
 
-## Current scope
+The project is designed around domain-focused modules such as k-mesh construction, pseudopotential parsing, recommendation advisors, and thin CLI entry points.
 
-The current development focus is a clean and research-grade package structure for Quantum ESPRESSO SCF single-point recommendations.
+## What It Does
 
-At the current stage, the project includes:
-- structure loading helpers based on `pymatgen.Structure`
-- basic structure analysis utilities
-- an initial machine-learning feature extraction layer
-- early package architecture for model loading and inference
+`goldilocks-core` currently focuses on two main workflows:
 
-## Package layout
+- recommending k-mesh settings from structure-aware logic and ML-predicted `k_index`
+- parsing UPF pseudopotential files and building local pseudopotential registries
 
-The package currently develops around the following subpackages:
+The package is intended to grow toward code- and task-aware input recommendation, where structure, pseudopotential choice, and calculation settings can be coordinated in a clean and testable way.
 
-- `helpers/`
-- `advisors/`
-- `processing/`
-- `cli/`
-- `ml/`
+## Current Capabilities
 
-## Development status
+### K-mesh stack
 
-This project is currently in an early design and implementation stage.
+- generate candidate k-distance values from reciprocal lattice geometry
+- convert k-distance values into Monkhorst-Pack-style meshes
+- build indexed `KMeshEntry` objects
+- compute mesh-related metadata such as k-point density intervals and reduced-k-point counts
+- map ML-predicted `k_index` values onto concrete k-mesh recommendations
+- expose a minimal CLI entry point for k-mesh recommendation
 
-The current codebase focuses on:
-- building a maintainable package structure
-- defining shared domain objects and types
-- implementing and testing core helper utilities
-- sketching the machine-learning feature/model/inference architecture
+### Pseudopotential stack
+
+- parse real UPF files into structured metadata
+- support both attribute-style and text-style `PP_HEADER`
+- supplement header parsing with `PP_INFO` when needed
+- normalize key fields such as:
+  - `element`
+  - `pseudo_type`
+  - `functional`
+  - `relativistic`
+  - `z_valence`
+- scan a local pseudo library into a list of `PseudoMetadata`
+- filter registry entries by element
 
 ## Installation
 
-Clone the repository and install the development dependencies with `uv`:
+This project uses `uv` for environment and dependency management.
+
+Clone the repository and sync the environment:
 
 ```bash
-git clone git@github.com:stfc/goldilocks-core.git
-cd goldilocks-core
 uv sync
 ```
 
-## Devlopment
+If you want development tools as well:
 
-Run the test suite with:
+```bash
+uv sync --group dev
+```
+
+## Quick Start
+
+### Load a structure and get k-mesh advice
+
+```python
+from pathlib import Path
+
+from goldilocks_core.advisors import advise_kpoints
+from goldilocks_core.io.structures import load_structure
+from goldilocks_core.shared.types import ModelSpec
+
+structure = load_structure("path/to/structure.cif")
+
+spec = ModelSpec(
+    name="local-kmesh-model",
+    version="v0",
+    model_type="random_forest",
+    target="k_index",
+    feature_set="cslr",
+    source="local",
+    location="path/to/model.joblib",
+    revision=None,
+)
+
+advice = advise_kpoints(structure, spec)
+print(advice.grid)
+```
+
+### Parse one UPF file
+
+```python
+from goldilocks_core.pseudo.parse_upf import parse_upf_metadata
+
+metadata = parse_upf_metadata("path/to/pseudo.UPF")
+print(metadata)
+```
+
+### Build a local pseudo registry
+
+```python
+from goldilocks_core.pseudo.registry import load_pseudo_metadata, filter_by_element
+
+metadata_list = load_pseudo_metadata("path/to/pseudopotentials")
+si_pseudos = filter_by_element(metadata_list, "Si")
+
+print(len(metadata_list))
+print(len(si_pseudos))
+```
+
+## Python API
+
+The current Python-facing entry points are:
+
+### K-mesh and advice
+
+- `goldilocks_core.advisors.advise_kpoints`
+- `goldilocks_core.kmesh`
+- `goldilocks_core.io.structures.load_structure`
+
+### Pseudopotentials
+
+- `goldilocks_core.pseudo.parse_upf.parse_upf_metadata`
+- `goldilocks_core.pseudo.registry.load_pseudo_metadata`
+- `goldilocks_core.pseudo.registry.filter_by_element`
+
+### Shared models
+
+- `goldilocks_core.shared.types`
+
+This package is intended to be notebook-friendly, but the package modules and tests should remain the source of truth rather than notebook-only logic.
+
+## CLI
+
+A minimal k-mesh CLI entry point is available.
+
+Show help:
+
+```bash
+uv run goldilocks-kmesh --help
+```
+
+Current usage pattern:
+
+```bash
+uv run goldilocks-kmesh path/to/structure.cif --model path/to/model.joblib
+```
+
+At this stage, the CLI is intentionally small and thin. The main logic lives in the Python package APIs.
+
+## Project Structure
+
+```text
+src/goldilocks_core/
+├── advisors/
+├── cli/
+├── io/
+├── kmesh.py
+├── ml/
+├── pseudo/
+└── shared/
+```
+
+### High-level responsibilities
+
+- `advisors/`
+  Coordinates recommendation workflows and policy decisions.
+
+- `cli/`
+  Exposes thin command-line entry points.
+
+- `io/`
+  Handles structure loading and normalization.
+
+- `kmesh.py`
+  Contains k-mesh construction and interval logic.
+
+- `ml/`
+  Contains feature extraction, model loading, and inference utilities.
+
+- `pseudo/`
+  Contains UPF parsing and local pseudopotential registry logic.
+
+- `shared/`
+  Contains reusable shared data models and type definitions.
+
+For a fuller explanation, see [docs/architecture.md](docs/architecture.md).
+
+## Development
+
+Run the test suite:
+
 ```bash
 uv run pytest
 ```
-Run linting with:
-```bash
-uv run ruff check .
-```
-Run pre-commit checks with:
+
+Run formatting and checks:
+
 ```bash
 uv run pre-commit run --all-files
 ```
+
+A typical development loop is:
+
+```bash
+uv run pytest
+uv run pre-commit run --all-files
+```
+
+## Testing Philosophy
+
+This project uses two complementary validation styles:
+
+- portable tests built from synthetic fixtures under `tmp_path`
+- local exploratory validation against real pseudopotential libraries and notebook experiments
+
+When a local exploration reveals an important behavior, it should be turned into a focused regression test whenever possible.
+
+## Current Status
+
+This project is under active design and development.
+
+The current codebase already has:
+
+- a working ML-driven k-mesh recommendation path
+- real UPF parsing across multiple pseudo-library styles
+- a local pseudo registry foundation
+- an evolving domain-oriented package structure
+
+The next major steps are expected to include:
+
+- richer pseudo registry filtering
+- pseudopotential selection logic
+- electron metadata derived from selected pseudos
+- clearer user-facing workflows for local pseudo management
