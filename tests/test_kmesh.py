@@ -2,7 +2,7 @@ import math
 
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.kmesh import (
+from goldilocks_core.kpoints.kmesh import (
     build_k_distance_intervals,
     build_kmesh_entries,
     generate_candidate_k_distances,

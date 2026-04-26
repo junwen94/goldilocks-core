@@ -1,4 +1,4 @@
-"""Feature extraction utilities for machine-learning models."""
+"""Feature extraction utilities for k-point mesh ML models."""
 
 from __future__ import annotations
 

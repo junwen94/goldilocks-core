@@ -1,6 +1,6 @@
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.advisors.kmesh_advisor import advise_kpoints
+from goldilocks_core.kpoints.advisor import advise_kpoints
 from goldilocks_core.shared.types import ModelSpec
 
 
@@ -31,7 +31,7 @@ def test_advise_kpoints_returns_selected_mesh(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        "goldilocks_core.advisors.kmesh_advisor.load_model",
+        "goldilocks_core.kpoints.advisor.load_model",
         lambda _: DummyModel(),
     )
 

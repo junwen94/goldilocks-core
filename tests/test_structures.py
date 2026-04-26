@@ -1,7 +1,7 @@
 import pytest
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.io.structures import load_structure
+from goldilocks_core.structure.io import load_structure
 
 
 def test_load_structure_returns_structure_input() -> None:

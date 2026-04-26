@@ -1,3 +1,3 @@
 """Advisor interfaces for calculation recommendations."""
 
-from .kmesh_advisor import advise_kpoints as advise_kpoints
+from goldilocks_core.kpoints.advisor import advise_kpoints as advise_kpoints

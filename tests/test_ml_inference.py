@@ -1,6 +1,6 @@
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.ml.features import extract_cslr_features
+from goldilocks_core.kpoints.features import extract_cslr_features
 from goldilocks_core.ml.inference import predict
 
 
