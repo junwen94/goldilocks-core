@@ -23,10 +23,12 @@ gh project list --owner stfc --format json
 If you see a missing-scope error, ask the user to refresh auth:
 
 ```bash
-gh auth refresh -s read:project,project
+gh auth refresh -s project -s read:project
 ```
 
 Do not work around Projects by inventing an external board. If project access is unavailable, say so and record intended status changes in issue comments.
+
+Creating an org Project also requires org-level permission. Having the `project` token scope is necessary but not sufficient.
 
 ## Board columns
 
