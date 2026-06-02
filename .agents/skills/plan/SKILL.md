@@ -23,7 +23,7 @@ Create a structured plan as a GitHub Issue. The issue body serves as the plan do
 1. **Research** — explore the codebase to understand current structure and constraints
 2. **Design** — define scope, goals, and key decisions
 3. **Write** — create a GitHub Issue with the plan
-4. **Track** — add the issue to the project board in **Backlog**
+4. **Track** — add the issue to the GitHub Project board in **Backlog** using the `github-projects` skill
 
 ## Issue Templates
 
@@ -93,13 +93,15 @@ gh issue create --title "feat: short description" --body-file plan.md
 
 ## After Creating
 
-1. Add to the project board:
+1. Add to the GitHub Project board:
    ```bash
-   gh project item-add <project-number> --url <issue-url>
+   gh project item-add <project-number> --owner stfc --url <issue-url>
    ```
-2. Summarize the plan for the user
-3. Ask whether to proceed with implementation or refine the plan
-4. As phases complete, update the issue body — check off tasks, add notes about what changed
+2. Set status to **Backlog** if the project does not do that automatically. Use the `github-projects` skill for status field details.
+3. If Project access is unavailable, add a short issue comment explaining the intended status and the access failure.
+4. Summarize the plan for the user
+5. Ask whether to proceed with implementation or refine the plan
+6. As phases complete, update the issue body — check off tasks, add notes about what changed
 
 ## Gotchas
 

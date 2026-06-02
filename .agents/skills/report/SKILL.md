@@ -20,7 +20,7 @@ Each agent session is ephemeral. Without a report, the next session has to recon
 2. **Review the session** — what was accomplished, what was decided, what remains.
 3. **Write a comment** on the issue.
 4. **Update the issue body** if the approach or scope has changed.
-5. **Update the project board** if status has changed.
+5. **Update the GitHub Project board** if status has changed. Use the `github-projects` skill.
 
 ## Comment Format
 
@@ -60,15 +60,14 @@ When to update:
 
 ## Updating the Project Board
 
-```bash
-# Moving to the right column
-gh project item-edit --project-id <id> --id <item-id> --field-id <status-field-id> --single-select-option-id <option-id>
-```
+GitHub Projects is the board/state layer. Use the `github-projects` skill for commands and ID lookup.
 
 Common transitions:
 - Starting work → **In Progress**
 - Opening a PR → **In Review**
 - PR merged → **Done**
+
+If Project access is unavailable, include the intended status transition in the issue report instead of claiming the board was updated.
 
 ## Git State
 

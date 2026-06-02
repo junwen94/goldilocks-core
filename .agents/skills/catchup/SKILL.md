@@ -25,25 +25,29 @@ git log origin/HEAD..HEAD --oneline 2>/dev/null
 ### 2. Check Open PRs
 
 ```bash
-gh pr list --state open --limit 10
+gh pr list --repo stfc/goldilocks-core --state open --limit 10
 ```
 
 For each open PR, note: which issue it closes, whether CI passes, whether it's been reviewed.
 
 ### 3. Read the Project Board
 
+Use the `github-projects` skill for details. Projects are the board/state layer.
+
 ```bash
-gh project list
-gh project view <number> --layout board
+gh project list --owner stfc --format json
+gh project view <project-number> --owner stfc --format json
 ```
+
+If Project access fails with missing scopes, report that explicitly and continue with issues/PRs. Do not pretend the board was checked.
 
 What's in **In Progress**? What's in **In Review**? Cross-reference with PRs — if something is In Progress but has no branch, find out why.
 
 ### 4. Read Recent Issue Activity
 
 ```bash
-gh issue list --state open --limit 10
-gh issue list --state all --limit 5 --search "sort:updated-desc"
+gh issue list --repo stfc/goldilocks-core --state open --limit 10
+gh issue list --repo stfc/goldilocks-core --state all --limit 5 --search "sort:updated-desc"
 ```
 
 Read the most recently updated issues. Check their comments for progress reports from previous sessions.
@@ -61,6 +65,7 @@ Compare what you found:
 - PR open, not merged → starting new work may cause conflicts
 - Issue says "in progress" but no branch → stale status
 - PR merged but issue still open → close it
+- Issue/PR status differs from GitHub Project status → update the Project or report missing access
 
 ### 6. Present Summary
 

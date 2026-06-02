@@ -130,14 +130,14 @@ gh api repos/stfc/goldilocks-core/issues/comments/<comment-id> -X PATCH -f body=
 
 ## Project board
 
-GitHub Projects v2 commands require project and item IDs. Prefer high-level inspection first:
+Use the `github-projects` skill for board/state workflow. GitHub Projects v2 commands require project and item IDs. Prefer high-level inspection first:
 
 ```bash
 gh project list --owner stfc
 gh project view <number> --owner stfc --format json
 ```
 
-If project updates are too cumbersome through `gh project`, report the intended transition in an issue comment instead of pretending the board is updated.
+If project updates are too cumbersome through `gh project`, report the intended transition in an issue comment instead of pretending the board is updated. Never claim Project status changed unless the command succeeded.
 
 ## Gotchas
 
