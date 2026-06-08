@@ -20,7 +20,7 @@ Each agent session is ephemeral. Without a report, the next session has to recon
 2. **Review the session** — what was accomplished, what was decided, what remains.
 3. **Write a comment** on the issue.
 4. **Update the issue body** if the approach or scope has changed.
-5. **Update the GitHub Project board** if status has changed. Use the `github-projects` skill.
+5. **Update the issue/PR record** if status has changed — issue body, comment, or PR link as appropriate.
 
 ## Comment Format
 
@@ -58,16 +58,16 @@ When to update:
 - New open questions emerged → add them
 - Scope expanded or shrank → update Goals/Non-Goals
 
-## Updating the Project Board
+## Updating Work Status
 
-GitHub Projects is the board/state layer. Use the `github-projects` skill for commands and ID lookup.
+Use the issue thread and PR state as the durable record.
 
 Common transitions:
-- Starting work → **In Progress**
-- Opening a PR → **In Review**
-- PR merged → **Done**
+- Starting work → leave a report comment or push a branch linked to the issue
+- Opening a PR → link it clearly in the issue comment or body
+- PR merged → confirm completion and any follow-up work
 
-If Project access is unavailable, include the intended status transition in the issue report instead of claiming the board was updated.
+If status changed, say so explicitly in the report instead of assuming the next session will infer it.
 
 ## Git State
 

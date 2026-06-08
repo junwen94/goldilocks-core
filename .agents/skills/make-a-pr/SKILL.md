@@ -72,13 +72,13 @@ Written by an agent on behalf of <user>.
 ## After opening
 
 - PR descriptions written by an agent must include `Written by an agent on behalf of <user>.`, replacing `<user>` with the human who requested the work.
-- Move the linked issue to **In Review** on the GitHub Project board. Use the `github-projects` skill.
-- If Project access is unavailable, comment on the issue with the intended status transition.
-- If CI exists, wait for it to pass before requesting review.
+- Make sure the PR body includes `Closes #N` for the linked issue.
+- If CI exists, inspect checks with `gh pr checks <number>`.
+- If GitHub Actions workflows exist and you need more detail, use `gh run list --branch <branch>` and `gh run view <run-id> --log`.
+- If there is no CI yet, say so plainly and rely on local verification results in the PR body.
 - Respond to review comments by pushing new commits — don't force-push reviewed code unless asked.
 
 ## Merging
 
-- Only merge after review approval and passing CI.
+- Only merge after review approval and passing CI when CI exists.
 - The `Closes #N` in the PR body auto-closes the issue on merge.
-- Move the issue to **Done** on the GitHub Project board after merge.

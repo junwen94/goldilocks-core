@@ -26,24 +26,12 @@ git log origin/HEAD..HEAD --oneline 2>/dev/null
 
 ```bash
 gh pr list --repo stfc/goldilocks-core --state open --limit 10
+gh pr checks <number> --repo stfc/goldilocks-core
 ```
 
-For each open PR, note: which issue it closes, whether CI passes, whether it's been reviewed.
+For each open PR, note: which issue it closes, whether checks pass, and whether it's been reviewed.
 
-### 3. Read the Project Board
-
-Use the `github-projects` skill for details. Projects are the board/state layer.
-
-```bash
-gh project list --owner stfc --format json
-gh project view <project-number> --owner stfc --format json
-```
-
-If Project access fails with missing scopes, report that explicitly and continue with issues/PRs. Do not pretend the board was checked.
-
-What's in **In Progress**? What's in **In Review**? Cross-reference with PRs — if something is In Progress but has no branch, find out why.
-
-### 4. Read Recent Issue Activity
+### 3. Read Recent Issue Activity
 
 ```bash
 gh issue list --repo stfc/goldilocks-core --state open --limit 10
@@ -57,7 +45,7 @@ Focus on:
 - **Next steps** — what was the intended next action?
 - **Blockers** — is anything waiting on review, external input, or another PR?
 
-### 5. Cross-Reference
+### 4. Cross-Reference
 
 Compare what you found:
 - Branch exists locally, not pushed → risk of lost work
@@ -65,23 +53,23 @@ Compare what you found:
 - PR open, not merged → starting new work may cause conflicts
 - Issue says "in progress" but no branch → stale status
 - PR merged but issue still open → close it
-- Issue/PR status differs from GitHub Project status → update the Project or report missing access
+- Recent issue comments disagree with the actual branch or PR state → fix the record
 
-### 6. Present Summary
+### 5. Present Summary
 
 ```markdown
 ## Project State
 
 **Branch**: [current]
 **Open PRs**: [list or none]
-**Board**: [what's in flight]
+**Issue activity**: [what's in flight]
 
 ### Pending Work
 - Issue #N: [status, what's left]
 - Issue #M: [status, what's left]
 
 ### Discrepancies
-- [Any mismatch between issues/board and actual git state]
+- [Any mismatch between issues/comments and actual git state]
 
 ### Recommended Next Step
 [What to do next, based on the above]
@@ -89,7 +77,7 @@ Compare what you found:
 
 ## After Catchup
 
-1. Fix discrepancies first — push stranded branches, close stale issues, update board status
+1. Fix discrepancies first — push stranded branches, close stale issues, correct issue/PR status
 2. Confirm the next step with the user
 3. Proceed with work
 

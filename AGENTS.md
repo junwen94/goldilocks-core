@@ -35,6 +35,6 @@ No CI yet. Run `pre-commit` before committing.
 
 - **Never push or merge directly to `main`.** All changes arrive through PRs.
 - Every PR must close an issue (`Closes #N`).
-- Track work status in GitHub Projects as well as Issues/PRs.
+- Track work status in GitHub Issues/PRs.
 - Any GitHub issue, issue comment, PR description, or review comment written by an agent must explicitly say so and name the human it represents: `Written by an agent on behalf of <user>.`
 - Use `uv`, not `pip`.

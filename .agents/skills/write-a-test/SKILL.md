@@ -15,6 +15,23 @@ uv run pytest tests/test_kmesh.py      # one file
 uv run pytest -k "test_entry"          # by name
 ```
 
+## Coverage
+
+Use coverage reports when adding baseline tests, refactoring public behaviour, or checking whether a new test actually exercises the intended path.
+
+```bash
+uv run --with pytest-cov pytest --cov=goldilocks_core --cov-report=term-missing
+uv run --with pytest-cov pytest --cov=goldilocks_core --cov-report=xml
+uv run --with pytest-cov pytest --cov=goldilocks_core --cov-report=html
+```
+
+- `uv run --with pytest-cov` keeps coverage tooling available without adding a permanent dependency unless the project decides it wants one.
+- `term-missing` is useful during development because it shows uncovered lines in the terminal.
+- `xml` is useful for CI services such as Codecov or Coveralls if/when they are configured.
+- `html` is useful for local inspection in a browser.
+
+New tests should not reduce overall coverage. Do not chase coverage numbers by testing implementation trivia; prioritize public behaviour, scientific edge cases, and regressions.
+
 ## Portability
 
 Tests must not depend on `local_data/` or any private dataset. The test suite must pass from a clean checkout with only `uv sync --group dev`.

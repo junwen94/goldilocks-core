@@ -1,6 +1,6 @@
 ---
 name: github-cli
-description: Use the gh CLI for GitHub issues, PRs, comments, checks, and project metadata in this repo. Use whenever reading or writing GitHub state from an agent session.
+description: Use the gh CLI for GitHub issues, PRs, comments, checks, and Actions state in this repo. Use whenever reading or writing GitHub state from an agent session.
 ---
 
 # GitHub CLI
@@ -30,6 +30,8 @@ gh issue list --repo stfc/goldilocks-core --state open --limit 20
 gh pr list --repo stfc/goldilocks-core --state open --limit 20
 gh pr view <number> --repo stfc/goldilocks-core --json state,mergeStateStatus,isDraft,reviewDecision,baseRefName,headRefName
 gh pr checks <number> --repo stfc/goldilocks-core
+gh run list --repo stfc/goldilocks-core --branch <branch>
+gh run view <run-id> --repo stfc/goldilocks-core --log
 ```
 
 Use `gh api` for fields not exposed by high-level commands:
@@ -128,16 +130,18 @@ gh api repos/stfc/goldilocks-core/issues/<issue-number>/comments --jq '.[] | {id
 gh api repos/stfc/goldilocks-core/issues/comments/<comment-id> -X PATCH -f body="$(cat /tmp/comment.md)"
 ```
 
-## Project board
+## Checks and Actions
 
-Use the `github-projects` skill for board/state workflow. GitHub Projects v2 commands require project and item IDs. Prefer high-level inspection first:
+Use `gh pr checks` for the quick answer and `gh run` when you need workflow detail.
 
 ```bash
-gh project list --owner stfc
-gh project view <number> --owner stfc --format json
+gh pr checks <number> --repo stfc/goldilocks-core
+gh run list --repo stfc/goldilocks-core --branch <branch>
+gh run view <run-id> --repo stfc/goldilocks-core --log
+gh run download <run-id> --repo stfc/goldilocks-core
 ```
 
-If project updates are too cumbersome through `gh project`, report the intended transition in an issue comment instead of pretending the board is updated. Never claim Project status changed unless the command succeeded.
+If the repo has no workflows yet, say so plainly and rely on local verification instead of pretending CI exists.
 
 ## Gotchas
 
