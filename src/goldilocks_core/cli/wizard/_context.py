@@ -20,4 +20,5 @@ class WizardContext:
     analysis: StructureAnalysis
     task: str = "scf"
     accuracy: str = "balanced"
+    code: str = "qe"
     hints: dict[str, Any] = field(default_factory=dict)

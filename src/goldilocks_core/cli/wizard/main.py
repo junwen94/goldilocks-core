@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-_VALID_CHOICES = {"0", "1", "2", "a", "b"}
+_VALID_CHOICES = {"0", "1", "2", "3", "5", "6", "a", "b"}
 
 
 def wizard() -> None:
@@ -52,6 +52,21 @@ def wizard() -> None:
 
             kit_run(console, None, mode="qe")
 
+        elif choice == "3":
+            from goldilocks_core.cli.wizard.hpc import run as hpc_run
+
+            hpc_run(console)
+
+        elif choice == "5":
+            from goldilocks_core.cli.wizard.parse import run as parse_run
+
+            parse_run(console)
+
+        elif choice == "6":
+            from goldilocks_core.cli.wizard.visualise import run as vis_run
+
+            vis_run(console)
+
         Prompt.ask(
             "\n  [dim]Press Enter to return to menu[/dim]",
             default="",
@@ -74,13 +89,13 @@ def _print_menu(console: Console) -> None:
         "   [bold cyan]2)[/bold cyan]  QE Inputs           —"
         " tailored for Quantum ESPRESSO\n"
         "\n"
-        "  ─── [dim]HPC Playground[/dim] ──────────────────────────────────────\n"
-        "   [dim]3)  HPC Scripts         — PBS · SLURM submission scripts, etc.  (coming soon)[/dim]\n"
+        "  ─── [bold]HPC Playground[/bold] ──────────────────────────────────────\n"
+        "   [bold cyan]3)[/bold cyan]  HPC Scripts         — PBS · SLURM submission scripts\n"
         "   [dim]4)  AiiDA Workflow      — job management & provenance           (coming soon)[/dim]\n"
         "\n"
-        "  ─── [dim]Post-Analysis Lab[/dim] ─────────────────────────────────────\n"
-        "   [dim]5)  Parse & Validate    — SCF · relax output + consistency check, etc.  (coming soon)[/dim]\n"
-        "   [dim]6)  Visualise           — band structure · DOS · charge density, etc.    (coming soon)[/dim]\n"
+        "  ─── [bold]Post-Analysis Lab[/bold] ─────────────────────────────────────\n"
+        "   [bold cyan]5)[/bold cyan]  Parse & Validate    — SCF · relax output + consistency check\n"
+        "   [bold cyan]6)[/bold cyan]  Visualise           — DOS · band structure plots\n"
         "\n"
         "   [bold]0)[/bold]  Quit"
     )
