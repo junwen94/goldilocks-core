@@ -22,7 +22,7 @@ _PROV_STYLE: dict[str, str] = {
 }
 
 _VALID_TASKS = {
-    "scf", "nscf", "bands", "relax", "md", "vc-relax", "vc-md",
+    "scf", "nscf", "bands", "relax", "md", "vc-relax", "vc-md", "ph",
 }
 
 _VALID_ACCURACY = {"fast", "balanced", "accurate"}
@@ -75,6 +75,10 @@ def run(
         bool,
         typer.Option("--explain", "-e", help="Show full rationale for every decision"),
     ] = False,
+    output: Annotated[
+        Optional[str],
+        typer.Option("--output", "-o", help="Generate QE input files in this directory"),
+    ] = None,
 ) -> None:
     """Recommend QE input parameters for STRUCTURE."""
     console = Console()
@@ -86,6 +90,11 @@ def run(
             f"Valid: {', '.join(sorted(_VALID_TASKS))}"
         )
         raise typer.Exit(1)
+    if task == "ph" and output is None:
+        console.print(
+            "[yellow]Note:[/yellow] ph task — pass --output <dir> to also generate "
+            "gl-pw-scf.in and gl-ph.in files."
+        )
     if accuracy not in _VALID_ACCURACY:
         console.print(
             f"[red]Error:[/red] unknown accuracy {accuracy!r}. "
@@ -135,7 +144,7 @@ def run(
 
     from goldilocks_core.intent import CalculationIntent
     _task = cast(
-        Literal["scf", "nscf", "bands", "relax", "md", "vc-relax", "vc-md"],
+        Literal["scf", "nscf", "bands", "relax", "md", "vc-relax", "vc-md", "ph"],
         task,
     )
     _accuracy = cast(Literal["fast", "balanced", "accurate"], accuracy)
@@ -156,10 +165,78 @@ def run(
 
     _display(console, structure, analysis, intent, params, explain)
 
+    # ── Optional file generation ──────────────────────────────────────────────
+    if output is not None:
+        _generate(console, params, structure_obj, intent, analysis, output)
+
 
 # ---------------------------------------------------------------------------
 # Display
 # ---------------------------------------------------------------------------
+
+def _generate(console: Console, params: Any, structure: Any, intent: Any, analysis: Any, output: str) -> None:
+    """Write input files into a new run_NNN/ sub-directory."""
+    from goldilocks_core.generate.qe import write_ph_inputs, write_qe_inputs
+
+    base = Path(output)
+    base.mkdir(parents=True, exist_ok=True)
+    n = 1
+    while True:
+        run_dir = base / f"run_{n:03d}"
+        if not run_dir.exists():
+            run_dir.mkdir(parents=True)
+            break
+        n += 1
+
+    is_ph = intent.task == "ph"
+    with console.status("  Writing files…", spinner="dots"):
+        try:
+            scf_intent = intent
+            ph_setup = None
+            if is_ph:
+                from typing import Literal as _Lit
+                from typing import cast as _cast
+
+                from goldilocks_core.advise.phonon import advise_ph_setup
+                from goldilocks_core.intent import CalculationIntent
+
+                scf_intent = CalculationIntent(
+                    structure=intent.structure, code=intent.code, task="scf",
+                    xc=intent.xc, pseudo_family=intent.pseudo_family,
+                    accuracy=intent.accuracy, hints=intent.hints,
+                )
+                ph_setup = advise_ph_setup(
+                    intent.structure, analysis,
+                    _cast(_Lit["fast", "balanced", "accurate"], intent.accuracy),
+                    params.kpoints_grid,
+                )
+            result = write_qe_inputs(
+                params, structure, scf_intent, output_dir=run_dir,
+                kgrid_override=ph_setup.phonon_kgrid if ph_setup else None,
+                conv_thr=ph_setup.scf_conv_thr if ph_setup else None,
+            )
+            ph_result = write_ph_inputs(
+                output_dir=run_dir,
+                nq=ph_setup.q_grid.nq if ph_setup else None,
+                epsil=ph_setup.needs_epsil if ph_setup else False,
+                tr2_ph=ph_setup.tr2_ph if ph_setup else 1e-14,
+            ) if is_ph else None
+        except Exception as exc:
+            console.print(f"  [red]Error generating files:[/red] {exc}")
+            return
+
+    console.print()
+    console.print(f"  [bold]Output:[/bold] {run_dir}")
+    console.print(f"  [green]✓[/green] {result['input_file'].name}")
+    if ph_result:
+        console.print(f"  [green]✓[/green] {ph_result['ph_file'].name}")
+    missing: list[str] = result.get("missing_pp", [])
+    if missing:
+        console.print(
+            f"  [yellow]⚠[/yellow] pp not found: {', '.join(missing)}"
+        )
+    console.print()
+
 
 def _prov(provenance: str) -> Text:
     return Text(provenance, style=_PROV_STYLE.get(provenance, ""))

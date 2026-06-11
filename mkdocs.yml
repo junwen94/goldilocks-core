@@ -26,7 +26,14 @@ plugins:
 
 nav:
   - Home: index.md
+  - CLI: cli.md
   - API Reference:
+      - intent: api/intent.md
+      - analyse: api/analyse.md
+      - advise: api/advise.md
+      - generate: api/generate.md
+      - pseudo: api/pseudo.md
+      - ml: api/ml.md
       - kmesh: api/kmesh.md
 
 markdown_extensions:

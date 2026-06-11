@@ -172,9 +172,19 @@ def _display_analysis(console: Console, analysis: Any, structure: Any) -> None:
     t.add_row(
         "Space group",
         f"{analysis.space_group_symbol} ({analysis.space_group_number}),"
-        f" {analysis.crystal_system}",
+        f" {analysis.crystal_system}  ·  {analysis.point_group}",
+    )
+    t.add_row(
+        "Symmetry",
+        ("centrosymmetric" if analysis.has_inversion_symmetry else "non-centrosymmetric")
+        + ("  [dim](polar)[/dim]" if analysis.is_polar else ""),
     )
     t.add_row("Sites", f"{analysis.n_atoms} atoms, {analysis.n_species} species")
+    t.add_row(
+        "Periodicity",
+        f"{analysis.dimensionality}  ·  {analysis.system_type}"
+        + ("  [dim](vacuum)[/dim]" if analysis.has_vacuum else ""),
+    )
     t.add_row(
         "Metallicity",
         Text.assemble(
@@ -183,16 +193,30 @@ def _display_analysis(console: Console, analysis: Any, structure: Any) -> None:
             Text(analysis.metallicity_source, style="dim"),
         ),
     )
+    mag_src = f"  [dim]({analysis.magnetic_source})[/dim]" if analysis.magnetic_source else ""
     t.add_row(
         "Magnetic el.",
-        ", ".join(analysis.magnetic_elements) if analysis.magnetic_elements else "—",
+        (", ".join(analysis.magnetic_elements) + mag_src)
+        if analysis.magnetic_elements else "—",
     )
     t.add_row(
         "Heavy el. (SOC)",
         ", ".join(analysis.heavy_elements) if analysis.heavy_elements else "—",
     )
     t.add_row("SOC relevant", "[bold]yes[/bold]" if analysis.soc_relevant else "no")
-    t.add_row("System", f"{analysis.system_type}, {analysis.dimensionality}")
+    if analysis.has_d_electrons or analysis.has_f_electrons:
+        flags = []
+        if analysis.has_d_electrons:
+            flags.append("d-electrons")
+        if analysis.has_f_electrons:
+            flags.append("f-electrons  [yellow](DFT+U recommended)[/yellow]")
+        t.add_row("Correlated el.", "  ".join(flags))
+    if analysis.has_partial_occupancy:
+        sites = ", ".join(str(i) for i in analysis.disordered_sites[:6])
+        t.add_row(
+            "Disorder",
+            f"[yellow]partial occupancy[/yellow]  [dim]sites: {sites}[/dim]",
+        )
 
     console.print(t)
 
