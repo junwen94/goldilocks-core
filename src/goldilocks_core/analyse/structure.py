@@ -28,6 +28,13 @@ _MAGNETIC_ELEMENTS: frozenset[str] = frozenset({
 
 _SOC_Z_THRESHOLD: int = 30  # Z > 30 → Ga and heavier; conservative SOC screening
 
+# Electronegative ligands that tend to localise d/f electrons (oxide, fluoride,
+# sulfide, nitride, halide, chalcogenide compounds).  Presence of these alongside
+# a TM element is a strong indicator that DFT+U may be relevant.
+_LOCALISING_LIGANDS: frozenset[str] = frozenset({
+    "O", "F", "N", "S", "Cl", "Se", "Te", "Br", "I", "P",
+})
+
 _POLAR_POINT_GROUPS: frozenset[str] = frozenset({
     "1", "2", "m", "mm2",
     "3", "3m",
@@ -218,10 +225,19 @@ def analyze_structure(
         warnings.append(_classifier_error)
     if has_partial_occupancy:
         warnings.append(f"Partial occupancy at sites: {disordered_sites}")
+    _is_metallic = metallicity in {"metallic", "likely_metallic"}
+    _is_insulating = metallicity in {"insulating", "likely_insulating"}
+    _has_localising_ligand = bool(set(elements) & _LOCALISING_LIGANDS)
     if has_f:
         warnings.append("f-electron elements detected: check whether DFT+U is needed")
-    elif has_d and metallicity not in {"metallic", "likely_metallic"}:
-        warnings.append("transition-metal d-electrons detected: consider DFT+U")
+    elif has_d and _is_insulating:
+        warnings.append(
+            "transition-metal d states in an insulating system: DFT+U may be worth testing"
+        )
+    elif has_d and _has_localising_ligand and not _is_metallic:
+        warnings.append(
+            "transition-metal d states with electronegative ligands: consider testing DFT+U"
+        )
     if soc_relevant and is_noncentrosymmetric:
         warnings.append(
             "Heavy elements without inversion symmetry: check Rashba/Dresselhaus effects"

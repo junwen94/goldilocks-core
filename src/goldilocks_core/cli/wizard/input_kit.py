@@ -372,14 +372,23 @@ def _display_agnostic(
     else:
         _flag("Dipole correction", "not applicable (bulk)", "ok")
 
-    # DFT+U
+    # DFT+U — two-layer check: (1) d/f electrons present, (2) chemical context
+    from goldilocks_core.analyse.structure import _LOCALISING_LIGANDS  # noqa: PLC0415
+    _dftu_is_metallic = analysis.metallicity in {"metallic", "likely_metallic"}
+    _dftu_is_insulating = analysis.metallicity in {"insulating", "likely_insulating"}
+    _dftu_has_ligand = bool(set(analysis.elements) & _LOCALISING_LIGANDS)
+    _dftu_tm_els = ", ".join(analysis.magnetic_elements) if analysis.magnetic_elements else "present"
     if analysis.has_f_electrons:
         _flag("DFT+U / Hubbard", "strongly recommended — f-electron elements present", "warn")
-    elif analysis.has_d_electrons and analysis.metallicity not in {"metallic", "likely_metallic"}:
+    elif analysis.has_d_electrons and _dftu_is_insulating:
         _flag("DFT+U / Hubbard",
-              f"consider — d-electron elements: {', '.join(analysis.magnetic_elements)}", "info")
-    elif analysis.has_d_electrons:
-        _flag("DFT+U / Hubbard", "not needed — itinerant d-electrons (metallic)", "ok")
+              f"likely needed — d states in insulating compound ({_dftu_tm_els})", "warn")
+    elif analysis.has_d_electrons and _dftu_has_ligand and not _dftu_is_metallic:
+        _flag("DFT+U / Hubbard",
+              f"consider — d states with electronegative ligands ({_dftu_tm_els})", "info")
+    elif analysis.has_d_electrons and _dftu_is_metallic:
+        _flag("DFT+U / Hubbard",
+              "not needed — itinerant d states (metallic system)", "ok")
     else:
         _flag("DFT+U / Hubbard", "not needed", "ok")
 
