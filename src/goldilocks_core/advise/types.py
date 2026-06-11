@@ -75,6 +75,23 @@ class SpinDecision:
 
 
 @dataclass(frozen=True, slots=True)
+class VdwDecision:
+    """Van der Waals dispersion correction decision (code-agnostic).
+
+    method uses physics names; per-code Generate layer translates:
+      d3   → QE "grimme-d3",  VASP IVDW=11
+      d3bj → QE "grimme-d3bj", VASP IVDW=12
+      ts   → QE "ts-vdw",     VASP IVDW=2
+      mbd  → QE "many-body-dispersion",  VASP IVDW=202
+    """
+
+    use_vdw: bool
+    method: Literal["d3", "d3bj", "ts", "mbd"] | None  # None when use_vdw=False
+    provenance: _Provenance
+    rationale: str
+
+
+@dataclass(frozen=True, slots=True)
 class CutoffDecision:
     """Plane-wave cutoff decision (eV, code-agnostic)."""
 
@@ -180,8 +197,12 @@ class QEParameterSet:
     angle1: dict[str, float] | None                  # degrees; non-None for noncolin
     angle2: dict[str, float] | None                  # degrees; non-None for noncolin
 
+    # Van der Waals (SYSTEM card, QE: vdw_corr)
+    vdw_corr: str | None          # QE string: "grimme-d3bj" etc.; None = no correction
+
     # Provenance (code-agnostic decisions that produced the above)
     smearing_decision: SmearingDecision
     kpoints_decision: KPointsDecision
     cutoff_decision: CutoffDecision
     spin_decision: SpinDecision
+    vdw_decision: VdwDecision

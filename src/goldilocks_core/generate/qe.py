@@ -105,6 +105,9 @@ def write_qe_inputs(
         system["smearing"] = params.smearing
         system["degauss"]  = round(params.degauss, 6)
 
+    if params.vdw_corr is not None:
+        system["vdw_corr"] = params.vdw_corr
+
     # Spin flags — avoid setting nspin=4 alongside noncolin (QE convention)
     if params.noncolin:
         system["noncolin"] = True

@@ -7,10 +7,18 @@ from goldilocks_core.advise.pseudo import advise_pseudos
 from goldilocks_core.advise.smearing import advise_smearing
 from goldilocks_core.advise.spin import advise_spin
 from goldilocks_core.advise.types import QEParameterSet
+from goldilocks_core.advise.vdw import advise_vdw
 from goldilocks_core.analyse.structure import StructureAnalysis
 from goldilocks_core.intent import CalculationIntent
 
 _EV_TO_RY: float = 1 / 13.605693122994
+
+_VDW_TO_QE: dict[str, str] = {
+    "d3":   "grimme-d3",
+    "d3bj": "grimme-d3bj",
+    "ts":   "ts-vdw",
+    "mbd":  "many-body-dispersion",
+}
 
 _SMEARING_TO_QE: dict[str, str] = {
     "marzari_vanderbilt": "mv",
@@ -55,6 +63,7 @@ def build_qe_parameter_set(
     spin_decision     = advise_spin(analysis, intent)
     pseudos           = advise_pseudos(analysis, intent)
     cutoff_decision   = advise_basis(analysis, intent, pseudos)
+    vdw_decision      = advise_vdw(analysis, intent)
 
     # Smearing → QE SYSTEM card
     if smearing_decision.use_smearing:
@@ -72,6 +81,8 @@ def build_qe_parameter_set(
     ecutwfc = cutoff_decision.wavefunction_cutoff_ev * _EV_TO_RY
     ecutrho = cutoff_decision.density_cutoff_ev * _EV_TO_RY
 
+    vdw_corr = _VDW_TO_QE[vdw_decision.method] if vdw_decision.use_vdw and vdw_decision.method else None
+
     return QEParameterSet(
         occupations=occupations,      # type: ignore[arg-type]
         smearing=smearing_qe,
@@ -87,8 +98,10 @@ def build_qe_parameter_set(
         starting_magnetization=spin_decision.initial_magnetization,
         angle1=spin_decision.angle1,
         angle2=spin_decision.angle2,
+        vdw_corr=vdw_corr,
         smearing_decision=smearing_decision,
         kpoints_decision=kpoints_decision,
         cutoff_decision=cutoff_decision,
         spin_decision=spin_decision,
+        vdw_decision=vdw_decision,
     )

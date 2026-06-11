@@ -359,6 +359,15 @@ def _display(console, structure_path, analysis, intent, params, explain: bool) -
     )
     pt.add_row("Cutoffs", cutoff_val, _prov(params.cutoff_decision.provenance))
 
+    # vdW correction
+    vdw = params.vdw_decision
+    if vdw.use_vdw:
+        vdw_val = Text(f"{vdw.method}")
+        vdw_val.append(f"  ({params.vdw_corr})", style="dim")
+    else:
+        vdw_val = Text("none", style="dim")
+    pt.add_row("vdW correction", vdw_val, _prov(vdw.provenance))
+
     # pseudos
     for ps in params.pseudos:
         fam_parts = ps.family.split("/")

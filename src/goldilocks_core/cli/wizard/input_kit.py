@@ -372,11 +372,16 @@ def _display_agnostic(
     else:
         _flag("DFT+U / Hubbard", "not needed", "ok")
 
-    # van der Waals
-    if analysis.dimensionality in ("2d", "1d") or analysis.has_vacuum:
-        _flag("van der Waals", "consider — low-dimensional / layered system", "info")
+    # van der Waals — reflect actual pipeline decision
+    vdw = params.vdw_decision
+    if vdw.use_vdw:
+        _flag(
+            "van der Waals",
+            f"{vdw.method} applied ({params.vdw_corr})",
+            "info",
+        )
     else:
-        _flag("van der Waals", "not needed (3D bulk)", "ok")
+        _flag("van der Waals", "not applied (3D bulk) — set hint use_vdw=True if needed", "ok")
 
     console.print(ft)
 
