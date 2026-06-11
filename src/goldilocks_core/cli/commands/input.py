@@ -117,11 +117,19 @@ def run(
     pseudo_family = pseudo if pseudo is not None else _DEFAULT_PSEUDO_SR
 
     # --- parse hints ---
+    from goldilocks_core.cli._parse import coerce_hint_value
+    from goldilocks_core.intent import ParameterHints
+
     parsed_hints: dict[str, Any] = {}
     if hints:
         for h in hints:
             k, _, v = h.partition("=")
-            parsed_hints[k.strip()] = _coerce(v.strip())
+            parsed_hints[k.strip()] = coerce_hint_value(v.strip())
+    try:
+        typed_hints = ParameterHints.from_dict(parsed_hints)
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] invalid hint — {exc}")
+        raise typer.Exit(1)
 
     # --- load structure ---
     try:
@@ -155,14 +163,16 @@ def run(
         xc=xc,
         pseudo_family=pseudo_family,
         accuracy=_accuracy,
-        hints=parsed_hints,
+        hints=typed_hints,
     )
 
     # --- advise ---
-    from goldilocks_core.advise.pipeline import build_qe_parameter_set
+    from goldilocks_core.advise.pipeline import advise
+    from goldilocks_core.select.qe import build_qe_parameter_set
     try:
         with console.status("Running advise pipeline…", spinner="dots"):
-            params = build_qe_parameter_set(analysis, intent)
+            bundle = advise(analysis, intent)
+            params = build_qe_parameter_set(bundle)
     except ValueError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1)
@@ -218,6 +228,7 @@ def _generate(console: Console, params: Any, structure: Any, intent: Any, analys
                 params, structure, scf_intent, output_dir=run_dir,
                 kgrid_override=ph_setup.phonon_kgrid if ph_setup else None,
                 conv_thr=ph_setup.scf_conv_thr if ph_setup else None,
+                analysis=analysis,
             )
             ph_result = write_ph_inputs(
                 output_dir=run_dir,
@@ -244,17 +255,6 @@ def _generate(console: Console, params: Any, structure: Any, intent: Any, analys
 
 def _prov(provenance: str) -> Text:
     return Text(provenance, style=_PROV_STYLE.get(provenance, ""))
-
-
-def _coerce(value: str) -> Any:
-    for cast in (int, float):
-        try:
-            return cast(value)
-        except ValueError:
-            pass
-    if value.lower() in ("true", "false"):
-        return value.lower() == "true"
-    return value
 
 
 def _display(console, structure_path, analysis, intent, params, explain: bool) -> None:

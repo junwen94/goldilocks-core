@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from pymatgen.core import Structure
 
     from goldilocks_core.advise.types import QEParameterSet
+    from goldilocks_core.analyse.structure import StructureAnalysis
     from goldilocks_core.intent import CalculationIntent
 
 _QE_TASK: dict[str, str] = {
@@ -31,6 +32,101 @@ _QE_TASK: dict[str, str] = {
     "md":       "md",
     "vc-md":    "vc-md",
 }
+
+
+def _hints_to_dict(hints: object) -> dict:
+    """Serialise ParameterHints to a plain dict, omitting None values."""
+    import dataclasses
+    if dataclasses.is_dataclass(hints) and not isinstance(hints, type):
+        return {k: v for k, v in dataclasses.asdict(hints).items() if v is not None}
+    if isinstance(hints, dict):
+        return {k: v for k, v in hints.items() if v is not None}
+    return {}
+
+
+def _build_manifest(
+    params: "QEParameterSet",
+    structure: "Structure",
+    intent: "CalculationIntent",
+    analysis: "StructureAnalysis | None",
+) -> dict:
+    """Build a JSON-serialisable manifest dict for this run."""
+    from datetime import datetime, timezone
+
+    try:
+        from importlib.metadata import version
+        gl_version = version("goldilocks-core")
+    except Exception:
+        gl_version = "unknown"
+
+    doc: dict = {
+        "goldilocks_version": gl_version,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "structure": {
+            "formula": structure.composition.reduced_formula,
+            "n_atoms": len(structure),
+            "n_species": len(structure.composition),
+        },
+        "intent": {
+            "task": intent.task,
+            "code": getattr(intent, "code", "qe"),
+            "xc": getattr(intent, "xc", "pbesol"),
+            "pseudo_family": intent.pseudo_family,
+            "accuracy": intent.accuracy,
+            "hints": _hints_to_dict(intent.hints),
+        },
+        "parameters": {
+            "spin": {
+                "treatment": params.spin_decision.treatment,
+                "provenance": params.spin_decision.provenance,
+            },
+            "smearing": {
+                "use_smearing": params.smearing_decision.use_smearing,
+                "method": params.smearing_decision.method,
+                "width_ev": params.smearing_decision.width_ev,
+                "provenance": params.smearing_decision.provenance,
+            },
+            "kpoints": {
+                "grid": list(params.kpoints_grid),
+                "shift": list(params.kpoints_shift),
+                "provenance": params.kpoints_decision.provenance,
+            },
+            "cutoffs": {
+                "ecutwfc_ry": params.ecutwfc,
+                "ecutrho_ry": params.ecutrho,
+                "provenance": params.cutoff_decision.provenance,
+            },
+            "vdw": {
+                "use_vdw": params.vdw_decision.use_vdw,
+                "method": params.vdw_decision.method,
+                "provenance": params.vdw_decision.provenance,
+            },
+            "pseudos": [
+                {
+                    "element": ps.element,
+                    "family": ps.family,
+                    "filename": ps.filename,
+                    "provenance": ps.provenance,
+                }
+                for ps in params.pseudos
+            ],
+        },
+    }
+
+    if analysis is not None:
+        doc["analysis"] = {
+            "metallicity": analysis.metallicity,
+            "metallicity_source": analysis.metallicity_source,
+            "magnetic_elements": list(analysis.magnetic_elements),
+            "soc_relevant": analysis.soc_relevant,
+            "heavy_elements": list(analysis.heavy_elements),
+            "dimensionality": analysis.dimensionality,
+            "system_type": analysis.system_type,
+            "has_vacuum": analysis.has_vacuum,
+            "warnings": list(analysis.warnings),
+        }
+
+    return doc
 
 
 def _z_valence_map(params: "QEParameterSet") -> dict[str, float]:
@@ -56,6 +152,7 @@ def write_qe_inputs(
     output_dir: str | Path = "./goldilocks_output",
     kgrid_override: tuple[int, int, int] | None = None,
     conv_thr: float | None = None,
+    analysis: "StructureAnalysis | None" = None,
 ) -> dict[str, Any]:
     """Generate ``goldilocks.in`` and copy pseudopotential files.
 
@@ -182,7 +279,17 @@ def write_qe_inputs(
             koffset=tuple(params.kpoints_shift),
         )
 
-    return {"input_file": input_file, "pseudo_dir": pseudo_dir, "missing_pp": missing}
+    import json
+    manifest = _build_manifest(params, structure, intent, analysis)
+    manifest_file = output_dir / "goldilocks_manifest.json"
+    manifest_file.write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
+
+    return {
+        "input_file": input_file,
+        "pseudo_dir": pseudo_dir,
+        "missing_pp": missing,
+        "manifest_file": manifest_file,
+    }
 
 
 def write_ph_inputs(

@@ -78,6 +78,8 @@ def run(
     hints: dict[str, Any] = {}
     console.print()
     if Confirm.ask("  Add parameter hints? (key=value overrides)", default=False):
+        from goldilocks_core.cli._parse import coerce_hint_value
+
         console.print("  Enter key=value pairs, blank line to finish:")
         while True:
             h = Prompt.ask("  hint", default="")
@@ -85,7 +87,7 @@ def run(
                 break
             k, _, v = h.partition("=")
             if k.strip():
-                hints[k.strip()] = _coerce(v.strip())
+                hints[k.strip()] = coerce_hint_value(v.strip())
 
     # --- ph-specific: setup advise + q-grid confirm ----------------------
     ph_nq: tuple[int, int, int] | None = None
@@ -94,14 +96,15 @@ def run(
         from goldilocks_core.advise.phonon import advise_ph_setup
 
         # Need base k-grid: build a temporary intent for the advise pipeline
-        from goldilocks_core.advise.pipeline import build_qe_parameter_set
+        from goldilocks_core.advise.pipeline import advise as _advise
         from goldilocks_core.intent import CalculationIntent as _CI
+        from goldilocks_core.select.qe import build_qe_parameter_set as _bqps
 
         _tmp_intent = _CI(
             structure=ctx.structure, code="qe", task="scf",
             accuracy=cast(Literal["fast", "balanced", "accurate"], accuracy),
         )
-        _tmp_params = build_qe_parameter_set(ctx.analysis, _tmp_intent)
+        _tmp_params = _bqps(_advise(ctx.analysis, _tmp_intent))
         ph_setup = advise_ph_setup(
             ctx.structure, ctx.analysis,
             cast(Literal["fast", "balanced", "accurate"], accuracy),
@@ -125,14 +128,21 @@ def run(
                 ph_nq = nq
 
     # --- build intent and run pipeline -----------------------------------
-    from goldilocks_core.advise.pipeline import build_qe_parameter_set
-    from goldilocks_core.intent import CalculationIntent
+    from goldilocks_core.advise.pipeline import advise
+    from goldilocks_core.intent import CalculationIntent, ParameterHints
+    from goldilocks_core.select.qe import build_qe_parameter_set
 
     _task = cast(
         Literal["scf", "nscf", "bands", "relax", "md", "vc-relax", "vc-md", "ph"],
         task,
     )
     _accuracy = cast(Literal["fast", "balanced", "accurate"], accuracy)
+
+    try:
+        typed_hints = ParameterHints.from_dict(hints)
+    except ValueError as exc:
+        console.print(f"\n  [red]Error:[/red] invalid hint — {exc}")
+        return
 
     intent = CalculationIntent(
         structure=ctx.structure,
@@ -141,7 +151,7 @@ def run(
         xc="pbesol",
         pseudo_family="PseudoDojo/0.4/PBEsol/SR/standard/upf",
         accuracy=_accuracy,
-        hints=hints,
+        hints=typed_hints,
     )
 
     k_distance_ml: float | None = None
@@ -158,9 +168,8 @@ def run(
         except Exception:
             pass
 
-        params = build_qe_parameter_set(
-            ctx.analysis, intent, k_distance_ml=k_distance_ml
-        )
+        bundle = advise(ctx.analysis, intent, k_distance_ml=k_distance_ml)
+        params = build_qe_parameter_set(bundle)
 
     console.print()
     if mode == "agnostic":
@@ -554,12 +563,3 @@ def _next_run_dir(base: str) -> Any:
         n += 1
 
 
-def _coerce(value: str) -> Any:
-    for try_type in (int, float):
-        try:
-            return try_type(value)
-        except ValueError:
-            pass
-    if value.lower() in ("true", "false"):
-        return value.lower() == "true"
-    return value

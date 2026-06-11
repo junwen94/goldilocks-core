@@ -1,230 +1,208 @@
 # goldilocks-core
 
-`goldilocks-core` is a research-grade Python package for organizing and recommending DFT calculation inputs from structures, machine-learning models, and parsed pseudopotentials.
-
-The project is designed around domain-focused modules such as k-mesh construction, pseudopotential parsing, recommendation advisors, and thin CLI entry points.
+`goldilocks-core` is a research-grade Python package that turns a crystal structure and a calculation intent into structured DFT parameter recommendations. It does not write DFT input files itself — that is done downstream by the `gl` CLI.
 
 ## What It Does
 
-`goldilocks-core` currently focuses on two main workflows:
+The package runs a four-stage pipeline:
 
-- recommending k-mesh settings from structure-aware logic and ML-predicted `k_index`
-- parsing UPF pseudopotential files and building local pseudopotential registries
-
-The package is intended to grow toward code- and task-aware input recommendation, where structure, pseudopotential choice, and calculation settings can be coordinated in a clean and testable way.
-
-## Current Capabilities
-
-### K-mesh stack
-
-- generate candidate k-distance values from reciprocal lattice geometry
-- convert k-distance values into Monkhorst-Pack-style meshes
-- build indexed `KMeshEntry` objects
-- compute mesh-related metadata such as k-point density intervals and reduced-k-point counts
-- map ML-predicted `k_index` values onto concrete k-mesh recommendations
-- expose a minimal CLI entry point for k-mesh recommendation
-
-### Pseudopotential stack
-
-- parse real UPF files into structured metadata
-- support both attribute-style and text-style `PP_HEADER`
-- supplement header parsing with `PP_INFO` when needed
-- normalize key fields such as:
-  - `element`
-  - `pseudo_type`
-  - `functional`
-  - `relativistic`
-  - `z_valence`
-- scan a local pseudo library into a list of `PseudoMetadata`
-- filter registry entries by element
-
-## Installation
-
-This project uses `uv` for environment and dependency management.
-
-Clone the repository and sync the environment:
-
-```bash
-uv sync
+```
+Load → Analyse → Advise → Generate
 ```
 
-If you want development tools as well:
+| Stage | What happens |
+|-------|-------------|
+| **Load** | Parse CIF / POSCAR / XSF into a `pymatgen.Structure` |
+| **Analyse** | Extract material facts: metallicity, magnetic elements, SOC relevance, dimensionality, disorder |
+| **Advise** | Combine analysis + intent + hints → parameter decisions with provenance tags (`heuristic` / `ML` / `user_hint`) |
+| **Generate** | Write QE `pw.x` / `ph.x` input files using ASE |
 
-```bash
-uv sync --group dev
-```
+Currently supports Quantum ESPRESSO only. The pipeline architecture is code-agnostic from the Advise stage down.
 
 ## Quick Start
 
-### Load a structure and get k-mesh advice
+### Interactive wizard
+
+```bash
+uv run gl
+```
+
+The wizard walks through Pre-Analysis → Input Kit → file generation → HPC script → output parsing.
+
+### Non-interactive command
+
+```bash
+uv run gl input -s Fe.cif
+uv run gl input -s Fe.cif -t relax -a accurate -e
+uv run gl input -s Fe.cif -H spin_treatment=collinear -H ecutwfc_ev=680
+```
+
+### Generate files
+
+```bash
+uv run gl input -s Fe.cif --output ./run
+```
+
+Writes `run/run_001/gl-pw-scf.in` and copies pseudopotentials.
+
+### Python API
 
 ```python
-from pathlib import Path
-
-from goldilocks_core.advisors import advise_kpoints
 from goldilocks_core.io.structures import load_structure
-from goldilocks_core.shared.types import ModelSpec
+from goldilocks_core.analyse.structure import analyze_structure
+from goldilocks_core.intent import CalculationIntent
+from goldilocks_core.advise.pipeline import advise
+from goldilocks_core.select.qe import build_qe_parameter_set
 
-structure = load_structure("path/to/structure.cif")
-
-spec = ModelSpec(
-    name="local-kmesh-model",
-    version="v0",
-    model_type="random_forest",
-    target="k_index",
-    feature_set="cslr",
-    source="local",
-    location="path/to/model.joblib",
-    revision=None,
+structure = load_structure("Fe.cif")
+analysis = analyze_structure(structure)
+intent = CalculationIntent(
+    structure=structure,
+    code="qe",
+    task="scf",
+    xc="pbesol",
+    pseudo_family="PseudoDojo/0.4/PBEsol/SR/standard/upf",
+    accuracy="balanced",
 )
-
-advice = advise_kpoints(structure, spec)
-print(advice.grid)
+bundle = advise(analysis, intent)
+params = build_qe_parameter_set(bundle)
+print(params.kpoints_grid, params.ecutwfc, params.nspin)
 ```
 
-### Parse one UPF file
+## Installation
 
-```python
-from goldilocks_core.pseudo.parse_upf import parse_upf_metadata
-
-metadata = parse_upf_metadata("path/to/pseudo.UPF")
-print(metadata)
-```
-
-### Build a local pseudo registry
-
-```python
-from goldilocks_core.pseudo.registry import load_pseudo_metadata, filter_by_element
-
-metadata_list = load_pseudo_metadata("path/to/pseudopotentials")
-si_pseudos = filter_by_element(metadata_list, "Si")
-
-print(len(metadata_list))
-print(len(si_pseudos))
-```
-
-## Python API
-
-The current Python-facing entry points are:
-
-### K-mesh and advice
-
-- `goldilocks_core.advisors.advise_kpoints`
-- `goldilocks_core.kmesh`
-- `goldilocks_core.io.structures.load_structure`
-
-### Pseudopotentials
-
-- `goldilocks_core.pseudo.parse_upf.parse_upf_metadata`
-- `goldilocks_core.pseudo.registry.load_pseudo_metadata`
-- `goldilocks_core.pseudo.registry.filter_by_element`
-
-### Shared models
-
-- `goldilocks_core.shared.types`
-
-This package is intended to be notebook-friendly, but the package modules and tests should remain the source of truth rather than notebook-only logic.
-
-## CLI
-
-A minimal k-mesh CLI entry point is available.
-
-Show help:
+This project uses `uv` for dependency management.
 
 ```bash
-uv run goldilocks-kmesh --help
+git clone https://github.com/stfc/goldilocks-core
+cd goldilocks-core
+uv sync --group dev
 ```
 
-Current usage pattern:
+Optional extras:
 
 ```bash
-uv run goldilocks-kmesh path/to/structure.cif --model path/to/model.joblib
+uv sync --extra kpoints-ml   # CGCNN/QRF k-points ML backend
+uv sync --extra mlip         # MACE MLIP pre-relaxation
+uv sync --extra aiida        # AiiDA workflow submission
 ```
 
-At this stage, the CLI is intentionally small and thin. The main logic lives in the Python package APIs.
-
-## Project Structure
+## Package Layout
 
 ```text
 src/goldilocks_core/
-├── advisors/
-├── cli/
-├── io/
-├── kmesh.py
-├── ml/
-├── pseudo/
-└── shared/
+├── intent.py          # CalculationIntent — shared input to all pipeline stages
+├── kmesh.py           # k-spacing ↔ mesh maths (🔒 stable API, used by goldilocks-models)
+├── io/                # Stage 1: Load — structure file parsing
+│   ├── structures.py  #   load_structure(), StructureInput type
+│   └── db_search.py   #   OPTIMADE database search (Materials Cloud, NOMAD)
+├── analyse/           # Stage 2: Analyse — material facts (no parameter recommendations)
+│   └── structure.py   #   analyze_structure() → StructureAnalysis
+├── advise/            # Stage 3: Advise — code-agnostic parameter decisions → AdviceBundle
+│   ├── pipeline.py    #   main orchestrator → AdviceBundle
+│   ├── smearing.py    #   metallicity → smearing method / width
+│   ├── kpoints.py     #   dimensionality + accuracy → k-grid
+│   ├── spin.py        #   magnetic elements → nspin / noncolin / initial moments
+│   ├── pseudo.py      #   SOC relevance → SR/FR pseudo family + cutoffs
+│   ├── basis.py       #   accuracy → ecutwfc / ecutrho
+│   ├── vdw.py         #   dimensionality → vdW correction
+│   ├── phonon.py      #   q-grid / k-grid / convergence for ph.x
+│   ├── protocol.py    #   accuracy tier → sampling protocol (smearing width + k-spacing)
+│   └── types.py       #   AdviceBundle, SmearingDecision, KPointsDecision, … QEParameterSet
+├── select/            # Stage 4: Select — translate AdviceBundle → code-specific values
+│   └── qe.py          #   build_qe_parameter_set(bundle) → QEParameterSet
+├── generate/          # Stage 5: Generate — write QE input files
+│   └── qe.py          #   write_qe_inputs(params, structure, intent, output_dir)
+├── data/              # Bundled assets (pseudopotentials + ML model artefacts)
+│   ├── pseudopotentials/  #   PseudoDojo 0.4 UPF files
+│   └── models/            #   kpoints / metallicity / magnetic_classifier manifests
+├── pseudo/            # UPF parsing and local pseudo registry / policy
+│   ├── parse_upf.py   #   parse_upf_metadata(), parse_upf_folders()
+│   ├── registry.py    #   load_pseudo_metadata(), filter_by_*()
+│   ├── policy.py      #   PseudoPolicy, apply_pseudo_policy()
+│   └── metadata.py    #   PseudoMetadata dataclass
+├── ml/                # ML backends (k-index predictor, magnetic classifier)
+│   ├── types.py       #   StructureFeatureVector
+│   ├── features.py    #   infer_features() — 🔒 stable API, used by goldilocks-models
+│   ├── models.py      #   load_model() from manifest directory
+│   ├── inference.py   #   predict() → float k_index
+│   ├── loader.py      #   try_load_kpoints_predictor(), try_load_magnetic_classifier()
+│   ├── magnetic.py    #   MagneticClassifier (requires goldilocks[mlip])
+│   └── kpoints/       #   Advanced ML backends (CGCNN + QRF, ALIGNN)
+├── results/           # Results Lab — parse, validate, and plot DFT output
+│   ├── types.py       #   SCFResult, RelaxResult, BandResult, ValidationReport
+│   ├── check.py       #   validate(result, manifest_path) → ValidationReport
+│   ├── plot.py        #   plot_bands(), plot_dos() → PNG
+│   └── local/
+│       └── qe.py      #   parse_scf(), parse_relax() from pw.x output files
+├── aiida/             # AiiDA workflow integration (goldilocks[aiida])
+│   ├── convert.py     #   QEParameterSet → AiiDA input dicts (pure Python)
+│   ├── qe.py          #   build_pw_inputs(), build_relax_inputs()
+│   ├── pseudo.py      #   aiida-pseudo family lookup
+│   ├── submit.py      #   submit_pw() → (pk, uuid)
+│   ├── status.py      #   get_status(), is_finished()
+│   └── results.py     #   load_scf_result(), load_relax_result()
+├── mlip/              # MLIP pre-analysis (goldilocks[mlip], MACE-based)
+│   ├── types.py       #   MLIPPreview dataclass (importable without mace-torch)
+│   ├── preview.py     #   run_mlip_prep() → MLIPPreview
+│   ├── relax.py       #   relax_structure() using MACE + ASE BFGS
+│   └── phonon.py      #   check_phonon_stability() using phonopy
+└── cli/               # Thin Typer / Rich adapters
+    ├── main.py        #   app entry point (gl)
+    ├── commands/      #   gl input (non-interactive)
+    └── wizard/        #   gl (interactive wizard)
 ```
 
-### High-level responsibilities
+Every parameter decision in `advise/` carries a `provenance` field (`heuristic` / `ML` / `user_hint`) and a `rationale` string. Pass `--explain` to `gl input` to see all rationales.
 
-- `advisors/`
-  Coordinates recommendation workflows and policy decisions.
+## CLI at a Glance
 
-- `cli/`
-  Exposes thin command-line entry points.
+```
+gl
+ 1) Pre-Analysis      — load structure, database lookup, material analysis
+ 2) Input Kit         — AI-guided QE parameter recommendation + file generation
+ 3) HPC Playground    — detect scheduler/QE, generate PBS/SLURM scripts, QE install guide
+ 5) Parse & Validate  — parse QE output files, show convergence / energy / magnetisation
+ 6) Visualise         — plot DOS and band structure from QE output files
+ 0) Quit
+```
 
-- `io/`
-  Handles structure loading and normalization.
+See [docs/cli.md](docs/cli.md) for the full reference.
 
-- `kmesh.py`
-  Contains k-mesh construction and interval logic.
+## Hints Reference
 
-- `ml/`
-  Contains feature extraction, model loading, and inference utilities.
+Hints override specific advise-stage decisions. Pass with `-H key=value` (non-interactive) or enter in the wizard.
 
-- `pseudo/`
-  Contains UPF parsing and local pseudopotential registry logic.
-
-- `shared/`
-  Contains reusable shared data models and type definitions.
-
-For a fuller explanation, see [docs/architecture.md](docs/architecture.md).
+| Key | Example value | Effect |
+|-----|--------------|--------|
+| `spin_treatment` | `collinear` | Override spin/SOC treatment |
+| `ecutwfc_ev` | `680` | Wavefunction cutoff (eV) |
+| `ecutrho_ev` | `5440` | Charge density cutoff (eV) |
+| `initial_magnetization` | `Fe:3.0,Ni:1.5` | Starting magnetic moments (μB) |
+| `use_vdw` | `true` | Enable vdW correction |
+| `vdw_method` | `d3bj` | vdW method: `d3` / `d3bj` / `ts` / `mbd` |
 
 ## Development
 
-Run the test suite:
-
-```bash
-uv run pytest
-```
-
-Run formatting and checks:
-
-```bash
-uv run pre-commit run --all-files
-```
-
-A typical development loop is:
-
 ```bash
 uv run pytest
 uv run pre-commit run --all-files
+uv run mkdocs serve        # local docs preview
 ```
 
-## Testing Philosophy
+The test suite runs without any private local data. Tests that require local pseudo libraries are marked `skip` with a clear message.
 
-This project uses two complementary validation styles:
+## Ecosystem
 
-- portable tests built from synthetic fixtures under `tmp_path`
-- local exploratory validation against real pseudopotential libraries and notebook experiments
+`goldilocks-core` sits in a four-repo pipeline:
 
-When a local exploration reveals an important behavior, it should be turned into a focused regression test whenever possible.
+```
+goldilocks-data → goldilocks-models → goldilocks-core → goldilocks-webapp
+```
 
-## Current Status
+`goldilocks-models` imports two stable APIs from this package:
 
-This project is under active design and development.
+- `goldilocks_core.kmesh.build_kmesh_entries` — k-index schedule
+- `goldilocks_core.infer_features` — structure feature extraction
 
-The current codebase already has:
-
-- a working ML-driven k-mesh recommendation path
-- real UPF parsing across multiple pseudo-library styles
-- a local pseudo registry foundation
-- an evolving domain-oriented package structure
-
-The next major steps are expected to include:
-
-- richer pseudo registry filtering
-- pseudopotential selection logic
-- electron metadata derived from selected pseudos
-- clearer user-facing workflows for local pseudo management
+These must not change without retraining the models.

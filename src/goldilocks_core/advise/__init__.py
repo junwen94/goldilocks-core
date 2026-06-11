@@ -1,5 +1,6 @@
-from goldilocks_core.advise.pipeline import build_qe_parameter_set
+from goldilocks_core.advise.pipeline import advise
 from goldilocks_core.advise.types import (
+    AdviceBundle,
     CutoffDecision,
     KPointsDecision,
     Protocol,
@@ -10,7 +11,8 @@ from goldilocks_core.advise.types import (
 )
 
 __all__ = [
-    "build_qe_parameter_set",
+    "advise",
+    "AdviceBundle",
     "CutoffDecision",
     "KPointsDecision",
     "Protocol",

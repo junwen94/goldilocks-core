@@ -6,9 +6,6 @@ from goldilocks_core.advise.types import PseudoSelection
 from goldilocks_core.analyse.structure import StructureAnalysis
 from goldilocks_core.intent import CalculationIntent
 
-_HINT_PSEUDO_FAMILY = "pseudo_family"
-_HINT_PSEUDO_DIR = "pseudo_dir"
-
 _SR_TAG = "/SR/"
 _FR_TAG = "/FR/"
 
@@ -127,8 +124,8 @@ def advise_pseudos(
     hints = intent.hints
     elements = sorted(set(analysis.elements))
 
-    if _HINT_PSEUDO_FAMILY in hints:
-        family = str(hints[_HINT_PSEUDO_FAMILY])
+    if hints.pseudo_family is not None:
+        family = hints.pseudo_family
         provenance = "user_hint"
     elif analysis.soc_relevant and _SR_TAG in intent.pseudo_family:
         family = _to_fr_family(intent.pseudo_family)
@@ -138,8 +135,8 @@ def advise_pseudos(
         provenance = "heuristic"
 
     # Resolve pseudo directory: hint > bundled data > aiida-pseudo placeholder
-    if _HINT_PSEUDO_DIR in hints:
-        pseudo_dir_path = Path(str(hints[_HINT_PSEUDO_DIR]))
+    if hints.pseudo_dir is not None:
+        pseudo_dir_path = Path(hints.pseudo_dir)
         return _resolve_from_registry(elements, family, pseudo_dir_path, provenance)
 
     # Try bundled data (ships with the package)

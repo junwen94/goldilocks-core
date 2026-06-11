@@ -38,7 +38,7 @@ kpoints-ml = [
     "torch-geometric>=2.5",
 ]
 # Standard MACE (PyPI) for MLIP pre-relaxation and structure embedding.
-mlip = ["mace-torch>=0.3.14", "torch>=2.0"]
+mlip = ["mace-torch>=0.3.14", "torch>=2.0", "phonopy>=2.20"]
 # mMACE fork — magnetic extensions (non-collinear SCF) not in public mace-torch.
 # Installs as mace-torch and REPLACES the public package.
 # Do NOT install both [mlip] and [magnetic] together.

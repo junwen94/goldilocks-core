@@ -9,11 +9,22 @@ direction is ``ceil(b* / δk)``, ensuring the actual spacing never exceeds δk.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 from pymatgen.core import Structure
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
-from goldilocks_core.shared.types import KMeshEntry
+
+@dataclass(frozen=True)
+class KMeshEntry:
+    """One indexed k-mesh entry produced from a structure scan."""
+
+    k_index: int
+    mesh: tuple[int, int, int]
+    k_distance_interval: tuple[float, float]
+    k_line_density_interval: tuple[float, float] | None
+    k_pra: float
+    n_reduced_kpoints: int
 
 
 def k_distance_to_mesh(

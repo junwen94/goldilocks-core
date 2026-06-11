@@ -6,7 +6,8 @@ from pathlib import Path
 
 from pymatgen.core import Structure
 
-from goldilocks_core.shared.types import StructureInput
+PathLike = str | Path
+StructureInput = Structure | PathLike
 
 
 def load_structure(structure: StructureInput) -> Structure:

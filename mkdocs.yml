@@ -27,6 +27,7 @@ plugins:
 nav:
   - Home: index.md
   - CLI: cli.md
+  - Architecture: architecture.md
   - API Reference:
       - intent: api/intent.md
       - analyse: api/analyse.md

@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 from pymatgen.core import Structure
 
-from goldilocks_core.shared.types import StructureFeatureVector
+from goldilocks_core.ml.types import StructureFeatureVector
 
 
 def extract_c_features(structure: Structure) -> StructureFeatureVector:
@@ -207,8 +207,8 @@ def extract_r_features(structure: Structure) -> StructureFeatureVector:
     )
 
 
-def extract_cslr_features(structure: Structure) -> StructureFeatureVector:
-    """Extract CSLR-style features from a structure."""
+def infer_features(structure: Structure) -> StructureFeatureVector:
+    """Extract CSLR-style structure features for ML inference."""
     c_features = extract_c_features(structure)
     s_features = extract_s_features(structure)
     l_features = extract_l_features(structure)
@@ -236,9 +236,5 @@ def extract_cslr_features(structure: Structure) -> StructureFeatureVector:
     )
 
 
-def infer_features(structure: Structure) -> StructureFeatureVector:
-    """Extract CSLR structure features for ML inference.
-
-    Public name expected by goldilocks-models. Wraps extract_cslr_features.
-    """
-    return extract_cslr_features(structure)
+# Backward-compat alias — goldilocks-models may import this name directly
+extract_cslr_features = infer_features

@@ -3,10 +3,10 @@ from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.ml.features import (
     extract_c_features,
-    extract_cslr_features,
     extract_l_features,
     extract_r_features,
     extract_s_features,
+    infer_features,
 )
 
 
@@ -35,7 +35,7 @@ def test_extract_l_features_returns_lattice_features() -> None:
     )
 
 
-def test_extract_cslr_features_combines_feature_blocks() -> None:
+def test_infer_features_combines_feature_blocks() -> None:
     """Combine C, S, L, and R feature blocks in a fixed order."""
     structure = Structure(
         lattice=Lattice.cubic(3.5),
@@ -48,7 +48,7 @@ def test_extract_cslr_features_combines_feature_blocks() -> None:
     l_features = extract_l_features(structure)
     r_features = extract_r_features(structure)
 
-    cslr_features = extract_cslr_features(structure)
+    cslr_features = infer_features(structure)
 
     expected_names = (
         c_features.feature_names

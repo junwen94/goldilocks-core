@@ -168,6 +168,26 @@ class PhononSetupAdvice:
 
 
 # ---------------------------------------------------------------------------
+# Layer 1.5: code-agnostic bundle (output of advise stage, input to select)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class AdviceBundle:
+    """Code-agnostic output of the advise stage.
+
+    Contains one decision per physical parameter.  The select stage
+    translates this into code-specific concrete values (e.g. QEParameterSet).
+    """
+
+    smearing: SmearingDecision
+    kpoints: KPointsDecision
+    spin: SpinDecision
+    pseudos: list[PseudoSelection]
+    cutoff: CutoffDecision
+    vdw: VdwDecision
+
+
+# ---------------------------------------------------------------------------
 # Layer 2: QE-specific parameter set
 # ---------------------------------------------------------------------------
 

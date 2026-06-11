@@ -44,9 +44,9 @@ def advise_vdw(
     hints = intent.hints
 
     # ── User hint override ───────────────────────────────────────────────────
-    if "use_vdw" in hints:
-        use = bool(hints["use_vdw"])
-        method_raw = hints.get("vdw_method", _DEFAULT_METHOD) if use else None
+    if hints.use_vdw is not None:
+        use = hints.use_vdw
+        method_raw = (hints.vdw_method or _DEFAULT_METHOD) if use else None
         if method_raw is not None and method_raw not in _VALID_METHODS:
             raise ValueError(
                 f"Unknown vdw_method {method_raw!r}. "

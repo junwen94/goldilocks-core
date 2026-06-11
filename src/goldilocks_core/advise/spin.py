@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from goldilocks_core.advise.types import SpinDecision
 from goldilocks_core.analyse.structure import StructureAnalysis
-from goldilocks_core.intent import CalculationIntent
-
-_HINT_TREATMENT = "spin_treatment"
-_HINT_INITIAL_MAG = "initial_magnetization"
+from goldilocks_core.intent import CalculationIntent, ParameterHints
 
 _VALID_TREATMENTS = frozenset({"non_magnetic", "collinear", "non_collinear", "non_collinear_soc"})
 
@@ -70,7 +67,7 @@ def _parse_mag_hint(raw: object) -> dict[str, float]:
 def _initial_magnetization(
     elements: list[str],
     magnetic_elements: list[str],
-    hints: dict,
+    hints: ParameterHints,
     include_all: bool = False,
 ) -> dict[str, float] | None:
     """Return initial magnetic moments (μB) per element.
@@ -79,9 +76,8 @@ def _initial_magnetization(
     species get _DEFAULT_NONMAG_MAG so QE doesn't start from zero and collapse.
     include_all=False (collinear): only magnetic species; QE default (0) for others.
     """
-    if _HINT_INITIAL_MAG in hints:
-        raw = hints[_HINT_INITIAL_MAG]
-        return _parse_mag_hint(raw)
+    if hints.initial_magnetization is not None:
+        return _parse_mag_hint(hints.initial_magnetization)
     if not magnetic_elements:
         return None
     if include_all:
@@ -125,8 +121,8 @@ def advise_spin(
     hints = intent.hints
 
     # --- user_hint overrides all ---
-    if _HINT_TREATMENT in hints:
-        treatment = str(hints[_HINT_TREATMENT])
+    if hints.spin_treatment is not None:
+        treatment = hints.spin_treatment
         if treatment not in _VALID_TREATMENTS:
             raise ValueError(
                 f"Unknown spin treatment {treatment!r}. Valid: {sorted(_VALID_TREATMENTS)}"

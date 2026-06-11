@@ -4,9 +4,6 @@ from goldilocks_core.advise.types import CutoffDecision, PseudoSelection
 from goldilocks_core.analyse.structure import StructureAnalysis
 from goldilocks_core.intent import CalculationIntent
 
-_HINT_ECUTWFC_EV = "ecutwfc_ev"
-_HINT_ECUTRHO_EV = "ecutrho_ev"
-
 _EV_PER_RY: float = 13.605693122994
 
 # Accuracy-tier defaults for norm-conserving (NC) pseudos.
@@ -36,9 +33,9 @@ def advise_basis(
     """
     hints = intent.hints
 
-    if _HINT_ECUTWFC_EV in hints and _HINT_ECUTRHO_EV in hints:
-        wfc_ev = float(hints[_HINT_ECUTWFC_EV])
-        rho_ev = float(hints[_HINT_ECUTRHO_EV])
+    if hints.ecutwfc_ev is not None and hints.ecutrho_ev is not None:
+        wfc_ev = hints.ecutwfc_ev
+        rho_ev = hints.ecutrho_ev
         return CutoffDecision(
             wavefunction_cutoff_ev=wfc_ev,
             density_cutoff_ev=rho_ev,

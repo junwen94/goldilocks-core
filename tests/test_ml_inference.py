@@ -1,6 +1,6 @@
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.ml.features import extract_cslr_features
+from goldilocks_core.ml.features import infer_features
 from goldilocks_core.ml.inference import predict
 
 
@@ -19,7 +19,7 @@ def test_predict_runs_on_cslr_features() -> None:
         coords=[[0.0, 0.0, 0.0]],
     )
 
-    features = extract_cslr_features(structure)
+    features = infer_features(structure)
     result = predict(DummyModel(), features)
 
     assert isinstance(result, float)

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 
-from goldilocks_core.advise.pipeline import build_qe_parameter_set
+from goldilocks_core.advise.pipeline import advise
 from goldilocks_core.analyse.structure import analyze_structure
 from goldilocks_core.intent import CalculationIntent
 from goldilocks_core.io.structures import load_structure
+from goldilocks_core.select.qe import build_qe_parameter_set
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,7 +38,7 @@ def main() -> None:
     structure = load_structure(args.structure)
     analysis = analyze_structure(structure)
     intent = CalculationIntent(structure=structure, accuracy=args.accuracy)
-    params = build_qe_parameter_set(analysis, intent)
+    params = build_qe_parameter_set(advise(analysis, intent))
 
     print(f"recommended mesh:  {params.kpoints_grid}")
     print(f"shift:             {params.kpoints_shift}")

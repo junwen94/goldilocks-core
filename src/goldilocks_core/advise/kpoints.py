@@ -9,10 +9,6 @@ from goldilocks_core.kmesh import (
     k_distance_to_mesh,
 )
 
-_HINT_KPOINTS_GRID  = "kpoints_grid"
-_HINT_KPOINTS_SHIFT = "kpoints_shift"
-_HINT_K_DISTANCE    = "k_distance"
-
 
 def advise_kpoints(
     analysis: StructureAnalysis,
@@ -36,14 +32,12 @@ def advise_kpoints(
     hints = intent.hints
 
     # --- grid ---
-    if _HINT_KPOINTS_GRID in hints:
-        raw = hints[_HINT_KPOINTS_GRID]
-        grid: tuple[int, int, int] = (int(raw[0]), int(raw[1]), int(raw[2]))
+    if hints.kpoints_grid is not None:
+        grid = hints.kpoints_grid
         provenance = "user_hint"
         rationale = f"k-point grid overridden by user_hint: {grid}"
 
     elif k_index is not None:
-        # ML path A: integer k_index → interval schedule (build_k_distance_intervals)
         candidates = generate_candidate_k_distances(intent.structure)
         ivs = build_k_distance_intervals(intent.structure, candidates)
         resolved = max(1, min(k_index, len(ivs)))
@@ -56,7 +50,6 @@ def advise_kpoints(
         )
 
     elif k_distance_ml is not None:
-        # ML path B: predicted k_distance (Å⁻¹) → k_distance_to_mesh
         grid = k_distance_to_mesh(intent.structure, k_distance_ml)
         provenance = "ML"
         rationale = (
@@ -66,13 +59,10 @@ def advise_kpoints(
         )
 
     else:
-        # Heuristic path: accuracy tier → k_distance → mesh
-        if _HINT_K_DISTANCE in hints:
-            k_distance = float(hints[_HINT_K_DISTANCE])
+        if hints.k_distance is not None:
+            k_distance = hints.k_distance
             provenance = "user_hint"
-            rationale = (
-                f"User override: k_distance={k_distance} Å⁻¹ → grid={{}}"
-            )
+            rationale = f"User override: k_distance={k_distance} Å⁻¹ → grid={{}}"
         else:
             k_distance = protocol.k_distance
             provenance = "heuristic"
@@ -95,13 +85,8 @@ def advise_kpoints(
         rationale += f"; non-periodic axes clamped → {grid}"
 
     # --- shift ---
-    if _HINT_KPOINTS_SHIFT in hints:
-        raw_shift = hints[_HINT_KPOINTS_SHIFT]
-        shift: tuple[int, int, int] = (
-            int(raw_shift[0]),
-            int(raw_shift[1]),
-            int(raw_shift[2]),
-        )
+    if hints.kpoints_shift is not None:
+        shift = hints.kpoints_shift
         provenance = "user_hint"
     else:
         shift = (0, 0, 0)
