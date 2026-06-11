@@ -14,7 +14,16 @@ from rich.text import Text
 if TYPE_CHECKING:
     from goldilocks_core.cli.wizard._context import WizardContext
 
-_TASKS = ["scf", "relax", "vc-relax", "nscf", "bands", "md", "vc-md"]
+_TASKS: list[tuple[str, str]] = [
+    ("scf",      "self-consistent field"),
+    ("relax",    "ionic relaxation, fixed cell"),
+    ("vc-relax", "variable-cell relaxation"),
+    ("nscf",     "non-self-consistent field  (DOS / Fermi surface)"),
+    ("bands",    "band structure along k-path"),
+    ("ph",       "phonon calculation (ph.x)"),
+    ("md",       "Born-Oppenheimer MD, fixed cell"),
+    ("vc-md",    "variable-cell MD"),
+]
 _ACCURACY = ["fast", "balanced", "accurate"]
 _RY_TO_EV: float = 13.605693122994
 
@@ -40,16 +49,16 @@ def run(
     # --- task ------------------------------------------------------------
     console.print()
     console.print("  [bold]Calculation task[/bold]")
-    for i, t in enumerate(_TASKS, 1):
-        suffix = "  [dim](default)[/dim]" if t == "scf" else ""
-        console.print(f"    [cyan]{i})[/cyan] {t}{suffix}")
+    for i, (name, desc) in enumerate(_TASKS, 1):
+        default_tag = "  [dim](default)[/dim]" if name == "scf" else ""
+        console.print(f"    [cyan]{i})[/cyan]  {name:<10} — {desc}{default_tag}")
     t_choice = Prompt.ask(
         "  Select  [dim](press Enter for default)[/dim]",
         choices=[str(i) for i in range(1, len(_TASKS) + 1)],
         default="1",
         show_default=False,
     )
-    task = _TASKS[int(t_choice) - 1]
+    task = _TASKS[int(t_choice) - 1][0]
 
     # --- accuracy --------------------------------------------------------
     console.print()
@@ -78,12 +87,49 @@ def run(
             if k.strip():
                 hints[k.strip()] = _coerce(v.strip())
 
+    # --- ph-specific: setup advise + q-grid confirm ----------------------
+    ph_nq: tuple[int, int, int] | None = None
+    ph_setup = None
+    if task == "ph":
+        from goldilocks_core.advise.phonon import advise_ph_setup
+
+        # Need base k-grid: build a temporary intent for the advise pipeline
+        from goldilocks_core.advise.pipeline import build_qe_parameter_set
+        from goldilocks_core.intent import CalculationIntent as _CI
+
+        _tmp_intent = _CI(
+            structure=ctx.structure, code="qe", task="scf",
+            accuracy=cast(Literal["fast", "balanced", "accurate"], accuracy),
+        )
+        _tmp_params = build_qe_parameter_set(ctx.analysis, _tmp_intent)
+        ph_setup = advise_ph_setup(
+            ctx.structure, ctx.analysis,
+            cast(Literal["fast", "balanced", "accurate"], accuracy),
+            _tmp_params.kpoints_grid,
+        )
+
+        _display_ph_setup(console, ph_setup)
+
+        nq = ph_setup.q_grid.nq
+        q_raw = Prompt.ask(
+            "  Q-grid",
+            default=f"{nq[0]} {nq[1]} {nq[2]}",
+            show_default=True,
+        ).strip()
+        if q_raw:
+            parts = q_raw.split()
+            if len(parts) == 3 and all(p.isdigit() for p in parts):
+                ph_nq = (int(parts[0]), int(parts[1]), int(parts[2]))
+            else:
+                console.print(f"  [yellow]⚠[/yellow] Invalid — using recommended {nq[0]} {nq[1]} {nq[2]}")
+                ph_nq = nq
+
     # --- build intent and run pipeline -----------------------------------
     from goldilocks_core.advise.pipeline import build_qe_parameter_set
     from goldilocks_core.intent import CalculationIntent
 
     _task = cast(
-        Literal["scf", "nscf", "bands", "relax", "md", "vc-relax", "vc-md"],
+        Literal["scf", "nscf", "bands", "relax", "md", "vc-relax", "vc-md", "ph"],
         task,
     )
     _accuracy = cast(Literal["fast", "balanced", "accurate"], accuracy)
@@ -133,7 +179,7 @@ def run(
             default="./goldilocks_output",
             show_default=False,
         )
-        _generate_qe(console, params, ctx.structure, intent, raw_dir)
+        _generate_qe(console, params, ctx.structure, intent, raw_dir, ph_nq=ph_nq, ph_setup=ph_setup)
 
 
 # ---------------------------------------------------------------------------
@@ -347,19 +393,104 @@ def _display_agnostic(
     console.print()
 
 
+def _display_ph_setup(console: Console, ph_setup: Any) -> None:
+    """Print the phonon setup checklist panel."""
+    from rich.panel import Panel
+
+    qadv = ph_setup.q_grid
+    nq   = qadv.nq
+    kg   = ph_setup.phonon_kgrid
+
+    lines: list[str] = [
+        "  [bold]Q-grid[/bold]  [dim](heuristic)[/dim]\n"
+        f"  Recommended  [bold cyan]{nq[0]} {nq[1]} {nq[2]}[/bold cyan]"
+        f"  [dim]IFC range ≈ {qadv.target_range_aa:.0f} Å[/dim]\n"
+        f"  [dim]{qadv.rationale}[/dim]\n",
+
+        "  [bold]Auto-applied to goldilocks.in (SCF for phonon)[/bold]\n"
+        f"  [green]✓[/green]  conv_thr = {ph_setup.scf_conv_thr:.0e}"
+        "  [dim](tighter than standard SCF)[/dim]\n"
+        f"  [green]✓[/green]  k-grid  {kg[0]} {kg[1]} {kg[2]}"
+        f"  [dim](commensurate with q-grid)[/dim]\n",
+
+        "  [bold]Auto-applied to ph.in[/bold]\n"
+        f"  [green]✓[/green]  tr2_ph = {ph_setup.tr2_ph:.0e}\n"
+        + (
+            "  [green]✓[/green]  epsil = .true."
+            "  [dim](polar insulator → Born charges + ε∞ for LO-TO splitting)[/dim]\n"
+            if ph_setup.needs_epsil else
+            "  [dim]–[/dim]  epsil = .false.  [dim](non-polar)[/dim]\n"
+        ),
+
+        "  [bold]Advisory (not in generated files)[/bold]\n"
+        "  [dim]·[/dim]  Relax structure first: "
+        "force < 1e-4 Ry/Bohr, stress < 0.1 kbar\n"
+        "  [dim]·[/dim]  matdyn.x: asr = 'crystal'\n"
+        "  [dim]·[/dim]  Verify q-grid convergence: compare phonon dispersion "
+        "at successive grids\n",
+    ]
+
+    if ph_setup.warnings:
+        warn_lines = "\n".join(
+            f"  [yellow]⚠[/yellow]  {w}" for w in ph_setup.warnings
+        )
+        lines.append(f"  [bold]Warnings[/bold]\n{warn_lines}\n")
+
+    console.print()
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title="[bold]Phonon Setup[/bold]  ·  heuristic",
+            border_style="cyan",
+            padding=(0, 2),
+        )
+    )
+    console.print()
+
+
 def _generate_qe(
     console: Console,
     params: Any,
     structure: Any,
     intent: Any,
     output_dir: str,
+    ph_nq: tuple[int, int, int] | None = None,
+    ph_setup: Any = None,
 ) -> None:
-    """Write goldilocks.in + copy pseudopotentials, then report to console."""
-    from goldilocks_core.generate.qe import write_qe_inputs
+    """Write gl-pw-{task}.in (and gl-ph.in for ph tasks) + copy pseudopotentials."""
+    from goldilocks_core.generate.qe import write_ph_inputs, write_qe_inputs
+
+    is_ph = intent.task == "ph"
+    run_dir = _next_run_dir(output_dir)
 
     with console.status("  Writing files…", spinner="dots"):
         try:
-            result = write_qe_inputs(params, structure, intent, output_dir=output_dir)
+            # For ph tasks, generate an SCF input with phonon-appropriate settings
+            scf_intent = intent
+            if is_ph:
+                from goldilocks_core.intent import CalculationIntent
+
+                scf_intent = CalculationIntent(
+                    structure=intent.structure,
+                    code=intent.code,
+                    task="scf",
+                    xc=intent.xc,
+                    pseudo_family=intent.pseudo_family,
+                    accuracy=intent.accuracy,
+                    hints=intent.hints,
+                )
+            kgrid_override = ph_setup.phonon_kgrid if (is_ph and ph_setup) else None
+            conv_thr       = ph_setup.scf_conv_thr  if (is_ph and ph_setup) else None
+            result = write_qe_inputs(
+                params, structure, scf_intent, output_dir=run_dir,
+                kgrid_override=kgrid_override, conv_thr=conv_thr,
+            )
+            ph_result = write_ph_inputs(
+                output_dir=run_dir,
+                nq=ph_nq,
+                epsil=ph_setup.needs_epsil if ph_setup else False,
+                tr2_ph=ph_setup.tr2_ph if ph_setup else 1e-14,
+            ) if is_ph else None
         except Exception as exc:
             console.print(f"  [red]Error generating files:[/red] {exc}")
             return
@@ -369,13 +500,14 @@ def _generate_qe(
     missing: list[str] = result.get("missing_pp", [])
 
     console.print()
-    console.print(f"  [green]✓[/green] [bold]{input_path}[/bold]")
+    console.print(f"  [bold]Output:[/bold] {run_dir}")
+    console.print(f"  [green]✓[/green] [bold]{input_path.name}[/bold]")
+    if ph_result:
+        console.print(f"  [green]✓[/green] [bold]{ph_result['ph_file'].name}[/bold]")
 
-    # List copied pp files
     if pseudo_path.exists():
-        pp_files = sorted(pseudo_path.iterdir())
-        for f in pp_files:
-            console.print(f"  [green]✓[/green] {f}")
+        for f in sorted(pseudo_path.iterdir()):
+            console.print(f"  [green]✓[/green] pseudo/{f.name}")
 
     if missing:
         console.print(
@@ -383,11 +515,38 @@ def _generate_qe(
             f"{', '.join(missing)} — add them manually to {pseudo_path}"
         )
 
+    run_name = run_dir.name
     console.print()
-    console.print(
-        "  [dim]Run with:[/dim]  pw.x -in goldilocks.in > goldilocks.out",
-        highlight=False,
-    )
+    if is_ph:
+        console.print(
+            f"  [dim]Run with:[/dim]  pw.x -in {run_name}/gl-pw-scf.in > {run_name}/gl-pw-scf.out",
+            highlight=False,
+        )
+        console.print(
+            f"             then:  ph.x -in {run_name}/gl-ph.in > {run_name}/gl-ph.out",
+            highlight=False,
+        )
+    else:
+        console.print(
+            f"  [dim]Run with:[/dim]  pw.x -in {run_name}/gl-pw-{intent.task}.in"
+            f" > {run_name}/gl-pw-{intent.task}.out",
+            highlight=False,
+        )
+
+
+def _next_run_dir(base: str) -> Any:
+    """Return the next unused run_NNN Path under *base*, creating it."""
+    from pathlib import Path
+
+    base_path = Path(base)
+    base_path.mkdir(parents=True, exist_ok=True)
+    n = 1
+    while True:
+        candidate = base_path / f"run_{n:03d}"
+        if not candidate.exists():
+            candidate.mkdir(parents=True)
+            return candidate
+        n += 1
 
 
 def _coerce(value: str) -> Any:
