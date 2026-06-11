@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from goldilocks_core.pseudo.metadata import PseudoMetadata
 from goldilocks_core.pseudo.parse_upf import parse_upf_metadata
-from goldilocks_core.pseudo.pp_metadata import PseudoMetadata
 
 
 def load_pseudo_metadata(root: str | Path) -> list[PseudoMetadata]:

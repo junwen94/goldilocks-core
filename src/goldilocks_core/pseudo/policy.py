@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from goldilocks_core.pseudo.pp_metadata import PseudoMetadata
+from goldilocks_core.pseudo.metadata import PseudoMetadata
 
 
 @dataclass(frozen=True)

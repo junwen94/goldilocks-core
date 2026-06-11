@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from goldilocks_core.pseudo.pp_registry import (
+from goldilocks_core.pseudo.registry import (
     filter_by_element,
     filter_by_functional,
     filter_by_pseudo_type,

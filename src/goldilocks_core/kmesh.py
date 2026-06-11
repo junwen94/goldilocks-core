@@ -1,4 +1,10 @@
-"""Utilities for converting between k-point representations."""
+"""K-mesh utilities for converting k-point spacing (Å⁻¹) to uniform grids.
+
+K-point sampling density is often specified as a maximum spacing δk between
+adjacent k-points (Å⁻¹) rather than an explicit grid.  For each reciprocal
+lattice direction with length b*, the number of grid points along that
+direction is ``ceil(b* / δk)``, ensuring the actual spacing never exceeds δk.
+"""
 
 from __future__ import annotations
 
@@ -33,12 +39,12 @@ def k_distance_to_mesh(
         reciprocal_lattice.c,
     )
 
-    mesh = tuple(
+    a, b, c = tuple(
         max(1, math.ceil(round(length / k_distance, 5)))
         for length in reciprocal_lengths
     )
 
-    return mesh
+    return (a, b, c)
 
 
 def generate_candidate_k_distances(

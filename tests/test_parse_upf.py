@@ -4,7 +4,14 @@ import pytest
 
 from goldilocks_core.pseudo.parse_upf import parse_upf_metadata
 
+_LOCAL_DATA = Path("local_data/pseudopotentials")
+_has_local = pytest.mark.skipif(
+    not _LOCAL_DATA.exists(),
+    reason="local_data/ not present — integration tests require local pseudo files",
+)
 
+
+@_has_local
 def test_parse_upf_metadata_parses_real_pslibrary_file() -> None:
     """Parse metadata from a real PSLibrary UPF file."""
     pseudo_path = Path(
@@ -21,6 +28,7 @@ def test_parse_upf_metadata_parses_real_pslibrary_file() -> None:
     assert metadata.z_valence == 12.0
 
 
+@_has_local
 def test_parse_upf_metadata_parses_real_gbrv_text_header() -> None:
     """Parse metadata from a real GBRV text-style PP_HEADER."""
     pseudo_path = Path(
@@ -45,6 +53,7 @@ def test_parse_upf_metadata_raises_for_missing_file(tmp_path: Path) -> None:
         parse_upf_metadata(pseudo_path)
 
 
+@_has_local
 def test_parse_upf_metadata_parses_real_pslibrary_pbesol_file() -> None:
     """Parse metadata from a real PSLibrary PBESOL UPF file."""
     pseudo_path = Path(
@@ -61,6 +70,7 @@ def test_parse_upf_metadata_parses_real_pslibrary_pbesol_file() -> None:
     assert metadata.z_valence == 3.0
 
 
+@_has_local
 def test_parse_upf_metadata_prefers_header_pseudo_type_over_filename_hint() -> None:
     """Prefer PP_HEADER pseudo_type over filename naming conventions."""
     pseudo_path = Path(

@@ -1,5 +1,5 @@
-from goldilocks_core.pseudo.pp_metadata import PseudoMetadata
-from goldilocks_core.pseudo.pp_policy import PseudoPolicy, apply_pseudo_policy
+from goldilocks_core.pseudo.metadata import PseudoMetadata
+from goldilocks_core.pseudo.policy import PseudoPolicy, apply_pseudo_policy
 
 
 def test_apply_pseudo_policy_filters_metadata_list() -> None:

@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from goldilocks_core.pseudo.pp_metadata import PseudoMetadata
+from goldilocks_core.pseudo.metadata import PseudoMetadata
 
 _TRUE_VALUES = {"T", "TRUE", "Y", "YES", "1"}
 _FALSE_VALUES = {"F", "FALSE", "N", "NO", "0"}
@@ -375,7 +375,9 @@ def _load_sssp_json(path: Path) -> dict[str, Any] | None:
     if not json_path.exists():
         return None
 
-    return json.loads(json_path.read_text())
+    data: dict[str, Any] = json.loads(json_path.read_text())
+    return data
+
 
 
 def _get_sssp_info(
