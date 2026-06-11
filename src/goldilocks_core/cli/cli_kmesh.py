@@ -4,25 +4,27 @@ from __future__ import annotations
 
 import argparse
 
-from goldilocks_core.advisors import advise_kpoints
+from goldilocks_core.advise.pipeline import build_qe_parameter_set
+from goldilocks_core.analyse.structure import analyze_structure
+from goldilocks_core.intent import CalculationIntent
 from goldilocks_core.io.structures import load_structure
-from goldilocks_core.shared.types import ModelSpec
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser for k-mesh recommendation."""
     parser = argparse.ArgumentParser(
-        prog="goldilocks",
-        description="Recommend a k-mesh for a structure.",
+        prog="goldilocks-kmesh",
+        description="Recommend a k-point mesh for a structure.",
     )
     parser.add_argument(
         "structure",
         help="Path to the input structure file.",
     )
     parser.add_argument(
-        "--model",
-        required=True,
-        help="The model to use for recommendation.",
+        "--accuracy",
+        choices=["fast", "balanced", "accurate"],
+        default="accurate",
+        help="Accuracy tier (default: accurate).",
     )
     return parser
 
@@ -33,20 +35,13 @@ def main() -> None:
     args = parser.parse_args()
 
     structure = load_structure(args.structure)
-    spec = ModelSpec(
-        name="cli-local-model",
-        version="unknown",
-        model_type="random_forest",
-        target="k_index",
-        feature_set="cslr",
-        source="local",
-        location=args.model,
-        revision=None,
-    )
+    analysis = analyze_structure(structure)
+    intent = CalculationIntent(structure=structure, accuracy=args.accuracy)
+    params = build_qe_parameter_set(analysis, intent)
 
-    advice = advise_kpoints(structure, spec)
-
-    print(f"recommended mesh: {advice.grid}")
+    print(f"recommended mesh:  {params.kpoints_grid}")
+    print(f"shift:             {params.kpoints_shift}")
+    print(f"protocol:          {params.kpoints_decision.rationale}")
 
 
 if __name__ == "__main__":
