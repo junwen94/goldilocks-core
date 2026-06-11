@@ -17,6 +17,9 @@ local_data/
 # Generated DFT input/output directories
 goldilocks_output/
 
+# MkDocs build output
+site/
+
 # macOS
 .DS_Store
 
