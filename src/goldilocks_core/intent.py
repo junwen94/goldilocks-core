@@ -35,7 +35,7 @@ class CalculationIntent:
 
     structure: Structure
     code: str = "qe"
-    task: Literal["scf", "nscf", "bands", "relax", "md", "vc-relax", "vc-md"] = "scf"
+    task: Literal["scf", "nscf", "bands", "relax", "md", "vc-relax", "vc-md", "ph"] = "scf"
     xc: str = "pbesol"
     pseudo_family: str = "PseudoDojo/0.4/PBEsol/SR/standard/upf"
     accuracy: Literal["fast", "balanced", "accurate"] = "accurate"

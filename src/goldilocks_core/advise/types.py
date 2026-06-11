@@ -102,6 +102,55 @@ class PseudoSelection:
 
 
 # ---------------------------------------------------------------------------
+# Phonon
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class QGridAdvice:
+    """Heuristic q-point grid recommendation for a ph.x phonon calculation.
+
+    The grid is sized so that each direction spans at least *target_range_aa*
+    angstroms of real-space IFC support.  See ``advise.phonon.advise_qgrid``.
+    """
+
+    nq: tuple[int, int, int]
+    target_range_aa: float       # Å — IFC real-space target used
+    provenance: _Provenance
+    rationale: str
+
+
+@dataclass(frozen=True, slots=True)
+class PhononSetupAdvice:
+    """Comprehensive heuristic setup for a ph.x phonon calculation.
+
+    Contains all parameters needed to generate a phonon-ready SCF input
+    (``goldilocks.in``) and a ``ph.in`` file.  Auto-applied items are written
+    into the generated files; advisory items are surfaced in the wizard.
+    """
+
+    # Q-grid
+    q_grid: QGridAdvice
+
+    # SCF k-grid, commensurate with q-grid and denser than normal SCF.
+    # Rule: nk_i = mult × nq_i (mult = 3–5 for metals, 2–3 for insulators).
+    phonon_kgrid: tuple[int, int, int]
+
+    # SCF convergence (auto-applied to &ELECTRONS in goldilocks.in)
+    scf_conv_thr: float          # 1e-10
+
+    # ph.x convergence (auto-applied to ph.in)
+    tr2_ph: float                # 1e-14
+
+    # LO-TO splitting: True for polar insulators (is_polar + insulating)
+    needs_epsil: bool
+
+    # Advisory warnings to surface in the wizard (not auto-applied)
+    warnings: list[str]
+
+    provenance: _Provenance
+
+
+# ---------------------------------------------------------------------------
 # Layer 2: QE-specific parameter set
 # ---------------------------------------------------------------------------
 
