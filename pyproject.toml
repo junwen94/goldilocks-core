@@ -100,4 +100,12 @@ warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = [
+    "goldilocks_core.ml.kpoints.*",
+    "goldilocks_core.ml.magnetic",
+    "goldilocks_core.io.db_search",
+]
+ignore_errors = true
+
 

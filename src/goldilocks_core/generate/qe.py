@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pymatgen.core import Structure
@@ -56,7 +56,7 @@ def write_qe_inputs(
     output_dir: str | Path = "./goldilocks_output",
     kgrid_override: tuple[int, int, int] | None = None,
     conv_thr: float | None = None,
-) -> dict[str, Path]:
+) -> dict[str, Any]:
     """Generate ``goldilocks.in`` and copy pseudopotential files.
 
     Args:
@@ -117,7 +117,9 @@ def write_qe_inputs(
         system["nspin"] = 2
 
     # starting_magnetization: μB → QE fraction (divide by pseudo z_valence)
-    # Species index follows first-appearance order in the ASE atoms list.
+    # ASE reads initial magmoms from the Atoms object and writes
+    # starting_magnetization(N) from there — so we set them on the atoms
+    # object instead of injecting into input_data["system"].
     if params.starting_magnetization:
         z_map = _z_valence_map(params)
         seen: dict[str, None] = {}
@@ -125,16 +127,19 @@ def write_qe_inputs(
             seen[sym] = None
         el_to_idx = {el: i + 1 for i, el in enumerate(seen)}
 
+        # Compute per-element fractional magmoms
+        mag_fracs: dict[str, float] = {}
         for el, mag_ub in params.starting_magnetization.items():
-            idx = el_to_idx.get(el)
-            if idx is None:
-                continue
             z_val = z_map.get(el)
             if z_val and z_val > 0:
-                mag_frac = max(-1.0, min(1.0, mag_ub / z_val))
+                mag_fracs[el] = round(max(-1.0, min(1.0, mag_ub / z_val)), 4)
             else:
-                mag_frac = max(-1.0, min(1.0, mag_ub / 10.0))
-            system[f"starting_magnetization({idx})"] = round(mag_frac, 4)
+                mag_fracs[el] = round(max(-1.0, min(1.0, mag_ub / 10.0)), 4)
+
+        # Set per-atom initial magnetic moments so ASE writes correct values
+        atoms.set_initial_magnetic_moments(
+            [mag_fracs.get(sym, 0.0) for sym in atoms.get_chemical_symbols()]
+        )
 
         # angle1 / angle2 for non-collinear (degrees; FM default 0.0)
         for angle_dict, key_prefix in [

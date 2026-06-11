@@ -39,6 +39,34 @@ _ML_INSTALL_TIP = (
 )
 
 
+def _parse_mag_hint(raw: object) -> dict[str, float]:
+    """Parse initial_magnetization hint into {element: μB} dict.
+
+    Accepts:
+      - dict as-is: {"Fe": 3.0}
+      - "Fe:3.0" or "Fe:3.0,Ni:1.5" (CLI-friendly colon-separated format)
+    """
+    if isinstance(raw, dict):
+        return {str(k): float(v) for k, v in raw.items()}
+    if isinstance(raw, str):
+        result: dict[str, float] = {}
+        for token in raw.replace(";", ",").split(","):
+            token = token.strip()
+            if not token:
+                continue
+            if ":" not in token:
+                raise ValueError(
+                    f"Cannot parse initial_magnetization token {token!r}. "
+                    "Expected format: El:value  e.g. Fe:3.0 or Fe:3.0,Ni:1.5"
+                )
+            el, _, val = token.partition(":")
+            result[el.strip()] = float(val.strip())
+        return result
+    raise ValueError(
+        f"initial_magnetization hint must be a dict or 'El:val' string, got {type(raw).__name__!r}"
+    )
+
+
 def _initial_magnetization(
     elements: list[str],
     magnetic_elements: list[str],
@@ -52,7 +80,8 @@ def _initial_magnetization(
     include_all=False (collinear): only magnetic species; QE default (0) for others.
     """
     if _HINT_INITIAL_MAG in hints:
-        return {str(k): float(v) for k, v in dict(hints[_HINT_INITIAL_MAG]).items()}
+        raw = hints[_HINT_INITIAL_MAG]
+        return _parse_mag_hint(raw)
     if not magnetic_elements:
         return None
     if include_all:

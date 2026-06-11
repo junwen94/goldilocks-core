@@ -345,7 +345,7 @@ Per-model manifests declare their upstream feature dependencies via the `depende
 
 In Phase 1, only `kpoints` has a trained model. Every other slice runs from a heuristic or a fixed default until the corresponding sweep lands in `goldilocks-data` and a model is trained and registered by `goldilocks-models`. Core's orchestration code is written against the manifest interface, so swapping a heuristic for a real model later is a configuration change rather than a code change.
 
-This DAG is the canonical orchestration model for the Goldilocks system. Mirror copies in [`goldilocks-models/docs/PLAN.md` §4.2](../../3-goldilocks-models/docs/PLAN.md) and the [ecosystem overview](../../0-goldilocks-ecosystem/1-docs/architecture.md) should track this version when the orchestration changes.
+This DAG is the canonical orchestration model for the Goldilocks system. Mirror copies in `goldilocks-models/docs/PLAN.md` §4.2 and the ecosystem overview (`goldilocks-ecosystem/docs/architecture.md`) should track this version when the orchestration changes.
 
 ## Data Model Strategy
 

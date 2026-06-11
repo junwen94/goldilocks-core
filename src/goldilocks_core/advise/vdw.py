@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 from goldilocks_core.advise.types import VdwDecision
 
 _DEFAULT_METHOD: Literal["d3bj"] = "d3bj"
+_VALID_METHODS: frozenset[str] = frozenset({"d3", "d3bj", "ts", "mbd"})
 
 
 def advise_vdw(
@@ -46,6 +47,11 @@ def advise_vdw(
     if "use_vdw" in hints:
         use = bool(hints["use_vdw"])
         method_raw = hints.get("vdw_method", _DEFAULT_METHOD) if use else None
+        if method_raw is not None and method_raw not in _VALID_METHODS:
+            raise ValueError(
+                f"Unknown vdw_method {method_raw!r}. "
+                f"Valid options: {', '.join(sorted(_VALID_METHODS))}"
+            )
         method: Literal["d3", "d3bj", "ts", "mbd"] | None = method_raw  # type: ignore[assignment]
         return VdwDecision(
             use_vdw=use,

@@ -502,7 +502,7 @@ def _generate_qe(
 
     input_path = result["input_file"]
     pseudo_path = result["pseudo_dir"]
-    missing: list[str] = result.get("missing_pp", [])
+    missing: list[str] = result.get("missing_pp") or []  # type: ignore[assignment]
 
     console.print()
     console.print(f"  [bold]Output:[/bold] {run_dir}")

@@ -160,8 +160,12 @@ def run(
 
     # --- advise ---
     from goldilocks_core.advise.pipeline import build_qe_parameter_set
-    with console.status("Running advise pipeline…", spinner="dots"):
-        params = build_qe_parameter_set(analysis, intent)
+    try:
+        with console.status("Running advise pipeline…", spinner="dots"):
+            params = build_qe_parameter_set(analysis, intent)
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1)
 
     _display(console, structure, analysis, intent, params, explain)
 
@@ -230,7 +234,7 @@ def _generate(console: Console, params: Any, structure: Any, intent: Any, analys
     console.print(f"  [green]✓[/green] {result['input_file'].name}")
     if ph_result:
         console.print(f"  [green]✓[/green] {ph_result['ph_file'].name}")
-    missing: list[str] = result.get("missing_pp", [])
+    missing: list[str] = result.get("missing_pp") or []  # type: ignore[assignment]
     if missing:
         console.print(
             f"  [yellow]⚠[/yellow] pp not found: {', '.join(missing)}"
