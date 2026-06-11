@@ -220,7 +220,7 @@ def analyze_structure(
         warnings.append(f"Partial occupancy at sites: {disordered_sites}")
     if has_f:
         warnings.append("f-electron elements detected: check whether DFT+U is needed")
-    elif has_d:
+    elif has_d and metallicity not in {"metallic", "likely_metallic"}:
         warnings.append("transition-metal d-electrons detected: consider DFT+U")
     if soc_relevant and is_noncentrosymmetric:
         warnings.append(

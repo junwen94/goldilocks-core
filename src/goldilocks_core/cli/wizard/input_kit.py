@@ -375,9 +375,11 @@ def _display_agnostic(
     # DFT+U
     if analysis.has_f_electrons:
         _flag("DFT+U / Hubbard", "strongly recommended — f-electron elements present", "warn")
-    elif analysis.has_d_electrons:
+    elif analysis.has_d_electrons and analysis.metallicity not in {"metallic", "likely_metallic"}:
         _flag("DFT+U / Hubbard",
               f"consider — d-electron elements: {', '.join(analysis.magnetic_elements)}", "info")
+    elif analysis.has_d_electrons:
+        _flag("DFT+U / Hubbard", "not needed — itinerant d-electrons (metallic)", "ok")
     else:
         _flag("DFT+U / Hubbard", "not needed", "ok")
 
