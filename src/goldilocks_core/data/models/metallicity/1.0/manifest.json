@@ -1,0 +1,10 @@
+{
+  "task": "metallicity",
+  "version": "1.0",
+  "model_type": "cgcnn",
+  "model_file": "is_metal.ckpt",
+  "feature_set": "radius_graph_cgcnn",
+  "atom_init": "atom_init.json",
+  "training_set": "materials_project",
+  "labels": {"0": "insulator", "1": "metal"}
+}

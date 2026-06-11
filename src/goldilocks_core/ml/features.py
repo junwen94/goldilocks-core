@@ -234,3 +234,11 @@ def extract_cslr_features(structure: Structure) -> StructureFeatureVector:
         values=values,
         feature_names=feature_names,
     )
+
+
+def infer_features(structure: Structure) -> StructureFeatureVector:
+    """Extract CSLR structure features for ML inference.
+
+    Public name expected by goldilocks-models. Wraps extract_cslr_features.
+    """
+    return extract_cslr_features(structure)

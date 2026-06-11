@@ -1,0 +1,10 @@
+{
+  "task": "kpoints",
+  "version": "1.0",
+  "model_type": "qrf",
+  "model_file": "QRF95.pkl",
+  "feature_set": "comp+struct+soap+lattice+cgcnn_metal",
+  "output_metric": "k_distance",
+  "hf_repo": "STFC-SCD/kpoints-goldilocks-QRF",
+  "metallicity_model": "metallicity/1.0"
+}

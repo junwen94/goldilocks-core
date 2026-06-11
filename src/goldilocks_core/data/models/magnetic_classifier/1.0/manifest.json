@@ -1,0 +1,16 @@
+{
+  "task": "magnetic_classifier",
+  "version": "1.0",
+  "model_type": "pytorch_mlp",
+  "model_file": "magnetic_clf.pt",
+  "feature_set": "mace_products_last_mean",
+  "backbone": "mace_matpes_pbe_baseline_run-3.model",
+  "backbone_elements": 89,
+  "embedding_dim": 128,
+  "mlp_hidden": [512, 256, 128],
+  "training_set": "materials_project",
+  "n_train": 29589,
+  "val_auc": 0.9617,
+  "labels": {"0": "non_magnetic", "1": "magnetic"},
+  "notes": "Binary classifier. 'magnetic' maps to 'collinear' in Phase 1; multi-class (FM/AFM/FiM) in Phase 2."
+}

@@ -8,3 +8,4 @@ from .features import (
 )
 from .inference import predict as predict
 from .models import load_model as load_model
+from .models import load_model_from_hf as load_model_from_hf
