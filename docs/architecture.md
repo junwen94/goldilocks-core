@@ -13,6 +13,51 @@ At the current stage, the package has two main vertical slices:
 
 These slices are designed to remain composable so that future recommendation workflows can combine structure, task, code, k-mesh policy, and pseudopotential choice in a clean way.
 
+## Ecosystem context
+
+`goldilocks-core` is one of four sibling repositories under the UKRI Goldilocks programme (EP/Z530657/1). The system is split into an **offline** training pipeline (`goldilocks-data` → `goldilocks-models` → artefact store) and an **online** recommendation path (`goldilocks-webapp` → `goldilocks-core` → loaded manifests). Core sits on the online path and reads the manifests written by the offline path; the two paths only meet at the shared artefact store, so the offline pipeline does not need to be running for the online recommendation to be served.
+
+```mermaid
+flowchart TB
+    user(["End user"]):::usr
+
+    subgraph offline [Offline · training pipeline]
+        direction LR
+        DATA["<b>goldilocks-data</b><br/><i>DFT sweeps on SCARF</i>"]:::data
+        MODELS["<b>goldilocks-models</b><br/><i>train + register</i>"]:::models
+        STORE[("Artefact store<br/>shared FS / HF Hub / PSDI")]:::store
+        DATA -.Parquet snapshots.-> MODELS
+        MODELS -.versioned artefact<br/>+ manifest.-> STORE
+    end
+
+    subgraph online [Online · recommendation serving]
+        direction LR
+        WEB["<b>goldilocks-webapp</b><br/><i>React + FastAPI</i>"]:::web
+        CORE["<b>goldilocks-core</b><br/><i>advisors + ml + pseudo</i>"]:::core
+        WEB --> CORE
+        STORE -.manifest read at startup.-> CORE
+    end
+
+    user --> WEB
+
+    subgraph hpc [HPC execution]
+        AIIDA[("aiida-qe / aiida-lab")]:::ext
+    end
+    CORE -.optional: submit SCF.-> AIIDA
+    AIIDA -.parsed outputs.-> CORE
+    DATA -.uses to produce data.-> AIIDA
+
+    classDef usr    fill:#fef3c7,stroke:#92400e,color:#000
+    classDef data   fill:#bbf7d0,stroke:#166534,color:#000
+    classDef models fill:#bfdbfe,stroke:#1e40af,color:#000
+    classDef core   fill:#ddd6fe,stroke:#5b21b6,color:#000
+    classDef web    fill:#fbcfe8,stroke:#9d174d,color:#000
+    classDef store  fill:#fef9c3,stroke:#854d0e,color:#000
+    classDef ext    fill:#f3f4f6,stroke:#6b7280,color:#000
+```
+
+Note that `goldilocks-data` also imports parts of this package (`kmesh.build_kmesh_entries`, `pp_selector`, `infer_features`) when building its sweeps, so there is a hard Python dependency from data → core in addition to the artefact-flow direction shown above.
+
 ## Design Principles
 
 - Prefer domain-oriented modules over generic buckets such as `helpers` or `processing`.
@@ -36,6 +81,74 @@ src/goldilocks_core/
 ├── pseudo/
 └── shared/
 ```
+
+### Package dependencies
+
+Solid edges are `import` dependencies between subpackages; dashed edges are data / artefact flows in or out of the package. External boundaries are inputs from CIF / POSCAR files and from `goldilocks-models` artefacts.
+
+```mermaid
+flowchart TB
+    EXT_STRUCT[("CIF / POSCAR<br/><i>pymatgen</i>")]:::ext
+    EXT_MODELS[("goldilocks-models<br/><i>manifest + artefacts</i>")]:::ext
+    EXT_PSEUDO[("PseudoDojo / PAW-JTH<br/><i>UPF / JTHXML files</i>")]:::ext
+
+    CLI[cli/cli_kmesh]:::top
+
+    subgraph advisors [advisors/]
+        KADV[kmesh_advisor]:::mid
+    end
+
+    subgraph ml [ml/]
+        FEAT[features]
+        INFER[inference]
+        MODS[models]
+    end
+
+    subgraph pseudo [pseudo/]
+        PPSEL[pp_selector]
+        PPPOL[pp_policy]
+        PPREG[pp_registry]
+        PPMETA[pp_metadata]
+        PPPARSE[parse_upf]
+    end
+
+    subgraph io [io/]
+        STRUCT[structures]
+    end
+
+    KMESH["kmesh<br/><i>k_distance ↔ mesh ↔ k-line-density</i><br/>build_kmesh_entries"]:::base
+    TYPES["shared/types<br/><i>KMeshEntry, ...</i>"]:::base
+
+    EXT_STRUCT -.parse.-> STRUCT
+    STRUCT --> KADV
+    STRUCT --> FEAT
+
+    CLI --> KADV
+    KADV --> INFER
+    KADV --> PPSEL
+    KADV --> KMESH
+
+    INFER --> FEAT
+    INFER --> MODS
+    EXT_MODELS -.load.-> MODS
+
+    PPSEL --> PPPOL
+    PPSEL --> PPREG
+    PPREG --> PPMETA
+    PPMETA --> PPPARSE
+    EXT_PSEUDO -.read.-> PPPARSE
+
+    KMESH --> TYPES
+    FEAT --> TYPES
+    PPMETA --> TYPES
+
+    classDef top  fill:#ddd6fe,stroke:#5b21b6,color:#000
+    classDef mid  fill:#bfdbfe,stroke:#1e40af,color:#000
+    classDef base fill:#bbf7d0,stroke:#166534,color:#000
+    classDef ext  fill:#fef3c7,stroke:#92400e,color:#000
+```
+
+The two vertical slices mentioned in the Overview map cleanly onto the diagram: the k-mesh slice is the `advisors → ml + kmesh` path, and the pseudopotential slice is `advisors → pseudo/` and `pseudo/ → parse_upf ← UPF files`. `shared/types` is the common type layer both slices reach into.
 
 ## Module Roles
 
@@ -181,6 +294,58 @@ Important design rules for this stack:
 - filename hints are useful, but header metadata is treated as authoritative when the two disagree
 
 This is especially important because real-world pseudo libraries contain historical naming inconsistencies.
+
+## Multi-task Recommendation Orchestration
+
+The k-mesh stack and the pseudopotential stack above are two of several per-target recommendation slices that `goldilocks-core` brings together at recommendation time. The slices are not independent: pseudopotential choice affects every downstream parameter (ecutwfc convergence is pseudo-specific; smearing depends on DOS at E_F which depends on pseudo; the k-mesh convergence label is computed for a given pseudo). Core walks a directed acyclic graph of these slices to produce a coherent recommendation.
+
+```mermaid
+flowchart TB
+    user(["user input<br/><i>structure · code · calc_type · constraints</i>"]):::user
+
+    pseudo["pseudo<br/><i>implicitly fixes xc</i>"]:::task
+    xc["xc<br/><i>only if pseudo constrained</i>"]:::optional
+    ecutwfc["ecutwfc"]:::task
+    smearing["smearing<br/><i>metals only</i>"]:::task
+    kpoints["kpoints<br/><b>Phase 1 active</b>"]:::active
+    resources["resources<br/><i>structure + all upstream</i>"]:::task
+    explanation["explanation<br/><i>NL output</i>"]:::task
+
+    user --> pseudo
+    pseudo -.-> xc
+    pseudo --> ecutwfc
+    pseudo --> smearing
+    pseudo --> kpoints
+    pseudo --> resources
+    ecutwfc --> resources
+    smearing --> resources
+    kpoints --> resources
+    resources --> explanation
+
+    classDef user     fill:#fef3c7,stroke:#92400e
+    classDef task     fill:#bfdbfe,stroke:#1e40af
+    classDef active   fill:#bbf7d0,stroke:#166534
+    classDef optional fill:#f3f4f6,stroke:#6b7280,stroke-dasharray:5
+```
+
+Reading the DAG:
+
+- Solid edges are **feature dependencies**. The downstream task's ML model was trained with the upstream target's value as an input feature column, so the upstream prediction must be available before the downstream model can be called.
+- The dashed edge `pseudo -.-> xc` is **conditional**. PseudoDojo / PAW-JTH families commit to a specific exchange-correlation functional, so picking a pseudo also fixes XC by construction. The `xc` slice only fires when the user constrains pseudo upstream and asks for an XC recommendation under that constraint.
+
+Walking the DAG at recommendation time:
+
+1. Inspect the user input. The four input dimensions (`structure`, `code`, `calc_type`, optional `user_constraints`) determine which slices are even relevant. Phase 1 locks `code = QE`, `calc_type = SCF`.
+2. Resolve `pseudo`. Either run the pseudo-selection model (when `goldilocks-models tasks/pseudo` is trained, Phase 1.5 onwards), or apply the rule-based selector in `pseudo/pp_selector` (Phase 1 default).
+3. Resolve `ecutwfc`, `smearing`, `kpoints`. Each takes the structure plus the resolved pseudo as input. In Phase 1 only the `kpoints` model is trained (via `advisors/kmesh_advisor` calling `ml/inference`); the others fall back to defaults (`ecutwfc` from the PseudoDojo recommended cutoffs, `smearing` from a metallicity heuristic + the chosen pseudo).
+4. Resolve `resources` if a wallclock / RAM / ntasks estimate is needed. This is the leaf of the DAG and consumes every upstream resolution as a feature.
+5. Optionally generate `explanation` via the LLM-class explainer model.
+
+Per-model manifests declare their upstream feature dependencies via the `dependencies.upstream_targets` field. Core reads these manifests at load time and refuses to use a model whose declared dependencies are not yet resolvable.
+
+In Phase 1, only `kpoints` has a trained model. Every other slice runs from a heuristic or a fixed default until the corresponding sweep lands in `goldilocks-data` and a model is trained and registered by `goldilocks-models`. Core's orchestration code is written against the manifest interface, so swapping a heuristic for a real model later is a configuration change rather than a code change.
+
+This DAG is the canonical orchestration model for the Goldilocks system. Mirror copies in [`goldilocks-models/docs/PLAN.md` §4.2](../../3-goldilocks-models/docs/PLAN.md) and the [ecosystem overview](../../0-goldilocks-ecosystem/1-docs/architecture.md) should track this version when the orchestration changes.
 
 ## Data Model Strategy
 

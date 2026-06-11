@@ -1,0 +1,35 @@
+site_name: goldilocks-core
+site_description: AI-powered DFT tools
+site_url: https://stfc.github.io/goldilocks-core
+repo_url: https://github.com/stfc/goldilocks-core
+repo_name: stfc/goldilocks-core
+
+theme:
+  name: material
+  palette:
+    scheme: default
+    primary: indigo
+  features:
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: true
+
+nav:
+  - Home: index.md
+  - API Reference:
+      - kmesh: api/kmesh.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences

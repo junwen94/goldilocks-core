@@ -13,3 +13,12 @@ design.md
 
 notebooks/
 local_data/
+
+# Generated DFT input/output directories
+goldilocks_output/
+
+# macOS
+.DS_Store
+
+# Auto-generated plan files (Claude Code plan mode)
+plan-*.md

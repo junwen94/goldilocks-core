@@ -1,35 +1,103 @@
 [project]
 name = "goldilocks-core"
 version = "0.1.0"
-description = "Materials machine learning tools for recommending DFT calculation inputs."
+description = "AI-powered DFT tools."
 readme = "README.md"
+license = { text = "TBD" }
+authors = [{ name = "Junwen Yin", email = "yin-junwen@outlook.com" }]
 requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 dependencies = [
+    "httpx>=0.27",
+    "huggingface_hub>=0.23",
     "joblib>=1.5.3",
     "matminer>=0.10.1",
     "numpy>=2.4.4",
     "pymatgen>=2026.3.23",
+    "rich>=13.0",
+    "typer>=0.9",
 ]
 
+[project.optional-dependencies]
+# K-points ML predictor (CGCNN + QRF).
+# torch-geometric requires torch; install torch first with the correct CUDA version.
+# dscribe and sklearn-quantile are pure-Python/scientific; torch/torch-geometric need GPU wheels.
+kpoints-ml = [
+    "dscribe>=2.1",
+    "sklearn-quantile>=0.1.1",
+    "torch>=2.0",
+    "torch-geometric>=2.5",
+]
+# Standard MACE (PyPI) for MLIP pre-relaxation and structure embedding.
+mlip = ["mace-torch>=0.3.14", "torch>=2.0"]
+# mMACE fork — magnetic extensions (non-collinear SCF) not in public mace-torch.
+# Installs as mace-torch and REPLACES the public package.
+# Do NOT install both [mlip] and [magnetic] together.
+magnetic = [
+    "mace-torch @ git+https://github.com/CheukHinHoJerry/mace.git@magnetic-fix-nonSOC",
+    "torch>=2.0",
+]
+aiida = ["aiida-core>=2.6", "aiida-quantumespresso>=4.6"]
+
+[project.urls]
+Homepage = "https://github.com/stfc/goldilocks-core"
+Repository = "https://github.com/stfc/goldilocks-core"
+Documentation = "https://stfc.github.io/goldilocks-core"
+
+
 [project.scripts]
+gl = "goldilocks_core.cli.main:main"
 goldilocks-kmesh = "goldilocks_core.cli.cli_kmesh:main"
 
 [dependency-groups]
 dev = [
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.27",
+    "mypy>=1.13",
     "pre-commit>=4.5.1",
     "pytest>=9.0.3",
     "ruff>=0.15.11",
 ]
 
+
+[tool.setuptools.package-data]
+goldilocks_core = [
+    "data/pseudopotentials/**/*.upf",
+    "data/models/**/*",
+]
+
 [tool.uv]
 package = true
+# mlip (PyPI mace-torch) and magnetic (mMACE git fork) both install as
+# mace-torch and cannot coexist.  Declaring them as conflicting extras lets
+# uv resolve each independently in the lock file.
+conflicts = [
+    [{ extra = "mlip" }, { extra = "magnetic" }],
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 
 [tool.ruff]
 target-version = "py312"
+line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
 
