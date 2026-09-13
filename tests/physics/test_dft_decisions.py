@@ -176,7 +176,11 @@ def test_lanthanide_element_is_forced_onto_sssp_even_when_pseudodojo_also_matche
     reason="A2 (stfc/goldilocks-core#177, still open): _spin_lines emits "
     "nspin=2 with no companion starting_magnetization, so QE relaxes to the "
     "non-magnetic solution while the run reports a normal, converged SCF. "
-    "Fixed by v2 epic 5's magnetic_config advisor.",
+    "This exact scenario is fixed in v2 epic 5's advisors/magnetic_config.py "
+    "(see tests/unit/test_advisors_magnetic_config.py) -- this test still "
+    "exercises v1's own compute()/advice/parameters.py pipeline, which v2 "
+    "epics deliberately leave untouched until cutover (v2 epic 9), so it "
+    "stays xfail until magnetic_config is actually wired into that pipeline.",
 )
 def test_spin_polarized_structure_gets_a_starting_magnetization(
     pseudo_metadata_factory: Callable[..., PseudoMetadata],
@@ -209,8 +213,11 @@ def test_spin_polarized_structure_gets_a_starting_magnetization(
     "original #177 report): _spin_lines lets spin_orbit.enabled short-circuit "
     "past magnetism.spin_polarized entirely, so enabling SOC on a structure "
     "independently advised as magnetic silently drops the magnetism and emits "
-    "a non-magnetic noncollinear run. Fixed alongside A2 by v2 epic 5's "
-    "magnetic_config advisor.",
+    "a non-magnetic noncollinear run. Fixed alongside A2 in v2 epic 5's "
+    "advisors/magnetic_config.py (see "
+    "tests/unit/test_advisors_magnetic_config.py) -- this test still "
+    "exercises v1's own compute() pipeline, left untouched until cutover "
+    "(v2 epic 9), so it stays xfail until magnetic_config is wired in.",
 )
 def test_soc_does_not_silently_discard_a_magnetic_structures_magnetism(
     pseudo_metadata_factory: Callable[..., PseudoMetadata],

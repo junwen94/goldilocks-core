@@ -17,8 +17,8 @@ the old rule's own first flagged element (Rb, Z=37) whose valence block is
 not s, using ``pymatgen``'s per-element ``block``.
 
 Reads ``composition`` rather than ``structure`` directly, per
-goldilocks-core-design.md's folder layout ("needs_soc.py: 读 composition") --
-and demonstrates the tri-state ``Blocked`` propagation pattern for real: if
+goldilocks-core-design.md's folder layout ("needs_soc.py: reads composition")
+-- and demonstrates the tri-state ``Blocked`` propagation pattern for real: if
 composition is ``Unavailable``/``Blocked``, needs_soc cannot compute at all
 and says so the same way (goldilocks-core-design.md:299-310).
 """
