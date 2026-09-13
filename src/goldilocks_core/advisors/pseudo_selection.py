@@ -1,0 +1,220 @@
+"""pseudo_selection: which registered pseudopotential table to use, and
+matching a made selection back to its verified metadata -- as tri-state
+results with provenance, not exceptions.
+
+Ported as content from v1's `pseudo/source.py` (v2 epic 5, #5): the table
+ranking/eligibility logic (`_table_problems`, `_automatic_table`,
+`is_table_eligible_for_elements`) and the lanthanide/actinide-must-use-SSSP
+rule (`_requires_sssp`) are correct scientific content, reused unchanged;
+only their failure shape changes.
+
+**Scope note**: this ports the *selection* decision only, not
+`PseudoResolution`'s full `materialize()` orchestration (reading actual UPF
+bytes off an `AssetStore`, building `InputArtifact`s, licence-file handling).
+That is file-assembly, not a settings decision -- it belongs with
+`generation/`/`bundle.py` (v2 epic 7's "QE generation rewrite"), the same
+line every other advisor in this epic draws. v1's `pseudo/source.py` stays
+untouched and keeps serving the live pipeline until cutover (v2 epic 9);
+this is a fresh, standalone port, tested on its own, same as every prior
+epic's deliverable.
+
+Two v1 bugs fixed here, per this epic's Section (c):
+
+- **`PseudoTableMismatch` raise-on-failure**
+  (`pseudo/source.py:159-161,172-175,200-203`) -- an unknown table id, a
+  table that doesn't cover the requested elements, or no compatible table
+  at all now returns `Unavailable` with the same diagnostic text v1's
+  exception message carried, not a raised exception on the happy-adjacent
+  path.
+- **`materialize()`'s `StopIteration`-prone round-trip**
+  (`pseudo/source.py:114-129`) -- matching each selected pseudopotential
+  back to its metadata used a bare `next(... for ... if ...)` with no
+  default, an opaque `StopIteration` on any miss. `match_selected_metadata`
+  below builds a lookup once instead of re-scanning per selection, and
+  returns `Unavailable` with which element failed to match, not an
+  undiagnosable crash.
+
+`_requires_sssp` (a private helper called from three separate places in v1)
+is `requires_sssp` here: one explicit, named, directly-testable policy.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from pymatgen.core.periodic_table import Element
+
+from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
+from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
+from goldilocks_core.resolution import FieldState, Provenance, Resolved, Unavailable
+from goldilocks_core.selection import SelectionRecord
+from goldilocks_core.types import PseudoAccuracy, RelativisticTreatment
+
+
+@dataclass(frozen=True, slots=True)
+class PseudoRequirements:
+    functional: str
+    accuracy: PseudoAccuracy
+    relativistic: RelativisticTreatment
+
+
+def pseudo_requirements(
+    functional: str,
+    *,
+    spin_orbit_enabled: bool,
+    accuracy: PseudoAccuracy = "efficiency",
+) -> PseudoRequirements:
+    """`relativistic` follows `magnetic_config`'s `spin_orbit_enabled`
+    (this epic), not v1's `spin_orbit["enabled"]` bool from the same-shaped
+    but now-superseded `advice/parameters.py` cascade -- same rule, new
+    source."""
+    return PseudoRequirements(
+        functional=functional,
+        accuracy=accuracy,
+        relativistic="full" if spin_orbit_enabled else "scalar",
+    )
+
+
+def requires_sssp(elements: set[str]) -> bool:
+    """Lanthanides and actinides only have reliable pseudopotential
+    coverage in the SSSP tables today; PseudoDojo's coverage for these
+    elements is incomplete/unreliable for automatic selection."""
+    return any(
+        Element(symbol).is_lanthanoid or Element(symbol).is_actinoid
+        for symbol in elements
+    )
+
+
+def select_pseudopotential_table(
+    tables: dict[str, PseudoTable],
+    *,
+    table_id: str | None,
+    elements: set[str],
+    requirements: PseudoRequirements,
+) -> FieldState[PseudoTable]:
+    if table_id is not None:
+        return _select_explicit_table(tables, table_id, elements, requirements)
+    return _select_automatic_table(tables, elements, requirements)
+
+
+def _select_explicit_table(
+    tables: dict[str, PseudoTable],
+    table_id: str,
+    elements: set[str],
+    requirements: PseudoRequirements,
+) -> FieldState[PseudoTable]:
+    table = tables.get(table_id)
+    if table is None:
+        choices = ", ".join(sorted(tables))
+        return Unavailable(
+            reason=f"unknown pseudopotential table {table_id!r}; available: {choices}"
+        )
+    problems = _table_problems(table, elements, requirements)
+    if not problems:
+        return Resolved(table, Provenance(source="heuristic"))
+    matches = [
+        candidate.id
+        for candidate in tables.values()
+        if not _table_problems(candidate, elements, requirements)
+    ]
+    alternatives = ", ".join(sorted(matches)) or "none"
+    return Unavailable(
+        reason=(
+            f"pseudopotential table {table.id!r} does not satisfy the request: "
+            f"{'; '.join(problems)}; matching tables: {alternatives}"
+        )
+    )
+
+
+def _select_automatic_table(
+    tables: dict[str, PseudoTable],
+    elements: set[str],
+    requirements: PseudoRequirements,
+) -> FieldState[PseudoTable]:
+    matches = [
+        table
+        for table in tables.values()
+        if not _table_problems(table, elements, requirements)
+    ]
+    if not matches:
+        requested = (
+            f"{requirements.functional} {requirements.accuracy} "
+            f"{requirements.relativistic}"
+        )
+        return Unavailable(
+            reason=(
+                f"no pseudopotential table satisfies {requested} for "
+                + ", ".join(sorted(elements))
+            )
+        )
+    provider = "sssp" if requires_sssp(elements) else "pseudodojo"
+    table = min(
+        matches, key=lambda candidate: (candidate.provider != provider, candidate.id)
+    )
+    return Resolved(table, Provenance(source="heuristic"))
+
+
+def is_table_eligible(table: PseudoTable, elements: set[str]) -> bool:
+    """Return whether a table may serve every element under Core policy."""
+    return all(element in table.elements for element in elements) and (
+        not requires_sssp(elements) or table.provider == "sssp"
+    )
+
+
+def _table_problems(
+    table: PseudoTable,
+    elements: set[str],
+    requirements: PseudoRequirements,
+) -> list[str]:
+    problems: list[str] = []
+    if table.functional != requirements.functional:
+        problems.append(
+            f"functional is {table.functional}, requested {requirements.functional}"
+        )
+    if table.accuracy != requirements.accuracy:
+        problems.append(
+            f"accuracy is {table.accuracy}, requested {requirements.accuracy}"
+        )
+    if table.relativistic != requirements.relativistic:
+        problems.append(
+            f"relativistic treatment is {table.relativistic}, "
+            f"requested {requirements.relativistic}"
+        )
+    if requires_sssp(elements) and table.provider != "sssp":
+        problems.append("lanthanide and actinide elements require an SSSP table")
+    missing = sorted(elements - set(table.elements))
+    if missing:
+        problems.append("missing elements " + ", ".join(missing))
+    return problems
+
+
+def match_selected_metadata(
+    selection: SelectionRecord, metadata: tuple[PseudoMetadata, ...]
+) -> FieldState[tuple[PseudoMetadata, ...]]:
+    lookup = {
+        (
+            item.element,
+            item.filename,
+            item.filepath,
+            item.table_id or item.provider or item.source_identifier,
+        ): item
+        for item in metadata
+    }
+    matched: list[PseudoMetadata] = []
+    for selected in selection["pseudopotentials"]:
+        key = (
+            selected["element"],
+            selected["filename"],
+            selected["filepath"],
+            selected["provenance"].data_source,
+        )
+        candidate = lookup.get(key)
+        if candidate is None:
+            return Unavailable(
+                reason=(
+                    f"selected pseudopotential for {selected['element']!r} has no "
+                    "matching metadata entry"
+                )
+            )
+        matched.append(candidate)
+    return Resolved(tuple(matched), Provenance(source="heuristic"))
