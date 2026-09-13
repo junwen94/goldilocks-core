@@ -28,11 +28,15 @@ dependencies = [
     # (see [tool.uv] below), not the default resolution.
     "torch>=2.13.0",
     "torch-geometric>=2.5",
+    # v2: contracts/ is pydantic BaseModel end to end (validation, serialization,
+    # OpenAPI/capabilities schema generation) -- promoted from the http/mcp
+    # extras to a core dependency (goldilocks-core-design.md S12, already decided).
+    "pydantic>=2.12",
 ]
 
 [project.optional-dependencies]
-http = ["fastapi", "pydantic>=2.12", "uvicorn"]
-mcp = ["mcp", "pydantic>=2.12"]
+http = ["fastapi", "uvicorn"]
+mcp = ["mcp"]
 
 [project.scripts]
 goldilocks = "goldilocks_core.cli.core:main"

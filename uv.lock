@@ -822,6 +822,7 @@ dependencies = [
     { name = "matminer" },
     { name = "numpy" },
     { name = "pandas" },
+    { name = "pydantic" },
     { name = "pymatgen" },
     { name = "requests" },
     { name = "scikit-learn" },
@@ -834,12 +835,10 @@ dependencies = [
 [package.optional-dependencies]
 http = [
     { name = "fastapi" },
-    { name = "pydantic" },
     { name = "uvicorn" },
 ]
 mcp = [
     { name = "mcp" },
-    { name = "pydantic" },
 ]
 
 [package.dev-dependencies]
@@ -861,8 +860,7 @@ requires-dist = [
     { name = "mcp", marker = "extra == 'mcp'" },
     { name = "numpy", specifier = ">=2.4.4" },
     { name = "pandas", specifier = ">=2.0" },
-    { name = "pydantic", marker = "extra == 'http'", specifier = ">=2.12" },
-    { name = "pydantic", marker = "extra == 'mcp'", specifier = ">=2.12" },
+    { name = "pydantic", specifier = ">=2.12" },
     { name = "pymatgen", specifier = ">=2026.3.23" },
     { name = "requests", specifier = ">=2.32" },
     { name = "scikit-learn", specifier = "==1.7.2" },
