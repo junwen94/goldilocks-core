@@ -687,3 +687,64 @@ def test_registered_task_requires_stable_ids_and_dispatches(
     assert resolve_output_types(["stub"]) == (StubRecord,)
     assert result.draft.structure["source"]["origin"] == "path"
     assert to_portable(result)["records"] == {"stub": {"value": "Si"}}
+
+
+def test_cycle_in_a_registered_task_raises_through_the_full_dispatch_path(
+    isolated_record_registry,
+    tmp_path,
+) -> None:
+    """graph.py's own cycle-detection unit test (test_graph.py) exercises
+    execute() directly; nothing exercises the same failure reached the way a
+    real caller would hit it, through Dispatcher.register()/compute() on a
+    task actually wired up with typed record ids and a build_context. A
+    regression that only broke cycle detection at the dispatch layer (e.g. a
+    caching or context-building change upstream of execute_graph) would not
+    be caught by the low-level test alone."""
+
+    @dataclass
+    class CycleStubA:
+        value: str = "a"
+
+    @dataclass
+    class CycleStubB:
+        value: str = "b"
+
+    graph = TaskGraph(
+        task="cycle_task",
+        stages=(
+            Stage(
+                CycleStubA,
+                (CycleStubB,),
+                lambda value, *, ctx: CycleStubA(),
+                id="produce_cycle_a",
+            ),
+            Stage(
+                CycleStubB,
+                (CycleStubA,),
+                lambda value, *, ctx: CycleStubB(),
+                id="produce_cycle_b",
+            ),
+        ),
+        presets=(),
+        selectable_outputs=(CycleStubA, CycleStubB),
+        record_ids=((CycleStubA, "cycle_a"), (CycleStubB, "cycle_b")),
+    )
+    handler = GraphHandler(
+        spec=graph,
+        build_context=lambda request, normalized, runtime: SimpleNamespace(),
+    )
+    structure_path = tmp_path / "Si.cif"
+    make_structure().to(filename=structure_path)
+    request = ComputeRequest(
+        draft=CalculationDraft(
+            PathStructureSource(structure_path),
+            intent=CalculationIntent(task="cycle_task"),
+        ),
+        selection=RecordSelection((CycleStubA,)),
+    )
+    with Runtime() as runtime:
+        dispatcher = Dispatcher(runtime)
+        dispatcher.register(handler)
+
+        with pytest.raises(ValueError, match="Cycle detected"):
+            dispatcher.compute(request)
