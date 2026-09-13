@@ -15,8 +15,8 @@ from goldilocks_core.inputs.structure import (
     StructureDocument,
     StructureSourceDocument,
 )
-from goldilocks_core.legacy_kmesh.resolve import KPointSelection
 from goldilocks_core.legacy_analysis import StructureAnalysisRecord
+from goldilocks_core.legacy_kmesh.resolve import KPointSelection
 from goldilocks_core.pseudo.source import (
     PseudopotentialMaterial,
     PseudopotentialSetIdentity,
