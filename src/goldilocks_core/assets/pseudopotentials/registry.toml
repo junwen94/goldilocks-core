@@ -240,6 +240,7 @@ functional     = "PBE"
 relativistic   = "SR"
 accuracy       = "efficiency"
 charge_density_dual = 4.0
+frozen_4f_core = true
 licence        = "CC-BY-4.0"
 upstream_url   = "https://www.pseudo-dojo.org/"
 citation       = "van Setten et al., Comput. Phys. Commun. 226, 39 (2018)"

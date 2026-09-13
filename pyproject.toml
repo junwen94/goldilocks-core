@@ -213,7 +213,7 @@ max-complexity = 10
 [tool.setuptools.package-data]
 goldilocks_core = [
     "ml/registry.toml",
-    "pseudo/registry.toml",
+    "assets/pseudopotentials/registry.toml",
     "examples/structures/*.cif",
     "examples/structures/README.md",
 ]

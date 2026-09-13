@@ -8,14 +8,14 @@ from typing import Literal, TypedDict
 from pymatgen.core import Element, Structure
 
 from goldilocks_core.advice.parameters import PseudopotentialRequirements
+from goldilocks_core.assets.pseudopotentials.importers import load_installed_table
+from goldilocks_core.assets.pseudopotentials.registry import PseudoTable, load_tables
+from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.assets.records import InstalledAsset
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.failures import ExpectedFailure
 from goldilocks_core.generation.files import InputArtifact
-from goldilocks_core.pseudo.installed import load_installed_table
-from goldilocks_core.pseudo.metadata import PseudoMetadata
 from goldilocks_core.pseudo.pp_registry import load_pseudo_metadata
-from goldilocks_core.pseudo.registry import PseudoTable, load_tables
 from goldilocks_core.selection import SelectionRecord, select_pseudopotentials
 from goldilocks_core.types import JsonDict, PathLike
 

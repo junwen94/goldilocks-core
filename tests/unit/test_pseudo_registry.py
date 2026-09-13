@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from goldilocks_core.pseudo.registry import (
+from goldilocks_core.assets.pseudopotentials.registry import (
     InvalidPseudoRegistry,
     default_table,
     load_tables,
@@ -46,6 +46,31 @@ def test_registry_has_one_exact_default() -> None:
 
     assert table.id == "pseudodojo-pbesol-efficiency-sr"
     assert table.asset.version == "0.4"
+
+
+def test_frozen_4f_core_is_a_declared_field_not_inferred_at_import_time() -> None:
+    """v2 epic 3 (#4) bug fix: frozen_4f_core used to be guessed by
+    substring-matching upstream_table for "3plus" at import time
+    (pseudo/import_pseudodojo.py); it is now a typed registry field."""
+    tables = load_tables()
+
+    assert tables["pseudodojo-pbe-lanthanides-sr"].frozen_4f_core is True
+    assert tables["pseudodojo-pbesol-efficiency-sr"].frozen_4f_core is False
+
+
+def test_note_and_record_reach_the_parsed_table_instead_of_being_dropped() -> None:
+    """v2 epic 3 (#4) bug fix: note/record were validated as allowed
+    optional TOML fields but never copied onto PseudoTable, so e.g. a
+    table's licence caveat in note never reached anything downstream."""
+    table = load_tables()["sssp-pbe-efficiency-sr"]
+
+    assert table.note is not None
+    assert "never redistributed" in table.note
+    assert table.record == "rcyfm-68h65"
+    other = load_tables()["pseudodojo-pbesol-efficiency-sr"]
+    assert other.note is not None
+    assert "never redistributed" not in other.note
+    assert other.record is None
 
 
 def test_registry_rejects_unknown_table_fields(tmp_path: Path) -> None:

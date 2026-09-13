@@ -5,13 +5,15 @@ import json
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
-from goldilocks_core.pseudo.metadata import PseudoMetadata
-from goldilocks_core.pseudo.parse_upf import parse_upf_metadata
-from goldilocks_core.pseudo.validation import (
+from goldilocks_core.assets.pseudopotentials.importers import (
     AmbiguousCutoffMetadata,
     PseudoImportError,
     finite_positive_cutoff,
     required_functional,
+)
+from goldilocks_core.assets.pseudopotentials.upf import (
+    PseudoMetadata,
+    parse_upf_metadata,
 )
 
 _HARTREE_TO_RYDBERG = 2.0

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from goldilocks_core.inputs import HumanInput
+from goldilocks_core.inputs.overrides import HumanInput
 from goldilocks_core.resolution import (
     Blocked,
     BlockedValueError,

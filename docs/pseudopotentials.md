@@ -89,8 +89,8 @@ For ordinary calculations, pass the table ID on `CalculationDraft`; see the
 
 ```python
 from goldilocks_core.assets.store import AssetStore
-from goldilocks_core.pseudo.installed import load_installed_table
-from goldilocks_core.pseudo.registry import load_tables
+from goldilocks_core.assets.pseudopotentials.importers import load_installed_table
+from goldilocks_core.assets.pseudopotentials.registry import load_tables
 
 table = load_tables()["pseudodojo-pbesol-efficiency-fr"]
 installed = AssetStore().resolve_spec(table.asset)
@@ -164,7 +164,7 @@ from the output root (`run` here), so `pseudo_dir = './pseudo'` resolves to the
 published files, not the original UPF directory.
 
 For Python-managed metadata, start with
-`goldilocks_core.pseudo.parse_upf.parse_upf_metadata`, then supply the cutoffs
+`goldilocks_core.assets.pseudopotentials.upf.parse_upf_metadata`, then supply the cutoffs
 and legal metadata on `PseudoMetadata` (`cutoffs` and `pseudo_info`). Parsing
 binds the file's SHA-256 and size; generation rejects changed file content. Keep
 `source_identifier` a provider-relative identity or URL, not an absolute or

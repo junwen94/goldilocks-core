@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from goldilocks_core.advice.parameters import ParameterAdvice
 from goldilocks_core.analysis import StructureAnalysisRecord
+from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.calculation import CalculationHints, CalculationIntent
 from goldilocks_core.generation.files import GeneratedFiles
 from goldilocks_core.input_data import DftInputData
-from goldilocks_core.io.structures import (
+from goldilocks_core.inputs.structure import (
     InlineStructureSource,
     InMemoryStructureSource,
     PathStructureSource,
@@ -13,7 +14,6 @@ from goldilocks_core.io.structures import (
 )
 from goldilocks_core.kmesh.resolve import KPointSelection
 from goldilocks_core.ml.models import ModelSpec
-from goldilocks_core.pseudo.metadata import PseudoMetadata
 from goldilocks_core.publication import (
     ArchiveOutput,
     DirectoryOutput,

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from goldilocks_core.pseudo.parse_upf import parse_upf_metadata
+from goldilocks_core.assets.pseudopotentials.upf import parse_upf_metadata
 
 
 def write_attr_upf(
@@ -257,15 +257,6 @@ def test_element_extraction_gives_up_on_a_digit_prefixed_filename(
     assert metadata.element is None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Found while hardening physics/ for v2 epic 1: "
-    "_extract_element_from_filename's first regex, ^([A-Z][a-z]?), only "
-    "takes a second character if it's lowercase, so an all-caps two-letter "
-    "filename like FE.UPF (a real provider convention) is misread as "
-    "Fluorine ('F') instead of Iron ('Fe'). Not previously tracked; fix "
-    "wherever v2 ports the pseudopotential plumbing (v2 epic 3).",
-)
 def test_element_extraction_does_not_misread_an_all_caps_two_letter_symbol(
     tmp_path: Path,
 ) -> None:

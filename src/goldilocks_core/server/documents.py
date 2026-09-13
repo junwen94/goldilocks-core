@@ -37,7 +37,7 @@ from pydantic import (
 )
 
 from goldilocks_core.calculation import CalculationHints, CalculationIntent
-from goldilocks_core.io.structures import InlineStructureSource, StructureInspection
+from goldilocks_core.inputs.structure import InlineStructureSource, StructureInspection
 from goldilocks_core.request import (
     CalculationDraft,
     ComputeRequest,

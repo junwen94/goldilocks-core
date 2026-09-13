@@ -4,8 +4,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAliasType, TypedDict
 
+from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.calculation import CalculationHints, CalculationIntent
-from goldilocks_core.io.structures import (
+from goldilocks_core.inputs.structure import (
     InlineStructureSource,
     InMemoryStructureSource,
     NormalizedStructure,
@@ -14,7 +15,6 @@ from goldilocks_core.io.structures import (
     StructureSource,
 )
 from goldilocks_core.ml.models import ModelSpec
-from goldilocks_core.pseudo.metadata import PseudoMetadata
 from goldilocks_core.pseudo.source import PseudoResolution
 from goldilocks_core.runtime.models import ModelResolution, Runtime
 from goldilocks_core.serialization import Portable, to_jsonable, to_portable

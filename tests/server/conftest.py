@@ -8,9 +8,9 @@ from dataclasses import dataclass
 import pytest
 from pymatgen.core import Structure
 
+from goldilocks_core.assets.pseudopotentials.registry import load_tables
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.examples.structures import structure
-from goldilocks_core.pseudo.registry import load_tables
 from goldilocks_core.runtime.dispatch import GraphHandler
 from goldilocks_core.runtime.graph import Preset, Stage, TaskGraph
 from goldilocks_core.runtime.models import Runtime

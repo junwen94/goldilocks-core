@@ -11,7 +11,7 @@ from goldilocks_core.generation.files import (
     GeneratedFiles,
     InputArtifact,
 )
-from goldilocks_core.io.structures import (
+from goldilocks_core.inputs.structure import (
     NormalizedStructure,
     StructureDocument,
     StructureSourceDocument,
