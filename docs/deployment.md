@@ -22,8 +22,8 @@ One uvicorn master accepts connections; each worker process runs a full
 
 The plan is `min(cpu count, 0.6 × memory budget / per-worker cost)`, at least
 one worker. A single usable CPU always means one worker. A quantity that
-cannot be measured (no cgroup files, no `fork` support) drops out and the plan
-falls back to the CPU count.
+cannot be measured (no cgroup files, no `fork` support) or a cost probe that
+does not finish drops out and the plan falls back to the CPU count.
 
 Set `GOLDILOCKS_WEB_WORKERS` to pin the count; it wins over planning. In
 Docker, `docker run --memory` limits feed the planning automatically, so a
@@ -39,6 +39,10 @@ one model load per worker.
 The server boots without installed runtime assets: `/ready` reports what is
 missing and compute fails per request until `goldilocks assets install
 workbench` runs. Installed but corrupt assets fail startup instead.
+
+On Linux, workers are killed when the serving master dies; on other platforms
+a master that dies leaves its workers running until they are stopped
+manually.
 
 ## Memory
 

@@ -5,13 +5,15 @@ import multiprocessing
 import os
 import signal
 import sys
-from multiprocessing.connection import Connection
+from multiprocessing.connection import Connection, wait
 from pathlib import Path
 from typing import Any
 
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 MEMORY_BUDGET_SHARE = 0.6
 WORKERS_ENV = "GOLDILOCKS_WEB_WORKERS"
+MASTER_PID_ENV = "GOLDILOCKS_SERVE_MASTER_PID"
+MEASURE_TIMEOUT_SECONDS = 300
 MIN_THREADPOOL_TOKENS = 2
 MAX_THREADPOOL_TOKENS = 8
 
@@ -44,6 +46,7 @@ def serve(
         from goldilocks_core.server.http import WORKBENCH_STATIC_ROOT_ENV
 
         os.environ[WORKBENCH_STATIC_ROOT_ENV] = str(static_root)
+    os.environ[MASTER_PID_ENV] = str(os.getpid())
     uvicorn.run(
         "goldilocks_core.server.workers:create_worker_app",
         factory=True,
@@ -63,11 +66,22 @@ def create_worker_app() -> Any:
 
 
 def _die_with_parent() -> None:
+    """Kill this process when the serving master dies (Linux only).
+
+    Spawned workers only: at one worker the master runs the factory itself.
+    The recorded master pid closes the prctl race where the master dies
+    before the signal registers; a live master that is PID 1 (the Docker
+    default) must not be mistaken for that reparenting.
+    """
     if sys.platform != "linux":
         return
+    master_pid = os.environ.get(MASTER_PID_ENV)
+    if master_pid is None or os.getpid() == int(master_pid):
+        return
     libc = ctypes.CDLL("libc.so.6", use_errno=True)
-    libc.prctl(_PR_SET_PDEATHSIG, signal.SIGKILL)
-    if os.getppid() == 1:
+    libc.prctl.argtypes = [ctypes.c_int] + [ctypes.c_ulong] * 4
+    libc.prctl(_PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0)
+    if os.getppid() != int(master_pid):
         os._exit(0)
 
 
@@ -141,12 +155,17 @@ def measured_worker_cost_bytes() -> int | None:
     process.start()
     sender.close()
     try:
+        if not wait([receiver], timeout=MEASURE_TIMEOUT_SECONDS):
+            process.terminate()
+            return None
         kind, value = receiver.recv()
     finally:
         receiver.close()
         process.join()
     if kind == "unavailable":
         return None
+    if kind == "error":
+        raise value
     return max(int(value), 0)
 
 
@@ -161,6 +180,7 @@ def _measure_in_child(sender: Connection) -> None:
         if isinstance(error, _asset_not_installed_type()):
             sender.send(("unavailable", None))
         else:
+            sender.send(("error", error))
             raise
     finally:
         sender.close()

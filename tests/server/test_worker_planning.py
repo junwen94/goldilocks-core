@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import multiprocessing
+import os
+import sys
+import time
+from multiprocessing.connection import wait
+
 import pytest
 
 from goldilocks_core.server import workers
@@ -102,3 +108,70 @@ def test_default_workers_rejects_nonnumeric_override(monkeypatch) -> None:
 def test_default_workers_pins_to_at_least_one(monkeypatch) -> None:
     monkeypatch.setenv(workers.WORKERS_ENV, "0")
     assert workers.default_workers() == 1
+
+
+def _report_alive(sender) -> None:
+    workers._die_with_parent()
+    sender.send("alive")
+    sender.close()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="PDEATHSIG is Linux-only")
+def test_die_with_parent_keeps_worker_whose_master_is_alive(monkeypatch) -> None:
+    """A live master that is PID 1 (the Docker default) is not reparenting."""
+    monkeypatch.setenv(workers.MASTER_PID_ENV, str(os.getpid()))
+    context = multiprocessing.get_context("spawn")
+    receiver, sender = context.Pipe(False)
+    process = context.Process(target=_report_alive, args=(sender,))
+    process.start()
+    sender.close()
+    assert receiver.poll(timeout=30)
+    assert receiver.recv() == "alive"
+    process.join(timeout=30)
+    assert process.exitcode == 0
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="PDEATHSIG is Linux-only")
+def test_die_with_parent_exits_when_reparented(monkeypatch) -> None:
+    """A worker whose recorded master is gone kills itself."""
+    fork = multiprocessing.get_context("fork")
+    gone = fork.Process(target=lambda: None)
+    gone.start()
+    gone.join(timeout=10)
+    monkeypatch.setenv(workers.MASTER_PID_ENV, str(gone.pid))
+    context = multiprocessing.get_context("spawn")
+    receiver, sender = context.Pipe(False)
+    process = context.Process(target=_report_alive, args=(sender,))
+    process.start()
+    sender.close()
+    assert wait([receiver], timeout=30)
+    with pytest.raises(EOFError):
+        receiver.recv()
+    process.join(timeout=30)
+    assert process.exitcode == 0
+
+
+def test_die_with_parent_leaves_the_master_alone(monkeypatch) -> None:
+    """At one worker the master runs the factory itself and must survive."""
+    monkeypatch.setenv(workers.MASTER_PID_ENV, str(os.getpid()))
+    workers._die_with_parent()
+
+
+def test_measured_worker_cost_propagates_child_failure(monkeypatch) -> None:
+    class ExplodingBackend:
+        def prewarm(self) -> None:
+            raise RuntimeError("model exploded")
+
+    monkeypatch.setattr("goldilocks_core.advice.kdistance.QrfBackend", ExplodingBackend)
+    with pytest.raises(RuntimeError, match="model exploded"):
+        workers.measured_worker_cost_bytes()
+
+
+def test_measured_worker_cost_drops_out_when_child_hangs(monkeypatch) -> None:
+    class SlowBackend:
+        def prewarm(self) -> None:
+            time.sleep(5)
+
+    monkeypatch.setattr("goldilocks_core.advice.kdistance.QrfBackend", SlowBackend)
+    monkeypatch.setattr(workers, "MEASURE_TIMEOUT_SECONDS", 0.2)
+    assert workers.measured_worker_cost_bytes() is None
