@@ -42,7 +42,8 @@ def download(file: AssetFile, destination: Path) -> None:
     """Fetch an asset file to ``destination`` over ``file://`` or HTTP(S).
 
     Large HTTP sources are fetched with parallel ranged GETs when the server
-    advertises byte ranges; everything else is streamed over one connection.
+    honors byte ranges; everything else, including sources that ignore the
+    Range header, is streamed over one connection.
     ``destination`` must not exist. Raises ``ChecksumMismatch`` (or any
     ``requests`` error) on a failed or corrupted download.
     """
@@ -61,16 +62,25 @@ def download(file: AssetFile, destination: Path) -> None:
                 response.headers.get("Accept-Ranges") != "bytes"
                 or total < _RANGED_THRESHOLD_BYTES
             ):
-                with destination.open("xb") as target:
-                    for chunk in response.iter_content(_CHUNK_SIZE):
-                        target.write(chunk)
+                _stream_body(response, destination)
             else:
                 _download_ranged(file.url, destination, total)
     verify_source(file, destination)
 
 
+def _stream_body(response: requests.Response, destination: Path) -> None:
+    """Write one full response body to a fresh ``destination``."""
+    with destination.open("xb") as target:
+        for chunk in response.iter_content(_CHUNK_SIZE):
+            target.write(chunk)
+
+
 def _download_ranged(url: str, destination: Path, total: int) -> None:
-    """Fetch ``url`` with concurrent ranged GETs reassembled into one file."""
+    """Fetch ``url`` with concurrent ranged GETs reassembled into one file.
+
+    The first range runs in-thread; a 200 answer means the source ignores
+    ranges and the download falls back to that single stream.
+    """
     step = total // _RANGE_CONNECTIONS
     bounds = [
         (index * step, (index + 1) * step - 1)
@@ -80,6 +90,19 @@ def _download_ranged(url: str, destination: Path, total: int) -> None:
     with destination.open("xb") as target:
         target.truncate(total)
 
+    first_start, first_end = bounds[0]
+    with _session().get(
+        url,
+        headers={"Range": f"bytes={first_start}-{first_end}"},
+        stream=True,
+        timeout=_TIMEOUT_SECONDS,
+    ) as response:
+        if response.status_code == 200:
+            destination.unlink()
+            _stream_body(response, destination)
+            return
+        _write_range(response, destination, first_start)
+
     def fetch(index: int) -> None:
         start, end = bounds[index]
         with _session().get(
@@ -88,18 +111,23 @@ def _download_ranged(url: str, destination: Path, total: int) -> None:
             stream=True,
             timeout=_TIMEOUT_SECONDS,
         ) as response:
-            if response.status_code != 206:
-                response.raise_for_status()
-                raise requests.RequestException(
-                    f"range request returned HTTP {response.status_code}, expected 206"
-                )
-            with destination.open("r+b") as target:
-                target.seek(start)
-                for chunk in response.iter_content(_CHUNK_SIZE):
-                    target.write(chunk)
+            _write_range(response, destination, start)
 
-    with ThreadPoolExecutor(max_workers=len(bounds)) as pool:
-        list(pool.map(fetch, range(len(bounds))))
+    with ThreadPoolExecutor(max_workers=len(bounds) - 1) as pool:
+        list(pool.map(fetch, range(1, len(bounds))))
+
+
+def _write_range(response: requests.Response, destination: Path, start: int) -> None:
+    """Stream one 206 body into ``destination`` at ``start``; reject non-206."""
+    if response.status_code != 206:
+        response.raise_for_status()
+        raise requests.RequestException(
+            f"range request returned HTTP {response.status_code}, expected 206"
+        )
+    with destination.open("r+b") as target:
+        target.seek(start)
+        for chunk in response.iter_content(_CHUNK_SIZE):
+            target.write(chunk)
 
 
 def verify_source(file: AssetFile, path: Path) -> None:

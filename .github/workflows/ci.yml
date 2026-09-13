@@ -173,7 +173,7 @@ jobs:
           tags: |
             type=raw,value=nightly,enable=${{ github.event_name == 'schedule' }}
             type=raw,value=nightly-{{date 'YYYY-MM-DD'}},enable=${{ github.event_name == 'schedule' }}
-            type=sha,prefix=sha-
+            type=sha,prefix=sha-,enable=${{ github.event_name == 'workflow_dispatch' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}

@@ -14,7 +14,7 @@ import pytest
 import requests
 
 from goldilocks_core.assets import runtime as asset_runtime
-from goldilocks_core.assets.download import _RANGE_CONNECTIONS, download
+from goldilocks_core.assets.download import _RETRIES, download
 from goldilocks_core.assets.records import AssetFile, AssetInstallation, AssetSpec
 from goldilocks_core.assets.runtime import catalogue, references
 from goldilocks_core.assets.store import (
@@ -324,8 +324,10 @@ def test_download_fails_after_exhausted_retries(tmp_path: Path) -> None:
     assert served["count"] == 4
 
 
-def _ranged_server(payload: bytes, range_failures: int = 0):
-    """Serve a payload with byte-range support, optionally failing range requests."""
+def _ranged_server(
+    payload: bytes, range_failures: int = 0, ignore_ranges: bool = False
+):
+    """Serve a payload with byte-range support, optionally failing or ignoring."""
     served = {"requests": 0, "ranges": 0}
 
     class _Handler(BaseHTTPRequestHandler):
@@ -347,6 +349,12 @@ def _ranged_server(payload: bytes, range_failures: int = 0):
                 return
             match = re.fullmatch(r"bytes=(\d+)-(\d+)", range_header)
             start, end = int(match[1]), int(match[2])
+            if ignore_ranges:
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
             self.send_response(206)
             self.send_header("Content-Length", str(end - start + 1))
             self.send_header("Content-Range", f"bytes {start}-{end}/{len(payload)}")
@@ -389,6 +397,30 @@ def test_download_reassembles_parallel_ranges(tmp_path: Path) -> None:
 
     assert destination.read_bytes() == payload
     assert served["ranges"] == 8
+
+
+def test_download_falls_back_when_source_ignores_ranges(tmp_path: Path) -> None:
+    """A source advertising ranges but answering 200 still downloads fully."""
+    payload = _random_payload(9 * 1024 * 1024)
+    server, thread, served = _ranged_server(payload, ignore_ranges=True)
+    destination = tmp_path / "payload.bin"
+
+    try:
+        download(
+            AssetFile(
+                role="payload",
+                path="data/payload.bin",
+                url=f"http://127.0.0.1:{server.server_port}/payload.bin",
+            ),
+            destination,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert destination.read_bytes() == payload
+    assert served["requests"] == 2
 
 
 def test_download_streams_small_files_over_one_connection(tmp_path: Path) -> None:
@@ -461,7 +493,7 @@ def test_download_fails_when_ranges_persistently_fail(tmp_path: Path) -> None:
         thread.join(timeout=5)
         server.server_close()
 
-    assert served["requests"] == 1 + _RANGE_CONNECTIONS * 4
+    assert served["requests"] == 1 + 1 + _RETRIES.total
 
 
 def test_references_resolves_bare_registry_table_id() -> None:
