@@ -17,7 +17,7 @@ from goldilocks_core import (
     Service,
 )
 from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
-from goldilocks_core.kmesh.resolve import KPointSelection
+from goldilocks_core.legacy_kmesh.resolve import KPointSelection
 from goldilocks_core.provenance import Provenance
 from goldilocks_core.runtime.dispatch import Dispatcher
 

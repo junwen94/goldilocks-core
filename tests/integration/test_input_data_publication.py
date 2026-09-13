@@ -29,7 +29,7 @@ from goldilocks_core.assets.pseudopotentials.registry import load_tables
 from goldilocks_core.assets.pseudopotentials.upf import parse_upf_metadata
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.input_data import DftInputData, input_data_portable
-from goldilocks_core.kmesh.resolve import KPointSelection
+from goldilocks_core.legacy_kmesh.resolve import KPointSelection
 from goldilocks_core.ml.models import ModelSpec, load_default_qrf_config
 from goldilocks_core.publication import Publisher
 from goldilocks_core.serialization import to_portable

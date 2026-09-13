@@ -6,7 +6,7 @@ import math
 import pytest
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.kmesh.math import (
+from goldilocks_core.legacy_kmesh.math import (
     build_kmesh_entries,
     generate_candidate_k_distances,
     k_distance_to_mesh,

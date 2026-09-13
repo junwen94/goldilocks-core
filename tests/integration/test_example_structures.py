@@ -16,8 +16,8 @@ from goldilocks_core.examples.structures import (
     structure,
     structures_path,
 )
-from goldilocks_core.kmesh.resolve import KPointSelection
 from goldilocks_core.legacy_analysis import StructureAnalysisRecord
+from goldilocks_core.legacy_kmesh.resolve import KPointSelection
 
 
 def _recommend(name: str):

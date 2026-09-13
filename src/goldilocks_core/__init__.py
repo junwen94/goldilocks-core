@@ -11,8 +11,8 @@ from goldilocks_core.inputs.structure import (
     PathStructureSource,
     StructureSource,
 )
-from goldilocks_core.kmesh.resolve import KPointSelection
 from goldilocks_core.legacy_analysis import StructureAnalysisRecord
+from goldilocks_core.legacy_kmesh.resolve import KPointSelection
 from goldilocks_core.ml.models import ModelSpec
 from goldilocks_core.publication import (
     ArchiveOutput,

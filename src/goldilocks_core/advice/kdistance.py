@@ -5,8 +5,8 @@ from threading import Lock
 from pymatgen.core import Structure
 
 from goldilocks_core.assets.store import AssetStore
-from goldilocks_core.kmesh.math import k_distance_to_mesh
-from goldilocks_core.kmesh.resolve import KPointSelection
+from goldilocks_core.legacy_kmesh.math import k_distance_to_mesh
+from goldilocks_core.legacy_kmesh.resolve import KPointSelection
 from goldilocks_core.ml.models import QrfKpointsConfig, load_default_qrf_config
 from goldilocks_core.ml.qrf.inference import (
     QrfResources,
