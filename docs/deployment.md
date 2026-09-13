@@ -40,9 +40,9 @@ The server boots without installed runtime assets: `/ready` reports what is
 missing and compute fails per request until `goldilocks assets install
 workbench` runs. Installed but corrupt assets fail startup instead.
 
-On Linux, workers are killed when the serving master dies; on other platforms
-a master that dies leaves its workers running until they are stopped
-manually.
+On Linux and elsewhere alike, workers exit within about a second when the
+serving master dies; a worker whose master died before it started never
+boots.
 
 ## Memory
 

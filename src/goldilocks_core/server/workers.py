@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import ctypes
 import multiprocessing
 import os
-import signal
 import sys
+import threading
+import time
 from multiprocessing.connection import Connection, wait
 from pathlib import Path
 from typing import Any
@@ -14,6 +14,7 @@ MEMORY_BUDGET_SHARE = 0.6
 WORKERS_ENV = "GOLDILOCKS_WEB_WORKERS"
 MASTER_PID_ENV = "GOLDILOCKS_SERVE_MASTER_PID"
 MEASURE_TIMEOUT_SECONDS = 300
+MASTER_POLL_SECONDS = 1.0
 MIN_THREADPOOL_TOKENS = 2
 MAX_THREADPOOL_TOKENS = 8
 
@@ -57,7 +58,7 @@ def serve(
 
 
 def create_worker_app() -> Any:
-    _die_with_parent()
+    _die_with_master()
     from goldilocks_core.server.http import create_app
 
     app = create_app()
@@ -65,27 +66,46 @@ def create_worker_app() -> Any:
     return app
 
 
-def _die_with_parent() -> None:
-    """Kill this process when the serving master dies (Linux only).
+def _die_with_master() -> None:
+    """Exit when the serving master dies, on every platform.
 
     Spawned workers only: at one worker the master runs the factory itself.
-    The recorded master pid closes the prctl race where the master dies
-    before the signal registers; a live master that is PID 1 (the Docker
-    default) must not be mistaken for that reparenting.
+    A master already gone exits synchronously; otherwise a watcher thread
+    polls until the master disappears and ends the process.
     """
-    if sys.platform != "linux":
-        return
     master_pid = os.environ.get(MASTER_PID_ENV)
     if master_pid is None or os.getpid() == int(master_pid):
         return
-    libc = ctypes.CDLL("libc.so.6", use_errno=True)
-    libc.prctl.argtypes = [ctypes.c_int] + [ctypes.c_ulong] * 4
-    libc.prctl(_PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0)
-    if os.getppid() != int(master_pid):
+    master = int(master_pid)
+    if not _master_alive(master):
         os._exit(0)
+    threading.Thread(target=_watch_master, args=(master,), daemon=True).start()
 
 
-_PR_SET_PDEATHSIG = 1
+def _watch_master(master_pid: int) -> None:
+    while _master_alive(master_pid):
+        time.sleep(MASTER_POLL_SECONDS)
+    os._exit(0)
+
+
+def _master_alive(master_pid: int) -> bool:
+    """Report whether the serving master process is still running."""
+    if sys.platform == "win32":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(_SYNCHRONIZE, False, master_pid)
+        if not handle:
+            return False
+        exit_code = ctypes.c_ulong()
+        kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+        kernel32.CloseHandle(handle)
+        return exit_code.value == _STILL_ACTIVE
+    return os.getppid() == master_pid
+
+
+_SYNCHRONIZE = 0x00100000
+_STILL_ACTIVE = 259
 
 
 def configure_threadpool() -> None:

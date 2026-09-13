@@ -110,14 +110,17 @@ def test_default_workers_pins_to_at_least_one(monkeypatch) -> None:
     assert workers.default_workers() == 1
 
 
+def _no_op() -> None:
+    pass
+
+
 def _report_alive(sender) -> None:
-    workers._die_with_parent()
+    workers._die_with_master()
     sender.send("alive")
     sender.close()
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="PDEATHSIG is Linux-only")
-def test_die_with_parent_keeps_worker_whose_master_is_alive(monkeypatch) -> None:
+def test_die_with_master_keeps_worker_whose_master_is_alive(monkeypatch) -> None:
     """A live master that is PID 1 (the Docker default) is not reparenting."""
     monkeypatch.setenv(workers.MASTER_PID_ENV, str(os.getpid()))
     context = multiprocessing.get_context("spawn")
@@ -131,15 +134,13 @@ def test_die_with_parent_keeps_worker_whose_master_is_alive(monkeypatch) -> None
     assert process.exitcode == 0
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="PDEATHSIG is Linux-only")
-def test_die_with_parent_exits_when_reparented(monkeypatch) -> None:
+def test_die_with_master_exits_when_reparented(monkeypatch) -> None:
     """A worker whose recorded master is gone kills itself."""
-    fork = multiprocessing.get_context("fork")
-    gone = fork.Process(target=lambda: None)
-    gone.start()
-    gone.join(timeout=10)
-    monkeypatch.setenv(workers.MASTER_PID_ENV, str(gone.pid))
     context = multiprocessing.get_context("spawn")
+    gone = context.Process(target=_no_op)
+    gone.start()
+    gone.join(timeout=30)
+    monkeypatch.setenv(workers.MASTER_PID_ENV, str(gone.pid))
     receiver, sender = context.Pipe(False)
     process = context.Process(target=_report_alive, args=(sender,))
     process.start()
@@ -151,10 +152,15 @@ def test_die_with_parent_exits_when_reparented(monkeypatch) -> None:
     assert process.exitcode == 0
 
 
-def test_die_with_parent_leaves_the_master_alone(monkeypatch) -> None:
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX reparenting check")
+def test_master_alive_rejects_a_non_parent_pid() -> None:
+    assert workers._master_alive(os.getpid()) is False
+
+
+def test_die_with_master_leaves_the_master_alone(monkeypatch) -> None:
     """At one worker the master runs the factory itself and must survive."""
     monkeypatch.setenv(workers.MASTER_PID_ENV, str(os.getpid()))
-    workers._die_with_parent()
+    workers._die_with_master()
 
 
 def test_measured_worker_cost_propagates_child_failure(monkeypatch) -> None:
