@@ -11,12 +11,15 @@ from pymatgen.core import Structure
 
 from goldilocks_core.advice.kdistance import QrfBackend
 from goldilocks_core.advice.kindex import ml_kmesh_advisor
-from goldilocks_core.analysis import StructureAnalysisRecord, heuristic_metallicity
 from goldilocks_core.assets.records import AssetSpec
 from goldilocks_core.assets.store import AssetNotInstalled, AssetStore
 from goldilocks_core.failures import ExpectedFailure
 from goldilocks_core.generation.files import InputArtifact
 from goldilocks_core.kmesh.resolve import KMeshAdvisor, KPointSelection
+from goldilocks_core.legacy_analysis import (
+    StructureAnalysisRecord,
+    heuristic_metallicity,
+)
 from goldilocks_core.ml.models import (
     ModelSpec,
     QrfKpointsConfig,

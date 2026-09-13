@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.analysis import (
+from goldilocks_core.legacy_analysis import (
     DimensionalityClassificationError,
     analyze_structure,
 )
@@ -47,7 +47,9 @@ def test_dimensionality_classifier_failure_aborts_the_whole_analysis(
     def _boom(*_args: object, **_kwargs: object) -> None:
         raise ValueError("synthetic CrystalNN failure")
 
-    monkeypatch.setattr("goldilocks_core.analysis.get_dimensionality_larsen", _boom)
+    monkeypatch.setattr(
+        "goldilocks_core.legacy_analysis.get_dimensionality_larsen", _boom
+    )
 
     with pytest.raises(DimensionalityClassificationError):
         analyze_structure(silicon)
@@ -68,7 +70,7 @@ def test_symmetry_analyzer_failure_degrades_one_field_instead_of_aborting(
     def _boom(*_args: object, **_kwargs: object) -> None:
         raise ValueError("synthetic spglib failure")
 
-    monkeypatch.setattr("goldilocks_core.analysis.SpacegroupAnalyzer", _boom)
+    monkeypatch.setattr("goldilocks_core.legacy_analysis.SpacegroupAnalyzer", _boom)
 
     record = analyze_structure(silicon)
 

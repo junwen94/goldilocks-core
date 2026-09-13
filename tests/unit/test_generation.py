@@ -5,13 +5,13 @@ import pytest
 from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.advice.parameters import ParameterAdvice, advise_parameters
-from goldilocks_core.analysis import analyze_structure
 from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.calculation import CalculationHints, CalculationIntent
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.qe.scf import _QE_SMEARING, _QE_VDW_CORR
 from goldilocks_core.generation.registry import generate_inputs
 from goldilocks_core.kmesh.resolve import resolve_kpoints
+from goldilocks_core.legacy_analysis import analyze_structure
 from goldilocks_core.provenance import Provenance
 from goldilocks_core.selection import select_pseudopotentials
 from goldilocks_core.types import SmearingType, VdwMethod

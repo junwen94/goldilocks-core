@@ -17,9 +17,9 @@ from goldilocks_core import (
     compute,
 )
 from goldilocks_core.advice.parameters import ParameterAdvice
-from goldilocks_core.analysis import StructureAnalysisRecord
 from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.kmesh.resolve import KPointSelection
+from goldilocks_core.legacy_analysis import StructureAnalysisRecord
 from goldilocks_core.selection import SelectionRecord
 from goldilocks_core.serialization import to_portable
 

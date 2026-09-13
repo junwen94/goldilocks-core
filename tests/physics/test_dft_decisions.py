@@ -18,10 +18,10 @@ from goldilocks_core import (
     compute,
 )
 from goldilocks_core.advice.parameters import ParameterAdvice
-from goldilocks_core.analysis import StructureAnalysisRecord
 from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.generation.files import GeneratedFiles
+from goldilocks_core.legacy_analysis import StructureAnalysisRecord
 from goldilocks_core.selection import SelectionRecord
 
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-from goldilocks_core.analysis import StructureAnalysisRecord
 from goldilocks_core.calculation import CalculationHints, CalculationIntent
+from goldilocks_core.legacy_analysis import StructureAnalysisRecord
 from goldilocks_core.provenance import Provenance
 from goldilocks_core.types import (
     PseudoAccuracy,

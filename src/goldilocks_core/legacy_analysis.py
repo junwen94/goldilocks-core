@@ -1,3 +1,13 @@
+"""v1's structure-fact computation -- renamed from ``analysis.py`` (v2 epic 4,
+#1), content and behaviour unchanged, to free the ``analysis`` name for the
+new v2 ``analysis/`` package. This is not a redesign: v1's still-running
+pipeline (``runtime/scf.py``) depends on this module exactly as it always
+has, and a module and a package can't share one name (the same conflict
+``inputs.py``/``inputs/`` hit in epic 3, #4). Deleted along with the rest of
+v1 at cutover (v2 epic 9); nothing here should gain new callers in the
+meantime -- new code reads facts from ``analysis/`` instead.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable

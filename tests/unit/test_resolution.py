@@ -12,6 +12,7 @@ from goldilocks_core.resolution import (
     Resolved,
     ResolvedField,
     Unavailable,
+    blocked_by,
 )
 
 
@@ -50,6 +51,30 @@ def test_blocked_chain_walks_to_the_original_root_cause() -> None:
 
     assert downstream.root_cause() == "Ce has no fully-relativistic pseudopotential"
     assert further_downstream.root_cause() == (
+        "Ce has no fully-relativistic pseudopotential"
+    )
+
+
+def test_blocked_by_extracts_the_reason_from_an_unavailable_upstream() -> None:
+    """v2 epic 4 (#1): the first real fact-depends-on-fact case
+    (analysis/needs_soc.py reading analysis/composition.py) found that
+    stuffing an Unavailable straight into Blocked.by breaks root_cause()'s
+    walk, since Blocked.by's type is Blocked | str, not FieldState."""
+    upstream = Unavailable(reason="composition could not be determined")
+
+    result = blocked_by(upstream)
+
+    assert result == "composition could not be determined"
+    assert Blocked(by=result).root_cause() == "composition could not be determined"
+
+
+def test_blocked_by_passes_a_blocked_upstream_through_unchanged() -> None:
+    upstream = Blocked(by="Ce has no fully-relativistic pseudopotential")
+
+    result = blocked_by(upstream)
+
+    assert result is upstream
+    assert Blocked(by=result).root_cause() == (
         "Ce has no fully-relativistic pseudopotential"
     )
 
