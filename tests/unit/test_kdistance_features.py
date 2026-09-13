@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import pytest
 from pymatgen.core import Lattice, Structure
@@ -67,3 +69,21 @@ def test_extract_structure_features_is_deterministic() -> None:
     second = extract_structure_features(structure, settings)
 
     assert np.array_equal(first, second)
+
+
+def test_extract_structure_features_matches_serial_under_threading() -> None:
+    """Concurrent extraction over the shared featurizers equals serial."""
+    settings = load_default_qrf_config().feature_settings
+    structures = [
+        make_diamond_silicon(),
+        make_diamond_silicon().apply_strain(0.01),
+        make_diamond_silicon().apply_strain(-0.02),
+    ]
+    serial = [extract_structure_features(s, settings) for s in structures]
+    with ThreadPoolExecutor(max_workers=len(structures)) as pool:
+        parallel = list(
+            pool.map(lambda s: extract_structure_features(s, settings), structures)
+        )
+
+    for expected, actual in zip(serial, parallel, strict=True):
+        np.testing.assert_array_equal(expected, actual)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import threading
 from functools import cache
 
 import numpy as np
@@ -9,6 +10,9 @@ from pymatgen.core import Structure
 from goldilocks_core.ml.models import QrfFeatureSettings, StructureFeatureVector
 
 QRF_FEATURE_COUNT = 483
+
+# Shared matminer/dscribe instances are not documented thread-safe; serialize.
+_FEATURIZER_LOCK = threading.Lock()
 
 _CRYSTAL_SYSTEM_ID = {
     "triclinic": 0,
@@ -173,10 +177,11 @@ def _composition_features(
 
     integer_formula = Composition(structure.formula).get_integer_formula_and_factor()[0]
     composition = Composition(Composition(integer_formula).iupac_formula)
-    return _require_finite(
-        _composition_featurizer(settings).featurize(composition),
-        "QRF composition block",
-    )
+    with _FEATURIZER_LOCK:
+        return _require_finite(
+            _composition_featurizer(settings).featurize(composition),
+            "QRF composition block",
+        )
 
 
 def _structure_features(
@@ -184,7 +189,8 @@ def _structure_features(
     settings: QrfFeatureSettings,
 ) -> np.ndarray:
     featurizer = _structure_featurizer(settings)
-    return _require_finite(featurizer.featurize(structure), "QRF structure block")
+    with _FEATURIZER_LOCK:
+        return _require_finite(featurizer.featurize(structure), "QRF structure block")
 
 
 def _soap_features(
@@ -193,10 +199,10 @@ def _soap_features(
 ) -> np.ndarray:
     from pymatgen.io.ase import AseAtomsAdaptor
 
-    soap = _soap_descriptor(settings)
     atoms = AseAtomsAdaptor.get_atoms(structure)
     atoms.set_chemical_symbols([settings.soap_species] * len(atoms))
-    values = soap.create(atoms)
+    with _FEATURIZER_LOCK:
+        values = _soap_descriptor(settings).create(atoms)
     if settings.soap_reduction == "mean":
         values = values.mean(axis=0)
     return _require_finite(values, "QRF SOAP block")
