@@ -6,7 +6,7 @@ from threading import Lock
 from typing import Any
 
 from goldilocks_core.failures import ExpectedFailure
-from goldilocks_core.io.structures import NormalizedStructure, normalize_structure
+from goldilocks_core.inputs.structure import NormalizedStructure, normalize_structure
 from goldilocks_core.request import ComputeRequest, PresetSelection
 from goldilocks_core.result import ComputationResult
 from goldilocks_core.runtime.graph import (

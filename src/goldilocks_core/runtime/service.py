@@ -6,7 +6,7 @@ from typing import Any, Literal
 from goldilocks_core.assets.runtime import install as install_assets
 from goldilocks_core.assets.store import AssetNotInstalled
 from goldilocks_core.failures import ExpectedFailure
-from goldilocks_core.io.structures import (
+from goldilocks_core.inputs.structure import (
     PathStructureSource,
     StructureInputError,
     StructureInspection,

@@ -20,9 +20,9 @@ from goldilocks_core import (
 from goldilocks_core.advice.kdistance import QrfBackend
 from goldilocks_core.advice.parameters import ParameterAdvice
 from goldilocks_core.analysis import StructureAnalysisRecord
+from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.generation.files import GeneratedFiles
 from goldilocks_core.ml.models import load_default_qrf_config
-from goldilocks_core.pseudo.metadata import PseudoMetadata
 from goldilocks_core.serialization import to_portable
 
 

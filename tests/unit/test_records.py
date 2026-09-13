@@ -5,7 +5,7 @@ from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.analysis import StructureAnalysisRecord
 from goldilocks_core.calculation import CalculationHints, CalculationIntent
-from goldilocks_core.io.structures import InMemoryStructureSource
+from goldilocks_core.inputs.structure import InMemoryStructureSource
 from goldilocks_core.request import CalculationDraft, PresetSelection
 from goldilocks_core.result import ComputationResult
 from goldilocks_core.serialization import to_portable

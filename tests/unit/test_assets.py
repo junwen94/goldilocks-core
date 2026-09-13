@@ -59,8 +59,24 @@ def test_install_publishes_only_complete_verified_asset(tmp_path: Path) -> None:
     installed = store.install(source_spec(source, checksum=f"sha256:{checksum}"))
 
     assert installed.path("data/payload.bin").read_bytes() == b"verified payload"
+    assert installed.read_bytes("data/payload.bin") == b"verified payload"
     assert store.status("models/example", "1") == "installed"
     assert not list((tmp_path / "store").glob(".example-*"))
+
+
+def test_read_bytes_raises_key_error_on_an_unknown_path_like_path_does(
+    tmp_path: Path,
+) -> None:
+    """v2 epic 3 (#4) bug fix: ``read_bytes`` used to raise a bare
+    ``StopIteration`` here instead of ``KeyError``, unlike its sibling
+    ``path()`` on the same failure mode (assets/records.py)."""
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"payload")
+    store = AssetStore(tmp_path / "store")
+    installed = store.install(source_spec(source))
+
+    with pytest.raises(KeyError, match="no file 'missing'"):
+        installed.read_bytes("missing")
 
 
 def test_failed_install_leaves_no_false_installed_state(tmp_path: Path) -> None:

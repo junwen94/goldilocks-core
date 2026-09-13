@@ -12,7 +12,7 @@ from zipfile import ZipFile
 
 _REQUIRED_PACKAGE_FILES = (
     "goldilocks_core/ml/registry.toml",
-    "goldilocks_core/pseudo/registry.toml",
+    "goldilocks_core/assets/pseudopotentials/registry.toml",
     "goldilocks_core/examples/structures/README.md",
     "goldilocks_core/examples/structures/Si.cif",
     "goldilocks_core/examples/structures/Fe_bcc.cif",

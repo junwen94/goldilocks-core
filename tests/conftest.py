@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.pseudo.metadata import PseudoMetadata
+from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 
 
 @pytest.fixture(autouse=True)

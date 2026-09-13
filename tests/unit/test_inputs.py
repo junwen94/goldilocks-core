@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from goldilocks_core.inputs import HumanInput, LlmInput, Task
+from goldilocks_core.inputs.overrides import HumanInput, LlmInput
+from goldilocks_core.inputs.task import Task
 
 
 class _ExampleHumanInput(HumanInput):

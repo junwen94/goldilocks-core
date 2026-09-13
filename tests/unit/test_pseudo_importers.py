@@ -9,14 +9,16 @@ import pytest
 from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.advice.parameters import PseudopotentialRequirements
+from goldilocks_core.assets.pseudopotentials.importers import (
+    PseudoImportError,
+    load_installed_table,
+    pseudodojo_preparer as dojo_preparer,
+    sssp_preparer,
+)
+from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 from goldilocks_core.assets.records import AssetFile, AssetSpec, InstalledAsset
 from goldilocks_core.assets.store import AssetCorrupt, AssetStore
 from goldilocks_core.provenance import Provenance
-from goldilocks_core.pseudo.import_pseudodojo import preparer as dojo_preparer
-from goldilocks_core.pseudo.import_sssp import preparer as sssp_preparer
-from goldilocks_core.pseudo.installed import load_installed_table
-from goldilocks_core.pseudo.registry import PseudoTable
-from goldilocks_core.pseudo.validation import PseudoImportError
 from goldilocks_core.selection import select_pseudopotentials
 
 UPF = (
@@ -50,7 +52,13 @@ def archive(path: Path, members: dict[str, bytes]) -> None:
             tar.addfile(info, io.BytesIO(payload))
 
 
-def table(provider: str, spec: AssetSpec, *, functional: str = "PBEsol") -> PseudoTable:
+def table(
+    provider: str,
+    spec: AssetSpec,
+    *,
+    functional: str = "PBEsol",
+    frozen_4f_core: bool = False,
+) -> PseudoTable:
     return PseudoTable(
         id=f"{provider}-fixture",
         provider=provider,
@@ -65,6 +73,7 @@ def table(provider: str, spec: AssetSpec, *, functional: str = "PBEsol") -> Pseu
         elements=("Si",),
         asset=spec,
         default=False,
+        frozen_4f_core=frozen_4f_core,
     )
 
 
@@ -74,6 +83,7 @@ def install_dojo_fixture(
     upf: bytes = UPF,
     report_functional: object = "PBEsol",
     table_functional: str = "PBEsol",
+    frozen_4f_core: bool = False,
 ) -> tuple[InstalledAsset, PseudoTable]:
     """Install one synthetic PseudoDojo table."""
     upfs = tmp_path / "upfs.tgz"
@@ -97,7 +107,9 @@ def install_dojo_fixture(
             AssetFile("metadata", "source/reports.tgz", reports.as_uri()),
         ),
     )
-    registry_table = table("pseudodojo", spec, functional=table_functional)
+    registry_table = table(
+        "pseudodojo", spec, functional=table_functional, frozen_4f_core=frozen_4f_core
+    )
     installed = AssetStore(tmp_path / "store").install(
         spec,
         dojo_preparer(registry_table),
@@ -157,6 +169,19 @@ def test_pseudodojo_normalizes_reports_and_verified_upfs(tmp_path: Path) -> None
     assert metadata[0].table_id == "pseudopotentials/pseudodojo-fixture"
     assert not list(installed.root.rglob("*.tgz"))
     assert "CC BY 4.0" in installed.path("LICENSE.txt").read_text()
+
+
+def test_pseudodojo_frozen_4f_core_comes_from_the_registry_field(
+    tmp_path: Path,
+) -> None:
+    """v2 epic 3 (#4) bug fix: frozen_4f_core used to be guessed by
+    substring-matching upstream_table for "3plus" here; a fixture table
+    with an unrelated upstream_table name proves it now comes from the
+    registry's own typed field instead."""
+    installed, _ = install_dojo_fixture(tmp_path, frozen_4f_core=True)
+    metadata = load_installed_table(installed)
+
+    assert metadata[0].frozen_4f_core is True
 
 
 def test_pseudodojo_decodes_serialized_lda_functional(tmp_path: Path) -> None:

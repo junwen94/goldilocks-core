@@ -1,3 +1,19 @@
+"""CIF/POSCAR -> pymatgen ``Structure``, with source-bytes provenance.
+
+Ported near-verbatim from v1's ``io/structures.py`` (v2 epic 3, #4):
+``normalize_structure``'s source-bytes sha256 + canonical CIF dual storage
+carries over unchanged. ``load_structure`` is deliberately **not** ported: it
+had zero non-test callers, computed no sha256, and bypassed
+``NormalizedStructure``'s provenance entirely -- dead code, not an edge worth
+keeping (goldilocks-core-design.md S10's "改" row for this module).
+
+Lives in ``inputs/`` rather than a generic ``io/``: this is normalization and
+validation of one specific kind of input, not a home for arbitrary
+input/output code (AGENTS.md's "no generic buckets" rule) -- matching the
+design doc's target tree, which puts this alongside ``task.py``/``code.py``/
+``hpc.py`` under ``inputs/``.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -220,37 +236,6 @@ def normalize_structure(source: StructureSource) -> NormalizedStructure:
         source=source_document,
         canonical_structure=structure_document(structure),
         canonical_cif=structure.to(fmt="cif"),
-    )
-
-
-def load_structure(structure: Structure | str | Path) -> Structure:
-    """Load one structure from a path, or pass a Structure through.
-
-    Raises FileNotFoundError when the path does not exist,
-    StructureInputError when it is not a file or pymatgen cannot parse it,
-    and TypeError for input types outside the contract.
-    """
-    if isinstance(structure, Structure):
-        return structure
-
-    if isinstance(structure, (str, Path)):
-        structure_path = Path(structure)
-        if not structure_path.exists():
-            raise FileNotFoundError(f"Structure file not found: {structure_path}")
-        if not structure_path.is_file():
-            raise StructureInputError(f"Structure path is not a file: {structure_path}")
-
-        try:
-            return Structure.from_file(structure_path)
-        except ValueError as exc:
-            raise StructureInputError(
-                "Unsupported structure file format. "
-                "goldilocks-core currently supports periodic structure files "
-                "readable by pymatgen.Structure."
-            ) from exc
-
-    raise TypeError(
-        "structure must be a pymatgen Structure or a path to a structure file"
     )
 
 

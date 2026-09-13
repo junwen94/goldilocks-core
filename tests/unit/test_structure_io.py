@@ -11,7 +11,7 @@ from goldilocks_core import (
     PathStructureSource,
     Service,
 )
-from goldilocks_core.io.structures import StructureInputError
+from goldilocks_core.inputs.structure import StructureInputError
 from goldilocks_core.serialization import to_portable
 
 

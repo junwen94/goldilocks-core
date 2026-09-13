@@ -6,8 +6,8 @@ from typing import Annotated, TypedDict
 from pymatgen.core import Structure
 
 from goldilocks_core.advice.parameters import PseudopotentialRequirements
+from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.provenance import Provenance
-from goldilocks_core.pseudo.metadata import PseudoMetadata
 from goldilocks_core.serialization import Portable, portable_record
 from goldilocks_core.types import JsonDict, RelativisticTreatment
 

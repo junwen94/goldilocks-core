@@ -1,3 +1,20 @@
+"""The declared pseudopotential table catalogue: ``registry.toml`` -> ``PseudoTable``.
+
+Ported near-verbatim from v1's ``pseudo/registry.py`` (v2 epic 3, #4), with two
+correctness fixes made while porting (goldilocks-core-design.md S5's "改" row):
+
+- ``frozen_4f_core`` is now a declared, typed field on ``PseudoTable`` (default
+  ``False``), set explicitly per table in ``registry.toml``. v1 inferred it at
+  import time by substring-matching a table's ``upstream_table`` string for
+  ``"3plus"`` (``pseudo/import_pseudodojo.py:185``) -- fragile against any future
+  PseudoDojo naming drift, and silent about which tables it actually affected.
+- ``note``/``record`` are now copied onto ``PseudoTable``. v1 validated them as
+  allowed optional TOML fields but never assigned them to the parsed object, so
+  e.g. a table's licence caveat written in ``note`` (see the SSSP tables' "never
+  redistributed by us" text) never reached ``capabilities --json`` or anything
+  else downstream -- it was write-only.
+"""
+
 from __future__ import annotations
 
 import math
@@ -49,6 +66,7 @@ _OPTIONAL_TABLE_FIELDS = frozenset(
         "note",
         "charge_density_dual",
         "default",
+        "frozen_4f_core",
     }
 )
 
@@ -72,6 +90,9 @@ class PseudoTable:
     asset: AssetSpec
     charge_density_dual: float | None = None
     default: bool = False
+    frozen_4f_core: bool = False
+    note: str | None = None
+    record: str | None = None
 
 
 def load_tables(path: PathLike | None = None) -> dict[str, PseudoTable]:
@@ -81,9 +102,9 @@ def load_tables(path: PathLike | None = None) -> dict[str, PseudoTable]:
             with Path(registry_path).open("rb") as source:
                 data = tomllib.load(source)
         else:
-            registry = resources.files("goldilocks_core.pseudo").joinpath(
-                _REGISTRY_RESOURCE
-            )
+            registry = resources.files(
+                "goldilocks_core.assets.pseudopotentials"
+            ).joinpath(_REGISTRY_RESOURCE)
             with registry.open("rb") as source:
                 data = tomllib.load(source)
     except (OSError, tomllib.TOMLDecodeError) as error:
@@ -195,9 +216,10 @@ def _parse_table(table_id: str, entry: Any) -> PseudoTable:
         entry["relativistic"] = _RELATIVISTIC[entry["relativistic"]]
         elements, asset = _table_payload(table_id, entry)
 
-        default = entry.get("default", False)
-        if not isinstance(default, bool):
-            raise ValueError("default must be a boolean")
+        default = _optional_bool(entry, "default")
+        frozen_4f_core = _optional_bool(entry, "frozen_4f_core")
+        note = _optional_string(entry, "note")
+        record = _optional_string(entry, "record")
         dual = entry.get("charge_density_dual")
         if dual is not None and (
             isinstance(dual, bool)
@@ -228,6 +250,9 @@ def _parse_table(table_id: str, entry: Any) -> PseudoTable:
             asset=asset,
             charge_density_dual=float(dual) if dual is not None else None,
             default=default,
+            frozen_4f_core=frozen_4f_core,
+            note=note,
+            record=record,
         )
     except (KeyError, TypeError, ValueError) as error:
         raise InvalidPseudoRegistry(f"invalid table {table_id!r}: {error}") from error
@@ -238,3 +263,19 @@ def _required_string(entry: dict[str, Any], name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
     return value.strip()
+
+
+def _optional_string(entry: dict[str, Any], name: str) -> str | None:
+    value = entry.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string when present")
+    return value.strip()
+
+
+def _optional_bool(entry: dict[str, Any], name: str) -> bool:
+    value = entry.get(name, False)
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be a boolean")
+    return value

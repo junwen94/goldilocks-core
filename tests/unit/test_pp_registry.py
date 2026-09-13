@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from goldilocks_core.pseudo.pp_registry import load_pseudo_metadata
-from goldilocks_core.pseudo.validation import (
+from goldilocks_core.assets.pseudopotentials.importers import (
     AmbiguousCutoffMetadata,
     PseudoImportError,
 )
+from goldilocks_core.pseudo.pp_registry import load_pseudo_metadata
 
 
 def make_upf(
