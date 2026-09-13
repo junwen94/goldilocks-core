@@ -7,7 +7,7 @@ from goldilocks_core.advisors.magnetic_config import (
     magnetic_config,
 )
 from goldilocks_core.analysis.is_magnetic import is_magnetic
-from goldilocks_core.resolution import Blocked, Resolved, Unavailable
+from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
 _SILICON = Structure(Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]])
@@ -16,13 +16,59 @@ _SILICON = Structure(Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25,
 def test_magnetic_structure_gets_spin_polarized_and_a_starting_magnetization() -> None:
     """A2 (stfc/goldilocks-core#177): spin_polarized=True must always come
     with a non-empty, non-zero starting_magnetization -- never implicit
-    zero moments that relax to the non-magnetic solution."""
+    zero moments that relax to the non-magnetic solution. Without a
+    z_valences (no pseudopotential chosen yet), every element gets
+    aiida-quantumespresso's own flat default (0.1), not a guessed
+    calibrated value."""
     state = magnetic_config(_IRON, is_magnetic(_IRON))
 
     assert state.ok
     assert state.value.spin_polarized is True
     assert state.value.magnetic_elements == ("Fe",)
-    assert state.value.starting_magnetization == {"Fe": 0.5}
+    assert state.value.starting_magnetization == {"Fe": 0.1}
+
+
+def test_starting_magnetization_uses_moment_target_when_z_valence_known() -> None:
+    """Once a pseudopotential's z_valence is known, the fraction is
+    aiida-quantumespresso's own target_moment / z_valence -- Fe's target is
+    5 Bohr magnetons (magnetization.yaml), so a Fe pseudopotential with
+    z_valence=16 gives 5/16, not the flat default."""
+    state = magnetic_config(_IRON, is_magnetic(_IRON), z_valences={"Fe": 16.0})
+
+    assert state.value.starting_magnetization == {"Fe": 5.0 / 16.0}
+
+
+def test_starting_magnetization_covers_every_element_not_just_magnetic_candidates() -> (
+    None
+):
+    """Matches aiida-quantumespresso's own behaviour: every kind gets an
+    entry once spin-polarized, including non-magnetic-candidate species like
+    O, so no single species sits at exactly zero and re-locks the spin
+    symmetry the rest of the structure is trying to break."""
+    iron_oxide = Structure(
+        Lattice.cubic(4.0),
+        ["Fe", "Fe", "O", "O", "O"],
+        [[i / 5, 0, 0] for i in range(5)],
+    )
+
+    state = magnetic_config(iron_oxide, is_magnetic(iron_oxide))
+
+    assert state.value.starting_magnetization == {"Fe": 0.1, "O": 0.1}
+
+
+def test_unlisted_element_falls_back_to_the_flat_default_even_with_z_valence() -> None:
+    """Cu has a filled d-shell as a neutral element and has no target in
+    aiida's table -- it must not be scaled, even if a z_valence is
+    supplied for it."""
+    copper = Structure(Lattice.cubic(3.6), ["Cu"], [[0.0, 0.0, 0.0]])
+
+    state = magnetic_config(
+        copper,
+        Resolved("magnetic", Provenance(source="heuristic")),
+        z_valences={"Cu": 11.0},
+    )
+
+    assert state.value.starting_magnetization == {"Cu": 0.1}
 
 
 def test_non_magnetic_structure_has_no_starting_magnetization() -> None:
@@ -93,7 +139,7 @@ def test_soc_enabled_on_a_magnetic_structure_keeps_the_magnetism() -> None:
 
     assert state.value.spin_polarized is True
     assert state.value.spin_orbit_enabled is True
-    assert state.value.starting_magnetization == {"Fe": 0.5}
+    assert state.value.starting_magnetization == {"Fe": 0.1}
     assert state.value.angle1 == {"Fe": 0.0}
     assert state.value.angle2 == {"Fe": 0.0}
 

@@ -48,6 +48,37 @@ extension, not this epic's job.
 SOC stays opt-in, matching v1's own policy: `needs_soc` only ever produces a
 warning recommending it be considered, never enables it automatically --
 enabling SOC changes cost and setup, which is a human's call.
+
+**`starting_magnetization` follows aiida-quantumespresso's own convention**
+(`aiida_quantumespresso.workflows.protocols.utils.get_magnetization`, used by
+`PwBaseWorkChain.get_builder_from_protocol(..., spin_type=SpinType.COLLINEAR)`;
+see also the "Magnetic configurations" tutorial), not an invented flat
+fraction: QE's `starting_magnetization` is defined as a species' spin
+polarization -- a fraction of that species' pseudopotential valence electron
+count, in [-1, 1] -- so the physically-motivated value is
+``target_moment_in_bohr_magnetons / z_valence``, not one constant for every
+element. `_MAGNETIC_MOMENT_TARGETS` below is aiida-quantumespresso's own
+per-element table verbatim (elements with a partially-occupied d/f shell get
+an aggressive maximal-moment target -- 5 or 7 Bohr magnetons -- to reliably
+break spin symmetry; everything else gets 0, which maps to the flat
+`DEFAULT_MAGNETIZATION_FRACTION` below). Every element in the structure gets
+an entry when spin-polarized, not just the transition-metal/lanthanide/
+actinide `magnetic_elements` -- aiida does the same, so that no single
+species sits at exactly zero and re-locks the spin symmetry the rest of the
+structure is trying to break.
+
+Computing the real, calibrated fraction needs `z_valences` (each element's
+*chosen pseudopotential's* valence electron count -- not a textbook/nominal
+count, real UPF files vary, e.g. whether semicore states are included).
+`pseudo_selection.py` picks that pseudopotential, and picking it needs
+`spin_orbit_enabled` from *this* file (for the relativistic requirement) --
+so this cannot import from `pseudo_selection.py` without a cycle. Instead
+`z_valences` is an optional parameter a caller supplies once pseudopotential
+selection has actually happened (no such caller is wired up yet -- v2 epic 8
+reconnects the delivery layers). Without it, every element still gets
+`DEFAULT_MAGNETIZATION_FRACTION` (aiida's own flat default, not this
+package's invention) rather than either guessing a `z_valence` or leaving
+`starting_magnetization` empty -- the latter would silently reopen A2.
 """
 
 from __future__ import annotations
@@ -61,12 +92,65 @@ from goldilocks_core.analysis.is_magnetic import Magnetism
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import Blocked, FieldState, Provenance, Resolved
 
-DEFAULT_STARTING_MAGNETIZATION_FRACTION = 0.5
-"""A generic, deliberately-nonzero starting guess (QE's `starting_magnetization`
-is a fraction of a species' valence electron count, not a moment in Bohr
-magnetons) -- large enough to break symmetry and let SCF find the real
-magnetic solution instead of relaxing to zero (the A2 failure mode this file
-exists to prevent), not a literature-calibrated value for any one element."""
+DEFAULT_MAGNETIZATION_FRACTION = 0.1
+"""aiida-quantumespresso's own flat default for elements with no specific
+moment target (`magnetization.yaml`'s `default_magnetization`) -- also the
+fallback for every element when `z_valences` isn't available at all, so
+`starting_magnetization` is never empty on a spin-polarized result (A2)."""
+
+_MAGNETIC_MOMENT_TARGETS: dict[str, float] = {
+    "Ac": 5,
+    "Ce": 5,
+    "Co": 5,
+    "Cr": 5,
+    "Dy": 7,
+    "Er": 7,
+    "Eu": 7,
+    "Fe": 5,
+    "Gd": 5,
+    "Hf": 5,
+    "Ho": 7,
+    "Ir": 5,
+    "La": 5,
+    "Lu": 5,
+    "Mn": 5,
+    "Mo": 5,
+    "Nb": 5,
+    "Nd": 7,
+    "Ni": 5,
+    "Np": 5,
+    "Os": 5,
+    "Pa": 5,
+    "Pm": 7,
+    "Pr": 7,
+    "Pt": 5,
+    "Pu": 7,
+    "Re": 5,
+    "Rh": 5,
+    "Ru": 5,
+    "Sc": 5,
+    "Sm": 7,
+    "Ta": 5,
+    "Tb": 7,
+    "Tc": 5,
+    "Th": 5,
+    "Ti": 5,
+    "Tm": 7,
+    "U": 5,
+    "V": 5,
+    "W": 5,
+    "Y": 5,
+    "Zr": 5,
+}
+"""Target initial magnetic moment (Bohr magnetons) per element, for elements
+with a partially-occupied d or f shell -- an aggressive "aim for the maximal
+possible moment" guess to reliably break spin symmetry, not a physical
+prediction (ported verbatim from aiida-quantumespresso's
+`workflows/protocols/magnetization.yaml`, itself a per-element, not a
+per-oxidation-state, table). Every element not listed here has no specific
+target and falls back to `DEFAULT_MAGNETIZATION_FRACTION`; notably this
+includes Cu/Zn (filled or near-filled d-shell as a neutral element) despite
+both being `is_transition_metal` in `analysis/composition.py`."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +171,11 @@ class MagneticConfigHumanInput(HumanInput):
     spin_orbit_coupling: bool | None = None
     tot_magnetization: float | None = None
     starting_magnetization: dict[str, float] | None = None
+    """A final, already-QE-scale fraction per element -- not a moment in
+    Bohr magnetons -- matching aiida-quantumespresso's "Using the parameters"
+    path (direct `parameters['SYSTEM']['starting_magnetization']`), as
+    opposed to its "Using the SpinType" path (a physical moment scaled by
+    `z_valences`, which is what the heuristic tier below does)."""
 
 
 class MagneticConfigLlmInput(LlmInput):
@@ -98,6 +187,7 @@ def magnetic_config(
     structure: Structure,
     is_magnetic: FieldState[Magnetism],
     needs_soc: FieldState[bool] | None = None,
+    z_valences: dict[str, float] | None = None,
     human: MagneticConfigHumanInput | None = None,
     llm: MagneticConfigLlmInput | None = None,
 ) -> FieldState[MagneticConfigFacts]:
@@ -119,9 +209,7 @@ def magnetic_config(
         starting_magnetization = (
             dict(human.starting_magnetization)
             if human.starting_magnetization is not None
-            else dict.fromkeys(
-                magnetic_elements, DEFAULT_STARTING_MAGNETIZATION_FRACTION
-            )
+            else _starting_magnetization(structure, z_valences)
         )
 
     spin_orbit_enabled = human.spin_orbit_coupling is True
@@ -135,9 +223,9 @@ def magnetic_config(
         )
 
     angle1 = angle2 = None
-    if spin_orbit_enabled and spin_polarized:
-        angle1 = dict.fromkeys(magnetic_elements, 0.0)
-        angle2 = dict.fromkeys(magnetic_elements, 0.0)
+    if spin_orbit_enabled and spin_polarized and starting_magnetization is not None:
+        angle1 = dict.fromkeys(starting_magnetization, 0.0)
+        angle2 = dict.fromkeys(starting_magnetization, 0.0)
 
     facts = MagneticConfigFacts(
         relabeled_structure=structure,
@@ -181,3 +269,23 @@ def _magnetic_elements(structure: Structure) -> tuple[str, ...]:
     facts = composition(structure).value
     candidates = {*facts.transition_metals, *facts.lanthanides, *facts.actinides}
     return tuple(sorted(candidates))
+
+
+def _starting_magnetization(
+    structure: Structure, z_valences: dict[str, float] | None
+) -> dict[str, float]:
+    elements = composition(structure).value.elements
+    return {symbol: _fraction_for(symbol, z_valences) for symbol in elements}
+
+
+def _fraction_for(symbol: str, z_valences: dict[str, float] | None) -> float:
+    target = _MAGNETIC_MOMENT_TARGETS.get(symbol, 0)
+    if not target:
+        return DEFAULT_MAGNETIZATION_FRACTION
+    if z_valences is None or symbol not in z_valences:
+        # The real fraction needs this element's chosen pseudopotential's
+        # valence electron count; without it, fall back to the flat default
+        # rather than guess a z_valence -- still non-zero (A2), just not the
+        # calibrated value yet.
+        return DEFAULT_MAGNETIZATION_FRACTION
+    return target / z_valences[symbol]
