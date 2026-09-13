@@ -14,10 +14,23 @@ v1-only classification that no longer exists in v2;
 conservatively: ``Unavailable`` rather than a guessed ``"likely_metal"``).
 
 Metals get QE's cold smearing (``degauss=0.01`` Ry, matching v1's own
-``METALLIC_SMEARING_WIDTH_RY``, ``advice/parameters.py:19``); anything
-else -- confirmed non-metal, or ``is_metal`` itself ``Unavailable`` --
-gets ``fixed`` occupations, the same safe default v1 used for both its
-``"insulator"`` and ``"unknown"`` branches.
+``METALLIC_SMEARING_WIDTH_RY``, ``advice/parameters.py:19``); a
+*confirmed* non-metal gets ``fixed`` occupations. ``is_metal``
+``Unavailable`` -- composition alone could not confirm metallic
+character either way -- also gets smearing, not fixed. This is a
+deliberate departure from v1's own mapping (v1's "unknown" bucket also
+fell through to fixed): v1's "unknown" was genuinely no-signal-at-all,
+but v2's ``is_metal`` is more conservative than v1's
+``electronic_character`` (``analysis/is_metal.py``'s own docstring: it
+only ever confidently asserts "metal", never a guessed "non_metal"), so
+its ``Unavailable`` bucket is broader and now includes cases that look
+metallic but are not fully confirmed. Smearing is the safe universal
+default there: it tolerates a small or absent gap, whereas fixed
+occupations assumes one and can fail to converge, or converge to the
+wrong state, on an actual metal it misclassified. This also matches
+common practice elsewhere (e.g. aiida-quantumespresso's own protocols
+default to smearing rather than requiring a prior metal/insulator
+classification).
 
 ``tetrahedra_opt`` (QE's third occupations option, appearing in
 goldilocks-core-design.md's per-step pipeline sketch) is not decided by
@@ -107,9 +120,15 @@ def occupations(
 
     if isinstance(is_metal, Blocked):
         return Blocked(by=is_metal)
-    if is_metal.ok and is_metal.value == "metal":
-        return Resolved(_smearing_decision(), Provenance(source="heuristic"))
-    return Resolved(_fixed_decision(magnetic), Provenance(source="heuristic"))
+    if is_metal.ok and is_metal.value == "non_metal":
+        return Resolved(_fixed_decision(magnetic), Provenance(source="heuristic"))
+    # Resolved("metal") or Unavailable ("heuristic tried, could not tell")
+    # both land here: smearing is the safe universal default, since unlike
+    # fixed it does not depend on the classification being right. Treating
+    # "could not tell" as "assume non-metal" would risk exactly the
+    # silent-wrong-answer failure mode fixed occupations produces on an
+    # actual metal -- see this module's docstring.
+    return Resolved(_smearing_decision(), Provenance(source="heuristic"))
 
 
 def _decision_for(

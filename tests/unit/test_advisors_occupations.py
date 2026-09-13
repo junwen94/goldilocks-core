@@ -33,11 +33,15 @@ def test_confirmed_non_metal_gets_fixed_occupations() -> None:
     assert state.value.degauss is None
 
 
-def test_unavailable_metallicity_defaults_to_fixed_not_blocked() -> None:
+def test_unavailable_metallicity_defaults_to_smearing_not_blocked() -> None:
+    """Unavailable means "could not confirm either way" -- since v2's
+    is_metal is more conservative than v1's classification, this bucket
+    now includes cases that look metallic but are not fully confirmed, so
+    it gets the safe universal default (smearing), not a guessed fixed."""
     state = occupations(Unavailable(reason="composition alone does not confirm"))
 
     assert state.ok
-    assert state.value.occupations == "fixed"
+    assert state.value.occupations == "smearing"
 
 
 def test_blocked_metallicity_propagates_as_blocked() -> None:
