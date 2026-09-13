@@ -3,10 +3,10 @@ from __future__ import annotations
 from pymatgen.core import Structure
 
 from goldilocks_core.advice.parameters import ParameterAdvice
-from goldilocks_core.analysis import StructureAnalysisRecord
 from goldilocks_core.generation.files import GeneratedFiles
 from goldilocks_core.input_data import DftInputData
 from goldilocks_core.kmesh.resolve import KPointSelection
+from goldilocks_core.legacy_analysis import StructureAnalysisRecord
 from goldilocks_core.selection import SelectionRecord
 
 RECORD_TYPE_IDS: dict[type, str] = {

@@ -5,7 +5,6 @@ from typing import Any
 from pymatgen.core import Structure
 
 from goldilocks_core.advice.parameters import ParameterAdvice, advise_parameters
-from goldilocks_core.analysis import StructureAnalysisRecord, analyze_structure
 from goldilocks_core.generation.files import GeneratedFiles
 from goldilocks_core.generation.registry import generate_inputs
 from goldilocks_core.input_data import (
@@ -14,6 +13,7 @@ from goldilocks_core.input_data import (
     assemble_dft_input_data,
 )
 from goldilocks_core.kmesh.resolve import KPointSelection, resolve_kpoints
+from goldilocks_core.legacy_analysis import StructureAnalysisRecord, analyze_structure
 from goldilocks_core.request import CalculationResources
 from goldilocks_core.runtime.dispatch import GraphHandler
 from goldilocks_core.runtime.graph import Preset, Stage, TaskGraph

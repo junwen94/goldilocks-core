@@ -11,13 +11,13 @@ from goldilocks_core import (
     compute,
 )
 from goldilocks_core.advice.parameters import ParameterAdvice
-from goldilocks_core.analysis import StructureAnalysisRecord
 from goldilocks_core.examples.structures import (
     available_structures,
     structure,
     structures_path,
 )
 from goldilocks_core.kmesh.resolve import KPointSelection
+from goldilocks_core.legacy_analysis import StructureAnalysisRecord
 
 
 def _recommend(name: str):

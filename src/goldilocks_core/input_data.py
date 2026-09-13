@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
 
 from goldilocks_core.advice.parameters import ParameterAdvice
-from goldilocks_core.analysis import StructureAnalysisRecord
 from goldilocks_core.calculation import CalculationHints, CalculationIntent
 from goldilocks_core.generation.files import (
     FileReference,
@@ -17,6 +16,7 @@ from goldilocks_core.inputs.structure import (
     StructureSourceDocument,
 )
 from goldilocks_core.kmesh.resolve import KPointSelection
+from goldilocks_core.legacy_analysis import StructureAnalysisRecord
 from goldilocks_core.pseudo.source import (
     PseudopotentialMaterial,
     PseudopotentialSetIdentity,

@@ -1,8 +1,8 @@
 import pytest
 from pymatgen.core import Lattice, Structure
 
-import goldilocks_core.analysis as analysis_module
-from goldilocks_core.analysis import (
+import goldilocks_core.legacy_analysis as analysis_module
+from goldilocks_core.legacy_analysis import (
     DimensionalityClassificationError,
     analyze_structure,
 )

@@ -24,7 +24,6 @@ from goldilocks_core import (
     Runtime,
 )
 from goldilocks_core.advice.parameters import ParameterAdvice
-from goldilocks_core.analysis import StructureAnalysisRecord
 from goldilocks_core.assets.pseudopotentials.importers import write_table_manifest
 from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
@@ -32,6 +31,7 @@ from goldilocks_core.assets.records import AssetFile, AssetSpec
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.calculation import CalculationIntent
 from goldilocks_core.kmesh.resolve import KPointSelection
+from goldilocks_core.legacy_analysis import StructureAnalysisRecord
 from goldilocks_core.ml.models import ModelSpec
 from goldilocks_core.provenance import Provenance
 from goldilocks_core.pseudo.source import (

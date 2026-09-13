@@ -16,10 +16,10 @@ from goldilocks_core import (
     PresetSelection,
     compute,
 )
-from goldilocks_core.analysis import StructureAnalysisRecord
 from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.generation.files import GeneratedFiles
 from goldilocks_core.kmesh.resolve import KPointSelection
+from goldilocks_core.legacy_analysis import StructureAnalysisRecord
 from goldilocks_core.selection import SelectionRecord
 
 

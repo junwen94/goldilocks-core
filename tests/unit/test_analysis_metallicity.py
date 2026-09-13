@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.analysis import analyze_structure, heuristic_metallicity
+from goldilocks_core.legacy_analysis import analyze_structure, heuristic_metallicity
 
 
 def test_default_heuristic_marks_all_metal_as_likely_metal() -> None:

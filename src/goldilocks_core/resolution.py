@@ -165,6 +165,22 @@ notation and keeps ``isinstance``/``match`` working directly on the
 three real classes above, with no extra indirection."""
 
 
+def blocked_by(state: Unavailable | Blocked) -> Blocked | str:
+    """Turn a failed upstream ``FieldState`` into a value ``Blocked.by``
+    accepts, for functions that depend on another analysis/advisors fact
+    rather than only on raw input (v2 epic 4, #1's ``needs_soc`` reading
+    ``composition`` is the first real case). ``Blocked.by``'s type is
+    ``Blocked | str``, not ``FieldState`` -- passing an ``Unavailable``
+    straight through would silently break ``root_cause()``'s walk, since it
+    stops at the first non-``Blocked`` value and returns it as-is, whatever
+    it is. This function is the one place that distinction gets handled:
+    an ``Unavailable``'s ``reason`` becomes the string cause, and a
+    ``Blocked`` passes through unchanged so the chain stays walkable."""
+    if isinstance(state, Blocked):
+        return state
+    return state.reason
+
+
 class ResolvedField[T](BaseModel):
     """The serializable projection of a ``FieldState[T]``, for storage
     on a settings/facts class -- this answers the design doc's
