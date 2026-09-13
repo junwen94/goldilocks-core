@@ -46,6 +46,24 @@ FM-only (identity) for now, so this has no real split species to expand yet
 in this epic -- exercised directly with a manually-split structure in its
 own tests, the same pattern `analysis/needs_soc.py` used for a dependency
 that also has no real failure to trigger it yet.
+
+**Note for epic 7 (QE generation rewrite), re: the aiida-quantumespresso
+hubbard.html tutorial.** QE >= 7.1's actual `HUBBARD` card is not the
+label-keyed `U Fe-3d 4.6` style `expand_hubbard_label` targets above -- it is
+atom-*index*-keyed: ``HUBBARD ortho-atomic`` followed by lines like
+``V Co-3d Co-3d 1 1 5.0`` (``V <manifold_I> <manifold_J> <site_i> <site_j>
+<value>``; onsite U is the degenerate case ``site_i == site_j``). This is
+also the format `hp.x`/`aiida-hubbard` itself emits from a calibration run.
+If epic 7 targets this format, AFM-split *species labels* stop being the
+mechanism for giving symmetry-inequivalent sites of the same element
+different U values -- distinct site indices already do that, with no
+`ATOMIC_SPECIES` relabeling required. Whether to target this format or the
+older label-keyed one is epic 7's decision to make once it exists;
+`expand_hubbard_label` here is not wrong for what it claims to do (expand a
+label-keyed table), it just may not be the table shape the renderer ends up
+needing. Separately, `hp.x` also requires its "Hubbard atoms" to be listed
+first in `ATOMIC_POSITIONS` -- a structure-preprocessing detail for whatever
+in epic 7 renders the calibration input, not a concern of this advisor.
 """
 
 from __future__ import annotations
