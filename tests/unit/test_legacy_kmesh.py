@@ -5,12 +5,12 @@ from typing import Any
 from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.calculation import CalculationHints
-from goldilocks_core.kmesh.math import (
+from goldilocks_core.legacy_kmesh.math import (
     build_kmesh_entries,
     generate_candidate_k_distances,
     k_distance_to_mesh,
 )
-from goldilocks_core.kmesh.resolve import resolve_kpoints
+from goldilocks_core.legacy_kmesh.resolve import resolve_kpoints
 from goldilocks_core.provenance import Provenance
 
 

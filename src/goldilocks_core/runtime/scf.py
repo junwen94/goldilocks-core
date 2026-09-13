@@ -12,7 +12,7 @@ from goldilocks_core.input_data import (
     InputRecords,
     assemble_dft_input_data,
 )
-from goldilocks_core.kmesh.resolve import KPointSelection, resolve_kpoints
+from goldilocks_core.legacy_kmesh.resolve import KPointSelection, resolve_kpoints
 from goldilocks_core.legacy_analysis import StructureAnalysisRecord, analyze_structure
 from goldilocks_core.request import CalculationResources
 from goldilocks_core.runtime.dispatch import GraphHandler

@@ -4,11 +4,11 @@ import math
 
 from pymatgen.core import Structure
 
-from goldilocks_core.kmesh.math import (
+from goldilocks_core.legacy_kmesh.math import (
     build_kmesh_entries,
     generate_candidate_k_distances,
 )
-from goldilocks_core.kmesh.resolve import KMeshAdvisor, KPointSelection
+from goldilocks_core.legacy_kmesh.resolve import KMeshAdvisor, KPointSelection
 from goldilocks_core.ml.kindex.inference import predict_kindex
 from goldilocks_core.ml.models import ModelSpec
 from goldilocks_core.provenance import Provenance

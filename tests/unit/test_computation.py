@@ -21,7 +21,7 @@ from goldilocks_core import (
 from goldilocks_core.advice.parameters import ParameterAdvice
 from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.generation.files import GeneratedFiles
-from goldilocks_core.kmesh.resolve import KPointSelection
+from goldilocks_core.legacy_kmesh.resolve import KPointSelection
 from goldilocks_core.legacy_analysis import StructureAnalysisRecord
 from goldilocks_core.ml.models import ModelSpec
 from goldilocks_core.selection import SelectionRecord

@@ -6,7 +6,7 @@ from typing import Annotated, Literal, TypedDict
 from pymatgen.core import Structure
 
 from goldilocks_core.calculation import CalculationHints
-from goldilocks_core.kmesh.math import k_distance_to_mesh
+from goldilocks_core.legacy_kmesh.math import k_distance_to_mesh
 from goldilocks_core.provenance import Provenance
 from goldilocks_core.serialization import Portable
 from goldilocks_core.types import KPointGrid, KPointShift

@@ -9,7 +9,7 @@ from goldilocks_core.advice.parameters import ParameterAdvice
 from goldilocks_core.calculation import CalculationIntent
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.files import GeneratedFiles
-from goldilocks_core.kmesh.resolve import KPointSelection
+from goldilocks_core.legacy_kmesh.resolve import KPointSelection
 from goldilocks_core.selection import SelectionRecord
 from goldilocks_core.types import JsonDict
 

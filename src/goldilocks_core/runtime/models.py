@@ -15,7 +15,7 @@ from goldilocks_core.assets.records import AssetSpec
 from goldilocks_core.assets.store import AssetNotInstalled, AssetStore
 from goldilocks_core.failures import ExpectedFailure
 from goldilocks_core.generation.files import InputArtifact
-from goldilocks_core.kmesh.resolve import KMeshAdvisor, KPointSelection
+from goldilocks_core.legacy_kmesh.resolve import KMeshAdvisor, KPointSelection
 from goldilocks_core.legacy_analysis import (
     StructureAnalysisRecord,
     heuristic_metallicity,
