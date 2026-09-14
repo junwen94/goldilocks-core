@@ -6,11 +6,11 @@ calls ``server/_handlers.py``'s free functions, the exact same path
 ``server/mcp.py`` calls -- one shared request-validation/dispatch
 implementation for both transports, not two.
 
-**No Workbench static-file mount.** v1's ``create_app`` also served the
-built frontend off ``/`` when a static root was configured. Wiring the
-Workbench back up to this epic's shapes (regenerated TypeScript types,
-new tri-state/warnings rendering) is v2 epic 12 (#12)'s explicit scope,
-not this one's -- see this epic's own issue, "downstream" section.
+**Workbench static-file mount.** When ``GOLDILOCKS_WORKBENCH_STATIC_ROOT``
+is set, the built Workbench frontend (``web/dist``) is mounted at ``/``
+-- same origin as the API, no CORS (v2 epic 12, #12). Unset by default,
+so plain API use (tests, ``goldilocks serve http`` in dev) never needs a
+frontend build lying around.
 
 Behind the optional ``[http]`` extra; importing ``goldilocks_core``
 never imports FastAPI (P7).
@@ -18,6 +18,7 @@ never imports FastAPI (P7).
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from goldilocks_core.bundle import archive_bytes
@@ -50,6 +51,7 @@ _MISSING_HTTP_EXTRA = (
     "The HTTP transport requires goldilocks-core[http]. "
     "Install it with `uv sync --extra http`."
 )
+_STATIC_ROOT_ENV = "GOLDILOCKS_WORKBENCH_STATIC_ROOT"
 _STATUS_BY_CATEGORY = {"input": 422, "dependency": 424, "local": 500}
 
 
@@ -84,7 +86,22 @@ def create_app() -> Any:
             return Response(archive_bytes(bundle_input), media_type="application/zip")
         return JSONResponse(summary)
 
+    _mount_workbench(app)
     return app
+
+
+def _mount_workbench(app: Any) -> None:
+    static_root = os.environ.get(_STATIC_ROOT_ENV)
+    if not static_root:
+        return
+    from fastapi.staticfiles import StaticFiles
+
+    # Mounted last, after every API route above: Starlette matches routes
+    # in registration order, so the explicit routes still win even though
+    # this Mount's prefix ("/") would otherwise swallow everything.
+    # `check_dir` (default True) already fails fast with a RuntimeError if
+    # static_root doesn't exist -- no need to duplicate that check here.
+    app.mount("/", StaticFiles(directory=static_root, html=True), name="workbench")
 
 
 def _register_error_handlers(app: Any) -> None:
