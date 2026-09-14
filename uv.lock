@@ -817,6 +817,7 @@ name = "goldilocks-core"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "ase" },
     { name = "dscribe" },
     { name = "joblib" },
     { name = "matminer" },
@@ -853,6 +854,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "ase", specifier = ">=3.28" },
     { name = "dscribe", specifier = ">=2.1" },
     { name = "fastapi", marker = "extra == 'http'" },
     { name = "joblib", specifier = "==1.5.3" },
