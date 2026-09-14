@@ -22,17 +22,24 @@ than `walltime`).
 
 **`ndiag`, gated on the HPC profile's `has_scalapack`**
 (goldilocks-core-design.md's `[codes.quantum_espresso] has_scalapack`
-profile field): QE's own diagonalization documentation states that
-without ScaLAPACK/ELPA, `-ndiag` is meaningless and defaults to 1
-regardless of what is requested -- so this module does not emit a
-value at all when the profile says the code was not built with it,
-rather than emitting a number QE will silently ignore. When emitted,
-it is the largest perfect square not exceeding `ntasks / npool`
-(the ⚠️ documented-but-unresolved ambiguity in official QE docs between
-"strictly smaller than" and "smaller than or equal to" the diagonalization
-sub-grid bound is resolved here as `<=`, matching the design doc's own
-recorded reading -- flagged for whoever eventually re-checks the
-primary QE source).
+profile field, matching the official user guide's own default-selection
+rule, verified directly 2026-09-14 against
+quantum-espresso.org/Doc/user_guide/node20.html -- not just the design
+doc's earlier citation of it): "nd is set to 1 if ScaLAPACK is not
+compiled, it is set to the square integer smaller than or equal to the
+number of processors of each pool." That page separately states the
+linear-algebra group size must be "smaller than" (strict) the pool's
+processor count as a general constraint -- a QE-documentation
+inconsistency in its own right (the two statements can disagree exactly
+when a pool's size is itself a perfect square), not a misreading here:
+this module replicates QE's own stated *default-selection* procedure
+verbatim (`<=`), which is what a caller actually wants reproduced.
+`-nband`/`-nb` (band groups, useful for hybrid functionals) and
+`-ntg`/`-nt` (task groups, FFT parallelization for very large process
+counts) are real, separate QE parallelization layers this module does
+not model at all -- no advisor in this codebase needs them yet
+(hybrid-functional support, and job sizes large enough for FFT-plane
+-count to bind, are both out of scope today).
 
 **`nimage` is always `None` here.** It only applies to NEB/phonon tasks
 (`neb.x`'s images, `ph.x`'s irreps/q-points), and this codebase has no
