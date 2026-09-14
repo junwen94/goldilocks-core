@@ -54,6 +54,7 @@ from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.parallelisation import ParallelisationDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
+from goldilocks_core.analysis.geometry import GeometryFacts
 from goldilocks_core.resolution import Blocked, FieldState
 
 _MISSING_TOT_MAGNETIZATION = (
@@ -97,6 +98,7 @@ def check_all(
     occupations: FieldState[OccupationsDecision] | None = None,
     magnetic: FieldState[MagneticConfigFacts] | None = None,
     relax: FieldState[RelaxOptions | VcRelaxOptions] | None = None,
+    geometry: FieldState[GeometryFacts] | None = None,
     job: FieldState[JobDecision] | None = None,
     parallel: FieldState[ParallelisationDecision] | None = None,
     purpose: str = "scf",
@@ -106,13 +108,16 @@ def check_all(
     ``field_states`` is every ``FieldState`` a caller has assembled so
     far (from any advisor) -- any that are ``Blocked`` land in
     ``report.blocking`` via ``collect_blocked``. ``occupations``/
-    ``magnetic``/``relax``/``job``/``parallel``/``purpose`` additionally
-    opt into the named cross-parameter rules this module implements;
-    passing them here also folds them into the generic ``Blocked`` scan,
-    so a caller does not need to repeat them in ``field_states`` as well.
+    ``magnetic``/``relax``/``geometry``/``job``/``parallel``/``purpose``
+    additionally opt into the named cross-parameter rules this module
+    implements; passing them here also folds them into the generic
+    ``Blocked`` scan, so a caller does not need to repeat them in
+    ``field_states`` as well.
     """
     optional = tuple(
-        s for s in (occupations, magnetic, relax, job, parallel) if s is not None
+        s
+        for s in (occupations, magnetic, relax, geometry, job, parallel)
+        if s is not None
     )
     blocking = list(collect_blocked(*field_states, *optional))
 
@@ -121,6 +126,10 @@ def check_all(
         blocking.append(reason)
 
     reason = _vc_relax_requires_bfgs_ion_dynamics(relax, purpose)
+    if reason is not None:
+        blocking.append(reason)
+
+    reason = _fix_bottom_layers_requires_2d_geometry(relax, geometry)
     if reason is not None:
         blocking.append(reason)
 
@@ -199,5 +208,30 @@ def _vc_relax_requires_bfgs_ion_dynamics(
             "ion_dynamics for vc-relax, and only the bfgs/bfgs combination "
             "is modelled here -- damp-paired cell dynamics is a future "
             "epic's scope."
+        )
+    return None
+
+
+def _fix_bottom_layers_requires_2d_geometry(
+    relax: FieldState[RelaxOptions | VcRelaxOptions] | None,
+    geometry: FieldState[GeometryFacts] | None,
+) -> str | None:
+    """``relax.fix_bottom_layers`` (#44) fixes atoms in a slab's bottom
+    N atomic layers -- meaningless (there is no "bottom" along a
+    stacking direction) unless the structure actually is a 2D slab.
+    Blocked here rather than silently ignored or left to fail deep
+    inside generation's own layer-detection algorithm with a less
+    actionable message."""
+    if relax is None or not relax.ok or relax.value.fix_bottom_layers is None:
+        return None
+    if geometry is None or not geometry.ok:
+        return (
+            "relax.fix_bottom_layers requires a 2D slab structure, but "
+            "geometry classification is not available."
+        )
+    if geometry.value.dimensionality != "2d":
+        return (
+            "relax.fix_bottom_layers requires a 2D slab structure; got "
+            f"dimensionality={geometry.value.dimensionality!r}."
         )
     return None

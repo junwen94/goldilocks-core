@@ -40,6 +40,19 @@ def _silicon() -> Structure:
     return Structure(Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]])
 
 
+def _silicon_slab() -> Structure:
+    """A real, multi-layer 2D slab -- see
+    ``test_generation_quantum_espresso_relax.py``'s own copy of this
+    helper for why ``_silicon()`` (a bulk placeholder) can't stand in
+    for layer-detection tests."""
+    from pymatgen.core.surface import SlabGenerator
+
+    bulk = Structure.from_spacegroup("Fd-3m", Lattice.cubic(5.43), ["Si"], [[0, 0, 0]])
+    return SlabGenerator(
+        bulk, (0, 0, 1), min_slab_size=10, min_vacuum_size=12, center_slab=True
+    ).get_slab()
+
+
 class TestAdviseRelaxDegradation:
     def test_relax_settings_resolve_with_heuristic_defaults(self) -> None:
         advice = advise_relax(_silicon(), calculation="relax", hpc=_hpc())
@@ -105,6 +118,29 @@ class TestAdviseRelaxDegradation:
         assert not report.ok
         assert any("ion_dynamics='bfgs'" in reason for reason in report.blocking)
 
+    def test_set_style_override_reaches_fix_bottom_layers(self) -> None:
+        """No registry entry was added for this: capabilities.py reflects
+        ``RelaxHumanInput.fix_bottom_layers`` automatically (#44)."""
+        overrides = build_overrides({"fix_bottom_layers": 2})
+
+        advice = advise_relax(
+            _silicon(), calculation="relax", hpc=_hpc(), overrides=overrides
+        )
+
+        assert advice.relax.value.fix_bottom_layers == 2
+        assert advice.relax.source == "human"
+
+    def test_fix_bottom_layers_on_bulk_silicon_is_blocked_end_to_end(self) -> None:
+        overrides = build_overrides({"fix_bottom_layers": 1})
+
+        advice = advise_relax(
+            _silicon(), calculation="relax", hpc=_hpc(), overrides=overrides
+        )
+        report = check_relax(advice)
+
+        assert not report.ok
+        assert any("2D slab structure" in reason for reason in report.blocking)
+
 
 class TestGenerateRelaxEndToEnd:
     def _store(self, tmp_path, monkeypatch) -> AssetStore:
@@ -132,6 +168,38 @@ class TestGenerateRelaxEndToEnd:
         assert "calculation      = 'relax'" in content
         assert "&IONS" in content
         assert "&CELL" not in content
+
+    def test_generate_relax_with_fix_bottom_layers_writes_if_pos_end_to_end(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Proves the full wire: a raw ``--set``-style dict override
+        reaches ``RelaxHumanInput`` (capabilities.py reflection), then
+        ``relax_settings`` (advisor), then ``checks.check_all`` (passes,
+        since this structure is a real 2D slab), then ``write_qe_relax``
+        (generation) -- not just each layer's own unit tests in
+        isolation."""
+        store = self._store(tmp_path, monkeypatch)
+        overrides = build_overrides({"fix_bottom_layers": 2})
+
+        advice = advise_relax(
+            _silicon_slab(),
+            calculation="relax",
+            hpc=_hpc(),
+            overrides=overrides,
+            store=store,
+        )
+        report = check_relax(advice)
+        assert report.ok, report.blocking
+
+        steps = generate_relax(advice, report)
+
+        lines = steps[0].files["relax.in"].splitlines()
+        start = lines.index("ATOMIC_POSITIONS crystal") + 1
+        end = next(i for i in range(start, len(lines)) if not lines[i].strip())
+        rows = lines[start:end]
+        fixed_rows = [row for row in rows if row.split()[-3:] == ["0", "0", "0"]]
+        assert fixed_rows, "expected at least one if_pos-fixed row"
+        assert len(fixed_rows) < len(rows), "expected some atoms to stay free"
 
     def test_generate_vc_relax_produces_one_step_with_cell_namelist(
         self, tmp_path, monkeypatch

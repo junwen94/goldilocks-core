@@ -92,13 +92,19 @@ def check(
     ``job``/``parallel``: always read straight off ``advice`` (every
     ``Advice`` has both) -- the ``npool``-must-divide-``ntasks`` rule
     (``checks.py``'s own ``_npool_must_divide_ntasks``) applies
-    regardless of ``purpose``.
+    regardless of ``purpose``. ``geometry`` (#44): same "always read
+    straight off ``advice``" treatment -- every ``Advice`` has an
+    ``analysis.geometry``, needed by ``_fix_bottom_layers_requires_2d_geometry``
+    regardless of ``purpose`` (a non-relax caller never sets
+    ``relax.fix_bottom_layers`` in the first place, so the rule is a
+    no-op for them).
     """
     return check_all(
         *advice.field_states(),
         occupations=advice.step.kpoints.occupations,
         magnetic=advice.system.magnetic,
         relax=relax,
+        geometry=advice.analysis.geometry,
         job=advice.step.resources.job,
         parallel=advice.step.resources.parallelisation,
         purpose=purpose,

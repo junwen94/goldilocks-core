@@ -10,14 +10,22 @@ epic 10's job"). Every default is copied verbatim from QE's own
 from memory or the design doc's own prose), not invented or "improved"
 with unvalidated numbers.
 
-**Not in this epic's scope, on purpose:** ``if_pos`` (fixing bottom
-layers of a slab) needs layer detection this codebase does not have yet
--- split out to its own follow-up issue (#44) once the rest of this
-epic's scope turned out large enough to implement on its own; the
-heuristic default (this module makes no decision at all: ``if_pos``
-does not exist as a field yet) still matches QE's own "don't write the
-card" default, so nothing here is a regression relative to not shipping
-it.
+**``fix_bottom_layers`` (#44, split out of this epic then implemented
+separately):** human-only (``RelaxHumanInput`` only, no ``RelaxLlmInput``
+counterpart) -- like the numerically-sensitive thresholds below, which
+atoms to physically pin during a relaxation is a structural decision,
+not a "which scenario" choice an llm tier should be guessing at.
+``checks.py``'s ``_fix_bottom_layers_requires_2d_geometry`` blocks any
+value other than ``None`` on a non-2D structure; the actual per-atom
+layer detection (bonded-graph orientation + ``ase.geometry.get_layers``)
+happens in ``generation/quantum_espresso/relax.py`` at generation time,
+against ``system.magnetic.relabeled_structure`` -- not here and not in
+``analysis/geometry.py`` -- since that is the exact structure whose site
+order the ``ATOMIC_POSITIONS`` card writer needs index-aligned layer
+data for, and AFM species-splitting (this module's own note above) can
+in principle change site count/order between the phase-1 ``structure``
+this module's own ``geometry`` parameter is computed against and
+generation time's ``relabeled_structure``.
 
 **``etot_conv_thr`` is not this module's own decision.** ``advisors/
 convergence.py`` already resolves it as ``nat * etot_conv_thr_per_atom``
@@ -189,6 +197,11 @@ class RelaxOptions:  # calculation ∈ {relax, vc-relax}
     trust_radius_ini: float = _TRUST_RADIUS_INI_DEFAULT
     """Bohr."""
     remove_rigid_rot: bool = False
+    fix_bottom_layers: int | None = None
+    """Number of bottom atomic layers (of a 2D slab) to fix with an
+    ``if_pos`` card entry. ``None`` matches QE's own default of no
+    ``if_pos`` column (every atom free). Human-only -- see this
+    module's own docstring."""
     warnings: tuple[Warning, ...] = ()
 
 
@@ -224,6 +237,7 @@ class RelaxHumanInput(HumanInput):
     trust_radius_min: float | None = Field(default=None, gt=0)
     trust_radius_ini: float | None = Field(default=None, gt=0)
     remove_rigid_rot: bool | None = None
+    fix_bottom_layers: int | None = Field(default=None, gt=0)
     cell_dofree: CellDofree | None = None
     press: float | None = None
     press_conv_thr: float | None = Field(default=None, gt=0)
@@ -236,7 +250,9 @@ class RelaxLlmInput(LlmInput):
     human-only, matching ``advisors/convergence.py``'s own
     ``ConvergenceLlmInput`` precedent of keeping convergence-threshold
     -shaped fields out of the llm tier -- only "which scenario" choices
-    are here."""
+    are here. ``fix_bottom_layers`` is human-only for the same reason as
+    the thresholds above: which atoms to physically pin is a structural
+    decision, not a scenario choice."""
 
     ion_dynamics: IonDynamics | None = None
     nstep: int | None = None
@@ -284,6 +300,7 @@ def relax_settings(
             human.trust_radius_ini, None, _TRUST_RADIUS_INI_DEFAULT
         ),
         "remove_rigid_rot": _pick(human.remove_rigid_rot, llm.remove_rigid_rot, False),
+        "fix_bottom_layers": _pick(human.fix_bottom_layers, None, None),
     }
     field_sources: dict[str, Source] = {
         "ion_dynamics": _field_source(human.ion_dynamics, llm.ion_dynamics),
@@ -294,6 +311,7 @@ def relax_settings(
         "trust_radius_min": _field_source(human.trust_radius_min),
         "trust_radius_ini": _field_source(human.trust_radius_ini),
         "remove_rigid_rot": _field_source(human.remove_rigid_rot, llm.remove_rigid_rot),
+        "fix_bottom_layers": _field_source(human.fix_bottom_layers),
     }
 
     if calculation == "vc-relax":
