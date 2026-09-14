@@ -30,6 +30,20 @@ from goldilocks_core.server.documents import (
     RunRequestDocument,
 )
 
+try:
+    # Module-level, not deferred into create_app() like the rest of
+    # FastAPI: with `from __future__ import annotations` in effect,
+    # route return-type hints are strings resolved against *this
+    # module's* __globals__ when FastAPI builds the OpenAPI schema
+    # (#31). A name bound only inside create_app() never satisfies
+    # that lookup, so .openapi() dies on a stale forward ref. The
+    # fallback keeps the module importable without the [http] extra --
+    # create_app()'s own try/except still raises _MISSING_HTTP_EXTRA
+    # for anyone who actually calls it.
+    from fastapi.responses import JSONResponse, Response
+except ImportError:
+    JSONResponse = Response = Any  # type: ignore[assignment,misc]
+
 __all__ = ["create_app", "serve"]
 
 _MISSING_HTTP_EXTRA = (
@@ -42,7 +56,6 @@ _STATUS_BY_CATEGORY = {"input": 422, "dependency": 424, "local": 500}
 def create_app() -> Any:
     try:
         from fastapi import FastAPI
-        from fastapi.responses import JSONResponse, Response
     except ImportError as error:
         raise ImportError(_MISSING_HTTP_EXTRA) from error
 
@@ -77,7 +90,6 @@ def create_app() -> Any:
 def _register_error_handlers(app: Any) -> None:
     from fastapi import Request
     from fastapi.exceptions import RequestValidationError
-    from fastapi.responses import JSONResponse
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(
@@ -115,8 +127,6 @@ def _register_error_handlers(app: Any) -> None:
 
 
 def _register_operational_routes(app: Any, readiness: Any) -> None:
-    from fastapi.responses import JSONResponse
-
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
