@@ -5,6 +5,8 @@ one ``Advice`` into rendered ``Step``s (v2 epic 8, #8). See
 
 from __future__ import annotations
 
+from typing import Literal
+
 from goldilocks_core.checks import CheckReport
 from goldilocks_core.failures import ExpectedFailure
 from goldilocks_core.generation.quantum_espresso.scf import write_qe_scf
@@ -36,14 +38,24 @@ class AdviceIncomplete(ExpectedFailure, ValueError):
 
 
 def generate(
-    advice: Advice, report: CheckReport, *, ctx: SharedContext | None = None
+    advice: Advice,
+    report: CheckReport,
+    *,
+    ctx: SharedContext | None = None,
+    purpose: Literal["scf", "nscf"] = "scf",
 ) -> tuple[Step, ...]:
     """Delivery: raises ``AdviceIncomplete`` if ``report`` is not ``ok``,
     per the "generate() refuses iff a needed field is unavailable/blocked"
     promise -- callers must call ``check(advice)`` first and are expected
     to inspect ``report.blocking`` themselves before ever reaching here
     in normal operation; this raise is the hard boundary, not the
-    primary way a caller learns what is missing."""
+    primary way a caller learns what is missing.
+
+    ``purpose`` (v2 epic 9, #9): forwarded to ``write_qe_scf`` unchanged
+    -- see that function's own docstring. Every existing caller renders
+    an scf step; ``service/_dos.py``'s nscf pass is the first to pass
+    ``purpose="nscf"``.
+    """
     if not report.ok:
         raise AdviceIncomplete(report)
     system = SystemSettings(
@@ -75,5 +87,6 @@ def generate(
             step_settings,
             advice.step.resources.job.value,
             ctx or default_shared_context(),
+            purpose,
         )
     )

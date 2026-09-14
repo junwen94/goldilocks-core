@@ -67,13 +67,24 @@ from ase.io.espresso_namelist.namelist import Namelist
 
 from goldilocks_core.generation.errors import GenerationError
 
-_BINARY = "pw"
+_DEFAULT_BINARY = "pw"
 
 
-def render_namelist(keywords: dict[str, object]) -> str:
+def render_namelist(keywords: dict[str, object], binary: str = _DEFAULT_BINARY) -> str:
     """Render ``keywords`` (flat, QE-spelled, possibly-indexed like
-    ``"starting_magnetization(1)"``) as ``pw.x`` namelist text, one
+    ``"starting_magnetization(1)"``) as ``binary.x`` namelist text, one
     section per namelist that actually received a keyword.
+
+    ``binary`` selects which of ASE's ``ase.io.espresso_namelist.keys.
+    ALL_KEYS`` schemas keywords are validated/sectioned against --
+    defaults to ``"pw"`` (every existing caller). ``dos.x``'s ``&DOS``
+    (v2 epic 9, #9) is the second binary this codebase renders: ASE's
+    own registry already has its schema (``ALL_KEYS["dos"]`` --
+    ``prefix``/``outdir``/``bz_sum``/``ngauss``/``degauss``/``emin``/
+    ``emax``/``deltae``/``fildos``, confirmed against the installed ASE
+    version 2026-09-14), a flat single-section list rather than pw.x's
+    ``&CONTROL``/``&SYSTEM``/... split -- ``to_nested`` handles both
+    shapes the same way, so no dos-specific branch is needed here.
     """
     if not keywords:
         raise GenerationError("no Quantum ESPRESSO namelist keywords to render")
@@ -81,11 +92,11 @@ def render_namelist(keywords: dict[str, object]) -> str:
     namelist = Namelist(keywords)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", UserWarning)
-        namelist.to_nested(_BINARY, warn=True)
+        namelist.to_nested(binary, warn=True)
     if caught:
         messages = "; ".join(str(warning.message) for warning in caught)
         raise GenerationError(
-            f"unrecognized Quantum ESPRESSO {_BINARY}.x namelist keyword(s): {messages}"
+            f"unrecognized Quantum ESPRESSO {binary}.x namelist keyword(s): {messages}"
         )
 
     populated = Namelist(
@@ -93,6 +104,6 @@ def render_namelist(keywords: dict[str, object]) -> str:
     )
     if not populated:
         raise GenerationError(
-            f"no keyword mapped to a known {_BINARY}.x namelist section"
+            f"no keyword mapped to a known {binary}.x namelist section"
         )
     return populated.to_string()

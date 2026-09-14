@@ -7,20 +7,18 @@ module does not replace (v2 epic 9 deletes the v1 tree, not this one).
 
 from __future__ import annotations
 
-import hashlib
-import io
 import json
 import shutil
-import tarfile
-from pathlib import Path
 
 import pytest
 from pymatgen.core import Lattice, Structure
+from support import (
+    SSSP_FIXTURE_UPF as _UPF,
+    sssp_fixture_table_spec as _sssp_table_spec,
+)
 
 from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
-from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
-from goldilocks_core.assets.records import AssetFile, AssetSpec
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.bundle import DirectoryOutput, is_complete, publish
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
@@ -36,70 +34,6 @@ from goldilocks_core.service import (
     to_bundle_input,
 )
 from goldilocks_core.steps import default_shared_context
-
-_UPF = (
-    b'<UPF version="2.0.1">\n'
-    b'<PP_HEADER element="Si" pseudo_type="NC" functional="PBEsol" '
-    b'relativistic="scalar" z_valence="4.0"/>\n'
-    b"</UPF>\n"
-)
-
-
-def _archive(path: Path, members: dict[str, bytes]) -> None:
-    with tarfile.open(path, "w:gz") as tar:
-        for name, payload in members.items():
-            info = tarfile.TarInfo(name)
-            info.size = len(payload)
-            tar.addfile(info, io.BytesIO(payload))
-
-
-def _sssp_table_spec(tmp_path: Path) -> tuple[AssetSpec, PseudoTable]:
-    """Build one real, fully-offline SSSP-shaped pseudopotential asset
-    (file:// sources, no network), matching the pattern already used by
-    ``tests/unit/test_pseudo_importers.py``'s ``install_sssp_fixture``."""
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    upfs = tmp_path / "table.tar.gz"
-    sidecar = tmp_path / "table.json"
-    licence = tmp_path / "LICENSE.txt"
-    _archive(upfs, {"nested/Si.upf": _UPF})
-    sidecar.write_text(
-        json.dumps(
-            {
-                "Si": {
-                    "filename": "Si.upf",
-                    "md5": hashlib.md5(_UPF).hexdigest(),
-                    "cutoff_wfc": 30.0,
-                    "cutoff_rho": 120.0,
-                    "pseudopotential": "Si fixture",
-                }
-            }
-        )
-    )
-    licence.write_text("SSSP fixture licence\n")
-    spec = AssetSpec(
-        "pseudopotentials/sssp-fixture",
-        "1",
-        (
-            AssetFile("pseudopotentials", "source/table.tar.gz", upfs.as_uri()),
-            AssetFile("metadata", "source/table.json", sidecar.as_uri()),
-            AssetFile("licence", "source/LICENSE.txt", licence.as_uri()),
-        ),
-    )
-    registry_table = PseudoTable(
-        id="sssp-fixture",
-        provider="sssp",
-        upstream_table="fixture",
-        version="1",
-        functional="PBEsol",
-        relativistic="scalar",
-        accuracy="efficiency",
-        licence="fixture licence",
-        citation="Synthetic SSSP fixture, cite me.",
-        elements=("Si",),
-        asset=spec,
-        default=True,
-    )
-    return spec, registry_table
 
 
 @pytest.fixture

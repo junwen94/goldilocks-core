@@ -9,14 +9,15 @@ hard-fails via ``checks.check_all`` if anything needed is
 ``explain`` command is exactly ``advise()``; ``run`` is
 ``advise()`` -> ``generate()`` -> submission script -> bundle.
 
-Only the one task epics 1-7 actually built a generation writer for
-(``scf_single_point`` on Quantum ESPRESSO) is wired here. Task
-sequencing (``PlannedStep``/``plan.py``) does not exist yet either
-(``steps.py``'s own docstring: "add once a second task actually needs
-step sequencing") -- ``_step.py`` calls the per-step advisors and this
-module calls ``generate()``'s writer directly, once, rather than through
-a task-expansion layer that would have no second caller to prove it
-against.
+Only the single-step task (``scf_single_point`` on Quantum ESPRESSO) is
+wired here -- ``_step.py`` calls the per-step advisors and this module
+calls ``generate()``'s writer directly, once. The multi-step ``dos``
+task (v2 epic 9, #9's ``plan.py``/``PlannedStep``) is deliberately not
+folded in here: ``service/_dos.py``'s ``advise_dos()``/``generate_dos()``
+call ``advise()``/``generate()`` (this module's own two functions) twice
+instead, rather than rewriting this module to be "one step or many" for
+a second task that needs the same single-step machinery, just called
+more than once. See ``_dos.py``'s own docstring for why.
 """
 
 from __future__ import annotations
@@ -65,11 +66,20 @@ def advise(
     return Advice(structure=structure, analysis=analysis, system=system, step=step)
 
 
-def check(advice: Advice) -> CheckReport:
-    """The ``advise()``/``generate()`` boundary -- see ``checks.py``."""
+def check(advice: Advice, *, purpose: str = "scf") -> CheckReport:
+    """The ``advise()``/``generate()`` boundary -- see ``checks.py``.
+
+    ``purpose`` (v2 epic 9, #9): the "``occupations='fixed'`` needs an
+    integer ``tot_magnetization``" rule is scf-only (``checks.py``'s own
+    docstring -- an nscf step reads a prior scf step's already-converged
+    density/spin and does not re-derive this constraint). Every existing
+    caller is an scf step and keeps the previous default unchanged;
+    ``service/_dos.py``'s nscf pass is the first caller to pass
+    ``purpose="nscf"``.
+    """
     return check_all(
         *advice.field_states(),
         occupations=advice.step.kpoints.occupations,
         magnetic=advice.system.magnetic,
-        purpose="scf",
+        purpose=purpose,
     )

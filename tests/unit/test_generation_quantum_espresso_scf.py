@@ -164,6 +164,26 @@ def test_writes_one_scf_step_with_pure_translated_content(
     assert "vdw_corr" not in content
 
 
+def test_purpose_nscf_renames_the_step_and_the_calculation_keyword(
+    silicon_structure, pseudo_metadata_factory
+) -> None:
+    """v2 epic 9 (#9): DOS's nscf step is the same writer, a different
+    ``purpose`` -- QE's own documented ``calculation='nscf'`` value, not
+    a new scientific decision this writer makes."""
+    system = _system(silicon_structure, pseudo_metadata_factory)
+    step = _step()
+
+    steps = write_qe_scf(system, step, _JOB, _CTX, purpose="nscf")
+
+    assert len(steps) == 1
+    rendered = steps[0]
+    assert rendered.name == "nscf"
+    assert rendered.args == ("-npool", "2", "-in", "nscf.in")
+    assert rendered.stdout == "nscf.out"
+    content = rendered.files["nscf.in"]
+    assert "calculation      = 'nscf'" in content
+
+
 def test_ndiag_is_appended_to_args_when_resolved(
     silicon_structure, pseudo_metadata_factory
 ) -> None:

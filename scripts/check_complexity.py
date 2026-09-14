@@ -19,6 +19,7 @@ LIMITS = {
     "input_data": (10, 20),
     "runtime.scf": (10, 20),
     "service._system": (13, 23),
+    "service._dos": (13, 22),
 }
 DEFAULT_LIMIT = (12, 24)
 

@@ -89,6 +89,7 @@ makes that impossible by construction.
 from __future__ import annotations
 
 import re
+from typing import Literal
 
 from pymatgen.core.periodic_table import Element
 
@@ -112,8 +113,20 @@ _SAFE_FILENAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
 
 
 def write_qe_scf(
-    system: SystemSettings, step: PwSettings, job: JobDecision, ctx: SharedContext
+    system: SystemSettings,
+    step: PwSettings,
+    job: JobDecision,
+    ctx: SharedContext,
+    purpose: Literal["scf", "nscf"] = "scf",
 ) -> list[Step]:
+    """``purpose`` (v2 epic 9, #9) selects QE's own ``&CONTROL
+    calculation`` value and this step's name/filenames -- both real,
+    documented ``pw.x`` values, not a new scientific choice this writer
+    makes (the *decision* to run an nscf step at all, with what k-mesh/
+    occupations, is ``service/_dos.py``'s job, upstream of here). Added
+    once ``dos``'s nscf step became a second real caller; ``scf`` stays
+    the default so every existing caller is unaffected.
+    """
     structure = system.magnetic.relabeled_structure
     if not structure.is_ordered:
         raise GenerationError(
@@ -132,7 +145,9 @@ def write_qe_scf(
         ("parallel", step.parallel),
     ):
         if value is None:
-            raise GenerationError(f"PwSettings.{name} is required to generate scf.in")
+            raise GenerationError(
+                f"PwSettings.{name} is required to generate {purpose}.in"
+            )
     if system.hubbard.plan != "not_needed":
         raise GenerationError(
             "a Hubbard +U correction was resolved "
@@ -146,7 +161,7 @@ def write_qe_scf(
     species_index = {symbol: index + 1 for index, symbol in enumerate(elements)}
 
     keywords: dict[str, object] = {}
-    keywords.update(_control_keywords(ctx, step, job))
+    keywords.update(_control_keywords(ctx, step, job, purpose))
     keywords.update(
         _system_keywords(structure, system, step, len(elements), species_index)
     )
@@ -162,15 +177,15 @@ def write_qe_scf(
     args = ["-npool", str(step.parallel.npool)]
     if step.parallel.ndiag is not None:
         args += ["-ndiag", str(step.parallel.ndiag)]
-    args += ["-in", "scf.in"]
+    args += ["-in", f"{purpose}.in"]
 
     return [
         Step(
-            name="scf",
+            name=purpose,
             executable="pw.x",
             args=tuple(args),
-            files={"scf.in": content},
-            stdout="scf.out",
+            files={f"{purpose}.in": content},
+            stdout=f"{purpose}.out",
         )
     ]
 
@@ -204,10 +219,13 @@ def _validated_pseudo_by_element(
 
 
 def _control_keywords(
-    ctx: SharedContext, step: PwSettings, job: JobDecision
+    ctx: SharedContext,
+    step: PwSettings,
+    job: JobDecision,
+    purpose: Literal["scf", "nscf"],
 ) -> dict[str, object]:
     keywords: dict[str, object] = {
-        "calculation": "scf",
+        "calculation": purpose,
         "prefix": ctx.prefix,
         "outdir": ctx.outdir,
         "pseudo_dir": ctx.pseudo_dir,

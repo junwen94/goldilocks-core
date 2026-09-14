@@ -16,16 +16,15 @@ deleted (see ``resolution.py``'s docstring), and ``Step``/
 (``generation/``, ``submission/``, ``bundle.py``), so they belong next
 to ``step_settings.py`` rather than inside any one of those.
 
-**No ``PlannedStep``/``plan.py`` here.** The design doc's layer 1
-(``PlannedStep`` + ``expand_task``, goldilocks-core-design.md:1072-1083)
-exists to turn one task into an *ordered sequence* of steps (e.g.
-``dos -> [scf, nscf, dos]``). This epic's own generation rewrite renders
-exactly one task, ``scf_single_point``, as exactly one ``Step`` -- there
-is no second step to sequence yet, so a task-expansion layer would have
-no real caller to prove it against (the same "do not build a registry
-for one entry" reasoning applies here as it did to skipping a v2
-``generation/registry.py``). Add ``PlannedStep``/``plan.py`` once a
-second task actually needs step sequencing.
+**``PlannedStep``/``plan.py`` moved out to its own module in v2 epic 9,
+#9** once ``dos`` became a second task that actually needs step
+sequencing (this module's own docstring predicted exactly this:
+"add ``PlannedStep``/``plan.py`` once a second task actually needs step
+sequencing"). Not merged into this file: ``Step``/``SharedContext`` are
+the *rendered* layer (per-program executable/args/files), while
+``PlannedStep`` is one layer up (which programs run, in what order,
+before any settings exist yet) -- distinct enough concerns that
+``plan.py``'s own docstring explains its scope separately.
 
 ``Step.args`` is a tuple, not the design doc's literal ``list[str]``,
 matching every other rendered-decision dataclass in this codebase
