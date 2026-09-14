@@ -73,6 +73,52 @@ def test_starting_magnetization_is_keyed_by_site_label_not_element_symbol() -> N
     assert state.value.starting_magnetization == {"Fe0": 0.1, "Fe1": 0.1}
 
 
+def test_starting_magnetization_override_with_an_unknown_label_is_blocked() -> None:
+    """Regression for #46: a human override keyed by bare element symbol
+    ('Fe') on a structure whose real labels are 'Fe0'/'Fe1' (pymatgen's
+    own CIF default) used to be accepted verbatim and only crash later,
+    deep in generation, with a raw KeyError -- checks.check_all saw
+    nothing wrong. Must now be Blocked here instead, with a message
+    naming both the bad key and the real labels."""
+    two_iron_sites = Structure(
+        Lattice.cubic(2.87),
+        ["Fe", "Fe"],
+        [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+        labels=["Fe0", "Fe1"],
+    )
+
+    state = magnetic_config(
+        two_iron_sites,
+        is_magnetic(two_iron_sites),
+        human=MagneticConfigHumanInput(starting_magnetization={"Fe": 0.5}),
+    )
+
+    assert isinstance(state, Blocked)
+    assert "Fe" in state.root_cause()
+    assert "Fe0" in state.root_cause()
+    assert "Fe1" in state.root_cause()
+
+
+def test_starting_magnetization_override_with_real_labels_is_accepted() -> None:
+    two_iron_sites = Structure(
+        Lattice.cubic(2.87),
+        ["Fe", "Fe"],
+        [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+        labels=["Fe0", "Fe1"],
+    )
+
+    state = magnetic_config(
+        two_iron_sites,
+        is_magnetic(two_iron_sites),
+        human=MagneticConfigHumanInput(
+            starting_magnetization={"Fe0": 0.5, "Fe1": -0.5}
+        ),
+    )
+
+    assert state.ok
+    assert state.value.starting_magnetization == {"Fe0": 0.5, "Fe1": -0.5}
+
+
 def test_starting_magnetization_covers_every_element_not_just_magnetic_candidates() -> (
     None
 ):

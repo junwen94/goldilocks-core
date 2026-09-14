@@ -302,6 +302,9 @@ def magnetic_config(
     starting_magnetization = None
     if spin_polarized:
         if human.starting_magnetization is not None:
+            invalid = _invalid_labels(human.starting_magnetization, relabeled_structure)
+            if invalid:
+                return Blocked(by=invalid)
             starting_magnetization = dict(human.starting_magnetization)
         else:
             starting_magnetization = _starting_magnetization_by_label(
@@ -525,6 +528,32 @@ def _label_by_spin(candidate: Structure) -> Structure:
         candidate.frac_coords,
         labels=labels,
         site_properties=candidate.site_properties,
+    )
+
+
+def _invalid_labels(override: dict[str, float], structure: Structure) -> str | None:
+    """A human-supplied ``starting_magnetization`` is keyed by QE species
+    *label* (``Fe0``/``Fe1``, whatever the real structure's labels are),
+    not element symbol -- the same fact ``_starting_magnetization_by_label``
+    already keys by (fixed for #32). Unlike that heuristic path, an
+    override's keys come from outside this codebase, so they need
+    validating here rather than trusted: a bare element symbol that
+    happens not to match any real label (pymatgen's own CIF reader
+    already produces ``Fe0``/``Fe1``, not ``Fe``, for the common case)
+    would otherwise reach ``generation/quantum_espresso/scf.py``'s
+    ``_magnetic_keywords`` as a bare ``KeyError``, not a clean error --
+    see this issue's own history (#46). Auto-expanding a bare symbol to
+    every matching label is deliberately not attempted: different labels
+    of one element can legitimately want different values (an AFM
+    ``Fe1``/``Fe2`` pair), so guessing would mask a genuine mistake
+    rather than catch it."""
+    valid_labels = {site.label for site in structure}
+    invalid = sorted(set(override) - valid_labels)
+    if not invalid:
+        return None
+    return (
+        f"starting_magnetization has unknown site label(s) {invalid!r}; "
+        f"this structure's real labels are {sorted(valid_labels)!r}"
     )
 
 
