@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pydantic import Field
 from pymatgen.core import Structure
 
 from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
@@ -36,7 +37,7 @@ class ElectronCountDecision:
 
 
 class ElectronCountHumanInput(HumanInput):
-    nelec: float | None = None
+    nelec: float | None = Field(default=None, gt=0)
 
 
 def electron_count(

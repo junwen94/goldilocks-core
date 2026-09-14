@@ -66,6 +66,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from pydantic import Field
+
 from goldilocks_core.analysis.geometry import GeometryFacts
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import FieldState, Provenance, Resolved, Warning
@@ -94,19 +96,19 @@ class ConvergenceDecision:
 
 
 class ConvergenceHumanInput(HumanInput):
-    conv_thr: float | None = None
-    etot_conv_thr: float | None = None
-    mixing_beta: float | None = None
-    electron_maxstep: int | None = None
+    conv_thr: float | None = Field(default=None, gt=0)
+    etot_conv_thr: float | None = Field(default=None, gt=0)
+    mixing_beta: float | None = Field(default=None, gt=0)
+    electron_maxstep: int | None = Field(default=None, gt=0)
     mixing_mode: MixingMode | None = None
-    mixing_fixed_ns: int | None = None
+    mixing_fixed_ns: int | None = Field(default=None, ge=0)
 
 
 class ConvergenceLlmInput(LlmInput):
-    mixing_beta: float | None = None
-    electron_maxstep: int | None = None
+    mixing_beta: float | None = Field(default=None, gt=0)
+    electron_maxstep: int | None = Field(default=None, gt=0)
     mixing_mode: MixingMode | None = None
-    mixing_fixed_ns: int | None = None
+    mixing_fixed_ns: int | None = Field(default=None, ge=0)
 
 
 def convergence(
