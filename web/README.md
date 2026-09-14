@@ -55,6 +55,10 @@ the same suite against the production image, run `uv run just image-e2e` from
 the repository root; it builds the image, boots it, and starts the Playwright
 suite (needs Docker).
 `web/openapi.json` and `web/src/api/schema.d.ts` are ignored build products.
+
+The e2e suite uses `http://127.0.0.1:8000` and does not start a server.
+`WORKBENCH_BASE_URL` selects another address.
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` selects an existing Chromium installation.
 The frontend `dev`, `lint`, `test`, `test:e2e`, `build`, and `check` commands
 regenerate them from the local Python package before running. Install the Python
 HTTP dependencies first with `uv sync --frozen --extra http`; schema export needs

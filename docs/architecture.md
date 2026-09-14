@@ -1,93 +1,22 @@
 # Architecture
 
-This page is for contributors changing Core or its transports. For using the
-library, start with the [Python tutorial](tutorial.md); for browser development,
-use the [Workbench guide](../web/README.md).
-
-## Set up a contribution
-
-From the repository root:
-
-```bash
-uv sync --group dev
-uv run pre-commit install
-uv run just check
-```
-
-`just check` runs Ruff lint, format, and complexity checks, then pytest with
-branch coverage. Use `uv run just fmt` to apply Python formatting. The commit
-hooks run the same lint and complexity checks. For frontend checks and
-API-schema refresh, follow the [Workbench guide](../web/README.md).
-
-## CI gates and workflows
-
-Every check has one canonical entry point: a `just` recipe for Python gates, an
-npm script for frontend checks, and a Python script under `scripts/` for release
-gates. Workflows call the same entry points that local development uses; check
-recipes are not inlined in workflow YAML.
-
-| Entry point | Checks |
-| --- | --- |
-| `just lint` | Ruff lint and format; complexity ceilings |
-| `just test` | pytest with branch coverage |
-| `just check` | `lint`, then `test`; the pre-PR gate |
-| `just mutation` | focused mutation testing against the score gate |
-| `just dist` | sdist and wheel build into a fresh directory, then content validation |
-| `just web-check` | Workbench lint, unit tests, and production build |
-| `just image-e2e` | production image build, boot, and Playwright e2e (needs Docker) |
-| `just bump <target>` | version bump in `pyproject.toml` plus `uv.lock` refresh |
-
-`.github/workflows/quality.yml` defines the shared verification jobs and holds
-no triggers itself. Two workflows call it:
-
-- `ci.yml` runs on pushes to `main` and on pull requests. Its concurrency group
-  cancels a superseded run on the same ref.
-- `release.yml` runs on `v*` tags, the nightly schedule at 03:00 UTC, and manual
-  dispatch. It runs the same quality jobs, then publishes. Its concurrency group
-  serializes releases and never cancels one mid-flight.
-
-The quality jobs run `just check` and `just mutation`; `npm run check` plus the
-image e2e through `scripts/image_e2e.sh`; and the distribution build and
-validation. The distribution job runs `uv build` and the validator directly so
-it never syncs the development environment. Pre-commit runs the fast gates only:
-Ruff and the complexity ceilings.
-
-`scripts/` holds the Python gates the recipes and workflows call:
-`check_complexity.py` (import and cyclomatic ceilings), `check_mutation_score.py`
-(the enforced score and the CI step summary), `validate_distribution.py` (wheel
-and sdist contents), `check_release_tag.py` (tag equals the `pyproject.toml`
-version), `bump_version.py` (version bump and relock), and
-`export_workbench_openapi.py` (HTTP contract export for the Workbench and the
-image build). Published artifacts are described under
-[Cut a release](#cut-a-release).
-
-## Cut a release
-
-One version covers the repository: `pyproject.toml` owns it, and the Workbench
-frontend ships inside the same image rather than carrying its own version.
-Treat API/schema changes (the OpenAPI export) as at least a minor bump during
-`0.x`; frontend-only fixes can be patches.
-
-To publish, bump the version with `uv run just bump patch` (or `minor`,
-`major`, or an explicit `X.Y.Z`); the recipe edits `pyproject.toml`, refreshes
-`uv.lock`, and prints the tag to use. Commit the bump in a release PR, then
-from `main`:
-
-```bash
-git tag -a v0.2.1 -m "v0.2.1"
-git push origin v0.2.1
-```
-
-The release workflow runs the full suite on the tagged commit, checks that the
-tag equals the `pyproject.toml` version, then pushes
-`ghcr.io/stfc/goldilocks-workbench` with `X.Y.Z`, `X.Y`, `X`, and `latest` tags,
-and creates a GitHub Release containing the sdist and wheel. Nightly builds of
-`main` publish `nightly` and `nightly-<date>` image tags at 03:00 UTC; PRs and
-plain `main` pushes publish nothing. The first publish creates the
-container package private; flip it to public once in the package settings so
-anonymous pulls work.
+This page maps how the repository is organised and where a change belongs. Read
+it after the [quickstart](quickstart.md) or [Python tutorial](tutorial.md); it is
+the map, not the introduction. Build setup, checks, CI, and releases live in
+[Contributing](contributing.md); browser development lives in the
+[Workbench guide](../web/README.md).
 
 ## Follow a request
+
+```mermaid
+flowchart TD
+    op["Operator: CLI · HTTP · MCP · Python"] --> request["CalculationDraft · ComputeRequest"]
+    request --> service["Service.compute<br/>runtime/service.py"]
+    service --> io["io/structures.py<br/>source normalisation and inspection"]
+    io --> stages["Dispatcher and graph executor<br/>stage functions run in dependency order"]
+    stages --> result["ComputationResult<br/>records and warnings"]
+    result --> publish["Publisher<br/>output directory or ZIP (optional)"]
+```
 
 `Service` exposes three operations: `capabilities`, `inspect_structure`, and
 `compute`. It reuses a `Runtime` containing model backends and an asset store.
@@ -147,9 +76,25 @@ Keep scientific decisions in their owning stages:
 - **DFT Input Data** combines the records and immutable byte snapshots of
   structures, generated files, and selected assets needed for publication.
 
-## Find the code to change
+## Repository structure
 
-Paths below are relative to `src/goldilocks_core/` unless stated otherwise.
+```mermaid
+flowchart TD
+    core["src/goldilocks_core"]
+    core --> boundary["calculation.py · request.py · result.py<br/>operator contracts and records"]
+    core --> runtime["runtime/<br/>graph executor · dispatcher · service · models"]
+    core --> science["analysis.py · advice/ · kmesh/ · selection.py<br/>scientific decisions"]
+    core --> output["generation/ · input_data.py · publication.py<br/>rendered files and publication"]
+    core --> sources["io/<br/>structure sources and inspection"]
+    core --> assets["assets/ · ml/ · pseudo/<br/>asset store and registries"]
+    core --> shared["contracts/ · types.py · provenance.py<br/>shared shapes and vocabulary"]
+    core --> transports["cli/ · server/<br/>CLI, HTTP, and MCP adapters"]
+    web["web/<br/>Workbench browser app"] --> transports
+    tests["tests/ — unit · integration · physics · server"] -. exercises .-> core
+```
+
+The module table below states each area's responsibility. Paths below are
+relative to `src/goldilocks_core/` unless stated otherwise.
 
 | Area                | Files and responsibility                                                                                                                                                                                                               |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -258,17 +203,6 @@ combines these with completed records rather than rediscovering sources.
   Native operations retain exception identities; document operations classify
   failures for adapters. Unexpected execution defects propagate.
 
-## Complexity gates
-
-`scripts/check_complexity.py` runs in contributor checks, hooks, and CI. Its AST
-import ceiling applies to every production owner: 12 project origin modules and
-24 imported symbols, with stricter limits for CLI, HTTP, MCP, assembly, and SCF.
-It counts local and type-only imports, resolves re-exports, and counts accessed
-module-alias members. Pure export packages are transparent to consumer counts.
-The same gate runs Ruff's McCabe check: at most 10 per production function,
-ignoring `noqa` suppressions. Reduce decisions and duplication; moving import
-blocks or extracting shallow helper fleets does not deepen an interface.
-
 ## Change the HTTP or browser contract
 
 `server/documents.py` converts strict request models directly into native Core
@@ -298,19 +232,3 @@ Frontend lifecycle commands regenerate them from the local Python package;
 generation needs neither a running server nor installed model assets. Commit
 the domain declarations, not generated copies. Docker exports OpenAPI in its
 Python stage and generates TypeScript in its Node stage.
-
-## Run browser tests
-
-Start the [built Workbench](../web/README.md#run-locally) in another terminal,
-then run:
-
-```bash
-npm --prefix web exec -- playwright install chromium
-npm --prefix web run test:e2e
-```
-
-Tests use `http://127.0.0.1:8000`; they do not start a server.
-`WORKBENCH_BASE_URL` selects another address.
-`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` selects an existing Chromium installation.
-`uv run just image-e2e` builds the production image, boots it, and runs the same
-suite against it.

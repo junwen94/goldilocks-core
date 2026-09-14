@@ -77,7 +77,8 @@ Then open **http://127.0.0.1:8000**.
 - [CLI reference](docs/cli.md) — commands and options.
 - [Scientific conventions](docs/conventions.md) — units and numerical
   definitions.
-- [Contributing](docs/architecture.md) — code layout and development checks.
+- [Architecture](docs/architecture.md) — code layout, module map, and extension points.
+- [Contributing](docs/contributing.md) — repository setup, checks, CI, and releases.
 
 ## Licence
 
