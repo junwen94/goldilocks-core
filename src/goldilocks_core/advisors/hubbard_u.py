@@ -219,6 +219,17 @@ def hubbard_u(
 def _heuristic(structure: Structure, *, source: str) -> FieldState[HubbardUDecision]:
     facts = composition(structure).value
     correlated_elements = _correlated_elements(facts)
+    if not correlated_elements:
+        # #36 (v2 epic 9, #9): forcing needs_correlation onward with no
+        # correlated element in the structure at all (e.g. plain Si)
+        # used to fall through to plan="table" with an EMPTY
+        # u_by_element plus two Hubbard-specific warnings that make no
+        # sense with no +U term present -- and since write_qe_scf
+        # treats any plan != "not_needed" as a real +U resolution, this
+        # then failed with "a Hubbard +U correction was resolved",
+        # which was factually wrong (nothing was). Matches the other
+        # not_needed short-circuits in hubbard_u() above.
+        return Resolved(_NOT_NEEDED, Provenance(source=source))
 
     u_by_element: dict[str, float] = {}
     calibration_requests: list[CalibrationRequest] = []

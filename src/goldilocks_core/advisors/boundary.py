@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from goldilocks_core.analysis.geometry import GeometryFacts
+from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import (
     Blocked,
     FieldState,
@@ -65,7 +66,42 @@ class BoundaryFacts:
     warnings: tuple[Warning, ...] = ()
 
 
-def boundary(geometry: FieldState[GeometryFacts]) -> FieldState[BoundaryFacts]:
+class BoundaryHumanInput(HumanInput):
+    assume_isolated: AssumeIsolated | None = None
+
+
+class BoundaryLlmInput(LlmInput):
+    assume_isolated: AssumeIsolated | None = None
+
+
+def boundary(
+    geometry: FieldState[GeometryFacts],
+    human: BoundaryHumanInput | None = None,
+    llm: BoundaryLlmInput | None = None,
+) -> FieldState[BoundaryFacts]:
+    """``human``/``llm`` (#36, v2 epic 9, #9): before this, ``boundary``
+    was the only geometry-derived system decision with no override path
+    at all -- unlike its sibling ``vdw_method`` (built in the same
+    epic, reading the same ``GeometryFacts``), it had no escape hatch
+    past a ``Blocked``/``Unavailable`` geometry, so a disordered/partial
+    -occupancy structure (dimensionality classification does not
+    support these) unconditionally blocked the whole run via this one
+    field alone, even when every other setting the run needed was
+    supplied. Matches ``vdw_method``'s own precedence: an explicit
+    override wins outright, checked before ``geometry.ok``."""
+    human = human or BoundaryHumanInput()
+    llm = llm or BoundaryLlmInput()
+
+    if human.assume_isolated is not None:
+        return Resolved(
+            BoundaryFacts(human.assume_isolated), Provenance(source="human")
+        )
+    ml_value: AssumeIsolated | None = None  # no ml model wired yet; epic 11's job
+    if ml_value is not None:
+        return Resolved(BoundaryFacts(ml_value), Provenance(source="ml"))
+    if llm.assume_isolated is not None:
+        return Resolved(BoundaryFacts(llm.assume_isolated), Provenance(source="llm"))
+
     if not geometry.ok:
         return Blocked(by=blocked_by(geometry))
     return _heuristic(geometry.value)

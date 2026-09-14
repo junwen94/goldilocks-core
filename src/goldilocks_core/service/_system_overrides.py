@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from goldilocks_core.advisors.boundary import BoundaryHumanInput, BoundaryLlmInput
 from goldilocks_core.advisors.cutoffs import CutoffsHumanInput
 from goldilocks_core.advisors.electron_count import ElectronCountHumanInput
 from goldilocks_core.advisors.functional import FunctionalHumanInput, FunctionalLlmInput
@@ -38,3 +39,5 @@ class SystemOverrides:
     vdw_llm: VdwMethodLlmInput | None = None
     hubbard: HubbardUHumanInput | None = None
     hubbard_llm: HubbardULlmInput | None = None
+    boundary: BoundaryHumanInput | None = None
+    boundary_llm: BoundaryLlmInput | None = None
