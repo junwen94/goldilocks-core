@@ -25,6 +25,22 @@ def test_metal_gets_cold_smearing() -> None:
     assert state.value.degauss == 0.01
 
 
+def test_smearing_type_and_degauss_apply_without_also_setting_occupations() -> None:
+    """Regression for #34 (v2 epic 9, #9): a human-supplied smearing_type/
+    degauss with no matching occupations override used to be silently
+    dropped in favor of the hardcoded 'cold'/0.01 heuristic default,
+    since only the explicit-occupations branch ever read them."""
+    state = occupations(
+        is_metal(_IRON),
+        human=OccupationsHumanInput(smearing_type="methfessel-paxton", degauss=0.05),
+    )
+
+    assert state.ok
+    assert state.value.occupations == "smearing"
+    assert state.value.smearing_type == "methfessel-paxton"
+    assert state.value.degauss == 0.05
+
+
 def test_confirmed_non_metal_gets_fixed_occupations() -> None:
     state = occupations(Resolved("non_metal", Provenance(source="heuristic")))
 

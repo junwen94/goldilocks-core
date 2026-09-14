@@ -146,6 +146,44 @@ def test_human_can_force_spin_polarization_on() -> None:
     assert state.source == "human"
 
 
+def test_tot_magnetization_alone_implies_spin_polarized() -> None:
+    """Regression for #34 (v2 epic 9, #9): a human-supplied
+    tot_magnetization (or starting_magnetization) with no spin_polarized
+    override at all is an unambiguous request for a spin-polarized
+    calculation -- before this, it was silently dropped whenever
+    spin_polarized otherwise resolved False (e.g. a non-magnetic
+    structure's heuristic default)."""
+    state = magnetic_config(
+        _SILICON,
+        is_magnetic(_SILICON),
+        human=MagneticConfigHumanInput(tot_magnetization=2.0),
+    )
+
+    assert state.ok
+    assert state.value.spin_polarized is True
+    assert state.source == "human"
+    assert state.value.tot_magnetization == 2.0
+
+
+def test_explicit_spin_polarized_false_wins_over_magnetization_and_warns() -> None:
+    """An explicit spin_polarized=False is a human override too and must
+    win outright over a simultaneously-given tot_magnetization -- but
+    silently dropping the latter with zero signal is still wrong, so
+    this warns instead."""
+    state = magnetic_config(
+        _SILICON,
+        is_magnetic(_SILICON),
+        human=MagneticConfigHumanInput(spin_polarized=False, tot_magnetization=2.0),
+    )
+
+    assert state.ok
+    assert state.value.spin_polarized is False
+    assert any(
+        warning.code == "magnetic.magnetization_ignored_spin_polarized_false"
+        for warning in state.value.warnings
+    )
+
+
 def test_giving_both_tot_and_starting_magnetization_does_not_error() -> None:
     """goldilocks-qe-pw-parameter-audit.md P0 finding #2: QE's own source
     (input.f90) does not error on this combination -- the design doc had

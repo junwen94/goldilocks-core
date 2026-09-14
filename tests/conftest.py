@@ -56,6 +56,7 @@ def pseudo_metadata_factory() -> Callable[..., PseudoMetadata]:
         accuracy: str | None = "efficiency",
         root: Path = Path("/pseudo"),
         materialize: bool = False,
+        z_valence: float | None = None,
     ) -> PseudoMetadata:
         filename = f"{element}.UPF"
         content = f"<UPF version='2.0.1'>{element} fixture</UPF>\n".encode()
@@ -72,6 +73,7 @@ def pseudo_metadata_factory() -> Callable[..., PseudoMetadata]:
             pseudo_type=pseudo_type,
             functional=functional,
             relativistic=relativistic,
+            z_valence=z_valence,
             cutoffs={"ecutwfc_ry": ecutwfc_ry, "ecutrho_ry": ecutrho_ry},
             source_identifier=f"synthetic/{filename}",
             content_sha256=(

@@ -143,7 +143,10 @@ def occupations(
     # "could not tell" as "assume non-metal" would risk exactly the
     # silent-wrong-answer failure mode fixed occupations produces on an
     # actual metal -- see this module's docstring.
-    return Resolved(_smearing_decision(), Provenance(source="heuristic"))
+    return Resolved(
+        _smearing_decision(human.smearing_type, human.degauss),
+        Provenance(source="heuristic"),
+    )
 
 
 def _decision_for(
@@ -176,7 +179,19 @@ def _fixed_decision(
     )
 
 
-def _smearing_decision() -> OccupationsDecision:
+def _smearing_decision(
+    smearing_type: str | None = None, degauss: float | None = None
+) -> OccupationsDecision:
+    """``smearing_type``/``degauss`` (v2 epic 9, #9, #34): honored even
+    when ``occupations`` itself lands on ``smearing`` through the
+    heuristic default (metal / unavailable), not only when a caller also
+    sets ``occupations="smearing"`` explicitly -- before this fix, a
+    human ``smearing_type``/``degauss`` override with no matching
+    ``occupations`` override was silently discarded in favor of the
+    hardcoded 'cold'/0.01 defaults, since only ``_decision_for``'s
+    explicit-choice branch ever read them."""
     return OccupationsDecision(
-        occupations="smearing", smearing_type="cold", degauss=_METALLIC_DEGAUSS
+        occupations="smearing",
+        smearing_type=smearing_type or "cold",
+        degauss=degauss if degauss is not None else _METALLIC_DEGAUSS,
     )

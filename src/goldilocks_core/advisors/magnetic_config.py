@@ -181,6 +181,16 @@ target and falls back to `DEFAULT_MAGNETIZATION_FRACTION`; notably this
 includes Cu/Zn (filled or near-filled d-shell as a neutral element) despite
 both being `is_transition_metal` in `analysis/composition.py`."""
 
+_MAGNETIZATION_IGNORED_WARNING = Warning(
+    code="magnetic.magnetization_ignored_spin_polarized_false",
+    level="warning",
+    category="magnetic",
+    message=(
+        "tot_magnetization/starting_magnetization were given but "
+        "spin_polarized is explicitly false; both are ignored."
+    ),
+)
+
 WARNING_CATALOGUE = (
     Warning(
         code="magnetic.soc_suggested",
@@ -216,6 +226,7 @@ WARNING_CATALOGUE = (
             "relabeled_structure now differs from structure."
         ),
     ),
+    _MAGNETIZATION_IGNORED_WARNING,
 )
 """Every warning code this module can emit -- ``capabilities.py``'s
 ``warnings[]`` catalogue aggregates one of these tuples per advisor. The
@@ -338,8 +349,26 @@ def _resolve_spin_polarized(
     human: MagneticConfigHumanInput,
     llm: MagneticConfigLlmInput,
 ) -> tuple[bool, str, tuple[Warning, ...]]:
+    magnetization_given = (
+        human.tot_magnetization is not None or human.starting_magnetization is not None
+    )
     if human.spin_polarized is not None:
+        if human.spin_polarized is False and magnetization_given:
+            # #34 (v2 epic 9, #9): an explicit spin_polarized=False wins
+            # (this is a human override, not the heuristic default), but
+            # both magnetization fields would otherwise be silently
+            # dropped a few lines below with no signal anything was
+            # ignored -- warn instead.
+            return False, "human", (_MAGNETIZATION_IGNORED_WARNING,)
         return human.spin_polarized, "human", ()
+    if magnetization_given:
+        # #34 (v2 epic 9, #9): a human giving tot_magnetization/
+        # starting_magnetization with no spin_polarized override at all
+        # is a clear, unambiguous request for a spin-polarized
+        # calculation -- before this, both were silently dropped
+        # whenever spin_polarized otherwise resolved False (e.g. the
+        # heuristic default on a structure not flagged magnetic).
+        return True, "human", ()
     ml_value: bool | None = None  # no ml model wired yet; stubbed until epic 11
     if ml_value is not None:
         return ml_value, "ml", ()
