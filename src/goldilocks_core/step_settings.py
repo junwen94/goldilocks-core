@@ -26,21 +26,22 @@ data class for the union members, only ``BaseStepSettings`` below,
 which really is common to every program.
 
 **Only the fields this codebase currently has a producer for are
-required.** ``PwSettings``'s ``occupations``/``k_sampling``/``n_irr_k``/
-``nbnd``/``convergence`` come directly from this epic's five per-step
-advisors (``advisors/occupations.py`` etc.) and are required. Every
-other field on every dataclass here -- ``BaseStepSettings``'s
-``disk_io``/``size``/``mem_per_proc`` (resource sizing, v2 epic 7),
-``PwSettings``'s ``parallel``/``relax`` (a parallelization advisor and
-relax/vc-relax support, v2 epic 10), and all of ``DosSettings``'s and
-``PhSettings``'s fields (their own per-step advisors do not exist yet)
--- is declared per the design doc's shape but defaults to ``None``,
-deliberately: nothing in this codebase computes them yet, and forcing
-every construction site (including this epic's own tests) to fabricate
-a placeholder value for a field nothing produces would be worse than an
-honest, typed "not yet available". These defaults are expected to
-become required once each field's real producer exists -- a natural,
-signature-breaking change at that point, not scope creep now.
+required; every other field defaults to `None` rather than forcing a
+fabricated value.** ``PwSettings``'s ``occupations``/``k_sampling``/
+``n_irr_k``/``nbnd``/``convergence`` (v2 epic 6) and ``parallel``
+(v2 epic 7's ``advisors/parallelisation.py``) are real types with real
+producers, just still optional here because nothing has wired a full
+per-step orchestration loop that constructs one of these yet (v2 epic
+8). ``relax`` (v2 epic 7's ``advisors/relax.py``) has a real *type*
+(``RelaxOptions | VcRelaxOptions``) but genuinely no producer that
+decides *values* -- this epic's own generation rewrite does not render
+a relax/vc-relax input at all, so nothing ever constructs a non-``None``
+one yet; full relax parameter coverage is v2 epic 10's job.
+``BaseStepSettings``'s ``disk_io`` and all of ``DosSettings``'s/
+``PhSettings``'s fields have no producer or real type at all yet (their
+own per-step advisors do not exist). Every optional field here is
+expected to become required once its real producer exists -- a
+natural, signature-breaking change at that point, not scope creep now.
 
 ``DosSettings`` existing as its own type with its own ``broadening``
 field (QE calls this ``degauss`` too, in ``dos.x``/``projwfc.x`` --
@@ -59,16 +60,22 @@ from goldilocks_core.advisors.convergence import ConvergenceDecision
 from goldilocks_core.advisors.k_sampling import KSamplingDecision
 from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
+from goldilocks_core.advisors.parallelisation import ParallelisationDecision
+from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
+from goldilocks_core.advisors.size import ResourceEstimate
 
 
 @dataclass(frozen=True, slots=True)
 class BaseStepSettings:
     """Common to every program: disk-usage convention and per-process
-    resource estimates. No producer in this codebase yet -- v2 epic 7's
-    "resource sizing" -- so every field defaults to unknown."""
+    resource estimates. ``size``/``mem_per_proc`` are produced by v2
+    epic 7's ``advisors/size.py`` (``resource_estimate``/
+    ``memory_per_process``); ``disk_io`` still has no producer in this
+    codebase (no ``advisors/disk_io.py`` exists yet) and stays unknown.
+    """
 
     disk_io: str | None = None
-    size: dict[str, float] | None = None
+    size: ResourceEstimate | None = None
     mem_per_proc: float | None = None
 
 
@@ -81,8 +88,8 @@ class PwSettings(BaseStepSettings):
     n_irr_k: int | None = None
     nbnd: NbndDecision | None = None
     convergence: ConvergenceDecision | None = None
-    parallel: dict[str, int] | None = None
-    relax: dict[str, float] | None = None
+    parallel: ParallelisationDecision | None = None
+    relax: RelaxOptions | VcRelaxOptions | None = None
 
 
 @dataclass(frozen=True, slots=True)

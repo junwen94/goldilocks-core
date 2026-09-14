@@ -5,7 +5,12 @@ import math
 import pytest
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.advisors.size import ResourceEstimate, envelope, resource_estimate
+from goldilocks_core.advisors.size import (
+    ResourceEstimate,
+    envelope,
+    memory_per_process,
+    resource_estimate,
+)
 
 _BOHR_PER_ANGSTROM = 1.8897259886
 _SILICON = Structure(Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]])
@@ -86,6 +91,19 @@ def test_more_bands_increases_ram_linearly() -> None:
     # more RAM for strictly more bands.
     assert large.ram_mb > small.ram_mb
     assert wfc_only_ratio < 2.0
+
+
+def test_memory_per_process_divides_by_ranks_within_one_pool() -> None:
+    estimate = ResourceEstimate(npw=1000, ngm=4000, fft_grid_points=8000, ram_mb=1000.0)
+
+    # 128 ranks, 4 pools -> 32 ranks per pool.
+    assert memory_per_process(estimate, ntasks=128, npool=4) == 1000.0 / 32
+
+
+def test_memory_per_process_with_a_single_pool_uses_every_rank() -> None:
+    estimate = ResourceEstimate(npw=1000, ngm=4000, fft_grid_points=8000, ram_mb=640.0)
+
+    assert memory_per_process(estimate, ntasks=64, npool=1) == 10.0
 
 
 def test_envelope_takes_the_max_across_steps_not_the_sum() -> None:

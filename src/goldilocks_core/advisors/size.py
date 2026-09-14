@@ -128,3 +128,23 @@ def envelope(estimates: list[ResourceEstimate]) -> ResourceEstimate:
         fft_grid_points=max(e.fft_grid_points for e in estimates),
         ram_mb=max(e.ram_mb for e in estimates),
     )
+
+
+def memory_per_process(estimate: ResourceEstimate, ntasks: int, npool: int) -> float:
+    """``mem_per_proc[step] <- size[step] x parallel[step]``
+    (goldilocks-core-design.md:3184-3191) -- the last step of the
+    ``size -> job -> parallel -> mem_per_proc`` chain, only computable
+    once both ``job_resources.py``'s ``ntasks`` and
+    ``parallelisation.py``'s ``npool`` are known. Takes plain ints
+    rather than those modules' own decision types so ``size.py`` never
+    imports from either -- it is the module they both read from, and
+    importing back from them would recreate exactly the circular
+    dependency the three-way split exists to avoid.
+
+    Both wavefunction and charge-density storage are distributed via
+    plane-wave/FFT-grid decomposition across the MPI ranks *within one
+    pool* (``ntasks / npool``), not across every rank in the job: each
+    of the ``npool`` pools holds its own independent copy of both.
+    """
+    ranks_per_pool = max(1, ntasks // npool)
+    return estimate.ram_mb / ranks_per_pool
