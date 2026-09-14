@@ -257,6 +257,31 @@ class TestBuildOverrides:
         with pytest.raises(InvalidSetting):
             build_overrides({key: value})
 
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("ecutwfc_ry", -30.0),
+            ("ecutrho_ry", 0.0),
+            ("nelec", 0.0),
+            ("nelec", -4.0),
+            ("conv_thr", -1e-8),
+            ("etot_conv_thr", 0.0),
+            ("mixing_beta", -0.1),
+            ("electron_maxstep", 0),
+            ("mixing_fixed_ns", -1),
+        ],
+    )
+    def test_cutoffs_electron_count_convergence_invalid_override_raises(
+        self, key: str, value: object
+    ) -> None:
+        """Regression for #50: none of these were validated at all --
+        no crash was reproduced for this specific batch, but a bad value
+        would either write a physically-meaningless value straight into
+        the generated input or only surface as a confusing QE-side
+        runtime error, instead of a clean InvalidSetting here."""
+        with pytest.raises(InvalidSetting):
+            build_overrides({key: value})
+
     def test_empty_assignments_gives_all_defaults(self) -> None:
         overrides = build_overrides({})
 

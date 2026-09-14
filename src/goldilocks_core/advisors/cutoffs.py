@@ -39,6 +39,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pydantic import Field
+
 from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.inputs.overrides import HumanInput
@@ -77,8 +79,8 @@ class CutoffsDecision:
 
 
 class CutoffsHumanInput(HumanInput):
-    ecutwfc_ry: float | None = None
-    ecutrho_ry: float | None = None
+    ecutwfc_ry: float | None = Field(default=None, gt=0)
+    ecutrho_ry: float | None = Field(default=None, gt=0)
 
 
 def cutoffs(
