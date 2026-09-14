@@ -1,0 +1,146 @@
+"""parallelisation: npool/ndiag, from a job's ntasks and the step's
+n_irr_k -- the other half of the false-circularity fix
+`advisors/job_resources.py` describes: this reads `job.ntasks`, never
+the reverse.
+
+New in v2 (v2 epic 7, #7); no v1 precedent.
+
+**Full constraint set** (goldilocks-core-design.md:1487-1493):
+`npool` must divide `ntasks` (a hard MPI-layout requirement -- QE
+itself refuses an `ntasks`/`npool` combination that does not divide
+evenly); `npool` should also divide `n_reduced_kpoints`, or some pools
+sit idle once every k-point has been assigned to a busy pool
+(goldilocks-core-design.md:1490, ":1511-1516" -- this is exactly why
+epic 6's `kmesh.py`/`advisors/n_irr_k.py` port matters here: v1 never
+had a real `n_reduced_kpoints`, so v1's own parallel advice was always
+a guess). This module only enforces the hard constraint and *prefers*
+the soft one; it does not search for a global optimum -- picking the
+actually-fastest layout is explicitly named as needing ml eventually
+(goldilocks-core-design.md:1396-1407: `npool`/`ndiag` are an efficiency
+question, not a correctness one, with much smaller error-cost asymmetry
+than `walltime`).
+
+**`ndiag`, gated on the HPC profile's `has_scalapack`**
+(goldilocks-core-design.md's `[codes.quantum_espresso] has_scalapack`
+profile field, matching the official user guide's own default-selection
+rule, verified directly 2026-09-14 against
+quantum-espresso.org/Doc/user_guide/node20.html -- not just the design
+doc's earlier citation of it): "nd is set to 1 if ScaLAPACK is not
+compiled, it is set to the square integer smaller than or equal to the
+number of processors of each pool." That page separately states the
+linear-algebra group size must be "smaller than" (strict) the pool's
+processor count as a general constraint -- a QE-documentation
+inconsistency in its own right (the two statements can disagree exactly
+when a pool's size is itself a perfect square), not a misreading here:
+this module replicates QE's own stated *default-selection* procedure
+verbatim (`<=`), which is what a caller actually wants reproduced.
+`-nband`/`-nb` (band groups, useful for hybrid functionals) and
+`-ntg`/`-nt` (task groups, FFT parallelization for very large process
+counts) are real, separate QE parallelization layers this module does
+not model at all -- no advisor in this codebase needs them yet
+(hybrid-functional support, and job sizes large enough for FFT-plane
+-count to bind, are both out of scope today).
+
+**`nimage` is always `None` here.** It only applies to NEB/phonon tasks
+(`neb.x`'s images, `ph.x`'s irreps/q-points), and this codebase has no
+NEB/phonon per-step advisor yet to decide how many images/q-points
+there even are -- a documented gap, not a default of 1 masquerading as
+a decision.
+
+No `llm` override: `npool`/`ndiag` are technical MPI-layout tuning
+knobs, not a scientific judgement call -- the same category
+`advisors/n_irr_k.py`'s `nosym` put itself in.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+from goldilocks_core.advisors.job_resources import JobDecision
+from goldilocks_core.inputs.overrides import HumanInput
+from goldilocks_core.resolution import FieldState, Provenance, Resolved
+
+
+@dataclass(frozen=True, slots=True)
+class ParallelisationDecision:
+    npool: int
+    ndiag: int | None
+    nimage: int | None = None
+    warnings: tuple[str, ...] = ()
+
+
+class ParallelisationHumanInput(HumanInput):
+    npool: int | None = None
+    ndiag: int | None = None
+
+
+def parallelisation(
+    job: JobDecision,
+    has_scalapack: bool,
+    n_irr_k: int | None = None,
+    human: ParallelisationHumanInput | None = None,
+) -> FieldState[ParallelisationDecision]:
+    human = human or ParallelisationHumanInput()
+
+    if human.npool is not None:
+        npool = human.npool
+        warnings: list[str] = []
+        if job.ntasks % npool != 0:
+            warnings.append(
+                f"npool={npool} does not divide ntasks={job.ntasks}; QE will "
+                "refuse this layout."
+            )
+        if n_irr_k is not None and npool > n_irr_k:
+            warnings.append(
+                f"npool={npool} exceeds n_reduced_kpoints={n_irr_k}; at least "
+                f"{npool - n_irr_k} pool(s) will have no k-point to work on."
+            )
+        source = "human"
+    else:
+        npool, warnings = _best_npool(job.ntasks, n_irr_k)
+        source = "heuristic"
+
+    ndiag = (
+        human.ndiag
+        if human.ndiag is not None
+        else _ndiag(job.ntasks, npool, has_scalapack)
+    )
+    if human.ndiag is not None:
+        source = "human"
+
+    decision = ParallelisationDecision(
+        npool=npool, ndiag=ndiag, warnings=tuple(warnings)
+    )
+    return Resolved(decision, Provenance(source=source))
+
+
+def _best_npool(ntasks: int, n_irr_k: int | None) -> tuple[int, list[str]]:
+    """The largest divisor of ``ntasks`` that does not exceed ``n_irr_k`` --
+    capping at ``n_irr_k`` is what prevents an idle pool (one with zero
+    k-points to work on) outright; preferring the largest such divisor
+    maximises k-point parallelism. Only when that divisor does not also
+    divide ``n_irr_k`` evenly is there a warning -- that is a milder,
+    unavoidable load *imbalance* (some pools get one more k-point than
+    others), not idling, and is not worth sacrificing parallelism for by
+    falling back to a smaller, evenly-dividing npool such as 1.
+    """
+    if n_irr_k is None:
+        return 1, []
+
+    candidates = [d for d in range(1, ntasks + 1) if ntasks % d == 0 and d <= n_irr_k]
+    chosen = max(candidates)  # 1 always qualifies, so candidates is never empty
+    if n_irr_k % chosen == 0:
+        return chosen, []
+    return chosen, [
+        f"npool={chosen} divides ntasks but not n_reduced_kpoints ({n_irr_k}) "
+        "evenly; some pools will handle one more k-point than others."
+    ]
+
+
+def _ndiag(ntasks: int, npool: int, has_scalapack: bool) -> int | None:
+    if not has_scalapack:
+        return None
+    per_pool = ntasks // npool
+    root = math.isqrt(per_pool)
+    return max(1, root * root)

@@ -1,0 +1,98 @@
+"""namelists: the one place QE namelist syntax gets generated.
+
+New in v2 (v2 epic 7, #7). This is the design doc's own "insertion
+point" for ASE (goldilocks-core-design.md:3872: "settings -> QE
+keywords, the sole translation layer, the ASE insertion point"; :4220).
+No underscore in the filename -- the design doc explicitly renames v1's
+``_namelists.py`` sketch because a file this frequently edited should
+not look like a private implementation detail (goldilocks-core-design.md
+S4.4: "the same problem: the underscore in `_namelists.py` is also
+hiding something", translated).
+
+**Which part of ASE, and why not the rest.** ``ase.io.espresso`` has two
+very different tools bundled under one name:
+
+- ``write_espresso_in`` / the ``Espresso`` calculator: atoms-driven.
+  Whenever ``nspin == 2`` (or ``noncolin``) it *unconditionally*
+  recomputes every ``starting_magnetization(i)`` from
+  ``atoms.get_initial_magnetic_moments()`` and overwrites whatever was
+  already in ``input_data`` -- verified empirically against installed
+  ase 3.28 (2026-09-14): passing
+  ``{"nspin": 2, "starting_magnetization(1)": 0.55}`` through
+  ``write_espresso_in`` with an ``Atoms`` carrying no magnetic moments
+  silently rewrites it to ``starting_magnetization(1) = 0.0`` --
+  reproducing v1's exact A2 bug (nspin=2 with implicitly-zero
+  magnetization) even though ``advisors/magnetic_config.py`` already
+  computed the real value. This is true *regardless* of whether
+  ``atoms.set_initial_magnetic_moments`` was ever called -- the branch
+  only checks the resolved ``nspin``, not how it got that way. So this
+  half of ASE is not used here at all: this codebase's own
+  ``magnetic_config.py`` is the only place magnetism is decided, never
+  ASE's moment-guessing.
+- ``ase.io.espresso_namelist.namelist.Namelist``: a plain
+  ``UserDict`` subclass with zero knowledge of ``Atoms``, magnetic
+  moments, or pseudopotentials. ``to_nested(binary)`` sorts a flat
+  ``{keyword: value}`` dict into the right namelist section by name
+  (looked up in ``ase.io.espresso_namelist.keys.ALL_KEYS``, matching a
+  bracketed key like ``starting_magnetization(1)`` against its base
+  keyword); ``to_string()`` formats values (``True``/``False`` ->
+  ``.true.``/``.false.``, everything else via ``repr``) and preserves
+  indexed keys verbatim. This is the only ASE entry point used here --
+  pure formatting, no derivation, so ``advisors/magnetic_config.py``'s
+  resolved ``starting_magnetization``/``angle1``/``angle2`` (already
+  keyed by QE species index, see ``scf.py``) pass through unchanged.
+
+**Empty sections are dropped.** ``to_nested`` always populates every
+section ``ALL_KEYS['pw']`` knows about (``&IONS``/``&CELL``/``&FCP``/
+``&RISM``), even when nothing was supplied for them -- confirmed
+harmless to QE but pure noise for an ``scf`` calculation, which uses
+none of those. ``render_namelist`` renders only the sections that
+actually received a keyword.
+
+**Unrecognized keywords are a ``GenerationError``, not a silent drop.**
+``Namelist.to_nested(..., warn=True)`` only ever raises a ``UserWarning``
+for a keyword matching no known ``pw.x`` section (default: silently
+dropped) -- replaces v1's bare-``KeyError``-on-typo failure mode
+(``generation/qe/scf.py:167,186-188,194-195,217-219``) with a named,
+boundary-validated error either way, per this epic's own invariant that
+generation validates at the boundary and never surfaces a raw
+``KeyError``/``UserWarning`` to a caller.
+"""
+
+from __future__ import annotations
+
+import warnings
+
+from ase.io.espresso_namelist.namelist import Namelist
+
+from goldilocks_core.generation.errors import GenerationError
+
+_BINARY = "pw"
+
+
+def render_namelist(keywords: dict[str, object]) -> str:
+    """Render ``keywords`` (flat, QE-spelled, possibly-indexed like
+    ``"starting_magnetization(1)"``) as ``pw.x`` namelist text, one
+    section per namelist that actually received a keyword.
+    """
+    if not keywords:
+        raise GenerationError("no Quantum ESPRESSO namelist keywords to render")
+
+    namelist = Namelist(keywords)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", UserWarning)
+        namelist.to_nested(_BINARY, warn=True)
+    if caught:
+        messages = "; ".join(str(warning.message) for warning in caught)
+        raise GenerationError(
+            f"unrecognized Quantum ESPRESSO {_BINARY}.x namelist keyword(s): {messages}"
+        )
+
+    populated = Namelist(
+        {section: values for section, values in namelist.items() if values}
+    )
+    if not populated:
+        raise GenerationError(
+            f"no keyword mapped to a known {_BINARY}.x namelist section"
+        )
+    return populated.to_string()

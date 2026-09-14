@@ -11,6 +11,15 @@ license = "BSD-3-Clause"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
+    # v2: generation/quantum_espresso/namelists.py uses only ase.io.espresso_namelist's
+    # Namelist class (a flat-dict -> QE namelist-text formatter with no Atoms/magnetic-
+    # moment logic at all) -- not ase.io.espresso.write_espresso_in, and not the
+    # Espresso calculator, both of which derive/overwrite starting_magnetization from
+    # atoms.get_initial_magnetic_moments() whenever nspin==2, unconditionally clobbering
+    # any value already resolved by advisors/magnetic_config.py (verified against
+    # installed ase 3.28, 2026-09-14; goldilocks-core-design.md:4220's "only use ASE at
+    # the namelists.py translation layer" insertion point).
+    "ase>=3.28",
     "dscribe>=2.1",
     "joblib==1.5.3",
     "matminer>=0.10.1",
@@ -214,6 +223,7 @@ max-complexity = 10
 goldilocks_core = [
     "ml/registry.toml",
     "assets/pseudopotentials/registry.toml",
+    "inputs/profiles/*.toml",
     "examples/structures/*.cif",
     "examples/structures/README.md",
 ]
