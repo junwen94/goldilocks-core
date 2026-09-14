@@ -61,6 +61,27 @@ class TestOperationalRoutes:
             assert error["details"]["asset_id"] == expected.asset_id
 
 
+class TestOpenAPISchema:
+    def test_openapi_builds_without_raising(self, client: TestClient) -> None:
+        """Regression test for #31: the ``/run`` route's ``-> Response``
+        return annotation is a string under ``from __future__ import
+        annotations``, and FastAPI/pydantic resolve it against
+        ``server/http.py``'s module globals when building the schema --
+        not against whatever was imported inside ``create_app()``. This
+        is also what ``scripts/export_workbench_openapi.py`` runs during
+        the Docker build stage, so a regression here breaks the image."""
+        schema = client.app.openapi()
+
+        assert set(schema["paths"]) == {
+            "/health",
+            "/ready",
+            "/capabilities",
+            "/inspect",
+            "/explain",
+            "/run",
+        }
+
+
 class TestCapabilities:
     def test_returns_the_same_shape_capabilities_py_builds(
         self, client: TestClient
