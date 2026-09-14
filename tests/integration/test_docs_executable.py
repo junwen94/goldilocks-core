@@ -21,15 +21,17 @@ ROOT = Path(__file__).resolve().parents[2]
 REAL_ASSET_ROOT = asset_root()
 EXEC_DOCUMENTS = (
     ROOT / "src" / "goldilocks_core" / "examples" / "structures" / "README.md",
+    ROOT / "docs" / "tutorial.md",
 )
-"""``docs/tutorial.md`` dropped here (v2 epic 9, #9): it's entirely
-v1's Python API (``ComputeRequest``/``compute``/``Service``/preset
-selection); the rewrite needs v2's real programmatic shape
-(``service.advise``/``check``/``generate``, ``RunOverrides``), not a
-find-replace, so it's deferred to v2 epic 9's own "update stale docs"
-pass rather than rushed here -- same bucket ``test_docs_examples.py``'s
-``_check_python``/``_check_bash`` already defer README.md/cli.md/
-quickstart.md/pseudopotentials.md to."""
+"""``docs/tutorial.md`` rewritten against v2's real programmatic shape
+(v2 epic 9, #9, module 7b) -- ``service.advise``/``check``/``generate``/
+``RunOverrides`` via ``set_overrides.build_overrides``, not v1's
+``ComputeRequest``/``compute``/``Service``/preset selection. Still not
+find-and-replaced onto README.md/cli.md/quickstart.md/pseudopotentials.md:
+those stay in ``test_docs_examples.py``'s ``_check_python``/``_check_bash``
+deferred bucket (they lean on ``--preset``/``--model*``/``--pseudo-root``
+flags with no v2 equivalent yet, since ml integration is deliberately
+last, v2 epic 11)."""
 _FENCE = re.compile(r"^```python\n(.*?)^```$", re.DOTALL | re.MULTILINE)
 SKILL_REFERENCES = ROOT / ".agents" / "skills" / "use-goldilocks" / "references"
 
@@ -70,13 +72,6 @@ def skill_structure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     structure.to(filename=tmp_path / "structure.cif")
 
 
-@pytest.mark.xfail(
-    reason=(
-        ".agents/skills/use-goldilocks/references/workflows.md uses v1's "
-        "Service/ComputeRequest API; rewrite deferred to v2 epic 9 (#9)"
-    ),
-    strict=False,
-)
 def test_skill_workflow_publishes_recommended_grid(
     real_assets: None, skill_structure: None, tmp_path: Path
 ) -> None:
@@ -86,20 +81,11 @@ def test_skill_workflow_publishes_recommended_grid(
         exec(compile(body, f"<{path.name} block {index}>", "exec"), namespace)
 
     manifest = json.loads((tmp_path / "run-dir" / "goldilocks.json").read_text())
-    assert manifest["records"]["analysis"]["reduced_formula"] == "Si"
-    assert manifest["records"]["k_points"]["grid"] == [4, 4, 4]
-    assert (
-        (tmp_path / "run-dir" / "inputs" / "qe.in").read_text().startswith("&CONTROL\n")
-    )
+    assert manifest["records"]["composition"]["value"]["elements"] == ["Si"]
+    assert manifest["records"]["k_sampling"]["value"]["mesh"] == [4, 4, 4]
+    assert (tmp_path / "run-dir" / "scf.in").read_text().startswith("&CONTROL\n")
 
 
-@pytest.mark.xfail(
-    reason=(
-        ".agents/skills/use-goldilocks/references/qe-scf-template.md uses "
-        "v1's Service/ComputeRequest API; rewrite deferred to v2 epic 9 (#9)"
-    ),
-    strict=False,
-)
 def test_skill_scf_extraction_reads_selected_scientific_values(
     real_assets: None, skill_structure: None
 ) -> None:
@@ -112,6 +98,4 @@ def test_skill_scf_extraction_reads_selected_scientific_values(
     assert namespace["ecutwfc"] > 0
     assert namespace["ecutrho"] >= namespace["ecutwfc"]
     assert all(axis > 0 for axis in namespace["grid"])
-    assert (
-        Path(namespace["pseudo_by_element"]["Si"]["filename"]).suffix.lower() == ".upf"
-    )
+    assert Path(namespace["pseudo_by_element"]["Si"].filename).suffix.lower() == ".upf"

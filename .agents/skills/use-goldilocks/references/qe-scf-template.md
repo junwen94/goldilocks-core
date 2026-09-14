@@ -15,7 +15,7 @@ Use this only after Goldilocks has already selected the scientific values. The g
 &SYSTEM
   ibrav = 0
   nat = <site_count>
-  ntyp = <element_count>
+  ntyp = <species_count>
   ecutwfc = <max_selected_ecutwfc_ry>
   ecutrho = <max_selected_ecutrho_ry>
   occupations = '<fixed_or_smearing>'
@@ -33,7 +33,7 @@ Use this only after Goldilocks has already selected the scientific values. The g
 /
 
 ATOMIC_SPECIES
-  <Element>  <atomic_mass>  <selected_pseudo_filename>
+  <species_label>  <atomic_mass>  <selected_pseudo_filename>
 
 CELL_PARAMETERS angstrom
   <a_x>  <a_y>  <a_z>
@@ -41,65 +41,74 @@ CELL_PARAMETERS angstrom
   <c_x>  <c_y>  <c_z>
 
 ATOMIC_POSITIONS crystal
-  <Element>  <f_x>  <f_y>  <f_z>
+  <species_label>  <f_x>  <f_y>  <f_z>
 
 K_POINTS automatic
   <nk1>  <nk2>  <nk3>  <s1>  <s2>  <s3>
 ```
 
+`<species_label>` is the QE species name (e.g. `Fe1`/`Fe2` for an
+AFM-relabeled structure), which is the real element (`Fe`) except when
+`magnetic_ordering="afm"` split one element into several oppositely-spinned
+species. `write_qe_scf` (`generation/quantum_espresso/scf.py`) already
+handles this distinction -- this template documents what it produces, it is
+not something to reimplement by hand.
+
 ## Mapping from Goldilocks records
 
 ```text
 site_count          -> len(structure)
-element_count       -> len(structure.composition.elements)
-k-grid              -> result.records[KPointSelection]["grid"]
-k-shift             -> result.records[KPointSelection]["shift"]
-pseudos             -> result.records[SelectionRecord]["pseudopotentials"]
-ecutwfc / ecutrho   -> max selected cutoffs across elements
-smearing/degauss    -> result.records[ParameterAdvice]["smearing"]
-spin flags          -> result.records[ParameterAdvice]["magnetism"] and ["spin_orbit"]
-convergence         -> result.records[ParameterAdvice]["convergence"]
-warnings            -> result.warnings
+species_count       -> len({site.label for site in structure})
+k-grid              -> advice.step.kpoints.k_sampling.value.mesh
+k-shift             -> advice.step.kpoints.k_sampling.value.shift
+pseudos             -> advice.system.pseudo.metadata.value  (one entry per element)
+ecutwfc / ecutrho   -> advice.system.cutoffs.value (max across elements)
+occupations         -> advice.step.kpoints.occupations.value
+spin / SOC          -> advice.system.magnetic.value, advice.system.pseudo.relativistic
+convergence         -> advice.step.kpoints.convergence.value
+warnings            -> advice.warnings()
 ```
 
 ## Minimal Python extraction pattern
 
 ```python
 from pymatgen.core.periodic_table import Element
-from goldilocks_core import (
-    CalculationDraft,
-    ComputeRequest,
-    KPointSelection,
-    PathStructureSource,
-    PresetSelection,
-    SelectionRecord,
-    Service,
-)
 
-request = ComputeRequest(
-    CalculationDraft(
-        PathStructureSource("structure.cif"),
-        pseudo_table="pseudodojo-pbesol-efficiency-sr",
-    ),
-    PresetSelection("recommend"),
-)
-with Service() as core:
-    result = core.compute(request)
+from goldilocks_core.examples.structures import structure
+from goldilocks_core.inputs.hpc import load_hpc_profile
+from goldilocks_core.inputs.structure import PathStructureSource, normalize_structure
+from goldilocks_core.resolution import Resolved
+from goldilocks_core.service import advise
 
-selection = result.records[SelectionRecord]
-pseudo_by_element = {
-    pseudo["element"]: pseudo for pseudo in selection["pseudopotentials"]
-}
+source = PathStructureSource(structure("Si.cif"))
+silicon = normalize_structure(source).structure
+hpc = load_hpc_profile("scarf")
+
+advice = advise(silicon, hpc=hpc)
+
+pseudo_metadata = advice.system.pseudo.metadata
+assert isinstance(pseudo_metadata, Resolved)
+pseudo_by_element = {pseudo.element: pseudo for pseudo in pseudo_metadata.value}
 elements = tuple(sorted(pseudo_by_element))
-ecutwfc = max(pseudo["ecutwfc_ry"] or 0.0 for pseudo in pseudo_by_element.values())
-ecutrho = max(pseudo["ecutrho_ry"] or 0.0 for pseudo in pseudo_by_element.values())
-k_points = result.records[KPointSelection]
-grid = k_points["grid"]
-shift = k_points["shift"]
+
+cutoffs = advice.system.cutoffs
+assert isinstance(cutoffs, Resolved)
+ecutwfc = cutoffs.value.ecutwfc_ry
+ecutrho = cutoffs.value.ecutrho_ry
+
+k_sampling = advice.step.kpoints.k_sampling
+assert isinstance(k_sampling, Resolved)
+grid = k_sampling.value.mesh
+shift = k_sampling.value.shift
 
 for element in elements:
     pseudo = pseudo_by_element[element]
-    print(element, float(Element(element).atomic_mass), pseudo["filename"])
+    print(element, float(Element(element).atomic_mass), pseudo.filename)
 ```
 
-Do not proceed to a runnable input if any selected pseudopotential has `filename`, `ecutwfc_ry`, or `ecutrho_ry` set to `None`.
+`advice.system.pseudo.metadata` is `Unavailable`/`Blocked`, not `Resolved`,
+if pseudopotential selection failed for any element -- check `.ok` (or use
+`check(advice)`/`report.blocking`, see [workflows.md](workflows.md)) before
+assuming a runnable input can be generated. Do not proceed to a runnable
+input if any selected pseudopotential's `filename`, `ecutwfc_ry`, or
+`ecutrho_ry` is `None`.
