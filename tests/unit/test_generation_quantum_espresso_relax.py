@@ -219,3 +219,91 @@ def test_missing_convergence_still_raises_same_as_scf(
 
     with pytest.raises(GenerationError, match="convergence"):
         write_qe_relax(system, step, _JOB, _CTX, "relax")
+
+
+def _silicon_slab():
+    """A real, multi-layer 2D slab -- unlike ``silicon_structure`` (a
+    single-atom bulk placeholder unsuited to layer detection). Built
+    the same way #44's own design sketch expects any slab reaching this
+    codebase to have been built (``pymatgen``'s ``SlabGenerator``)."""
+    from pymatgen.core import Lattice, Structure
+    from pymatgen.core.surface import SlabGenerator
+
+    bulk = Structure.from_spacegroup("Fd-3m", Lattice.cubic(5.43), ["Si"], [[0, 0, 0]])
+    return SlabGenerator(
+        bulk, (0, 0, 1), min_slab_size=10, min_vacuum_size=12, center_slab=True
+    ).get_slab()
+
+
+def _atomic_positions_block(content: str) -> list[str]:
+    lines = content.splitlines()
+    start = next(
+        i for i, line in enumerate(lines) if line.startswith("ATOMIC_POSITIONS")
+    )
+    end = next(i for i in range(start + 1, len(lines)) if not lines[i].strip())
+    return lines[start + 1 : end]
+
+
+def test_fix_bottom_layers_none_writes_no_if_pos_columns(
+    pseudo_metadata_factory,
+) -> None:
+    slab = _silicon_slab()
+    system = _system(slab, pseudo_metadata_factory)
+    step = _step(relax=RelaxOptions(fix_bottom_layers=None))
+
+    content = write_qe_relax(system, step, _JOB, _CTX, "relax")[0].files["relax.in"]
+
+    rows = _atomic_positions_block(content)
+    assert len(rows) == len(slab)
+    assert not any(row.split()[-3:] == ["0", "0", "0"] for row in rows)
+
+
+def test_fix_bottom_layers_fixes_exactly_the_lowest_atoms(
+    pseudo_metadata_factory,
+) -> None:
+    slab = _silicon_slab()
+    system = _system(slab, pseudo_metadata_factory)
+    step = _step(relax=RelaxOptions(fix_bottom_layers=2))
+
+    content = write_qe_relax(system, step, _JOB, _CTX, "relax")[0].files["relax.in"]
+
+    rows = _atomic_positions_block(content)
+    assert len(rows) == len(slab)
+    fixed_indices = {
+        i for i, row in enumerate(rows) if row.split()[-3:] == ["0", "0", "0"]
+    }
+    free_indices = set(range(len(rows))) - fixed_indices
+    assert fixed_indices, "expected at least one fixed atom"
+
+    # Independent oracle: every fixed atom's cartesian z must be no
+    # higher than every free atom's -- "bottom" layers really are the
+    # ones with the lowest coordinate along the slab's vacuum direction,
+    # not an artifact of whatever index order the detection happened to
+    # produce.
+    z = slab.cart_coords[:, 2]
+    assert max(z[i] for i in fixed_indices) < min(z[i] for i in free_indices)
+
+
+def test_fix_bottom_layers_exceeding_detected_layers_raises(
+    pseudo_metadata_factory,
+) -> None:
+    slab = _silicon_slab()
+    system = _system(slab, pseudo_metadata_factory)
+    step = _step(relax=RelaxOptions(fix_bottom_layers=999))
+
+    with pytest.raises(GenerationError, match="fix_bottom_layers=999"):
+        write_qe_relax(system, step, _JOB, _CTX, "relax")
+
+
+def test_fix_bottom_layers_on_a_bulk_structure_raises(
+    silicon_structure, pseudo_metadata_factory
+) -> None:
+    """``checks.check_all`` is expected to reject this before generation
+    is ever reached in the real pipeline -- this only confirms the
+    writer itself fails loudly rather than silently mis-fixing atoms if
+    that guard were ever bypassed."""
+    system = _system(silicon_structure, pseudo_metadata_factory)
+    step = _step(relax=RelaxOptions(fix_bottom_layers=1))
+
+    with pytest.raises(GenerationError, match="2D bonded component"):
+        write_qe_relax(system, step, _JOB, _CTX, "relax")

@@ -7,6 +7,7 @@ from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.parallelisation import ParallelisationDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
+from goldilocks_core.analysis.geometry import GeometryFacts
 from goldilocks_core.checks import check_all, collect_blocked
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
@@ -164,6 +165,60 @@ def test_relax_blocked_field_state_surfaces_via_the_generic_scan() -> None:
     report = check_all(relax=Blocked(by="convergence undecided"), purpose="vc-relax")
 
     assert report.blocking == ("convergence undecided",)
+
+
+def _geometry(dimensionality: str):
+    return Resolved(
+        GeometryFacts(
+            dimensionality=dimensionality, low_dimensional=dimensionality != "3d"
+        ),
+        Provenance(source="heuristic"),
+    )
+
+
+def _relax_with_fix_bottom_layers(count: int | None):
+    return Resolved(
+        RelaxOptions(fix_bottom_layers=count), Provenance(source="heuristic")
+    )
+
+
+def test_fix_bottom_layers_on_a_2d_structure_is_ok() -> None:
+    report = check_all(relax=_relax_with_fix_bottom_layers(2), geometry=_geometry("2d"))
+
+    assert report.ok
+
+
+def test_fix_bottom_layers_unset_is_unaffected_by_geometry() -> None:
+    report = check_all(
+        relax=_relax_with_fix_bottom_layers(None), geometry=_geometry("3d")
+    )
+
+    assert report.ok
+
+
+def test_fix_bottom_layers_on_a_3d_structure_blocks() -> None:
+    report = check_all(relax=_relax_with_fix_bottom_layers(2), geometry=_geometry("3d"))
+
+    assert not report.ok
+    assert "2D slab structure" in report.blocking[0]
+    assert "dimensionality='3d'" in report.blocking[0]
+
+
+def test_fix_bottom_layers_with_no_geometry_at_all_blocks() -> None:
+    report = check_all(relax=_relax_with_fix_bottom_layers(2))
+
+    assert not report.ok
+    assert "geometry classification is not available" in report.blocking[0]
+
+
+def test_fix_bottom_layers_with_unresolved_geometry_blocks() -> None:
+    report = check_all(
+        relax=_relax_with_fix_bottom_layers(2),
+        geometry=Unavailable(reason="dimensionality classification failed"),
+    )
+
+    assert not report.ok
+    assert "geometry classification is not available" in report.blocking[0]
 
 
 def _job(ntasks: int) -> Resolved[JobDecision]:

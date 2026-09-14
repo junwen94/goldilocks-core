@@ -25,16 +25,36 @@ does not need to know or assert which QE namelist a keyword belongs to,
 only which *keywords* apply, matching every other writer in this
 package.
 
-**No ``if_pos`` support yet.** Split out to #44 once the rest of this
-epic's scope turned out large enough on its own -- ``atomic_positions``
-is reused completely unchanged, matching QE's own default of "no
-``if_pos`` column written" (every atom free), which is also this
-codebase's only implemented behaviour so far, not a regression.
+**``if_pos`` slab-layer fixing (#44).** When ``relax.fix_bottom_layers``
+is set, this module (not ``analysis/geometry.py``, not
+``advisors/relax.py``) detects which atoms sit in the bottom N layers
+and passes their indices to ``atomic_positions``. Done here, at
+generation time, against ``system.magnetic.relabeled_structure``
+directly -- the exact structure ``atomic_positions`` iterates -- rather
+than reusing a fact computed earlier in the pipeline against a
+structure that AFM species-splitting could in principle have changed
+the site count/order of (``advisors/relax.py``'s own docstring).
+``checks.py``'s ``_fix_bottom_layers_requires_2d_geometry`` already
+guarantees the structure classifies as 2D by the time this runs; the
+detection below re-derives the actual stacking direction rather than
+assuming the c-axis, since that assumption only holds for slabs built
+by ``pymatgen``'s own ``SlabGenerator``/ASE's ``surface()`` (confirmed
+2026-09-14: ``SlabGenerator`` always reorients its output cell so the
+surface normal is c, regardless of the *original* bulk Miller index
+requested), not for an arbitrary slab structure reaching this codebase
+by another route.
 """
 
 from __future__ import annotations
 
 from typing import Literal
+
+from ase.geometry import get_layers
+from pymatgen.analysis.dimensionality import get_structure_components
+from pymatgen.analysis.local_env import JmolNN
+from pymatgen.core import Structure
+from pymatgen.core.graphs import StructureGraph
+from pymatgen.io.ase import AseAtomsAdaptor
 
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
@@ -53,6 +73,19 @@ from goldilocks_core.generation.quantum_espresso.scf import (
 from goldilocks_core.step_settings import PwSettings
 from goldilocks_core.steps import SharedContext, Step
 from goldilocks_core.system_settings import SystemSettings
+
+_LAYER_TOLERANCE_ANGSTROM = 0.5
+"""Maximum out-of-plane distance (Angstrom) for two atoms to count as
+the same layer (``ase.geometry.get_layers``' own ``tolerance`` param,
+default ``0.001`` -- far too tight for anything but a perfectly flat,
+freshly-generated slab). This is a chosen heuristic, not sourced from
+an official QE/ASE/pymatgen recommendation for this exact problem --
+loosely anchored to pymatgen's own ``Slab.get_tasker2_slabs`` same
+-plane tolerance (``tol=0.01`` *fractional*, i.e. roughly this order of
+magnitude in Angstrom for a typical slab+vacuum cell) and to typical
+DFT-relaxation-induced surface rumpling being well under 1 Angstrom for
+most systems. Worth a domain-expert sanity check against real slab
+systems rather than treated as authoritative."""
 
 
 def write_qe_relax(
@@ -127,7 +160,7 @@ def write_qe_relax(
     lines = [render_namelist(keywords)]
     lines.append(atomic_species(species_labels, label_to_element, pseudo_by_element))
     lines.append(cell_parameters(structure))
-    lines.append(atomic_positions(structure))
+    lines.append(atomic_positions(structure, _fixed_site_indices(structure, relax)))
     lines.append(k_points(step))
     content = "\n".join(lines)
 
@@ -173,3 +206,62 @@ def cell_keywords(relax: VcRelaxOptions) -> dict[str, object]:
         "press_conv_thr": relax.press_conv_thr,
         "cell_factor": relax.cell_factor,
     }
+
+
+def _fixed_site_indices(
+    structure: Structure, relax: RelaxOptions
+) -> frozenset[int] | None:
+    if relax.fix_bottom_layers is None:
+        return None
+    return _bottom_layer_site_indices(structure, relax.fix_bottom_layers)
+
+
+def _bottom_layer_site_indices(structure: Structure, count: int) -> frozenset[int]:
+    """0-based indices (``structure``'s own site order) of every atom in
+    the bottom ``count`` atomic layers along the structure's own
+    stacking direction.
+
+    Bonding method (``JmolNN``) matches ``analysis/geometry.py``'s own
+    2D classification, so this reaches the same "is it 2D" answer
+    ``checks.py`` already validated against, on a real structure rather
+    than by assumption. A slab can decompose into more than one bonded
+    component along the stacking direction (e.g. van-der-Waals-bonded
+    multilayers, where ``JmolNN`` does not bond across the gap) -- every
+    2D component's own detected orientation is required to agree, since
+    disagreement means genuinely ambiguous stacking this function cannot
+    safely guess at.
+    """
+    bonded = StructureGraph.from_local_env_strategy(structure, JmolNN())
+    components = get_structure_components(bonded, inc_orientation=True)
+    orientations = {
+        component["orientation"]
+        for component in components
+        if component["dimensionality"] == 2
+    }
+    if not orientations:
+        raise GenerationError(
+            "relax.fix_bottom_layers: could not detect a 2D bonded component "
+            "to determine the slab's stacking direction"
+        )
+    if len(orientations) > 1:
+        raise GenerationError(
+            "relax.fix_bottom_layers: detected more than one stacking "
+            f"orientation across bonded components ({sorted(orientations)}); "
+            "cannot determine an unambiguous set of atomic layers"
+        )
+    miller = tuple(int(component) for component in next(iter(orientations)))
+
+    atoms = AseAtomsAdaptor.get_atoms(structure)
+    layer_by_site, _ = get_layers(atoms, miller, tolerance=_LAYER_TOLERANCE_ANGSTROM)
+    distinct_layers = sorted({int(layer) for layer in layer_by_site})
+    if count > len(distinct_layers):
+        raise GenerationError(
+            f"relax.fix_bottom_layers={count} exceeds the {len(distinct_layers)} "
+            "distinct atomic layers detected in this structure"
+        )
+    bottom_layers = set(distinct_layers[:count])
+    return frozenset(
+        index
+        for index, layer in enumerate(layer_by_site)
+        if int(layer) in bottom_layers
+    )

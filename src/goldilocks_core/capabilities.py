@@ -443,6 +443,12 @@ _SETTING_META: dict[str, _SettingExtra] = {
             "trades total-energy/force self-consistency for speed."
         ),
     },
+    "fix_bottom_layers": {
+        "description": (
+            "Fix the bottom N atomic layers of a 2D slab (if_pos) during "
+            "relax/vc-relax; requires the structure to classify as 2D."
+        ),
+    },
     "cell_dofree": {
         "default": "all",
         "description": (

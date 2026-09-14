@@ -124,6 +124,28 @@ def test_no_overrides_gives_heuristic_source() -> None:
     assert state.source == "heuristic"
 
 
+def test_fix_bottom_layers_defaults_to_none() -> None:
+    state = relax_settings("relax", _CONVERGENCE)
+
+    assert state.value.fix_bottom_layers is None
+
+
+def test_human_can_set_fix_bottom_layers_and_it_is_human_sourced() -> None:
+    state = relax_settings(
+        "relax", _CONVERGENCE, human=RelaxHumanInput(fix_bottom_layers=2)
+    )
+
+    assert state.value.fix_bottom_layers == 2
+    assert state.source == "human"
+
+
+def test_fix_bottom_layers_has_no_llm_counterpart() -> None:
+    """Human-only, unlike ``ion_dynamics``/``nstep`` -- ``RelaxLlmInput``
+    does not even have this field, so there is nothing an llm tier can
+    set here (a structural decision, not a scenario choice)."""
+    assert not hasattr(RelaxLlmInput(), "fix_bottom_layers")
+
+
 def test_hexagonal_2d_defaults_cell_dofree_to_ibrav_2dxy() -> None:
     state = relax_settings(
         "vc-relax",

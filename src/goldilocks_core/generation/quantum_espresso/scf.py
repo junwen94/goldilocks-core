@@ -395,11 +395,24 @@ def atomic_species(
     return "\n".join(lines) + "\n"
 
 
-def atomic_positions(structure) -> str:
+def atomic_positions(
+    structure, fixed_site_indices: frozenset[int] | None = None
+) -> str:
+    """``fixed_site_indices`` (#44): 0-based indices, in ``structure``'s
+    own site order, of atoms to pin with an ``if_pos`` column. Appended
+    only to fixed atoms' rows, never to free atoms' -- matching ASE's
+    own ``ase.io.espresso`` writer convention (confirmed by reading its
+    source 2026-09-14: it omits the mask entirely for any atom with
+    nothing fixed, relying on QE's per-row default of ``1 1 1`` rather
+    than writing it out for every atom)."""
+    fixed_site_indices = fixed_site_indices or frozenset()
     lines = ["ATOMIC_POSITIONS crystal"]
-    for site in structure:
+    for index, site in enumerate(structure):
         coords = "  ".join(_format_float(value) for value in site.frac_coords)
-        lines.append(f"  {site.label}  {coords}")
+        line = f"  {site.label}  {coords}"
+        if index in fixed_site_indices:
+            line += "  0  0  0"
+        lines.append(line)
     return "\n".join(lines) + "\n"
 
 
