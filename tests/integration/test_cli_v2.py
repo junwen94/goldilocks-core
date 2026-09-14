@@ -208,6 +208,55 @@ class TestRunAndExplainAgainstRealAssets:
         assert "scf.in" in completed.stdout
         assert list(tmp_path.iterdir()) == []
 
+    def test_explain_dos_task_reports_nscf_prefixed_records(
+        self, real_assets: None
+    ) -> None:
+        """v2 epic 9 (#9, #28): --task dos used to be silently accepted
+        and ignored by every delivery layer -- this confirms it now
+        actually routes to advise_dos through the real CLI subprocess."""
+        silicon = structure("Si.cif")
+
+        completed = _run_cli(
+            "explain", str(silicon), "--hpc", "scarf", "--task", "dos", "--json"
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        records = json.loads(completed.stdout)["records"]
+        assert records["occupations"]["value"]["occupations"] == "smearing"
+        assert records["nscf_occupations"]["value"]["occupations"] == ("tetrahedra_opt")
+        assert records["dos"]["value"]["delta_e"] == 0.01
+
+    def test_run_dos_task_publishes_all_three_steps(
+        self, real_assets: None, tmp_path: Path
+    ) -> None:
+        silicon = structure("Si.cif")
+        destination = tmp_path / "out"
+
+        completed = _run_cli(
+            "run",
+            str(silicon),
+            "--hpc",
+            "scarf",
+            "--task",
+            "dos",
+            "-o",
+            str(destination),
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        assert (destination / "scf.in").exists()
+        assert (destination / "nscf.in").exists()
+        assert (destination / "dos.in").exists()
+        assert (destination / "submit.sh").exists()
+
+    def test_unknown_task_is_an_operator_error_not_a_silent_fallback(self) -> None:
+        silicon = structure("Si.cif")
+
+        completed = _run_cli("run", str(silicon), "--hpc", "scarf", "--task", "bands")
+
+        assert completed.returncode == 2
+        assert "Traceback" not in completed.stderr
+
     def test_run_with_out_publishes_a_complete_bundle(
         self, real_assets: None, tmp_path: Path
     ) -> None:

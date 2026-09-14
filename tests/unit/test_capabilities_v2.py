@@ -68,12 +68,16 @@ class TestTopLevelShape:
         assert capabilities()["vocabulary_version"] == VOCABULARY_VERSION == "1"
 
     def test_sources_is_the_closed_priority_order(self) -> None:
-        assert capabilities()["sources"] == list(SOURCES) == [
-            "human",
-            "ml",
-            "llm",
-            "heuristic",
-        ]
+        assert (
+            capabilities()["sources"]
+            == list(SOURCES)
+            == [
+                "human",
+                "ml",
+                "llm",
+                "heuristic",
+            ]
+        )
 
     def test_is_fully_json_serializable(self) -> None:
         """Regression guard for the exact bug module 1's bundle.py hit:
@@ -100,17 +104,23 @@ class TestTopLevelShape:
         assert len(codes) == len(set(codes))
 
     def test_codes_and_tasks_reflect_only_what_actually_runs(self) -> None:
+        """v2 epic 9 (#9, #28): ``dos`` joined ``scf_single_point`` once
+        the delivery layers actually routed it, not before -- this list
+        names every task a caller can request today, no more, no less."""
         caps = capabilities()
         assert caps["codes"] == [
             {
                 "id": "quantum_espresso",
                 "name": "Quantum ESPRESSO",
-                "tasks": ["scf_single_point"],
+                "tasks": ["scf_single_point", "dos"],
             }
         ]
-        assert len(caps["tasks"]) == 1
-        assert caps["tasks"][0]["id"] == "scf_single_point"
-        assert caps["tasks"][0]["executables"] == ["pw.x"]
+        assert len(caps["tasks"]) == 2
+        by_id = {task["id"]: task for task in caps["tasks"]}
+        assert by_id["scf_single_point"]["executables"] == ["pw.x"]
+        assert by_id["scf_single_point"]["step_count"] == 1
+        assert by_id["dos"]["executables"] == ["pw.x", "pw.x", "dos.x"]
+        assert by_id["dos"]["step_count"] == 3
 
 
 class TestSettingsCompleteness:
@@ -231,8 +241,7 @@ class TestFacts:
         for fact in capabilities()["facts"]:
             if fact["overridable"]:
                 assert fact["key"] in catalogue, (
-                    f"{fact['key']!r} claims overridable=True but has no "
-                    "--set binding"
+                    f"{fact['key']!r} claims overridable=True but has no --set binding"
                 )
 
 

@@ -38,6 +38,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from goldilocks_core.types import CalcTask
+
 _STRICT = ConfigDict(extra="forbid")
 
 
@@ -77,10 +79,17 @@ class InspectRequestDocument(InlineStructureDocument):
 class ComputeRequestDocument(InlineStructureDocument):
     """Shared by ``/explain`` and ``/run`` (and MCP's ``explain``/``run``
     tools) -- one request shape, per this epic's own "one shared
-    request-validation path" scope item."""
+    request-validation path" scope item.
+
+    ``task: CalcTask`` (v2 epic 9, #9, #28), not a bare ``str``: an
+    unknown task must be a pydantic validation error at the transport
+    boundary, the same "clear operator error, not a silent fallback"
+    contract an unknown ``--set`` key or hpc profile already gets --
+    before this, the field parsed but was never read anywhere, so any
+    value (typo or not) silently ran the scf-only pipeline."""
 
     code: str = "quantum_espresso"
-    task: str = "scf_single_point"
+    task: CalcTask = "scf_single_point"
     hpc: str | None = None
     overrides: dict[str, Any] = Field(default_factory=dict)
     fetch_missing: bool = False

@@ -26,12 +26,26 @@ from goldilocks_core.cli._common import (
 )
 from goldilocks_core.service import (
     advise,
+    advise_dos,
     check,
+    check_dos,
     generate,
+    generate_dos,
     render_submission,
+    render_submission_dos,
     to_bundle_input,
+    to_bundle_input_dos,
 )
 from goldilocks_core.steps import default_shared_context
+
+
+def _print_blocked_and_exit(blocking: tuple[str, ...]) -> None:
+    # Many fields can share one root cause (report.blocking has one
+    # entry per blocked field, not per distinct cause); dedupe for a
+    # human, not for a machine reading --json elsewhere.
+    for reason in dict.fromkeys(blocking):
+        print(f"blocked: {reason}", file=sys.stderr)
+    raise SystemExit(2)
 
 
 def add_subparser(subparsers: argparse._SubParsersAction) -> None:
@@ -52,26 +66,37 @@ def run(args: argparse.Namespace) -> None:
     structure = resolve_structure(args.structure)
     hpc = resolve_hpc(args.hpc)
     overrides = resolve_overrides(args)
-    advice = advise(
-        structure,
-        code=args.code,
-        hpc=hpc,
-        overrides=overrides,
-        fetch_missing=args.fetch_missing,
-    )
-    report = check(advice)
-    if not report.ok:
-        # Many fields can share one root cause (report.blocking has one
-        # entry per blocked field, not per distinct cause); dedupe for
-        # a human, not for a machine reading --json elsewhere.
-        for reason in dict.fromkeys(report.blocking):
-            print(f"blocked: {reason}", file=sys.stderr)
-        raise SystemExit(2)
-
-    steps = generate(advice, report)
     ctx = default_shared_context()
-    script = render_submission(advice, hpc, args.code, ctx, steps)
-    bundle_input = to_bundle_input(advice, steps, script, ctx)
+    if args.task == "dos":
+        dos_advice = advise_dos(
+            structure,
+            code=args.code,
+            hpc=hpc,
+            overrides=overrides,
+            fetch_missing=args.fetch_missing,
+        )
+        dos_report = check_dos(dos_advice)
+        if not dos_report.ok:
+            _print_blocked_and_exit(dos_report.blocking)
+        steps = generate_dos(dos_advice, dos_report, ctx=ctx)
+        script = render_submission_dos(dos_advice, hpc, args.code, ctx, steps)
+        bundle_input = to_bundle_input_dos(dos_advice, steps, script, ctx)
+        advice_warnings = dos_advice.warnings()
+    else:
+        advice = advise(
+            structure,
+            code=args.code,
+            hpc=hpc,
+            overrides=overrides,
+            fetch_missing=args.fetch_missing,
+        )
+        report = check(advice)
+        if not report.ok:
+            _print_blocked_and_exit(report.blocking)
+        steps = generate(advice, report)
+        script = render_submission(advice, hpc, args.code, ctx, steps)
+        bundle_input = to_bundle_input(advice, steps, script, ctx)
+        advice_warnings = advice.warnings()
 
     if args.out is not None:
         output = (
@@ -95,7 +120,7 @@ def run(args: argparse.Namespace) -> None:
                 {
                     "files": [file["path"] for file in files],
                     "records": records_to_json(bundle_input.records),
-                    "warnings": advice.warnings(),
+                    "warnings": advice_warnings,
                 },
                 indent=2,
                 sort_keys=True,

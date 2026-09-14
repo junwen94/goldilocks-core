@@ -19,7 +19,7 @@ from goldilocks_core.cli._common import (
     resolve_overrides,
     resolve_structure,
 )
-from goldilocks_core.service import advise
+from goldilocks_core.service import advise, advise_dos
 
 
 def add_subparser(subparsers: argparse._SubParsersAction) -> None:
@@ -35,13 +35,22 @@ def run(args: argparse.Namespace) -> None:
     structure = resolve_structure(args.structure)
     hpc = resolve_hpc(args.hpc)
     overrides = resolve_overrides(args)
-    advice = advise(
-        structure,
-        code=args.code,
-        hpc=hpc,
-        overrides=overrides,
-        fetch_missing=args.fetch_missing,
-    )
+    if args.task == "dos":
+        advice = advise_dos(
+            structure,
+            code=args.code,
+            hpc=hpc,
+            overrides=overrides,
+            fetch_missing=args.fetch_missing,
+        )
+    else:
+        advice = advise(
+            structure,
+            code=args.code,
+            hpc=hpc,
+            overrides=overrides,
+            fetch_missing=args.fetch_missing,
+        )
     records = advice.records()
     if args.json:
         print(

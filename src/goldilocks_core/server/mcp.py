@@ -98,7 +98,9 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
         description=(
             "Run analysis and advisors only, without generating any files. "
             "Returns every decision (with its source) and a warnings array "
-            "the caller must relay verbatim."
+            "the caller must relay verbatim. task='dos' explains all three "
+            "of the density-of-states task's steps (scf, nscf, dos.x); "
+            "its nscf-step decisions are returned under nscf_-prefixed keys."
         )
     )
     async def explain(document: ComputeRequestDocument) -> dict[str, Any]:
@@ -108,7 +110,9 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
         description=(
             "Generate a runnable input. Returns the published file list, "
             "every decision, and a warnings array the caller must relay "
-            "verbatim -- fails if any required field is unavailable or blocked."
+            "verbatim -- fails if any required field is unavailable or "
+            "blocked. task='dos' generates all three steps (scf, nscf, "
+            "dos.x) sharing one submission script, not just a single scf."
         )
     )
     async def run(document: ComputeRequestDocument) -> dict[str, Any]:

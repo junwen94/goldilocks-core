@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import tomllib
 from pathlib import Path
+from typing import get_args
 
 from pymatgen.core import Structure
 
@@ -26,6 +27,7 @@ from goldilocks_core.set_overrides import (
     coerce_cli_assignments,
     parse_set_flags,
 )
+from goldilocks_core.types import CalcTask
 
 
 def add_run_arguments(parser: argparse.ArgumentParser) -> None:
@@ -35,7 +37,12 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--code", default="quantum_espresso", help="Code to generate input for."
     )
-    parser.add_argument("--task", default="scf_single_point", help="Task to run.")
+    parser.add_argument(
+        "--task",
+        default="scf_single_point",
+        choices=get_args(CalcTask),
+        help="Task to run.",
+    )
     parser.add_argument(
         "--hpc",
         help="HPC profile name; required unless exactly one profile is installed.",

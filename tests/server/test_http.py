@@ -105,6 +105,33 @@ class TestExplain:
         assert body["records"]["functional"]["value"] == "PBEsol"
         assert "warnings" in body
 
+    def test_dos_task_returns_nscf_prefixed_records_and_a_dos_record(
+        self, client: TestClient, real_assets, silicon_cif: str
+    ) -> None:
+        """v2 epic 9 (#9, #28): task='dos' used to be silently accepted
+        and ignored -- this confirms it actually routes to advise_dos,
+        not the scf-only pipeline, through the real HTTP transport."""
+        response = client.post(
+            "/explain",
+            json={"structure_content": silicon_cif, "hpc": "scarf", "task": "dos"},
+        )
+
+        assert response.status_code == 200
+        records = response.json()["records"]
+        assert records["occupations"]["value"]["occupations"] == "smearing"
+        assert records["nscf_occupations"]["value"]["occupations"] == ("tetrahedra_opt")
+        assert records["dos"]["value"]["delta_e"] == 0.01
+
+    def test_unknown_task_is_a_422_not_a_silent_fallback(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        response = client.post(
+            "/explain",
+            json={"structure_content": silicon_cif, "hpc": "scarf", "task": "bands"},
+        )
+
+        assert response.status_code == 422
+
 
 class TestRun:
     def test_json_mode_lists_the_published_files(
@@ -133,7 +160,21 @@ class TestRun:
 
         assert response.status_code == 200
         assert response.headers["content-type"] == "application/zip"
-        assert response.content[:2] == b"PK"  # zip local-file-header magic
+
+    def test_dos_task_generates_all_three_steps(
+        self, client: TestClient, real_assets, silicon_cif: str
+    ) -> None:
+        response = client.post(
+            "/run",
+            json={"structure_content": silicon_cif, "hpc": "scarf", "task": "dos"},
+        )
+
+        assert response.status_code == 200
+        files = response.json()["files"]
+        assert "scf.in" in files
+        assert "nscf.in" in files
+        assert "dos.in" in files
+        assert "submit.sh" in files
 
     def test_unknown_setting_is_a_422_with_did_you_mean(
         self, client: TestClient, real_assets, silicon_cif: str

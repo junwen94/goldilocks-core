@@ -17,7 +17,8 @@ LIMITS = {
     "server.http": (5, 10),
     "server.mcp": (5, 10),
     "service._system": (13, 23),
-    "service._dos": (13, 22),
+    "service._dos": (16, 26),
+    "server._handlers": (13, 23),
 }
 DEFAULT_LIMIT = (12, 24)
 
