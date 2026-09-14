@@ -10,7 +10,7 @@ import {
 } from "@mantine/core";
 import { Upload } from "lucide-react";
 
-import type { StructureInspection, StructureSource } from "../api/coreClient";
+import type { StructureInput, StructureInspection } from "../api/coreClient";
 
 export function StructureSourceControls({
   source,
@@ -18,10 +18,10 @@ export function StructureSourceControls({
   inspecting,
   onOpen,
 }: {
-  readonly source: StructureSource | null;
+  readonly source: StructureInput | null;
   readonly inspection: StructureInspection | null;
   readonly inspecting: boolean;
-  readonly onOpen: (source: StructureSource) => Promise<void>;
+  readonly onOpen: (input: StructureInput) => Promise<void>;
 }) {
   const resetFileInput = useRef<(() => void) | null>(null);
   const selectionEpoch = useRef(0);
@@ -43,10 +43,9 @@ export function StructureSourceControls({
       const content = await file.text();
       if (selection !== selectionEpoch.current) return;
       await onOpen({
-        kind: "inline",
-        name: file.name,
-        format: structureFormat(file.name),
-        content,
+        structure_content: content,
+        structure_name: file.name,
+        structure_format: structureFormat(file.name),
       });
     } catch {
       if (selection === selectionEpoch.current) {
@@ -103,7 +102,7 @@ export function StructureSourceControls({
             <Upload aria-hidden="true" size={18} />
           )}
           <Text fw={600} truncate w="100%" ta="center">
-            {source?.name ?? "Drop a structure"}
+            {source?.structure_name ?? "Drop a structure"}
           </Text>
           <Text id="structure-source-help" c="dimmed" size="sm" ta="center">
             {sourceHelp}

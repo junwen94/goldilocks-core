@@ -49,12 +49,12 @@ export function GuidedControls({
           </ActionIcon>
         </Group>
         <StructureSourceControls
-          source={snapshot.source}
+          source={snapshot.structureInput}
           inspection={snapshot.inspection}
           inspecting={snapshot.operation === "inspect"}
-          onOpen={(source) => {
+          onOpen={(input) => {
             onShowStructure();
-            return workspace.dispatch({ type: "source.open", source });
+            return workspace.dispatch({ type: "source.open", input });
           }}
         />
       </Paper>
