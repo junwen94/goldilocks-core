@@ -5,11 +5,20 @@ from __future__ import annotations
 from pymatgen.core import Lattice, Structure
 from support import sssp_fixture_table_spec
 
+from goldilocks_core.advisors.k_sampling import KSamplingHumanInput
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
 from goldilocks_core.resolution import Blocked
-from goldilocks_core.service import advise_dos, check_dos, generate_dos
+from goldilocks_core.service import (
+    KpointsOverrides,
+    RunOverrides,
+    StepOverrides,
+    advise_dos,
+    check_dos,
+    generate_dos,
+)
+from goldilocks_core.set_overrides import build_overrides
 
 
 def _hpc() -> HpcProfile:
@@ -47,6 +56,48 @@ class TestAdviseDosDegradation:
         nscf_k_distance = advice.nscf.step.kpoints.k_sampling.value.k_distance
         assert nscf_k_distance == 0.10
         assert nscf_k_distance < scf_k_distance
+
+    def test_explicit_k_grid_override_reaches_the_nscf_step_too(self) -> None:
+        """Regression for #33 (v2 epic 9, #9): _nscf_overrides used to
+        unconditionally replace k_sampling with the fixed nscf-protocol
+        k_distance default, silently discarding a caller's own explicit
+        k_grid override for the nscf step specifically (while the exact
+        same override correctly reached the scf step)."""
+        overrides = build_overrides({"k_grid": (16, 16, 16)})
+
+        advice = advise_dos(_silicon(), hpc=_hpc(), overrides=overrides)
+
+        assert advice.scf.step.kpoints.k_sampling.value.mesh == (16, 16, 16)
+        assert advice.nscf.step.kpoints.k_sampling.value.mesh == (16, 16, 16)
+
+    def test_explicit_occupations_override_reaches_the_nscf_step_too(self) -> None:
+        overrides = build_overrides({"occupations": "fixed"})
+
+        advice = advise_dos(_silicon(), hpc=_hpc(), overrides=overrides)
+
+        assert advice.scf.step.kpoints.occupations.value.occupations == "fixed"
+        assert advice.nscf.step.kpoints.occupations.value.occupations == "fixed"
+
+    def test_nscf_still_gets_its_own_default_when_only_scf_relevant_fields_are_unset(
+        self,
+    ) -> None:
+        """A k_grid override for one field must not suppress the
+        nscf-protocol default for a sibling field (occupations) that
+        the caller left alone."""
+        overrides = RunOverrides(
+            step=StepOverrides(
+                kpoints=KpointsOverrides(
+                    k_sampling=KSamplingHumanInput(k_grid=(4, 4, 4))
+                )
+            )
+        )
+
+        advice = advise_dos(_silicon(), hpc=_hpc(), overrides=overrides)
+
+        assert advice.nscf.step.kpoints.k_sampling.value.mesh == (4, 4, 4)
+        assert advice.nscf.step.kpoints.occupations.value.occupations == (
+            "tetrahedra_opt"
+        )
 
     def test_dos_settings_resolve_from_the_nscf_steps_own_occupations(self) -> None:
         advice = advise_dos(_silicon(), hpc=_hpc())

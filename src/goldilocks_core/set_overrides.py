@@ -23,19 +23,29 @@ values reach `build_overrides` pre-typed and skip coercion entirely --
 `build_overrides` itself is the one transport-agnostic core, matching
 P1/P5: validate identically, fail the same way, regardless of caller.
 
-**`steps.<name>.<key>=value` is accepted but not yet load-bearing**:
-`service`'s own per-step advisors compute exactly one `StepAdvice` per
-request today (`service/_step.py`'s own docstring: no `PlannedStep`/
-task-expansion layer exists, since only one task/step,
-`scf_single_point`, is wired). The `steps.` prefix here is validated
-against `_STEP_NAMES` and then stripped -- functionally identical to
-the flat key today, because there is nowhere else for a per-step
-override to land. Design point 2's hard rule ("a flat `--set` landing
-on >1 step must warn") has no real trigger case until a second step
-exists; implementing that warning now would be inventing behaviour
-with no way to test it against a real multi-step task, the same
-"don't build a lookup table for one entry" reasoning `inputs/task.py`
-and `steps.py` already document for this exact codebase.
+**`steps.<name>.<key>=value` is accepted but not yet load-bearing, for
+either name in `_STEP_NAMES`** (#33, v2 epic 9, #9): `service`'s own
+per-step advisors compute exactly one `StepAdvice` per `advise()` call
+(`service/_step.py`'s own docstring: no `PlannedStep`/task-expansion
+layer exists to route a per-step override to a specific step). The
+`steps.` prefix here is validated against `_STEP_NAMES` and then
+stripped -- functionally identical to the flat key, because there is
+nowhere else for a per-step override to land, for *either* `scf` or
+`nscf` even though `nscf` is now a real second step (`service/_dos.py`'s
+`dos` task, v2 epic 9, #9): `--set steps.nscf.k_grid=...` no longer
+rejects `nscf` as an unknown step name (it correctly stopped doing
+that once a real `nscf` step existed), but it still applies to *both*
+of a `dos` task's steps, same as the equivalent flat key or a
+`steps.scf.` one -- there is no way yet to scope an override to just
+one step of a multi-step task. Building real per-step routing (giving
+`RunOverrides` a per-step-name override, not one shared `StepOverrides`)
+is real, separate work with only one real multi-step task
+(`dos`) to design it against so far -- the same "don't build a lookup
+table for one entry" reasoning `inputs/task.py` and `steps.py` already
+document for this exact codebase. Design point 2's hard rule ("a flat
+`--set` landing on >1 step must warn") now has a real trigger case
+(`dos`'s scf+nscf) but is not implemented here either -- tracked as a
+known follow-up, not silently dropped.
 """
 
 from __future__ import annotations
@@ -56,10 +66,11 @@ from goldilocks_core.service import (
     SystemOverrides,
 )
 
-_STEP_NAMES = ("scf",)
-"""The one step epics 1-7 built a generation writer for -- see this
-module's own docstring on why `steps.<name>.` is validated against
-this but does not yet route anywhere different from a flat key."""
+_STEP_NAMES = ("scf", "nscf")
+"""Every step name a generation writer exists for (`nscf` added #33, v2
+epic 9, #9, once `dos` made it a real step) -- see this module's own
+docstring on why `steps.<name>.` is validated against this but does not
+yet route anywhere different from a flat key, for either name."""
 
 _TRUE_STRINGS = {"true", "1", "yes", "on"}
 _FALSE_STRINGS = {"false", "0", "no", "off"}
