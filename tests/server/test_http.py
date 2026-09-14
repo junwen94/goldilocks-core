@@ -69,6 +69,35 @@ class TestWorkbenchStaticMount:
         with pytest.raises(RuntimeError, match="does not exist"):
             create_app()
 
+    def test_the_static_root_parameter_works_without_the_env_var(
+        self, tmp_path: Path
+    ) -> None:
+        """#59: the CLI's ``--static-root`` flag reaches here as this
+        explicit parameter, not by mutating the env var."""
+        (tmp_path / "index.html").write_text("<!doctype html><title>Workbench</title>")
+
+        client = TestClient(create_app(static_root=tmp_path))
+        response = client.get("/")
+
+        assert response.status_code == 200
+        assert "Workbench" in response.text
+
+    def test_the_static_root_parameter_wins_over_the_env_var(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        env_root = tmp_path / "from-env"
+        env_root.mkdir()
+        (env_root / "index.html").write_text("<!doctype html><title>Env</title>")
+        param_root = tmp_path / "from-param"
+        param_root.mkdir()
+        (param_root / "index.html").write_text("<!doctype html><title>Param</title>")
+        monkeypatch.setenv("GOLDILOCKS_WORKBENCH_STATIC_ROOT", str(env_root))
+
+        client = TestClient(create_app(static_root=param_root))
+        response = client.get("/")
+
+        assert "Param" in response.text
+
 
 class TestOperationalRoutes:
     def test_health(self, client: TestClient) -> None:
