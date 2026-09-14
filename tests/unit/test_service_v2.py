@@ -18,6 +18,7 @@ from support import (
 )
 
 from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
+from goldilocks_core.advisors.parallelisation import ParallelisationHumanInput
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.bundle import DirectoryOutput, is_complete, publish
@@ -25,7 +26,9 @@ from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
 from goldilocks_core.resolution import Blocked, Unavailable
 from goldilocks_core.service import (
     AdviceIncomplete,
+    ResourceOverrides,
     RunOverrides,
+    StepOverrides,
     SystemOverrides,
     advise,
     check,
@@ -123,6 +126,28 @@ class TestAdviseEndToEnd:
             for warning in warnings
         )
         assert any(warning["code"] == "job.walltime_defaulted" for warning in warnings)
+
+    def test_npool_not_dividing_ntasks_blocks_end_to_end(
+        self, silicon, hpc, installed_table
+    ) -> None:
+        """Regression for #52, exercised through the real advise()/
+        check() pipeline (test_checks.py already covers checks.check_all
+        directly) -- npool=7 never divides scarf's 64 ntasks."""
+        store, _table = installed_table
+        overrides = RunOverrides(
+            step=StepOverrides(
+                resources=ResourceOverrides(
+                    parallelisation=ParallelisationHumanInput(npool=7)
+                )
+            )
+        )
+
+        advice = advise(silicon, hpc=hpc, overrides=overrides, store=store)
+        assert advice.step.resources.job.value.ntasks == 64
+        report = check(advice)
+
+        assert not report.ok
+        assert any("npool=7" in reason for reason in report.blocking)
 
     def test_human_overrides_flow_through_to_generated_input(
         self, silicon, hpc, installed_table

@@ -49,8 +49,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.occupations import OccupationsDecision
+from goldilocks_core.advisors.parallelisation import ParallelisationDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.resolution import Blocked, FieldState
 
@@ -95,6 +97,8 @@ def check_all(
     occupations: FieldState[OccupationsDecision] | None = None,
     magnetic: FieldState[MagneticConfigFacts] | None = None,
     relax: FieldState[RelaxOptions | VcRelaxOptions] | None = None,
+    job: FieldState[JobDecision] | None = None,
+    parallel: FieldState[ParallelisationDecision] | None = None,
     purpose: str = "scf",
 ) -> CheckReport:
     """The single hard-fail gate.
@@ -102,12 +106,14 @@ def check_all(
     ``field_states`` is every ``FieldState`` a caller has assembled so
     far (from any advisor) -- any that are ``Blocked`` land in
     ``report.blocking`` via ``collect_blocked``. ``occupations``/
-    ``magnetic``/``relax``/``purpose`` additionally opt into the named
-    cross-parameter rules this module implements; passing them here also
-    folds them into the generic ``Blocked`` scan, so a caller does not
-    need to repeat them in ``field_states`` as well.
+    ``magnetic``/``relax``/``job``/``parallel``/``purpose`` additionally
+    opt into the named cross-parameter rules this module implements;
+    passing them here also folds them into the generic ``Blocked`` scan,
+    so a caller does not need to repeat them in ``field_states`` as well.
     """
-    optional = tuple(s for s in (occupations, magnetic, relax) if s is not None)
+    optional = tuple(
+        s for s in (occupations, magnetic, relax, job, parallel) if s is not None
+    )
     blocking = list(collect_blocked(*field_states, *optional))
 
     reason = _fixed_occupations_needs_integer_moment(occupations, magnetic, purpose)
@@ -115,6 +121,10 @@ def check_all(
         blocking.append(reason)
 
     reason = _vc_relax_requires_bfgs_ion_dynamics(relax, purpose)
+    if reason is not None:
+        blocking.append(reason)
+
+    reason = _npool_must_divide_ntasks(job, parallel)
     if reason is not None:
         blocking.append(reason)
 
@@ -139,6 +149,31 @@ def _fixed_occupations_needs_integer_moment(
         return (
             "occupations='fixed' with a spin-polarized system requires an "
             f"integer tot_magnetization; got {tot!r}."
+        )
+    return None
+
+
+def _npool_must_divide_ntasks(
+    job: FieldState[JobDecision] | None,
+    parallel: FieldState[ParallelisationDecision] | None,
+) -> str | None:
+    """``npool`` not dividing ``ntasks`` is a hard MPI-layout requirement
+    QE itself refuses (``advisors/parallelisation.py``'s own docstring) --
+    unlike ``ndiag``'s squareness/``has_scalapack`` gate (a genuine
+    QE-will-likely-ignore-or-reject *preference*, correctly left
+    advisory), a bad ``npool`` here fails only once compute is already
+    allocated and the job is running, worse than the same "warn, don't
+    block" pattern used for e.g. ``nodes``/``walltime_h`` exceeding a
+    partition's ceiling (which fail at SLURM *submission*, before any
+    compute is consumed). ``parallelisation()``'s own heuristic default
+    (``_best_npool``) always returns a value that divides ``ntasks`` by
+    construction, so this can only ever fire for a human override."""
+    if job is None or parallel is None or not job.ok or not parallel.ok:
+        return None
+    if job.value.ntasks % parallel.value.npool != 0:
+        return (
+            f"npool={parallel.value.npool} does not divide "
+            f"ntasks={job.value.ntasks}; QE refuses this MPI layout."
         )
     return None
 

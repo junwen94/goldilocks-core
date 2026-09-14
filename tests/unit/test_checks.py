@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pymatgen.core import Lattice, Structure
 
+from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.occupations import OccupationsDecision
+from goldilocks_core.advisors.parallelisation import ParallelisationDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.checks import check_all, collect_blocked
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
@@ -162,3 +164,50 @@ def test_relax_blocked_field_state_surfaces_via_the_generic_scan() -> None:
     report = check_all(relax=Blocked(by="convergence undecided"), purpose="vc-relax")
 
     assert report.blocking == ("convergence undecided",)
+
+
+def _job(ntasks: int) -> Resolved[JobDecision]:
+    decision = JobDecision(
+        partition="scarf",
+        nodes=1,
+        ntasks=ntasks,
+        ntasks_per_node=ntasks,
+        walltime_h=168.0,
+        max_seconds=574560,
+        account=None,
+    )
+    return Resolved(decision, Provenance(source="heuristic"))
+
+
+def _parallel(npool: int) -> Resolved[ParallelisationDecision]:
+    decision = ParallelisationDecision(npool=npool, ndiag=None)
+    return Resolved(decision, Provenance(source="human"))
+
+
+def test_npool_dividing_ntasks_is_ok() -> None:
+    report = check_all(job=_job(64), parallel=_parallel(8))
+
+    assert report.ok
+
+
+def test_npool_not_dividing_ntasks_blocks() -> None:
+    """Regression for #52: this used to be only a warning, so a bad
+    npool reached the SLURM script and failed only once compute was
+    already allocated and running."""
+    report = check_all(job=_job(64), parallel=_parallel(7))
+
+    assert not report.ok
+    assert "npool=7" in report.blocking[0]
+    assert "ntasks=64" in report.blocking[0]
+
+
+def test_npool_check_is_unaffected_when_either_side_is_missing() -> None:
+    assert check_all(job=_job(64)).ok
+    assert check_all(parallel=_parallel(7)).ok
+    assert check_all().ok
+
+
+def test_npool_blocked_field_state_surfaces_via_the_generic_scan() -> None:
+    report = check_all(parallel=Blocked(by="job resources undecided"))
+
+    assert report.blocking == ("job resources undecided",)
