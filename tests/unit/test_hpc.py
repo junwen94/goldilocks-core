@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from goldilocks_core.inputs.hpc import InvalidHpcProfile, load_hpc_profile
+from goldilocks_core.inputs.hpc import (
+    InvalidHpcProfile,
+    list_hpc_profiles,
+    load_hpc_profile,
+)
 
 
 def test_loads_the_real_scarf_profile() -> None:
@@ -12,6 +16,14 @@ def test_loads_the_real_scarf_profile() -> None:
     assert profile.launcher == "srun"
     assert profile.modules["quantum_espresso"] == ("QuantumESPRESSO/7.5-foss-2025a",)
     assert profile.has_scalapack["quantum_espresso"] is True
+
+
+def test_list_hpc_profiles_includes_scarf_and_is_sorted() -> None:
+    names = list_hpc_profiles()
+
+    assert "scarf" in names
+    assert names == tuple(sorted(names))
+    assert all(name == load_hpc_profile(name).name for name in names)
 
 
 def test_scarf_partition_is_the_default() -> None:
