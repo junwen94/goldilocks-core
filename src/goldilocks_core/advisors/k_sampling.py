@@ -151,11 +151,11 @@ def k_sampling(
         return Blocked(by=is_metal)
     if is_metal.ok and is_metal.value == "non_metal":
         return Resolved(
-            _from_k_distance(structure, _NON_METAL_K_DISTANCE, None),
+            _from_k_distance(structure, _NON_METAL_K_DISTANCE, human.shift),
             Provenance(source="heuristic"),
         )
     return Resolved(
-        _from_k_distance(structure, _METAL_K_DISTANCE, None),
+        _from_k_distance(structure, _METAL_K_DISTANCE, human.shift),
         Provenance(source="heuristic"),
     )
 

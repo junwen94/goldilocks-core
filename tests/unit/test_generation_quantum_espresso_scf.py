@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 from pymatgen.core import Lattice, Species, Structure
 
@@ -69,9 +71,13 @@ def _system(
     return SystemSettings(
         functional=functional,
         cutoffs=CutoffsDecision(ecutwfc_ry=30.0, ecutrho_ry=120.0),
-        electron_count=ElectronCountDecision(nelec=8.0),
+        # z_valence=4.0 per atom below and nelec=4.0 * len(structure) agree
+        # exactly, so _charge_keywords's derived tot_charge is 0.0 (omitted)
+        # unless a test overrides electron_count itself -- these tests are
+        # about other keywords, not #34's tot_charge translation.
+        electron_count=ElectronCountDecision(nelec=4.0 * len(structure)),
         pseudopotentials=tuple(
-            pseudo_metadata_factory(element, functional=functional)
+            pseudo_metadata_factory(element, functional=functional, z_valence=4.0)
             for element in elements
         ),
         magnetic=magnetic or _magnetic(structure),
@@ -127,6 +133,42 @@ def _step(
         ),
         relax=relax,
     )
+
+
+def test_nelec_override_translates_to_qe_s_real_tot_charge_keyword(
+    silicon_structure, pseudo_metadata_factory
+) -> None:
+    """Regression for #34 (v2 epic 9, #9): QE's real &SYSTEM namelist has
+    no ``nelec`` input keyword at all (confirmed against ASE's own
+    ALL_KEYS['pw']['system'] registry -- only ``tot_charge`` exists) --
+    a resolved ``electron_count.nelec`` different from the natural,
+    pseudopotential-summed count must translate to ``tot_charge``, the
+    deviation from neutral, not be dropped or emitted verbatim under a
+    keyword QE would reject."""
+    system = _system(silicon_structure, pseudo_metadata_factory)
+    system = dataclasses.replace(
+        system, electron_count=ElectronCountDecision(nelec=3.0)
+    )
+    step = _step()
+
+    content = write_qe_scf(system, step, _JOB, _CTX)[0].files["scf.in"]
+
+    assert "tot_charge       = 1.0" in content
+    assert "nelec" not in content
+
+
+def test_no_tot_charge_keyword_when_nelec_matches_the_natural_count(
+    silicon_structure, pseudo_metadata_factory
+) -> None:
+    """The default heuristic path resolves nelec to exactly the natural
+    (pseudopotential-summed) count -- tot_charge would be 0.0 and is
+    pure noise, so it must not appear at all."""
+    system = _system(silicon_structure, pseudo_metadata_factory)
+    step = _step()
+
+    content = write_qe_scf(system, step, _JOB, _CTX)[0].files["scf.in"]
+
+    assert "tot_charge" not in content
 
 
 def test_writes_one_scf_step_with_pure_translated_content(

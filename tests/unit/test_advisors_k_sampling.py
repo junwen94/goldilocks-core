@@ -24,6 +24,20 @@ def test_metal_gets_the_denser_default_k_distance() -> None:
     assert state.value.shift == (0, 0, 0)
 
 
+def test_human_shift_applies_on_the_pure_heuristic_default_path() -> None:
+    """Regression for #34 (v2 epic 9, #9): a human-supplied shift with no
+    matching k_grid/k_distance override used to be silently dropped in
+    the pure-heuristic branches -- K_POINTS was always Gamma-centered
+    regardless of the requested shift."""
+    state = k_sampling(
+        is_metal(_IRON), _IRON, human=KSamplingHumanInput(shift=(1, 1, 1))
+    )
+
+    assert state.ok
+    assert state.value.shift == (1, 1, 1)
+    assert state.value.k_distance == 0.15
+
+
 def test_confirmed_non_metal_gets_the_coarser_default_k_distance() -> None:
     state = k_sampling(Resolved("non_metal", Provenance(source="heuristic")), _SILICON)
 

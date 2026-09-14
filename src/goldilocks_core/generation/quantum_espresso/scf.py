@@ -257,6 +257,7 @@ def _system_keywords(
     }
     keywords.update(_occupations_keywords(step))
     keywords.update(_magnetic_keywords(system, species_index))
+    keywords.update(_charge_keywords(structure, system))
     if system.vdw.use_vdw:
         if system.vdw.method not in _QE_VDW_CORR:
             raise GenerationError(
@@ -308,6 +309,35 @@ def _magnetic_keywords(
         for label, value in values.items():
             keywords[f"{field_name}({species_index[label]})"] = value
     return keywords
+
+
+def _charge_keywords(structure, system: SystemSettings) -> dict[str, object]:
+    """``system.electron_count.nelec`` (#34, v2 epic 9, #9) is this
+    codebase's own resolved *total electron count* -- but QE's real
+    ``&SYSTEM`` namelist has no ``nelec`` input keyword at all (``nelec``
+    is a QE-computed/reported quantity, confirmed against ASE's own
+    ``ase.io.espresso_namelist.keys.ALL_KEYS['pw']['system']`` registry,
+    which lists ``tot_charge``, not ``nelec``). The real input is
+    ``tot_charge``, the *deviation* from the neutral, pseudopotential
+    -summed electron count -- so this recomputes that neutral baseline
+    from ``system.pseudopotentials`` (already available here, no new
+    dependency) and translates the difference, rather than emitting a
+    keyword QE would reject outright. Omitted entirely when the
+    requested count matches the neutral baseline exactly (the heuristic
+    -default case, since ``advisors/electron_count.py``'s own heuristic
+    branch uses this identical formula) -- writing ``tot_charge = 0.0``
+    would be harmless but is pure noise."""
+    z_valence_by_element = {
+        pseudo.element: pseudo.z_valence for pseudo in system.pseudopotentials
+    }
+    counts = structure.composition.get_el_amt_dict()
+    natural_nelec = sum(
+        z_valence_by_element[element] * count for element, count in counts.items()
+    )
+    tot_charge = natural_nelec - system.electron_count.nelec
+    if tot_charge == 0.0:
+        return {}
+    return {"tot_charge": tot_charge}
 
 
 def _electrons_keywords(step: PwSettings) -> dict[str, object]:
