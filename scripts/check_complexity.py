@@ -16,8 +16,6 @@ LIMITS = {
     "cli.core": (8, 16),
     "server.http": (5, 10),
     "server.mcp": (5, 10),
-    "input_data": (10, 20),
-    "runtime.scf": (10, 20),
     "service._system": (13, 23),
     "service._dos": (13, 22),
 }
