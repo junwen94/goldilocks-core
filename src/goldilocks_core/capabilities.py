@@ -101,6 +101,7 @@ from goldilocks_core.inputs.hpc import list_hpc_profiles, load_hpc_profile
 from goldilocks_core.service import (
     AnalysisOverrides,
     KpointsOverrides,
+    RelaxOverrides,
     ResourceOverrides,
     SystemOverrides,
 )
@@ -122,6 +123,8 @@ tiers, per design point (5)."""
 _CODE = "quantum_espresso"
 _TASK = "scf_single_point"
 _DOS_TASK = "dos"
+_RELAX_TASK = "relax"
+_VC_RELAX_TASK = "vc-relax"
 _PROGRAM = "pw.x"
 
 
@@ -399,6 +402,72 @@ _SETTING_META: dict[str, _SettingExtra] = {
             "when has_scalapack is true."
         ),
     },
+    "ion_dynamics": {
+        "default": "bfgs",
+        "description": (
+            "Ionic relaxation algorithm for relax/vc-relax; vc-relax only "
+            "accepts 'bfgs' in this codebase (QE couples cell_dynamics to it)."
+        ),
+    },
+    "forc_conv_thr": {
+        "unit": "Ry/Bohr",
+        "default": 1.0e-3,
+        "description": "Force-convergence threshold for relax/vc-relax.",
+    },
+    "nstep": {
+        "default": 50,
+        "description": "Maximum number of ionic/cell relaxation steps.",
+    },
+    "trust_radius_max": {
+        "unit": "Bohr",
+        "default": 0.8,
+        "description": "Maximum BFGS ionic-displacement trust radius (bfgs only).",
+    },
+    "trust_radius_min": {
+        "unit": "Bohr",
+        "default": 1.0e-3,
+        "description": (
+            "Minimum BFGS ionic-displacement trust radius; BFGS resets below "
+            "this (bfgs only)."
+        ),
+    },
+    "trust_radius_ini": {
+        "unit": "Bohr",
+        "default": 0.5,
+        "description": "Initial BFGS ionic-displacement trust radius (bfgs only).",
+    },
+    "remove_rigid_rot": {
+        "default": False,
+        "description": (
+            "Cancel spurious rigid-body torque for isolated-system relaxation; "
+            "trades total-energy/force self-consistency for speed."
+        ),
+    },
+    "cell_dofree": {
+        "default": "all",
+        "description": (
+            "Which cell degrees of freedom vc-relax may move; heuristic "
+            "default is hexagon-aware for 2D structures ('ibrav+2Dxy' vs "
+            "bare '2Dxy')."
+        ),
+    },
+    "press": {
+        "unit": "kbar",
+        "default": 0.0,
+        "description": "Target external pressure for vc-relax.",
+    },
+    "press_conv_thr": {
+        "unit": "kbar",
+        "default": 0.5,
+        "description": "Pressure-convergence threshold for vc-relax.",
+    },
+    "cell_factor": {
+        "default": 2.0,
+        "description": (
+            "Pseudopotential-table interpolation headroom; must exceed the "
+            "maximum linear cell contraction expected during vc-relax."
+        ),
+    },
 }
 
 _FACTS: tuple[Fact, ...] = (
@@ -497,7 +566,7 @@ class SettingBinding:
 
     key: str
     group: str
-    branch: Literal["analysis", "system", "kpoints", "resources"]
+    branch: Literal["analysis", "system", "kpoints", "resources", "relax"]
     outer_field: str
     inner_field: str | None
     human_input_cls: type | None
@@ -508,7 +577,7 @@ class SettingBinding:
 
 
 def _leaves_from_human_input(
-    branch: Literal["analysis", "system", "kpoints", "resources"],
+    branch: Literal["analysis", "system", "kpoints", "resources", "relax"],
     outer_field: str,
     human_input_cls: type,
     *,
@@ -544,7 +613,7 @@ def _leaves_from_human_input(
 def _leaves_from_overrides(
     overrides_cls: type,
     *,
-    branch: Literal["analysis", "system", "kpoints", "resources"],
+    branch: Literal["analysis", "system", "kpoints", "resources", "relax"],
     scope: Literal["system", "per_step"],
 ) -> list[SettingBinding]:
     hints = typing.get_type_hints(overrides_cls)
@@ -587,6 +656,7 @@ def _leaves() -> list[SettingBinding]:
         *_leaves_from_overrides(
             ResourceOverrides, branch="resources", scope="per_step"
         ),
+        *_leaves_from_overrides(RelaxOverrides, branch="relax", scope="per_step"),
     ]
 
 
@@ -674,7 +744,13 @@ def _hpc_profiles() -> list[dict[str, object]]:
 
 
 def _codes() -> list[dict[str, object]]:
-    return [{"id": _CODE, "name": "Quantum ESPRESSO", "tasks": [_TASK, _DOS_TASK]}]
+    return [
+        {
+            "id": _CODE,
+            "name": "Quantum ESPRESSO",
+            "tasks": [_TASK, _DOS_TASK, _RELAX_TASK, _VC_RELAX_TASK],
+        }
+    ]
 
 
 def _tasks() -> list[dict[str, object]]:
@@ -697,6 +773,28 @@ def _tasks() -> list[dict[str, object]]:
             "codes": [_CODE],
             "step_count": 3,
             "executables": [_PROGRAM, _PROGRAM, "dos.x"],
+        },
+        {
+            "id": _RELAX_TASK,
+            "name": "Ionic relaxation",
+            "description": (
+                "One pw.x run, calculation='relax': scf plus BFGS/damped/FIRE "
+                "ionic-position optimization (v2 epic 10, #10)."
+            ),
+            "codes": [_CODE],
+            "step_count": 1,
+            "executables": [_PROGRAM],
+        },
+        {
+            "id": _VC_RELAX_TASK,
+            "name": "Variable-cell relaxation",
+            "description": (
+                "One pw.x run, calculation='vc-relax': scf plus BFGS ionic "
+                "and cell relaxation together (v2 epic 10, #10)."
+            ),
+            "codes": [_CODE],
+            "step_count": 1,
+            "executables": [_PROGRAM],
         },
     ]
 

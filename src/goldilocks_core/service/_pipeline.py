@@ -24,9 +24,11 @@ from __future__ import annotations
 
 from pymatgen.core import Structure
 
+from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.checks import CheckReport, check_all
 from goldilocks_core.inputs.hpc import HpcProfile
+from goldilocks_core.resolution import FieldState
 from goldilocks_core.service._advice import Advice, RunOverrides
 from goldilocks_core.service._analysis import analyze
 from goldilocks_core.service._step import step_advice
@@ -66,20 +68,31 @@ def advise(
     return Advice(structure=structure, analysis=analysis, system=system, step=step)
 
 
-def check(advice: Advice, *, purpose: str = "scf") -> CheckReport:
+def check(
+    advice: Advice,
+    *,
+    purpose: str = "scf",
+    relax: FieldState[RelaxOptions | VcRelaxOptions] | None = None,
+) -> CheckReport:
     """The ``advise()``/``generate()`` boundary -- see ``checks.py``.
 
     ``purpose`` (v2 epic 9, #9): the "``occupations='fixed'`` needs an
-    integer ``tot_magnetization``" rule is scf-only (``checks.py``'s own
-    docstring -- an nscf step reads a prior scf step's already-converged
-    density/spin and does not re-derive this constraint). Every existing
+    integer ``tot_magnetization``" rule applies to every purpose that
+    runs its own scf loop (``checks.py``'s own ``_SCF_LIKE_PURPOSES``) --
+    an nscf step reads a prior scf step's already-converged
+    density/spin and does not re-derive this constraint. Every existing
     caller is an scf step and keeps the previous default unchanged;
     ``service/_dos.py``'s nscf pass is the first caller to pass
     ``purpose="nscf"``.
+
+    ``relax`` (v2 epic 10, #10): only ever passed by ``service/_relax.py``,
+    which does not have a plain ``Advice`` field to fold it into --
+    every other caller leaves it ``None``.
     """
     return check_all(
         *advice.field_states(),
         occupations=advice.step.kpoints.occupations,
         magnetic=advice.system.magnetic,
+        relax=relax,
         purpose=purpose,
     )

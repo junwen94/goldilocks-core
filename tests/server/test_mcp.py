@@ -127,6 +127,30 @@ class TestToolCalls:
         assert "nscf.in" in files
         assert "dos.in" in files
 
+    def test_run_tool_relax_task_generates_relax_in(
+        self, real_assets, silicon_cif: str
+    ) -> None:
+        """v2 epic 10 (#10): confirms task='relax' actually routes
+        through the real MCP transport, same shape as the dos check
+        above."""
+        server = create_server()
+
+        result = asyncio.run(
+            server.call_tool(
+                "run",
+                {
+                    "document": {
+                        "structure_content": silicon_cif,
+                        "hpc": "scarf",
+                        "task": "relax",
+                    }
+                },
+            )
+        )
+
+        assert result.is_error is False
+        assert "relax.in" in result.structured_content["files"]
+
     def test_unknown_top_level_argument_raises_tool_error(
         self, silicon_cif: str
     ) -> None:

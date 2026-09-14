@@ -143,6 +143,21 @@ class TestExplain:
         assert records["nscf_occupations"]["value"]["occupations"] == ("tetrahedra_opt")
         assert records["dos"]["value"]["delta_e"] == 0.01
 
+    def test_relax_task_returns_a_relax_record(
+        self, client: TestClient, real_assets, silicon_cif: str
+    ) -> None:
+        """v2 epic 10 (#10): confirms task='relax' actually routes to
+        advise_relax through the real HTTP transport, the same
+        end-to-end check #28 added for task='dos'."""
+        response = client.post(
+            "/explain",
+            json={"structure_content": silicon_cif, "hpc": "scarf", "task": "relax"},
+        )
+
+        assert response.status_code == 200
+        records = response.json()["records"]
+        assert records["relax"]["value"]["ion_dynamics"] == "bfgs"
+
     def test_unknown_task_is_a_422_not_a_silent_fallback(
         self, client: TestClient, silicon_cif: str
     ) -> None:
@@ -196,6 +211,36 @@ class TestRun:
         assert "nscf.in" in files
         assert "dos.in" in files
         assert "submit.sh" in files
+
+    def test_relax_task_generates_relax_in(
+        self, client: TestClient, real_assets, silicon_cif: str
+    ) -> None:
+        response = client.post(
+            "/run",
+            json={"structure_content": silicon_cif, "hpc": "scarf", "task": "relax"},
+        )
+
+        assert response.status_code == 200
+        files = response.json()["files"]
+        assert "relax.in" in files
+        assert "submit.sh" in files
+
+    def test_vc_relax_task_generates_vc_relax_in_with_a_set_override(
+        self, client: TestClient, real_assets, silicon_cif: str
+    ) -> None:
+        response = client.post(
+            "/run",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "task": "vc-relax",
+                "overrides": {"cell_factor": 3.0},
+            },
+        )
+
+        assert response.status_code == 200
+        files = response.json()["files"]
+        assert "vc-relax.in" in files
 
     def test_unknown_setting_is_a_422_with_did_you_mean(
         self, client: TestClient, real_assets, silicon_cif: str

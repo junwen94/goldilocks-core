@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 
 from pymatgen.core import Structure
 
+from goldilocks_core.advisors.relax import RelaxHumanInput, RelaxLlmInput
 from goldilocks_core.advisors.size import ResourceEstimate
 from goldilocks_core.inputs.hpc import HpcProfile
 from goldilocks_core.resolution import FieldState
@@ -44,9 +45,25 @@ from goldilocks_core.service._system import SystemAdvice
 
 
 @dataclass(frozen=True, slots=True)
+class RelaxOverrides:
+    """Its own branch (v2 epic 10, #10), not folded into ``KpointsOverrides``:
+    ``relax``/``vc-relax`` is the first task whose own settings are
+    genuinely wired to ``--set``/HTTP/MCP overrides at all -- unlike
+    ``dos``'s own ``DosHumanInput``/``DosLlmInput`` (v2 epic 9, #9),
+    which the epic 9 delivery-layer audit found are not reachable from
+    any transport. ``capabilities.py``'s ``_leaves()`` walks this
+    dataclass the same way it walks ``KpointsOverrides``/
+    ``ResourceOverrides`` -- see that module's own docstring."""
+
+    relax: RelaxHumanInput | None = None
+    relax_llm: RelaxLlmInput | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class StepOverrides:
     kpoints: KpointsOverrides = field(default_factory=KpointsOverrides)
     resources: ResourceOverrides = field(default_factory=ResourceOverrides)
+    relax: RelaxOverrides = field(default_factory=RelaxOverrides)
 
 
 @dataclass(frozen=True, slots=True)

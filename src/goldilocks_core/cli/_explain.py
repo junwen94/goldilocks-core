@@ -19,7 +19,7 @@ from goldilocks_core.cli._common import (
     resolve_overrides,
     resolve_structure,
 )
-from goldilocks_core.service import advise, advise_dos
+from goldilocks_core.service import advise, advise_dos, advise_relax
 
 
 def add_subparser(subparsers: argparse._SubParsersAction) -> None:
@@ -38,6 +38,15 @@ def run(args: argparse.Namespace) -> None:
     if args.task == "dos":
         advice = advise_dos(
             structure,
+            code=args.code,
+            hpc=hpc,
+            overrides=overrides,
+            fetch_missing=args.fetch_missing,
+        )
+    elif args.task in ("relax", "vc-relax"):
+        advice = advise_relax(
+            structure,
+            calculation=args.task,
             code=args.code,
             hpc=hpc,
             overrides=overrides,
