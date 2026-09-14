@@ -218,3 +218,44 @@ def match_selected_metadata(
             )
         matched.append(candidate)
     return Resolved(tuple(matched), Provenance(source="heuristic"))
+
+
+def select_metadata_for_elements(
+    metadata: tuple[PseudoMetadata, ...], elements: set[str]
+) -> FieldState[tuple[PseudoMetadata, ...]]:
+    """Narrow one already-chosen table's full metadata down to exactly the
+    requested elements (v2 epic 8, #8).
+
+    This is deliberately not a port of v1's `selection.py` cross-table
+    `_select_for_element`/`_candidate_rank` ranking machinery, and it does not
+    use `match_selected_metadata` above. Both of those exist to rank
+    candidates drawn from *multiple* tables/functionals/accuracies at once --
+    the problem v1 had because it never committed to one table before picking
+    per-element files. v2's `select_pseudopotential_table` already commits to
+    one table first, and `_table_problems` there already confirmed that
+    table's functional/accuracy/relativistic and element coverage satisfy the
+    request. Every entry in `metadata` (one table's installed manifest,
+    loaded via `assets.pseudopotentials.importers.load_installed_table`)
+    therefore already satisfies the request -- there is nothing left to rank,
+    only to look up by element and confirm the table gives exactly one file
+    per element (not zero, not several)."""
+    by_element: dict[str, list[PseudoMetadata]] = {}
+    for item in metadata:
+        if item.element is not None:
+            by_element.setdefault(item.element, []).append(item)
+    selected: list[PseudoMetadata] = []
+    for element in sorted(elements):
+        candidates = by_element.get(element, [])
+        if not candidates:
+            return Unavailable(
+                reason=f"no pseudopotential for {element!r} in the selected table"
+            )
+        if len(candidates) > 1:
+            return Unavailable(
+                reason=(
+                    f"selected table has {len(candidates)} pseudopotentials for "
+                    f"{element!r}; expected exactly one per element"
+                )
+            )
+        selected.append(candidates[0])
+    return Resolved(tuple(selected), Provenance(source="heuristic"))

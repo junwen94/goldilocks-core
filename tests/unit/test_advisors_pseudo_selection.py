@@ -6,6 +6,7 @@ from goldilocks_core.advisors.pseudo_selection import (
     match_selected_metadata,
     pseudo_requirements,
     requires_sssp,
+    select_metadata_for_elements,
     select_pseudopotential_table,
 )
 from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
@@ -210,3 +211,93 @@ class TestMatchSelectedMetadata:
         assert not state.ok
         assert state.status == "unavailable"
         assert "Si" in state.reason
+
+
+class TestSelectMetadataForElements:
+    def test_selects_exactly_the_requested_elements(self) -> None:
+        metadata = (
+            PseudoMetadata(
+                filepath="/store/Si.upf",
+                filename="Si.upf",
+                header_format="attr",
+                element="Si",
+            ),
+            PseudoMetadata(
+                filepath="/store/O.upf",
+                filename="O.upf",
+                header_format="attr",
+                element="O",
+            ),
+            PseudoMetadata(
+                filepath="/store/Fe.upf",
+                filename="Fe.upf",
+                header_format="attr",
+                element="Fe",
+            ),
+        )
+
+        state = select_metadata_for_elements(metadata, {"Si", "O"})
+
+        assert state.ok
+        assert {item.element for item in state.value} == {"Si", "O"}
+
+    def test_missing_element_is_unavailable_not_a_raise(self) -> None:
+        metadata = (
+            PseudoMetadata(
+                filepath="/store/Si.upf",
+                filename="Si.upf",
+                header_format="attr",
+                element="Si",
+            ),
+        )
+
+        state = select_metadata_for_elements(metadata, {"Si", "O"})
+
+        assert not state.ok
+        assert state.status == "unavailable"
+        assert "O" in state.reason
+
+    def test_duplicate_element_entries_are_unavailable_not_silently_first_picked(
+        self,
+    ) -> None:
+        metadata = (
+            PseudoMetadata(
+                filepath="/store/Si-a.upf",
+                filename="Si-a.upf",
+                header_format="attr",
+                element="Si",
+            ),
+            PseudoMetadata(
+                filepath="/store/Si-b.upf",
+                filename="Si-b.upf",
+                header_format="attr",
+                element="Si",
+            ),
+        )
+
+        state = select_metadata_for_elements(metadata, {"Si"})
+
+        assert not state.ok
+        assert state.status == "unavailable"
+        assert "Si" in state.reason
+
+    def test_result_is_deterministically_ordered_by_element(self) -> None:
+        metadata = (
+            PseudoMetadata(
+                filepath="/store/O.upf",
+                filename="O.upf",
+                header_format="attr",
+                element="O",
+            ),
+            PseudoMetadata(
+                filepath="/store/Fe.upf",
+                filename="Fe.upf",
+                header_format="attr",
+                element="Fe",
+            ),
+        )
+
+        state = select_metadata_for_elements(metadata, {"O", "Fe"})
+
+        assert state.ok
+        assert [item.element for item in state.value] == ["Fe", "O"]
