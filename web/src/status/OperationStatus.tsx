@@ -23,7 +23,8 @@ export function OperationStatus({
 const OPERATION_MESSAGES: Readonly<Record<WorkspaceOperation, string>> = {
   capabilities: "Loading capabilities",
   inspect: "Inspecting structure",
-  compute: "Computing recommendation",
+  explain: "Computing recommendation",
+  download: "Generating input files",
 };
 
 function operationMessage(

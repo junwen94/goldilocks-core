@@ -1,20 +1,45 @@
+import { useEffect, useState } from "react";
 import { Group, Stack, Tabs, Text, Title } from "@mantine/core";
-import { useState } from "react";
 
-import type { ComputationResult } from "../api/coreClient";
-import { artifactMetadata } from "./artifacts";
+import type { ArchiveDownload } from "../api/coreClient";
+import {
+  type ArchiveContents,
+  artifactMetadata,
+  unzipArchive,
+} from "./artifacts";
 import { GeneratedInputPreview } from "./GeneratedInputPreview";
 
 export function GeneratedInputReview({
-  result,
+  archive,
 }: {
-  readonly result: ComputationResult;
+  readonly archive: ArchiveDownload | null;
 }) {
+  const contents = useUnzippedArchive(archive);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const files = result.records.generated_files ?? [];
+
+  if (archive === null) {
+    return (
+      <Stack component="section" gap="xs" miw={0}>
+        <Title order={3}>Generated inputs</Title>
+        <Text c="dimmed">
+          Generate input files to preview them here before saving.
+        </Text>
+      </Stack>
+    );
+  }
+  if (contents === null) {
+    return (
+      <Stack component="section" gap="xs" miw={0}>
+        <Title order={3}>Generated inputs</Title>
+        <Text c="dimmed">Reading the generated archive…</Text>
+      </Stack>
+    );
+  }
+
+  const { manifest, files } = contents;
   const file =
     files.find((candidate) => candidate.path === selectedPath) ?? files[0];
-  const inputData = result.records.dft_input_data;
+
   return (
     <Stack component="section" gap="xs" miw={0}>
       <Group component="header" justify="space-between">
@@ -40,12 +65,7 @@ export function GeneratedInputReview({
                 <GeneratedInputPreview
                   path={file.path}
                   content={file.content}
-                  digest={
-                    inputData === undefined
-                      ? undefined
-                      : (artifactMetadata(inputData.manifest, file.path)
-                          ?.sha256 ?? null)
-                  }
+                  digest={artifactMetadata(manifest, file.path)?.sha256}
                 />
               ) : null}
             </Tabs.Panel>
@@ -54,4 +74,29 @@ export function GeneratedInputReview({
       )}
     </Stack>
   );
+}
+
+/** Unzipping is genuinely async work driven by an external blob, not
+ * derivable during render -- a legitimate effect, unlike CalculationForm's
+ * JsonOverrideControl (which only needed to resync local text state). */
+function useUnzippedArchive(
+  archive: ArchiveDownload | null,
+): ArchiveContents | null {
+  const [state, setState] = useState<{
+    readonly archive: ArchiveDownload;
+    readonly contents: ArchiveContents;
+  } | null>(null);
+
+  useEffect(() => {
+    if (archive === null) return;
+    let cancelled = false;
+    void unzipArchive(archive).then((contents) => {
+      if (!cancelled) setState({ archive, contents });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [archive]);
+
+  return state?.archive === archive ? state.contents : null;
 }
