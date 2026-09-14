@@ -5,144 +5,124 @@ Use these canonical patterns before reading implementation files.
 ## Inspect a Structure Source
 
 ```python
-from goldilocks_core import PathStructureSource, Service
+from goldilocks_core.inputs.structure import PathStructureSource, normalize_structure
 
-with Service() as core:
-    inspection = core.inspect_structure(PathStructureSource("structure.cif"))
+inspection = normalize_structure(PathStructureSource("structure.cif")).inspection
 
 print(inspection["structure"]["reduced_formula"])
 print(inspection["canonical_cif"])
 ```
 
-## Compute a Preset
+## Diagnose a structure (advise)
 
 ```python
-from goldilocks_core import (
-    CalculationDraft,
-    CalculationHints,
-    ComputeRequest,
-    PathStructureSource,
-    PresetSelection,
-    Service,
-)
-from goldilocks_core.serialization import to_portable
+from goldilocks_core.inputs.hpc import load_hpc_profile
+from goldilocks_core.inputs.structure import PathStructureSource, normalize_structure
+from goldilocks_core.resolution import Resolved
+from goldilocks_core.service import advise
+from goldilocks_core.set_overrides import build_overrides
 
-request = ComputeRequest(
-    CalculationDraft(
-        PathStructureSource("structure.cif"),
-        hints=CalculationHints(k_grid=(4, 4, 4)),
-        pseudo_table="pseudodojo-pbesol-efficiency-sr",
-    ),
-    PresetSelection("recommend"),
-)
-with Service() as core:
-    result = core.compute(request)
+structure = normalize_structure(PathStructureSource("structure.cif")).structure
+hpc = load_hpc_profile("scarf")
+overrides = build_overrides({"k_grid": (4, 4, 4)})
 
-records = to_portable(result)["records"]
-print(records["analysis"]["reduced_formula"])
-print(records["k_points"]["grid"])
-print(records["selection"]["pseudopotentials"])
-print(result.warnings)
+advice = advise(structure, hpc=hpc, overrides=overrides)
+
+records = advice.records()
+print(records["functional"])
+k_sampling = advice.step.kpoints.k_sampling
+if isinstance(k_sampling, Resolved):
+    print(k_sampling.value.mesh)
+print(advice.warnings())
 ```
 
-`PresetSelection("generate")` also returns `generated_files` and complete
-`dft_input_data`.
+`advise()` always returns -- diagnosis degrades field-by-field
+(`Resolved`/`Unavailable`/`Blocked`) rather than raising. `advice.records()`
+returns every decision keyed by name, already JSON-safe; `advice.warnings()`
+flattens every advisor's warnings into one list.
 
-The Python `result.records` mapping uses Record types as keys and dictionary
-values. `to_portable(result)["records"]` uses stable string Record IDs.
-
-## Publish Ready-to-run Output
+## Generate and publish a runnable input
 
 ```python
-from goldilocks_core import DirectoryOutput
+from goldilocks_core.bundle import DirectoryOutput, publish
+from goldilocks_core.service import check, generate, render_submission, to_bundle_input
+from goldilocks_core.steps import default_shared_context
 
-request = ComputeRequest(request.draft, PresetSelection("generate"))
+report = check(advice)
+if not report.ok:
+    raise SystemExit(f"blocked: {report.blocking}")
 
-with Service() as core:
-    result = core.compute(request, output=DirectoryOutput("run-dir"))
+ctx = default_shared_context()
+steps = generate(advice, report, ctx=ctx)
+script = render_submission(advice, hpc, "quantum_espresso", ctx, steps)
+bundle_input = to_bundle_input(advice, steps, script, ctx)
 
-print(result.publication["path"])
+publication = publish(bundle_input, DirectoryOutput("run-dir"))
+print(publication["path"])
 ```
 
-The destination must not exist. Use `ArchiveOutput("run.zip")` for ZIP,
-`DirectoryOutput()` for automatic allocation, or `None` for memory-only output.
-Directory and ZIP outputs contain the same logical files: source and canonical
-structures, inputs, selected UPFs, licences, citations, provenance, and
-checksums.
+`check()` never raises; always inspect `report.ok`/`report.blocking` before
+calling `generate()`, which raises `AdviceIncomplete` on an incomplete
+report rather than silently degrading (delivery has preconditions that
+diagnosis does not).
+
+The destination must not exist. Use `ArchiveOutput("run.zip")` for a ZIP, or
+skip `publish` entirely and call `bundle_files(bundle_input)` for a
+memory-only preview. Directory and ZIP outputs contain the same logical
+files: inputs, selected UPFs, a submission script, licences, citations, and
+`goldilocks.json` (records, warnings, checksums).
 
 CLI equivalents:
 
 ```bash
-uv run goldilocks compute structure.cif --preset generate --pseudo-table pseudodojo-pbesol-efficiency-sr --k-grid 4 4 4 --out run-dir --json
-uv run goldilocks compute structure.cif --preset generate --pseudo-table pseudodojo-pbesol-efficiency-sr --k-grid 4 4 4 --archive run.zip --json
+uv run goldilocks run structure.cif --hpc scarf --set k_grid=4,4,4 --out run-dir --json
+uv run goldilocks run structure.cif --hpc scarf --set k_grid=4,4,4 --out run.zip --json
 ```
 
-## Select Records
+## Read only the records you need
+
+`Advice`/`DosAdvice` always compute every field; there is no partial-record
+selection in v2 -- filter the dict `advice.records()` returns instead:
 
 ```python
-from goldilocks_core import (
-    ComputeRequest,
-    KPointSelection,
-    RecordSelection,
-    StructureAnalysisRecord,
-    compute,
-)
-
-query = ComputeRequest(
-    request.draft,
-    RecordSelection((StructureAnalysisRecord, KPointSelection)),
-)
-result = compute(query)
-print(result.records[StructureAnalysisRecord])
-print(result.records[KPointSelection])
+wanted = {"functional", "k_sampling", "cutoffs"}
+subset = {name: state for name, state in advice.records().items() if name in wanted}
+print(subset)
 ```
 
-CLI equivalent:
+CLI equivalent (the full record set, since `explain`/`run` do not support
+partial selection either):
 
 ```bash
-uv run goldilocks compute structure.cif --outputs analysis,k_points --k-grid 4 4 4 --no-out --json
+uv run goldilocks explain structure.cif --hpc scarf --json
 ```
 
 ## Use a local pseudopotential root
 
 ```bash
-uv run goldilocks compute structure.cif --preset generate --pseudo-root pseudos --k-grid 4 4 4 --out run-dir
+uv run goldilocks run structure.cif --hpc scarf --set pseudo_table_id=my-local-table --out run-dir
 ```
 
-`goldilocks-pseudopotentials.json` in the root must identify the real licence
-file and citation before Core can publish local UPFs. Never invent missing
-cutoffs or redistribution terms.
+The registered table's metadata must identify the real licence file and
+citation before Core can publish local UPFs. Never invent missing cutoffs
+or redistribution terms. See [Pseudopotentials](../../../../docs/pseudopotentials.md)
+for how local tables are registered.
 
-## Use a local k-point model
+## Generate a multi-step task (DOS)
 
 ```python
-from goldilocks_core import ModelSpec
+from goldilocks_core.service import advise_dos, check_dos, generate_dos
 
-model = ModelSpec(
-    name="local-kmesh-model",
-    version="v1",
-    model_type="random_forest",
-    target="k_index",
-    feature_set="cslr",
-    source="local",
-    location="models/kmesh.joblib",
-    licence="licence-id",
-    licence_text="actual model licence text",
-    citation="model citation",
-)
-request = ComputeRequest(
-    CalculationDraft(
-        PathStructureSource("structure.cif"),
-        kmesh_model=model,
-        pseudo_table="pseudodojo-pbesol-efficiency-sr",
-    ),
-    PresetSelection("generate"),
-)
+dos_advice = advise_dos(structure, hpc=hpc)
+dos_report = check_dos(dos_advice)
+if dos_report.ok:
+    dos_steps = generate_dos(dos_advice, dos_report, ctx=ctx)
+    print([step.name for step in dos_steps])
 ```
 
-For a local model used during generation, supply its real licence identifier,
-full licence text, and citation in `licence`, `licence_text`, and `citation`.
-Replace the illustrative metadata above with the model's actual terms.
+`DosAdvice.records()` keys the shared system-level fields unprefixed, the
+nscf step's own fields under `nscf_`, and the DOS decision itself under
+`"dos"`. CLI/HTTP/MCP equivalent: pass `task="dos"` (CLI: `--task dos`).
 
 ## Optional transports
 
@@ -152,9 +132,8 @@ uv run goldilocks serve http --host 127.0.0.1 --port 8000
 uv run goldilocks serve mcp
 ```
 
-HTTP accepts inline Structure Sources and returns one multipart response with
-reviewed Result JSON and its exact optional ZIP. Local MCP accepts inline
-content and either publishes automatically to a server-chosen directory or
-keeps the Result in memory. Both may select a registered pseudopotential table
-by stable ID. Neither accepts structure paths, pseudopotential roots, model
-locations, or publication paths. Both reuse one process-owned `Service`.
+HTTP and MCP share `server/_handlers.py` with the CLI's `run`/`explain`
+commands -- same `RunOverrides`/`CalcTask` validation, same tri-state
+records and warnings shape, same `dos` task support. Both accept inline
+structure content; neither accepts filesystem paths, since a server process
+should not read from the caller's local disk.
