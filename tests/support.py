@@ -13,6 +13,13 @@ suite collects ``tests/server/`` too). Fixtures still belong in
 Python's plain import system, so that part is unaffected); plain helper
 *functions* a test calls directly belong here instead, under a name
 unique across the whole tree.
+
+``run_cli``/``default_profile_installed``/``REAL_ASSET_ROOT`` moved
+here from ``tests/integration/test_cli_v2.py`` (v2 epic 9, #9) once a
+second file (the five-scenario acceptance suite) needed to spawn the
+real CLI subprocess too -- the ``real_assets`` fixture that wraps
+``default_profile_installed`` stays in ``tests/conftest.py`` for the
+same fixtures-are-directory-scoped reason.
 """
 
 from __future__ import annotations
@@ -20,14 +27,45 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import subprocess
+import sys
 import tarfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from goldilocks_core.assets.records import AssetFile, AssetSpec
+from goldilocks_core.assets.runtime import statuses
+from goldilocks_core.assets.store import AssetStore, asset_root
 
 if TYPE_CHECKING:
     from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
+
+REAL_ASSET_ROOT = asset_root()
+"""The real, developer-machine asset root (not the per-test isolated
+one ``conftest.py``'s ``isolated_default_asset_root`` autouse fixture
+sets up) -- shared by every test that needs a genuinely-installed
+pseudopotential table, not a synthetic fixture."""
+
+
+def default_profile_installed() -> bool:
+    store = AssetStore(REAL_ASSET_ROOT)
+    return all(state == "installed" for _, _, state in statuses("default", store=store))
+
+
+def run_cli(
+    *arguments: str, cwd: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Spawn the real ``goldilocks`` CLI entry point as a subprocess --
+    shared by every integration test that exercises argument parsing
+    end to end (v2 epic 9, #9), not just the internal core API."""
+    return subprocess.run(
+        [sys.executable, "-m", "goldilocks_core.cli.core", *arguments],
+        cwd=cwd,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
 
 SSSP_FIXTURE_UPF = (
     b'<UPF version="2.0.1">\n'

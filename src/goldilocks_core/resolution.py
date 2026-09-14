@@ -102,6 +102,18 @@ class Provenance(BaseModel):
     carry structurally (e.g. "derived from structure analysis" vs
     "package default, nothing else applied") -- now just prose here
     instead of a family of source literals."""
+    field_sources: dict[str, Source] | None = None
+    """Opt-in, per-scalar override of ``source`` for compound decisions
+    whose own dataclass bundles several independently-overridable
+    fields (e.g. ``ConvergenceDecision``'s ``conv_thr``/``mixing_beta``/
+    ``mixing_mode``) -- added for v2 epic 9 (#9)'s scenario 2
+    ("explicit single-field override is field-level, not whole-group
+    skip"). ``source`` above still answers "was *anything* in this
+    decision human/ml/llm-touched", which is what every advisor
+    computed before this field existed and what most callers still only
+    need; this is additive, only populated by advisors precise enough
+    to know which of their own scalars came from which tier, and
+    ``None`` (the default) for every other advisor's ``Provenance``."""
 
 
 class BlockedValueError(Exception):
@@ -215,13 +227,22 @@ class ResolvedField[T](BaseModel):
     status: Status
     value: T | None = None
     source: str | None = None
+    field_sources: dict[str, Source] | None = None
+    """Mirrors ``Provenance.field_sources`` -- ``None`` unless the
+    advisor that produced this field opted in to per-scalar sourcing
+    (see ``Provenance.field_sources``'s own docstring)."""
     reason: str | None = None
     blocked_by: str | None = None
 
     @classmethod
     def from_state(cls, state: FieldState[T]) -> ResolvedField[T]:
         if isinstance(state, Resolved):
-            return cls(status=state.status, value=state.value, source=state.source)
+            return cls(
+                status=state.status,
+                value=state.value,
+                source=state.source,
+                field_sources=state.provenance.field_sources,
+            )
         if isinstance(state, Unavailable):
             return cls(status=state.status, reason=state.reason)
         return cls(status=state.status, blocked_by=state.root_cause())
