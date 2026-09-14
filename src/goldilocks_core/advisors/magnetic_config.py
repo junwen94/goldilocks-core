@@ -292,12 +292,10 @@ def magnetic_config(
     if spin_polarized:
         if human.starting_magnetization is not None:
             starting_magnetization = dict(human.starting_magnetization)
-        elif relabeled_structure is not structure:
+        else:
             starting_magnetization = _starting_magnetization_by_label(
                 relabeled_structure, z_valences
             )
-        else:
-            starting_magnetization = _starting_magnetization(structure, z_valences)
 
     spin_orbit_enabled = human.spin_orbit_coupling is True
     needs_soc_resolved_true = needs_soc is not None and needs_soc.ok and needs_soc.value
@@ -370,13 +368,6 @@ def _magnetic_elements(structure: Structure) -> tuple[str, ...]:
     facts = composition(structure).value
     candidates = {*facts.transition_metals, *facts.lanthanides, *facts.actinides}
     return tuple(sorted(candidates))
-
-
-def _starting_magnetization(
-    structure: Structure, z_valences: dict[str, float] | None
-) -> dict[str, float]:
-    elements = composition(structure).value.elements
-    return {symbol: _fraction_for(symbol, z_valences) for symbol in elements}
 
 
 def _fraction_for(symbol: str, z_valences: dict[str, float] | None) -> float:
@@ -511,11 +502,23 @@ def _label_by_spin(candidate: Structure) -> Structure:
 def _starting_magnetization_by_label(
     structure: Structure, z_valences: dict[str, float] | None
 ) -> dict[str, float]:
-    """Same calibration as ``_starting_magnetization``, but keyed by the
-    relabeled structure's per-sublattice label rather than by element, and
-    signed by each sublattice's own spin direction -- QE's
-    ``starting_magnetization`` is given per ``ATOMIC_SPECIES`` entry, and
-    after AFM relabeling that is no longer the same thing as per element."""
+    """The heuristic default, keyed by ``site.label`` (the QE-species label
+    ``generation/quantum_espresso/scf.py``'s ``species_index`` also keys by),
+    never by ``site.specie.symbol`` -- fixes #32 (v2 epic 9, #9), a
+    regression #27 introduced: ``species_index`` became label-keyed to make
+    AFM species-splitting work, but this function, called for every
+    spin-polarized structure (not only AFM-relabeled ones), was still
+    element-keyed -- a bare ``KeyError`` the instant a structure's own
+    per-site labels are not identical to its element symbols, which
+    pymatgen's own CIF writer/reader already does by default (e.g.
+    ``Fe0``/``Fe1``, not ``Fe``) for every bundled example structure.
+
+    Signed by each site's own spin direction where one is set (only true
+    once AFM relabeling has run -- see ``_label_by_spin``); every other
+    caller's sites carry no spin decoration at all, so ``sign`` is always
+    ``1.0`` and every site with the same element gets the same (positive)
+    fraction, exactly reproducing the old element-keyed heuristic's values,
+    just correctly indexed by label instead of by symbol."""
     result: dict[str, float] = {}
     for site in structure:
         label = site.label

@@ -49,6 +49,30 @@ def test_starting_magnetization_uses_moment_target_when_z_valence_known() -> Non
     assert state.value.starting_magnetization == {"Fe": 5.0 / 16.0}
 
 
+def test_starting_magnetization_is_keyed_by_site_label_not_element_symbol() -> None:
+    """Regression for #32 (v2 epic 9, #9): a real structure's per-site
+    labels are not always identical to its element symbols -- pymatgen's
+    own CIF writer/reader already assigns distinct labels like
+    'Fe0'/'Fe1' by default, not just AFM-relabeled structures. Before the
+    fix, this heuristic default was keyed by element symbol
+    (composition(structure).value.elements), which no longer matched
+    generation/quantum_espresso/scf.py's label-keyed species_index once
+    #27 made that label-keyed -- a bare KeyError on every bundled example
+    structure. Two same-element, same-spin sites with distinct labels
+    must both appear, with the same (positive) fraction."""
+    two_iron_sites = Structure(
+        Lattice.cubic(2.87),
+        ["Fe", "Fe"],
+        [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+        labels=["Fe0", "Fe1"],
+    )
+
+    state = magnetic_config(two_iron_sites, is_magnetic(two_iron_sites))
+
+    assert state.ok
+    assert state.value.starting_magnetization == {"Fe0": 0.1, "Fe1": 0.1}
+
+
 def test_starting_magnetization_covers_every_element_not_just_magnetic_candidates() -> (
     None
 ):
@@ -99,8 +123,7 @@ def test_unavailable_magnetism_defaults_to_non_magnetic_not_blocked() -> None:
     assert state.ok
     assert state.value.spin_polarized is False
     assert any(
-        "could not be determined" in warning.message
-        for warning in state.value.warnings
+        "could not be determined" in warning.message for warning in state.value.warnings
     )
 
 
