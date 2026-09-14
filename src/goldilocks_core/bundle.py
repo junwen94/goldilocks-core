@@ -79,7 +79,7 @@ from typing import Any, Literal, TypedDict
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from goldilocks_core.generation.files import InputArtifact
-from goldilocks_core.resolution import FieldState, ResolvedField
+from goldilocks_core.resolution import FieldState, Resolved, ResolvedField
 
 _COMPLETE_MARKER = ".complete"
 _SCHEMA_VERSION = 1
@@ -129,6 +129,19 @@ def _validate_destination(path: str | Path) -> None:
         raise ValueError("output destination must be a non-empty path")
 
 
+def _warnings(records: dict[str, FieldState[Any]]) -> list[dict[str, object]]:
+    """Every record's own structured ``resolution.Warning`` list,
+    flattened -- the same logic ``service.Advice.warnings()`` applies to
+    a live ``Advice``, needed again here since ``goldilocks.json`` (the
+    published manifest) must carry the same top-level ``warnings`` array
+    every transport's own response shape does, not just per-record."""
+    collected: list[dict[str, object]] = []
+    for _name, state in sorted(records.items()):
+        if isinstance(state, Resolved) and isinstance(state.value, dict):
+            collected.extend(state.value.get("warnings") or ())
+    return collected
+
+
 def bundle_files(bundle_input: BundleInput) -> tuple[InputArtifact, ...]:
     """Assemble every artifact, plus ``CITATIONS.md``/``README.md``/
     ``goldilocks.json``, hashing as it goes -- the exact bytes returned
@@ -145,6 +158,7 @@ def bundle_files(bundle_input: BundleInput) -> tuple[InputArtifact, ...]:
             name: ResolvedField.from_state(state).model_dump()
             for name, state in sorted(bundle_input.records.items())
         },
+        "warnings": _warnings(bundle_input.records),
         "citations": list(bundle_input.citations),
         "files": {
             path: {

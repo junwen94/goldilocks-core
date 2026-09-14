@@ -82,6 +82,7 @@ from goldilocks_core.resolution import (
     FieldState,
     Provenance,
     Resolved,
+    Warning,
     blocked_by,
 )
 
@@ -115,17 +116,27 @@ classes La itself as both a lanthanide and a transition metal -- its row/
 block still resolve to 4f here, which is what a Hubbard correction on La
 would actually target)."""
 
-_PROJECTOR_MISMATCH_WARNING = (
-    "Materials Project's U values are calibrated for VASP's PAW projectors; "
-    "QE's atomic/ortho-atomic/norm-atomic projectors are not guaranteed to "
-    "give the same effective U for the same physical correction."
+PROJECTOR_MISMATCH_WARNING = Warning(
+    code="hubbard.projector_mismatch",
+    level="warning",
+    category="hubbard",
+    message=(
+        "Materials Project's U values are calibrated for VASP's PAW projectors; "
+        "QE's atomic/ortho-atomic/norm-atomic projectors are not guaranteed to "
+        "give the same effective U for the same physical correction."
+    ),
 )
 
-_STARTING_NS_EIGENVALUE_WARNING = (
-    "No starting_ns_eigenvalue initial occupation-matrix guess is provided "
-    "(pitfall A10): +U calculations have multiple metastable occupation-matrix "
-    "solutions and may converge to the wrong one silently. Supplying an "
-    "explicit initial guess is recommended but not computed automatically here."
+STARTING_NS_EIGENVALUE_WARNING = Warning(
+    code="hubbard.starting_ns_eigenvalue_missing",
+    level="warning",
+    category="hubbard",
+    message=(
+        "No starting_ns_eigenvalue initial occupation-matrix guess is provided "
+        "(pitfall A10): +U calculations have multiple metastable occupation-matrix "
+        "solutions and may converge to the wrong one silently. Supplying an "
+        "explicit initial guess is recommended but not computed automatically here."
+    ),
 )
 """A10 (goldilocks-core-design.md:4465): a real initial guess needs a
 crystal-field/atomic-physics decomposition of the occupation matrix by spin
@@ -133,6 +144,10 @@ channel this package does not attempt -- recorded as an explicit warning
 (the design doc's own instruction to record this into provenance) rather
 than a guessed number, which is the honest answer tri-state exists to
 allow."""
+
+WARNING_CATALOGUE = (PROJECTOR_MISMATCH_WARNING, STARTING_NS_EIGENVALUE_WARNING)
+"""Every warning code this module can emit -- ``capabilities.py``'s
+``warnings[]`` catalogue aggregates one of these tuples per advisor."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +167,7 @@ class HubbardUDecision:
     plan: HubbardPlan
     u_by_element: dict[str, float]
     calibration_requests: tuple[CalibrationRequest, ...] = ()
-    warnings: tuple[str, ...] = ()
+    warnings: tuple[Warning, ...] = ()
 
 
 class HubbardUHumanInput(HumanInput):
@@ -223,7 +238,7 @@ def _heuristic(structure: Structure, *, source: str) -> FieldState[HubbardUDecis
                 plan="self_consistent_calibration_needed",
                 u_by_element=u_by_element,
                 calibration_requests=tuple(calibration_requests),
-                warnings=(_STARTING_NS_EIGENVALUE_WARNING,) if u_by_element else (),
+                warnings=(STARTING_NS_EIGENVALUE_WARNING,) if u_by_element else (),
             ),
             Provenance(source=source),
         )
@@ -231,7 +246,7 @@ def _heuristic(structure: Structure, *, source: str) -> FieldState[HubbardUDecis
         HubbardUDecision(
             plan="table",
             u_by_element=u_by_element,
-            warnings=(_PROJECTOR_MISMATCH_WARNING, _STARTING_NS_EIGENVALUE_WARNING),
+            warnings=(PROJECTOR_MISMATCH_WARNING, STARTING_NS_EIGENVALUE_WARNING),
         ),
         Provenance(source=source),
     )

@@ -39,7 +39,9 @@ def test_npool_warns_when_it_cannot_evenly_divide_n_irr_k() -> None:
     state = parallelisation(_JOB, has_scalapack=False, n_irr_k=5)
 
     assert state.value.npool == 4
-    assert any("one more k-point" in warning for warning in state.value.warnings)
+    assert any(
+        "one more k-point" in warning.message for warning in state.value.warnings
+    )
 
 
 def test_npool_never_exceeds_n_irr_k_even_if_that_means_less_parallelism() -> None:
@@ -88,7 +90,7 @@ def test_human_npool_that_does_not_divide_ntasks_warns() -> None:
     )
 
     assert state.value.npool == 5
-    assert any("refuse" in warning for warning in state.value.warnings)
+    assert any("refuse" in warning.message for warning in state.value.warnings)
 
 
 def test_human_npool_exceeding_n_irr_k_warns_about_real_idle_pools() -> None:
@@ -100,7 +102,10 @@ def test_human_npool_exceeding_n_irr_k_warns_about_real_idle_pools() -> None:
     )
 
     assert state.value.npool == 8
-    assert any("no k-point to work on" in warning for warning in state.value.warnings)
+    assert any(
+        "no k-point to work on" in warning.message
+        for warning in state.value.warnings
+    )
 
 
 def test_human_ndiag_override_bypasses_scalapack_gate() -> None:

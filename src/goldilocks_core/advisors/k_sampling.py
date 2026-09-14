@@ -68,16 +68,31 @@ from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.analysis.is_metal import Metallicity
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.kmesh import k_distance_to_mesh
-from goldilocks_core.resolution import Blocked, FieldState, Provenance, Resolved
+from goldilocks_core.resolution import (
+    Blocked,
+    FieldState,
+    Provenance,
+    Resolved,
+    Warning,
+)
 
 _GAMMA_SHIFT = (0, 0, 0)
 _METAL_K_DISTANCE = 0.15
 _NON_METAL_K_DISTANCE = 0.30
 
-_GRID_AND_DISTANCE_WARNING = (
-    "both k_grid and k_distance were given; k_grid wins outright and "
-    "k_distance is ignored."
+GRID_AND_DISTANCE_WARNING = Warning(
+    code="k_sampling.grid_and_distance_conflict",
+    level="info",
+    category="k_sampling",
+    message=(
+        "both k_grid and k_distance were given; k_grid wins outright and "
+        "k_distance is ignored."
+    ),
 )
+
+WARNING_CATALOGUE = (GRID_AND_DISTANCE_WARNING,)
+"""Every warning code this module can emit -- ``capabilities.py``'s
+``warnings[]`` catalogue aggregates one of these tuples per advisor."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,7 +100,7 @@ class KSamplingDecision:
     mesh: tuple[int, int, int]
     shift: tuple[int, int, int]
     k_distance: float | None
-    warnings: tuple[str, ...] = ()
+    warnings: tuple[Warning, ...] = ()
 
 
 class KSamplingHumanInput(HumanInput):
@@ -109,7 +124,7 @@ def k_sampling(
     llm = llm or KSamplingLlmInput()
 
     if human.k_grid is not None:
-        warnings = (_GRID_AND_DISTANCE_WARNING,) if human.k_distance is not None else ()
+        warnings = (GRID_AND_DISTANCE_WARNING,) if human.k_distance is not None else ()
         decision = KSamplingDecision(
             mesh=human.k_grid,
             shift=human.shift or _GAMMA_SHIFT,

@@ -95,6 +95,7 @@ def run(args: argparse.Namespace) -> None:
                 {
                     "files": [file["path"] for file in files],
                     "records": records_to_json(bundle_input.records),
+                    "warnings": advice.warnings(),
                 },
                 indent=2,
                 sort_keys=True,

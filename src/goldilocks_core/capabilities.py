@@ -68,13 +68,14 @@ override at all (``analysis/composition.py``'s and
 ``analysis/symmetry.py``'s own docstrings say so explicitly) and don't
 fit this shape; they are not exposed here.
 
-**`warnings[]` ships empty.** ``resolution.Warning`` (code/level/category)
-is defined but not one advisor constructs it yet -- every advisor's own
-``.warnings`` field is still a plain prose ``tuple[str, ...]`` (v2 epics
-4-7). A catalogue of codes that don't exist would be worse than an empty,
-honest list; wiring advisors to emit structured warnings is the
-transport-response-shape work ("warnings array in every CLI/HTTP/MCP
-response") tracked for this epic's later modules, not this one.
+**`warnings[]` is aggregated, not hand-listed**, the same reflection
+-over-imports-elsewhere-in-the-codebase spirit as `settings[]`: every
+advisor that can emit a ``resolution.Warning`` declares its own
+``WARNING_CATALOGUE`` constant (code/level/category/a generic
+description), and ``advisors/warning_catalogue.py`` -- a dedicated
+aggregator, not this module -- imports all ten of them so this module
+itself only needs one import to get the full list without blowing its
+own import-surface ceiling.
 
 **`models[]` ships empty.** ml integration is deliberately last (v2 epic
 11, #11); until then no ``target`` has an installed model, so
@@ -90,6 +91,9 @@ from dataclasses import dataclass
 from importlib.metadata import version as package_version
 from typing import Literal, TypedDict
 
+from goldilocks_core.advisors.warning_catalogue import (
+    WARNING_CATALOGUE as _ADVISOR_WARNING_CATALOGUE,
+)
 from goldilocks_core.analysis.is_magnetic import Magnetism
 from goldilocks_core.analysis.is_metal import Metallicity
 from goldilocks_core.assets.pseudopotentials.registry import load_tables
@@ -675,6 +679,10 @@ def _tasks() -> list[dict[str, object]]:
     ]
 
 
+def _warnings() -> list[dict[str, object]]:
+    return [warning.model_dump() for warning in _ADVISOR_WARNING_CATALOGUE]
+
+
 def capabilities() -> Capabilities:
     """Everything the design doc's S4.2 shape lists. Cacheable in-process
     per that section's own note ("static... only `models` needs to query
@@ -692,6 +700,6 @@ def capabilities() -> Capabilities:
         "pseudopotential_tables": _pseudopotential_tables(),
         "hpc_profiles": _hpc_profiles(),
         "models": [],
-        "warnings": [],
+        "warnings": _warnings(),
         "sources": list(SOURCES),
     }

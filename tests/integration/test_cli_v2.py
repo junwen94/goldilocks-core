@@ -183,6 +183,29 @@ class TestRunAndExplainAgainstRealAssets:
         assert "functional: 'PBEsol' (source=heuristic)" in completed.stdout
         assert "is_metal: unavailable:" in completed.stdout
 
+    def test_explain_json_carries_a_structured_top_level_warnings_array(
+        self, real_assets: None
+    ) -> None:
+        """Matches HTTP/MCP's own ``/explain`` shape
+        (``{"records", "warnings"}``) -- v2 epic 8's own "warnings array
+        in every CLI/HTTP/MCP response" requirement."""
+        silicon = structure("Si.cif")
+
+        completed = _run_cli("explain", str(silicon), "--hpc", "scarf", "--json")
+
+        assert completed.returncode == 0, completed.stderr
+        document = json.loads(completed.stdout)
+        assert document.keys() == {"records", "warnings"}
+        assert document["warnings"]
+        assert any(
+            warning["code"] == "job.walltime_defaulted"
+            for warning in document["warnings"]
+        )
+        assert all(
+            warning.keys() == {"code", "level", "category", "message"}
+            for warning in document["warnings"]
+        )
+
     def test_run_without_out_previews_without_touching_disk(
         self, real_assets: None, tmp_path: Path
     ) -> None:
@@ -211,6 +234,10 @@ class TestRunAndExplainAgainstRealAssets:
         assert (destination / "submit.sh").exists()
         manifest = json.loads((destination / "goldilocks.json").read_text())
         assert manifest["records"]["functional"]["value"] == "PBEsol"
+        assert any(
+            warning["code"] == "job.walltime_defaulted"
+            for warning in manifest["warnings"]
+        )
 
     def test_run_json_output_is_stable_and_sorted(self, real_assets: None) -> None:
         silicon = structure("Si.cif")
@@ -220,6 +247,10 @@ class TestRunAndExplainAgainstRealAssets:
         assert completed.returncode == 0, completed.stderr
         document = json.loads(completed.stdout)
         assert "scf.in" in document["files"]
+        assert any(
+            warning["code"] == "job.walltime_defaulted"
+            for warning in document["warnings"]
+        )
         # P2: sort_keys=True -- re-serializing must reproduce the same text.
         assert json.dumps(
             document, indent=2, sort_keys=True

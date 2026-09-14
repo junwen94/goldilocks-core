@@ -39,7 +39,9 @@ def test_common_3d_oxide_uses_the_package_default_table() -> None:
 
     assert state.value.plan == "table"
     assert state.value.u_by_element == {"Ni": 6.2}
-    assert any("projector" in warning.lower() for warning in state.value.warnings)
+    assert any(
+        "projector" in warning.message.lower() for warning in state.value.warnings
+    )
 
 
 @pytest.mark.parametrize(
@@ -96,7 +98,9 @@ def test_plus_u_from_the_table_warns_about_the_missing_initial_guess() -> None:
 
     state = hubbard_u(nio, needs_correlation(composition(nio)), "PBEsol")
 
-    assert any("starting_ns_eigenvalue" in warning for warning in state.value.warnings)
+    assert any(
+        "starting_ns_eigenvalue" in warning.message for warning in state.value.warnings
+    )
 
 
 def test_calibration_needed_with_a_partial_table_still_warns_about_the_guess() -> None:
@@ -109,7 +113,9 @@ def test_calibration_needed_with_a_partial_table_still_warns_about_the_guess() -
 
     assert state.value.plan == "self_consistent_calibration_needed"
     assert state.value.u_by_element == {"Ni": 6.2}
-    assert any("starting_ns_eigenvalue" in warning for warning in state.value.warnings)
+    assert any(
+        "starting_ns_eigenvalue" in warning.message for warning in state.value.warnings
+    )
 
 
 def test_hybrid_functional_suppresses_plus_u_regardless_of_composition() -> None:

@@ -55,11 +55,54 @@ from dataclasses import dataclass
 from goldilocks_core.advisors.size import ResourceEstimate
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
-from goldilocks_core.resolution import FieldState, Provenance, Resolved, Unavailable
+from goldilocks_core.resolution import (
+    FieldState,
+    Provenance,
+    Resolved,
+    Unavailable,
+    Warning,
+)
 
 _NODE_SAFETY_FACTOR = 1.2
 _MAX_SECONDS_FRACTION = 0.95
 _BYTES_PER_GB_IN_MB = 1024
+
+WARNING_CATALOGUE = (
+    Warning(
+        code="job.partition_upgraded_for_memory",
+        level="info",
+        category="job",
+        message=(
+            "the default partition cannot fit the estimated memory footprint "
+            "even at its node ceiling; a larger-memory partition on the same "
+            "profile was used instead."
+        ),
+    ),
+    Warning(
+        code="job.no_larger_partition_available",
+        level="warning",
+        category="job",
+        message=(
+            "the estimated memory footprint does not fit the default partition "
+            "even at its node ceiling, and the HPC profile has no larger "
+            "-memory partition to fall back to."
+        ),
+    ),
+    Warning(
+        code="job.walltime_defaulted",
+        level="warning",
+        category="job",
+        message=(
+            "walltime not specified; requesting the chosen partition's own "
+            "ceiling instead of a guessed value."
+        ),
+    ),
+)
+"""Every warning code this module can emit -- ``capabilities.py``'s
+``warnings[]`` catalogue aggregates one of these tuples per advisor. The
+real, per-occurrence messages (naming the actual partition/GB figures)
+are built at their call sites below; these are the generic descriptions
+of each code, for a caller that has not seen it fire."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +114,7 @@ class JobDecision:
     walltime_h: float
     max_seconds: int
     account: str | None
-    warnings: tuple[str, ...] = ()
+    warnings: tuple[Warning, ...] = ()
 
 
 class JobHumanInput(HumanInput):
@@ -134,7 +177,7 @@ def _pick_partition(
     hpc: HpcProfile,
     human: JobHumanInput,
     llm: JobLlmInput,
-) -> tuple[Partition, list[str]]:
+) -> tuple[Partition, list[Warning]]:
     name = human.partition or llm.partition
     if name is not None:
         return hpc.partition(name), []
@@ -152,14 +195,28 @@ def _pick_partition(
     if bigger:
         chosen = max(bigger, key=lambda p: p.hardware.mem_per_node_gb)
         return chosen, [
-            f"default partition {default.name!r} cannot fit the estimated "
-            f"{needed_gb:.0f} GB even at its node ceiling; using "
-            f"{chosen.name!r} instead."
+            Warning(
+                code="job.partition_upgraded_for_memory",
+                level="info",
+                category="job",
+                message=(
+                    f"default partition {default.name!r} cannot fit the estimated "
+                    f"{needed_gb:.0f} GB even at its node ceiling; using "
+                    f"{chosen.name!r} instead."
+                ),
+            )
         ]
     return default, [
-        f"estimated {needed_gb:.0f} GB does not fit in partition "
-        f"{default.name!r} even at its node ceiling, and profile "
-        f"{hpc.name!r} has no larger-memory partition to fall back to."
+        Warning(
+            code="job.no_larger_partition_available",
+            level="warning",
+            category="job",
+            message=(
+                f"estimated {needed_gb:.0f} GB does not fit in partition "
+                f"{default.name!r} even at its node ceiling, and profile "
+                f"{hpc.name!r} has no larger-memory partition to fall back to."
+            ),
+        )
     ]
 
 
@@ -170,18 +227,29 @@ def _nodes_needed(estimate: ResourceEstimate, hardware: Hardware) -> int:
 
 
 def _pick_walltime(
-    partition: Partition, human: JobHumanInput, llm: JobLlmInput, warnings: list[str]
+    partition: Partition,
+    human: JobHumanInput,
+    llm: JobLlmInput,
+    warnings: list[Warning],
 ) -> float:
     if human.walltime_h is not None:
         return human.walltime_h
     if llm.walltime_h is not None:
         return llm.walltime_h
     warnings.append(
-        f"walltime not specified; requesting partition {partition.name!r}'s "
-        f"ceiling ({partition.hardware.max_walltime_h}h). This slows queueing "
-        "-- schedulers favour short jobs -- but guessing short risks the job "
-        "being killed before it finishes, wasting the entire run. If you "
-        "know roughly how long this will take, set walltime_h explicitly."
+        Warning(
+            code="job.walltime_defaulted",
+            level="warning",
+            category="job",
+            message=(
+                f"walltime not specified; requesting partition {partition.name!r}'s "
+                f"ceiling ({partition.hardware.max_walltime_h}h). This slows "
+                "queueing -- schedulers favour short jobs -- but guessing short "
+                "risks the job being killed before it finishes, wasting the "
+                "entire run. If you know roughly how long this will take, set "
+                "walltime_h explicitly."
+            ),
+        )
     )
     return partition.hardware.max_walltime_h
 

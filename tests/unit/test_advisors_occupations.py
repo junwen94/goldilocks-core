@@ -90,7 +90,8 @@ def test_fixed_occupations_on_a_spin_polarized_system_warns() -> None:
 
     assert state.value.occupations == "fixed"
     assert any(
-        "integer tot_magnetization" in warning for warning in state.value.warnings
+        "integer tot_magnetization" in warning.message
+        for warning in state.value.warnings
     )
 
 

@@ -90,7 +90,13 @@ from pymatgen.core import Structure
 from goldilocks_core.analysis.composition import composition
 from goldilocks_core.analysis.is_magnetic import Magnetism
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
-from goldilocks_core.resolution import Blocked, FieldState, Provenance, Resolved
+from goldilocks_core.resolution import (
+    Blocked,
+    FieldState,
+    Provenance,
+    Resolved,
+    Warning,
+)
 
 DEFAULT_MAGNETIZATION_FRACTION = 0.1
 """aiida-quantumespresso's own flat default for elements with no specific
@@ -152,6 +158,30 @@ target and falls back to `DEFAULT_MAGNETIZATION_FRACTION`; notably this
 includes Cu/Zn (filled or near-filled d-shell as a neutral element) despite
 both being `is_transition_metal` in `analysis/composition.py`."""
 
+WARNING_CATALOGUE = (
+    Warning(
+        code="magnetic.soc_suggested",
+        level="info",
+        category="magnetic",
+        message=(
+            "heavy, non-s-block elements are present; consider enabling "
+            "spin_orbit_coupling (not enabled automatically -- it changes "
+            "cost and setup)."
+        ),
+    ),
+    Warning(
+        code="magnetic.metallicity_unknown_defaulted_non_magnetic",
+        level="warning",
+        category="magnetic",
+        message="magnetism could not be determined; defaulted to non-magnetic.",
+    ),
+)
+"""Every warning code this module can emit -- ``capabilities.py``'s
+``warnings[]`` catalogue aggregates one of these tuples per advisor. The
+real, per-occurrence message for the second code names the actual
+reason (built at its call site in ``_resolve_spin_polarized`` below);
+this is the generic description, for a caller that has not seen it fire."""
+
 
 @dataclass(frozen=True, slots=True)
 class MagneticConfigFacts:
@@ -163,7 +193,7 @@ class MagneticConfigFacts:
     spin_orbit_enabled: bool
     angle1: dict[str, float] | None
     angle2: dict[str, float] | None
-    warnings: tuple[str, ...] = ()
+    warnings: tuple[Warning, ...] = ()
 
 
 class MagneticConfigHumanInput(HumanInput):
@@ -217,9 +247,16 @@ def magnetic_config(
     if not spin_orbit_enabled and needs_soc_resolved_true:
         warnings = (
             *warnings,
-            "heavy, non-s-block elements are present; consider enabling "
-            "spin_orbit_coupling (not enabled automatically -- it changes "
-            "cost and setup).",
+            Warning(
+                code="magnetic.soc_suggested",
+                level="info",
+                category="magnetic",
+                message=(
+                    "heavy, non-s-block elements are present; consider enabling "
+                    "spin_orbit_coupling (not enabled automatically -- it changes "
+                    "cost and setup)."
+                ),
+            ),
         )
 
     angle1 = angle2 = None
@@ -245,7 +282,7 @@ def _resolve_spin_polarized(
     is_magnetic: FieldState[Magnetism],
     human: MagneticConfigHumanInput,
     llm: MagneticConfigLlmInput,
-) -> tuple[bool, str, tuple[str, ...]]:
+) -> tuple[bool, str, tuple[Warning, ...]]:
     if human.spin_polarized is not None:
         return human.spin_polarized, "human", ()
     ml_value: bool | None = None  # no ml model wired yet; stubbed until epic 11
@@ -259,8 +296,15 @@ def _resolve_spin_polarized(
         False,
         "heuristic",
         (
-            f"magnetism could not be determined ({is_magnetic.reason}); "
-            "defaulted to non-magnetic.",
+            Warning(
+                code="magnetic.metallicity_unknown_defaulted_non_magnetic",
+                level="warning",
+                category="magnetic",
+                message=(
+                    f"magnetism could not be determined ({is_magnetic.reason}); "
+                    "defaulted to non-magnetic."
+                ),
+            ),
         ),
     )
 

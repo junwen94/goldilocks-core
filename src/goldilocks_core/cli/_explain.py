@@ -44,7 +44,16 @@ def run(args: argparse.Namespace) -> None:
     )
     records = advice.records()
     if args.json:
-        print(json.dumps(records_to_json(records), indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "records": records_to_json(records),
+                    "warnings": advice.warnings(),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return
     for name, state in sorted(records.items()):
         print(f"{name}: {format_field_state(state)}")

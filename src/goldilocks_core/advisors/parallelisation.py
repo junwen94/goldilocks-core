@@ -59,7 +59,39 @@ from dataclasses import dataclass
 
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.inputs.overrides import HumanInput
-from goldilocks_core.resolution import FieldState, Provenance, Resolved
+from goldilocks_core.resolution import FieldState, Provenance, Resolved, Warning
+
+WARNING_CATALOGUE = (
+    Warning(
+        code="parallelisation.npool_does_not_divide_ntasks",
+        level="warning",
+        category="parallelisation",
+        message="npool does not divide ntasks; QE will refuse this layout.",
+    ),
+    Warning(
+        code="parallelisation.npool_exceeds_kpoints",
+        level="warning",
+        category="parallelisation",
+        message=(
+            "npool exceeds the number of reduced k-points; at least one pool "
+            "will have no k-point to work on."
+        ),
+    ),
+    Warning(
+        code="parallelisation.npool_load_imbalance",
+        level="info",
+        category="parallelisation",
+        message=(
+            "npool divides ntasks but not the number of reduced k-points "
+            "evenly; some pools will handle one more k-point than others."
+        ),
+    ),
+)
+"""Every warning code this module can emit -- ``capabilities.py``'s
+``warnings[]`` catalogue aggregates one of these tuples per advisor. The
+real, per-occurrence messages (naming the actual npool/ntasks/k-point
+figures) are built at their call sites below; these are the generic
+descriptions of each code, for a caller that has not seen it fire."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +99,7 @@ class ParallelisationDecision:
     npool: int
     ndiag: int | None
     nimage: int | None = None
-    warnings: tuple[str, ...] = ()
+    warnings: tuple[Warning, ...] = ()
 
 
 class ParallelisationHumanInput(HumanInput):
@@ -85,16 +117,31 @@ def parallelisation(
 
     if human.npool is not None:
         npool = human.npool
-        warnings: list[str] = []
+        warnings: list[Warning] = []
         if job.ntasks % npool != 0:
             warnings.append(
-                f"npool={npool} does not divide ntasks={job.ntasks}; QE will "
-                "refuse this layout."
+                Warning(
+                    code="parallelisation.npool_does_not_divide_ntasks",
+                    level="warning",
+                    category="parallelisation",
+                    message=(
+                        f"npool={npool} does not divide ntasks={job.ntasks}; QE "
+                        "will refuse this layout."
+                    ),
+                )
             )
         if n_irr_k is not None and npool > n_irr_k:
             warnings.append(
-                f"npool={npool} exceeds n_reduced_kpoints={n_irr_k}; at least "
-                f"{npool - n_irr_k} pool(s) will have no k-point to work on."
+                Warning(
+                    code="parallelisation.npool_exceeds_kpoints",
+                    level="warning",
+                    category="parallelisation",
+                    message=(
+                        f"npool={npool} exceeds n_reduced_kpoints={n_irr_k}; at "
+                        f"least {npool - n_irr_k} pool(s) will have no k-point "
+                        "to work on."
+                    ),
+                )
             )
         source = "human"
     else:
@@ -115,7 +162,7 @@ def parallelisation(
     return Resolved(decision, Provenance(source=source))
 
 
-def _best_npool(ntasks: int, n_irr_k: int | None) -> tuple[int, list[str]]:
+def _best_npool(ntasks: int, n_irr_k: int | None) -> tuple[int, list[Warning]]:
     """The largest divisor of ``ntasks`` that does not exceed ``n_irr_k`` --
     capping at ``n_irr_k`` is what prevents an idle pool (one with zero
     k-points to work on) outright; preferring the largest such divisor
@@ -133,8 +180,16 @@ def _best_npool(ntasks: int, n_irr_k: int | None) -> tuple[int, list[str]]:
     if n_irr_k % chosen == 0:
         return chosen, []
     return chosen, [
-        f"npool={chosen} divides ntasks but not n_reduced_kpoints ({n_irr_k}) "
-        "evenly; some pools will handle one more k-point than others."
+        Warning(
+            code="parallelisation.npool_load_imbalance",
+            level="info",
+            category="parallelisation",
+            message=(
+                f"npool={chosen} divides ntasks but not n_reduced_kpoints "
+                f"({n_irr_k}) evenly; some pools will handle one more "
+                "k-point than others."
+            ),
+        )
     ]
 
 

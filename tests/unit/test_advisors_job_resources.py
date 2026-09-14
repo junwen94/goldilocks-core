@@ -56,7 +56,7 @@ def test_walltime_defaults_to_the_partitions_ceiling_with_a_warning() -> None:
     state = job_resources(_SMALL_ESTIMATE, _profile())
 
     assert state.value.walltime_h == 168
-    assert any("not specified" in warning for warning in state.value.warnings)
+    assert any("not specified" in warning.message for warning in state.value.warnings)
     assert state.value.max_seconds == int(168 * 3600 * 0.95)
 
 
@@ -74,7 +74,7 @@ def test_huge_job_falls_back_to_a_bigger_memory_partition_when_one_exists() -> N
     state = job_resources(_HUGE_ESTIMATE, _profile(with_bigmem=True))
 
     assert state.value.partition == "bigmem"
-    assert any("using" in warning for warning in state.value.warnings)
+    assert any("using" in warning.message for warning in state.value.warnings)
 
 
 def test_huge_job_warns_but_does_not_crash_when_no_bigger_partition_exists() -> None:
@@ -82,7 +82,7 @@ def test_huge_job_warns_but_does_not_crash_when_no_bigger_partition_exists() -> 
 
     assert state.ok
     assert state.value.partition == "scarf"
-    assert any("does not fit" in warning for warning in state.value.warnings)
+    assert any("does not fit" in warning.message for warning in state.value.warnings)
 
 
 def test_human_can_force_a_specific_partition() -> None:

@@ -81,13 +81,23 @@ class TestTopLevelShape:
         anywhere in this tree would blow up json.dumps."""
         json.dumps(capabilities())
 
-    def test_models_and_warnings_are_honestly_empty(self) -> None:
-        """No ml integration exists yet (epic 11) and no advisor emits a
-        structured resolution.Warning yet -- both must stay empty, not
+    def test_models_is_honestly_empty(self) -> None:
+        """No ml integration exists yet (epic 11) -- must stay empty, not
         fabricated, per this module's own docstring."""
+        assert capabilities()["models"] == []
+
+    def test_warnings_catalogue_is_populated_from_every_advisor(self) -> None:
         caps = capabilities()
-        assert caps["models"] == []
-        assert caps["warnings"] == []
+
+        assert caps["warnings"]
+        for entry in caps["warnings"]:
+            assert entry.keys() == {"code", "level", "category", "message"}
+            assert entry["level"] in {"info", "warning", "error"}
+
+    def test_warnings_catalogue_codes_are_unique(self) -> None:
+        codes = [entry["code"] for entry in capabilities()["warnings"]]
+
+        assert len(codes) == len(set(codes))
 
     def test_codes_and_tasks_reflect_only_what_actually_runs(self) -> None:
         caps = capabilities()

@@ -35,7 +35,10 @@ class TestExplain:
         assert result["records"]["functional"]["value"] == "PBEsol"
         assert result["records"]["functional"]["status"] == "resolved"
         assert isinstance(result["warnings"], list)
-        assert all(isinstance(message, str) for message in result["warnings"])
+        assert all(
+            warning.keys() == {"code", "level", "category", "message"}
+            for warning in result["warnings"]
+        )
 
     def test_never_raises_for_a_scientifically_incomplete_request(
         self, real_assets, silicon_cif

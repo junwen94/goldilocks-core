@@ -47,15 +47,33 @@ from goldilocks_core.resolution import (
     FieldState,
     Provenance,
     Resolved,
+    Warning,
     blocked_by,
 )
+
+WARNING_CATALOGUE = (
+    Warning(
+        code="cutoffs.ecutrho_derived_from_dual",
+        level="info",
+        category="cutoffs",
+        message=(
+            "ecutrho derived as charge_density_dual x ecutwfc for one or more "
+            "elements (no explicit value published for that pseudopotential)."
+        ),
+    ),
+)
+"""Every warning code this module can emit -- ``capabilities.py``'s
+``warnings[]`` catalogue aggregates one of these tuples per advisor. The
+real, per-occurrence message (naming the actual element and dual) is
+built at the call site in ``_aggregate`` below; this entry is the
+generic description of the code, for a caller that has not seen it fire."""
 
 
 @dataclass(frozen=True, slots=True)
 class CutoffsDecision:
     ecutwfc_ry: float
     ecutrho_ry: float
-    warnings: tuple[str, ...] = ()
+    warnings: tuple[Warning, ...] = ()
 
 
 class CutoffsHumanInput(HumanInput):
@@ -98,11 +116,11 @@ def cutoffs(
 
 def _aggregate(
     pseudos: tuple[PseudoMetadata, ...], table: FieldState[PseudoTable] | None
-) -> tuple[float, float, tuple[str, ...]] | Blocked:
+) -> tuple[float, float, tuple[Warning, ...]] | Blocked:
     dual = table.value.charge_density_dual if table is not None and table.ok else None
     wfc_values: list[float] = []
     rho_values: list[float] = []
-    warnings: list[str] = []
+    warnings: list[Warning] = []
     for metadata in pseudos:
         wfc = metadata.cutoffs.get("ecutwfc_ry") if metadata.cutoffs else None
         if wfc is None:
@@ -120,8 +138,15 @@ def _aggregate(
                 )
             rho = wfc * dual
             warnings.append(
-                f"{metadata.element}: ecutrho derived as {dual}x ecutwfc "
-                "(no explicit value published)"
+                Warning(
+                    code="cutoffs.ecutrho_derived_from_dual",
+                    level="info",
+                    category="cutoffs",
+                    message=(
+                        f"{metadata.element}: ecutrho derived as {dual}x ecutwfc "
+                        "(no explicit value published)"
+                    ),
+                )
             )
         rho_values.append(rho)
     return max(wfc_values), max(rho_values), tuple(warnings)

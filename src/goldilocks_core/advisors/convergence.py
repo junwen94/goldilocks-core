@@ -60,7 +60,7 @@ from typing import Literal
 
 from goldilocks_core.analysis.geometry import GeometryFacts
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
-from goldilocks_core.resolution import FieldState, Provenance, Resolved
+from goldilocks_core.resolution import FieldState, Provenance, Resolved, Warning
 
 MixingMode = Literal["plain", "local-TF"]
 
@@ -82,7 +82,7 @@ class ConvergenceDecision:
     electron_maxstep: int
     mixing_mode: MixingMode
     mixing_fixed_ns: int | None
-    warnings: tuple[str, ...] = ()
+    warnings: tuple[Warning, ...] = ()
 
 
 class ConvergenceHumanInput(HumanInput):

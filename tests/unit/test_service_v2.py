@@ -173,7 +173,7 @@ class TestAdviseEndToEnd:
         assert (destination / "scf.in").exists()
         assert (destination / "submit.sh").exists()
 
-    def test_warnings_flattens_every_record_s_prose_warnings(
+    def test_warnings_flattens_every_record_s_structured_warnings(
         self, silicon, hpc, installed_table
     ) -> None:
         store, _table = installed_table
@@ -182,7 +182,11 @@ class TestAdviseEndToEnd:
 
         warnings = advice.warnings()
         assert warnings  # scarf's own missing-walltime warning always fires
-        assert all(isinstance(message, str) and ": " in message for message in warnings)
+        assert all(
+            warning.keys() == {"code", "level", "category", "message"}
+            for warning in warnings
+        )
+        assert any(warning["code"] == "job.walltime_defaulted" for warning in warnings)
 
     def test_human_overrides_flow_through_to_generated_input(
         self, silicon, hpc, installed_table

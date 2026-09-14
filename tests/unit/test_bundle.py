@@ -105,6 +105,45 @@ def test_manifest_records_are_tri_state_aware(tmp_path: Path) -> None:
     assert records["vdw"]["blocked_by"] == "geometry blocked upstream"
 
 
+def test_manifest_carries_a_top_level_warnings_array(tmp_path: Path) -> None:
+    """v2 epic 8's "warnings array in every ... response" requirement
+    extends to the published ``goldilocks.json`` manifest, not just
+    HTTP/MCP/CLI transport responses -- flattened from every record's
+    own structured warnings, the same way ``service.Advice.warnings()``
+    does for a live pipeline run."""
+    bundle_input = _bundle_input(
+        records={
+            "functional": Resolved("PBEsol", Provenance(source="human")),
+            "job": Resolved(
+                {
+                    "partition": "scarf",
+                    "warnings": [
+                        {
+                            "code": "job.walltime_defaulted",
+                            "level": "warning",
+                            "category": "job",
+                            "message": "walltime not specified.",
+                        }
+                    ],
+                },
+                Provenance(source="heuristic"),
+            ),
+        }
+    )
+
+    files = {item["path"]: item["content"] for item in bundle_files(bundle_input)}
+    manifest = json.loads(files["goldilocks.json"])
+
+    assert manifest["warnings"] == [
+        {
+            "code": "job.walltime_defaulted",
+            "level": "warning",
+            "category": "job",
+            "message": "walltime not specified.",
+        }
+    ]
+
+
 def test_archive_bytes_match_directory_publication(tmp_path: Path) -> None:
     bundle_input = _bundle_input()
     directory = tmp_path / "dir-out"

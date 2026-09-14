@@ -96,7 +96,10 @@ def test_spin_polarized_system_gets_an_informational_note() -> None:
 
     state = nbnd(16.0, _FIXED, magnetic=magnetic)
 
-    assert any("not the number of bands" in warning for warning in state.value.warnings)
+    assert any(
+        "not the number of bands" in warning.message
+        for warning in state.value.warnings
+    )
 
 
 def test_non_magnetic_system_has_no_spin_note() -> None:

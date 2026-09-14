@@ -60,17 +60,32 @@ from typing import Literal
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.analysis.is_metal import Metallicity
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
-from goldilocks_core.resolution import Blocked, FieldState, Provenance, Resolved
+from goldilocks_core.resolution import (
+    Blocked,
+    FieldState,
+    Provenance,
+    Resolved,
+    Warning,
+)
 
 Occupations = Literal["fixed", "smearing", "tetrahedra_opt"]
 
 _METALLIC_DEGAUSS = 0.01
 """Ry. Matches v1's METALLIC_SMEARING_WIDTH_RY (advice/parameters.py:19)."""
 
-_FIXED_SPIN_POLARIZED_WARNING = (
-    "occupations='fixed' with a spin-polarized system requires an integer "
-    "tot_magnetization -- checks.py enforces this, not this advisor."
+FIXED_SPIN_POLARIZED_WARNING = Warning(
+    code="occupations.fixed_spin_polarized_needs_integer_tot_magnetization",
+    level="warning",
+    category="occupations",
+    message=(
+        "occupations='fixed' with a spin-polarized system requires an integer "
+        "tot_magnetization -- checks.py enforces this, not this advisor."
+    ),
 )
+
+WARNING_CATALOGUE = (FIXED_SPIN_POLARIZED_WARNING,)
+"""Every warning code this module can emit -- ``capabilities.py``'s
+``warnings[]`` catalogue aggregates one of these tuples per advisor."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +93,7 @@ class OccupationsDecision:
     occupations: Occupations
     smearing_type: str | None
     degauss: float | None
-    warnings: tuple[str, ...] = ()
+    warnings: tuple[Warning, ...] = ()
 
 
 class OccupationsHumanInput(HumanInput):
@@ -153,9 +168,9 @@ def _decision_for(
 def _fixed_decision(
     magnetic: FieldState[MagneticConfigFacts] | None,
 ) -> OccupationsDecision:
-    warnings: tuple[str, ...] = ()
+    warnings: tuple[Warning, ...] = ()
     if magnetic is not None and magnetic.ok and magnetic.value.spin_polarized:
-        warnings = (_FIXED_SPIN_POLARIZED_WARNING,)
+        warnings = (FIXED_SPIN_POLARIZED_WARNING,)
     return OccupationsDecision(
         occupations="fixed", smearing_type=None, degauss=None, warnings=warnings
     )
