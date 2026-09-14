@@ -99,11 +99,26 @@ class DosAdvice:
 
 
 def _nscf_overrides(overrides: RunOverrides) -> RunOverrides:
-    kpoints = dataclasses.replace(
-        overrides.step.kpoints,
-        occupations=OccupationsHumanInput(occupations="tetrahedra_opt"),
-        k_sampling=KSamplingHumanInput(k_distance=_NSCF_K_DISTANCE),
-    )
+    """Applies the aiida nscf protocol defaults only where the caller
+    didn't already give an explicit occupations/k-sampling override
+    (#33, v2 epic 9, #9) -- this used to replace both fields
+    unconditionally, so a flat ``--set k_grid=...``/``--set
+    occupations=...`` (there is no way to scope one to just the nscf
+    step yet, see ``set_overrides.py``'s own docstring) was silently
+    discarded for the nscf step specifically, even though the exact
+    same flat override correctly reached the scf step. A caller's own
+    explicit choice now applies to both steps, same as every other
+    flat per-step override in this codebase, rather than being
+    overwritten for one of them."""
+    kpoints = overrides.step.kpoints
+    if kpoints.occupations is None:
+        kpoints = dataclasses.replace(
+            kpoints, occupations=OccupationsHumanInput(occupations="tetrahedra_opt")
+        )
+    if kpoints.k_sampling is None:
+        kpoints = dataclasses.replace(
+            kpoints, k_sampling=KSamplingHumanInput(k_distance=_NSCF_K_DISTANCE)
+        )
     return dataclasses.replace(
         overrides, step=dataclasses.replace(overrides.step, kpoints=kpoints)
     )

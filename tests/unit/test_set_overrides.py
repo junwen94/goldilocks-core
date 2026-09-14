@@ -51,8 +51,19 @@ class TestParseSetFlags:
         assert result == {"k_distance": "0.12"}
 
     def test_steps_prefix_rejects_an_unknown_step(self) -> None:
-        with pytest.raises(InvalidSetting, match="unknown step 'nscf'"):
-            parse_set_flags(["steps.nscf.k_distance=0.12"])
+        with pytest.raises(InvalidSetting, match="unknown step 'bands'"):
+            parse_set_flags(["steps.bands.k_distance=0.12"])
+
+    def test_steps_nscf_prefix_is_accepted_now_that_dos_has_a_real_nscf_step(
+        self,
+    ) -> None:
+        """Regression for #33 (v2 epic 9, #9): nscf used to be rejected
+        as an unknown step even though dos.x's task genuinely has one --
+        still not scoped to just that step (see set_overrides.py's own
+        docstring), but no longer an outright rejection."""
+        result = parse_set_flags(["steps.nscf.k_distance=0.12"])
+
+        assert result == {"k_distance": "0.12"}
 
     def test_steps_prefix_rejects_a_malformed_path(self) -> None:
         with pytest.raises(InvalidSetting, match="malformed"):
