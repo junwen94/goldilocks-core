@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from pymatgen.core import Lattice, Structure
 
+from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 from goldilocks_core.assets.records import AssetFile, AssetSpec
@@ -248,6 +249,8 @@ class TestAdviseDegradation:
 
         assert isinstance(advice.system.pseudo.table, Unavailable)
         assert isinstance(advice.system.pseudo.metadata, Blocked)
+        assert isinstance(advice.system.pseudo.relativistic, Blocked)
+        assert isinstance(advice.system.magnetic, Blocked)
         assert isinstance(advice.system.cutoffs, Blocked)
         assert isinstance(advice.system.electron_count, Blocked)
         assert isinstance(advice.step.kpoints.nbnd, Blocked)
@@ -258,6 +261,35 @@ class TestAdviseDegradation:
         # metal -- so it is not asserted here; see is_metal.py's own
         # docstring on why composition alone never confirms "non_metal".)
         assert advice.analysis.composition.ok
+        assert advice.system.functional.ok
+        assert advice.step.kpoints.k_sampling.ok
+
+    def test_soc_on_a_lanthanide_blocks_the_whole_relativistic_chain(
+        self, hpc
+    ) -> None:
+        """v2 epic 9 (#9)'s "SOC on Ce" acceptance scenario: SSSP is the
+        only table lanthanides are allowed to use (``requires_sssp``), but
+        no SSSP table is fully relativistic -- so requesting spin-orbit
+        coupling on a lanthanide can never be satisfied by any table in
+        the registry, real or synthetic, no asset store needed to prove
+        it (table *selection* fails before any file is ever touched)."""
+        cerium = Structure(Lattice.cubic(5.16), ["Ce"], [[0.0, 0.0, 0.0]])
+        overrides = RunOverrides(
+            system=SystemOverrides(
+                magnetic=MagneticConfigHumanInput(spin_orbit_coupling=True)
+            )
+        )
+
+        advice = advise(cerium, hpc=hpc, overrides=overrides)
+
+        assert isinstance(advice.system.pseudo.table, Unavailable)
+        assert "Ce" in advice.system.pseudo.table.reason
+        assert isinstance(advice.system.pseudo.metadata, Blocked)
+        assert isinstance(advice.system.pseudo.relativistic, Blocked)
+        assert isinstance(advice.system.magnetic, Blocked)
+        assert isinstance(advice.system.cutoffs, Blocked)
+        # Genuinely unrelated decisions -- never fed pseudo/magnetic data
+        # at all -- still resolve normally.
         assert advice.system.functional.ok
         assert advice.step.kpoints.k_sampling.ok
         assert advice.step.kpoints.occupations.ok
@@ -324,6 +356,14 @@ class TestAdviseDegradation:
         assert isinstance(advice.system.pseudo.metadata, Unavailable)
         assert "not installed" in advice.system.pseudo.metadata.reason
         assert isinstance(advice.system.cutoffs, Blocked)
+        # A table *was* selected (only the asset isn't downloaded yet) --
+        # ``relativistic`` is already confirmed, and magnetic still falls
+        # back to its pre-pseudo provisional guess rather than blocking:
+        # this is an ordinary preview-without-download run, not a chain
+        # failure (contrast the SOC-on-a-lanthanide test above, where no
+        # table can ever be selected at all).
+        assert advice.system.pseudo.relativistic.ok
+        assert advice.system.magnetic.ok
 
     def test_fetch_missing_true_installs_then_succeeds(
         self, silicon, hpc, tmp_path, monkeypatch

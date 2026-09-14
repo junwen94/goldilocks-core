@@ -14,10 +14,20 @@ not derived or guessed): for an insulator, ``nbnd = nelec / 2`` (the
 number of valence bands); for a metal, 20% more, with a floor of at
 least 4 more than the insulator count -- i.e.
 ``max(1.2 * nelec/2, nelec/2 + 4)``, rounded up. QE's own docs also note
-explicitly that in a spin-polarized calculation it is the number of
-*k-points* that doubles internally, not the number of bands -- ``nbnd``
-itself is not doubled for ``nspin=2``, and this module does not double
-it either.
+explicitly that in a spin-polarized (``nspin=2``) calculation it is the
+number of *k-points* that doubles internally, not the number of bands --
+``nbnd`` itself is not doubled for ``nspin=2``, and this module does not
+double it either.
+
+**Noncollinear (``noncolin``/SOC) calculations are the one case that
+*does* need doubled ``nbnd`` (v2 epic 9, #9)**: QE's own ``nbnd`` default
+note draws this distinction explicitly -- a noncollinear band holds one
+electron (a two-component spinor), not two, so the same nominal filling
+needs ``nbnd = nelec`` (not ``nelec / 2``) before the metal/insulator
+padding above is even applied. This is a different mechanism from the
+``nspin=2`` note above (that one is about k-point handling, not band
+count) and fires only when ``magnetic.spin_orbit_enabled`` is set --
+plain spin-polarized (``nspin=2``, no SOC) still does not double.
 
 **Uses ``occupations`` (not ``is_metal``) to decide the metal branch.**
 ``advisors/occupations.py`` has already turned ``is_metal`` (plus any
@@ -81,7 +91,18 @@ SPIN_NOTE = Warning(
     ),
 )
 
-WARNING_CATALOGUE = (SPIN_NOTE,)
+NONCOLLINEAR_NOTE = Warning(
+    code="nbnd.noncollinear_bands_doubled",
+    level="info",
+    category="nbnd",
+    message=(
+        "noncollinear/spin-orbit bands hold one electron each, not two, "
+        "so nbnd here is based on the full electron count rather than "
+        "half of it -- roughly double a comparable non-magnetic run."
+    ),
+)
+
+WARNING_CATALOGUE = (SPIN_NOTE, NONCOLLINEAR_NOTE)
 """Every warning code this module can emit -- ``capabilities.py``'s
 ``warnings[]`` catalogue aggregates one of these tuples per advisor."""
 
@@ -121,7 +142,10 @@ def nbnd(
         return Blocked(by=blocked_by(occupations))
 
     is_metal_like = occupations.value.occupations in _METAL_LIKE_OCCUPATIONS
-    base = _formula(nelec, is_metal_like)
+    noncollinear = (
+        magnetic is not None and magnetic.ok and magnetic.value.spin_orbit_enabled
+    )
+    base = _formula(nelec, is_metal_like, noncollinear)
 
     if human.extra_bands is not None:
         extra, source = human.extra_bands, "human"
@@ -135,14 +159,18 @@ def nbnd(
     return Resolved(decision, Provenance(source=source))
 
 
-def _formula(nelec: float, is_metal_like: bool) -> int:
-    valence_bands = nelec / 2
+def _formula(nelec: float, is_metal_like: bool, noncollinear: bool) -> int:
+    valence_bands = nelec if noncollinear else nelec / 2
     if not is_metal_like:
         return max(1, math.ceil(valence_bands))
     return max(1, math.ceil(max(valence_bands * 1.2, valence_bands + 4)))
 
 
 def _spin_note(magnetic: FieldState[MagneticConfigFacts] | None) -> tuple[Warning, ...]:
-    if magnetic is not None and magnetic.ok and magnetic.value.spin_polarized:
+    if magnetic is None or not magnetic.ok:
+        return ()
+    if magnetic.value.spin_orbit_enabled:
+        return (NONCOLLINEAR_NOTE,)
+    if magnetic.value.spin_polarized:
         return (SPIN_NOTE,)
     return ()

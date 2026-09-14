@@ -251,6 +251,16 @@ def test_spin_orbit_magnetic_emits_noncolin_lspinorb_and_angles(
     assert "angle1(1)" in content
     assert "angle2(1)" in content
     assert "nspin" not in content
+    # QE 7.3 hard-rejects the Gamma-only *algorithm* (real-valued
+    # wavefunctions) together with noncolin (PW/src/setup.f90) -- sampling
+    # at Gamma is fine, but it must never be spelled as the special
+    # "K_POINTS gamma" card, only "K_POINTS automatic" with an explicit
+    # 1 1 1 grid (v2 epic 9, #9; goldilocks-core-design.md's own 2026-09-09
+    # correction on this exact point). v2 never emits the "gamma" card at
+    # all, under any settings -- this pins that invariant specifically for
+    # the one combination QE would otherwise refuse to run.
+    assert "K_POINTS automatic" in content
+    assert "K_POINTS gamma" not in content
 
 
 def test_vdw_method_translates_to_qe_keyword(

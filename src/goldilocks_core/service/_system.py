@@ -63,6 +63,7 @@ class SystemAdvice:
             self.functional,
             self.pseudo.table,
             self.pseudo.metadata,
+            self.pseudo.relativistic,
             self.cutoffs,
             self.electron_count,
             self.vdw,
@@ -75,6 +76,7 @@ class SystemAdvice:
             "functional": self.functional,
             "pseudo_table": self.pseudo.table,
             "pseudopotentials": self.pseudo.metadata,
+            "relativistic": self.pseudo.relativistic,
             "magnetic": self.magnetic,
             "cutoffs": self.cutoffs,
             "electron_count": self.electron_count,
@@ -115,7 +117,11 @@ def system_advice(
         )
     else:
         cause = blocked_by(magnetic_provisional)
-        pseudo = PseudoAdvice(table=Blocked(by=cause), metadata=Blocked(by=cause))
+        pseudo = PseudoAdvice(
+            table=Blocked(by=cause),
+            metadata=Blocked(by=cause),
+            relativistic=Blocked(by=cause),
+        )
 
     if pseudo.metadata.ok:
         z_valences = {
@@ -131,6 +137,17 @@ def system_advice(
             overrides.magnetic,
             overrides.magnetic_llm,
         )
+    elif isinstance(pseudo.metadata, Blocked):
+        # A genuine chain failure (no compatible pseudopotential table
+        # exists at all -- e.g. SOC on a lanthanide forced onto SSSP,
+        # which has no fully-relativistic table, v2 epic 9's #9 SOC-on-Ce
+        # acceptance scenario) must propagate, not silently keep serving
+        # the pre-pseudo provisional guess as if it were still good.
+        # ``Unavailable`` (the asset merely isn't installed yet -- a
+        # normal preview-without-download run) is not this: that case
+        # still falls through to the provisional guess below, same as
+        # it always has.
+        magnetic_state = Blocked(by=pseudo.metadata)
     else:
         magnetic_state = magnetic_provisional
 

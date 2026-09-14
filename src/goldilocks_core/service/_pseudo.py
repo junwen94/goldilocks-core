@@ -36,7 +36,15 @@ from goldilocks_core.assets.pseudopotentials.registry import PseudoTable, load_t
 from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.assets.runtime import install as install_assets
 from goldilocks_core.assets.store import AssetNotInstalled, AssetStore
-from goldilocks_core.resolution import Blocked, FieldState, Unavailable, blocked_by
+from goldilocks_core.resolution import (
+    Blocked,
+    FieldState,
+    Provenance,
+    Resolved,
+    Unavailable,
+    blocked_by,
+)
+from goldilocks_core.types import RelativisticTreatment
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,10 +57,18 @@ class PseudoAdvice:
     back to their true origin, so ``_system.py`` would still be charged
     for these types even importing them indirectly; composing them into
     one record defined and consumed from here is what actually keeps
-    them off ``_system.py``'s ledger."""
+    them off ``_system.py``'s ledger.
+
+    ``relativistic`` is the *confirmed* treatment -- backed by an actual
+    selected table, not merely the requested one -- so it ``Blocked``s
+    exactly when ``table`` itself could not be selected at all (v2 epic
+    9, #9: the SOC-on-Ce acceptance scenario needs this as its own named,
+    independently-checkable field, not only buried inside ``table``'s own
+    ``.value.relativistic``, which is unreadable once ``table`` blocks)."""
 
     table: FieldState[PseudoTable]
     metadata: FieldState[tuple[PseudoMetadata, ...]]
+    relativistic: FieldState[RelativisticTreatment]
 
 
 def resolve_pseudopotentials(
@@ -78,9 +94,15 @@ def resolve_pseudopotentials(
         load_tables(), table_id=table_id, elements=elements, requirements=requirements
     )
     if not table_state.ok:
-        return PseudoAdvice(
-            table=table_state, metadata=Blocked(by=blocked_by(table_state))
-        )
+        cause = Blocked(by=blocked_by(table_state))
+        return PseudoAdvice(table=table_state, metadata=cause, relativistic=cause)
+
+    # A table was actually selected, so the relativistic treatment it
+    # implies is confirmed, not merely requested -- true regardless of
+    # whether the asset itself is installed yet below.
+    relativistic_state: FieldState[RelativisticTreatment] = Resolved(
+        requirements.relativistic, Provenance(source="heuristic")
+    )
 
     table = table_state.value
     active_store = store or AssetStore()
@@ -97,6 +119,7 @@ def resolve_pseudopotentials(
                         "with fetch_missing"
                     )
                 ),
+                relativistic=relativistic_state,
             )
         install_assets(table.asset.id, store=active_store)
         try:
@@ -110,10 +133,12 @@ def resolve_pseudopotentials(
                         f"installed after fetching: {error}"
                     )
                 ),
+                relativistic=relativistic_state,
             )
 
     full_metadata = load_installed_table(installed, table=table)
     return PseudoAdvice(
         table=table_state,
         metadata=select_metadata_for_elements(full_metadata, elements),
+        relativistic=relativistic_state,
     )
