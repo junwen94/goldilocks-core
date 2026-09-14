@@ -1,124 +1,104 @@
 import { MantineProvider } from "@mantine/core";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
-import { computationResult } from "../support/workbenchFixtures";
+import type { ResolvedField } from "../../src/api/coreClient";
+import { buildArchive } from "../support/workbenchFixtures";
 import { GeneratedInputReview } from "../../src/review/GeneratedInputReview";
-import { PseudopotentialReview } from "../../src/review/PseudopotentialReview";
 import { ScientificRecord } from "../../src/review/ScientificRecord";
 
-describe("scientific record presentation", () => {
-  it("keeps sampling shifts, override provenance, and warnings readable", () => {
-    render(
-      <ScientificRecord
-        name="k_points"
-        result={{
-          ...computationResult,
-          records: {
-            k_points: {
-              grid: [4, 6, 8],
-              shift: [1, 0, 1],
-              mesh_type: "monkhorst-pack",
-              provenance: {
-                source: "user_hint",
-                reason: "Explicit grid supplied by the user.",
-                confidence: null,
-                data_source: null,
-                details: { internal: { grid: [4, 6, 8] } },
-                warnings: ["Check convergence for this mesh."],
-              },
-            },
+describe("ScientificRecord", () => {
+  it("renders an unavailable field's reason", () => {
+    const field: ResolvedField = {
+      status: "unavailable",
+      reason: "No pseudopotential table matches this structure.",
+    };
+    render(<ScientificRecord field={field} />, { wrapper: MantineProvider });
+
+    expect(
+      screen.getByText(/No pseudopotential table matches this structure\./),
+    ).toBeInTheDocument();
+  });
+
+  it("renders a blocked field's upstream cause", () => {
+    const field: ResolvedField = {
+      status: "blocked",
+      blocked_by: "pseudo_table",
+    };
+    render(<ScientificRecord field={field} />, { wrapper: MantineProvider });
+
+    expect(screen.getByText(/pseudo_table/)).toBeInTheDocument();
+  });
+
+  it("renders a resolved field's source, nested value, and per-field sources", () => {
+    const field: ResolvedField = {
+      status: "resolved",
+      value: { grid: [4, 6, 8], shift: [1, 0, 1], mesh_type: "monkhorst-pack" },
+      source: "human",
+      field_sources: { grid: "human", shift: "heuristic" },
+    };
+    render(<ScientificRecord field={field} />, { wrapper: MantineProvider });
+
+    expect(screen.getAllByText("Your override").length).toBeGreaterThan(0);
+    expect(screen.getByText("4, 6, 8")).toBeInTheDocument();
+    expect(screen.getByText("monkhorst-pack")).toBeInTheDocument();
+    expect(screen.getByText("Per-field sources")).toBeInTheDocument();
+    expect(screen.getByText("Heuristic default")).toBeInTheDocument();
+  });
+
+  it("renders a record's own nested warnings inline", () => {
+    const field: ResolvedField = {
+      status: "resolved",
+      value: {
+        grid: [4, 6, 8],
+        warnings: [
+          {
+            code: "kmesh.dense",
+            level: "warning",
+            category: "kmesh",
+            message: "Check convergence for this mesh.",
           },
-        }}
-      />,
-      { wrapper: MantineProvider },
-    );
-    expect(screen.getByText("4 × 6 × 8")).toBeInTheDocument();
-    expect(screen.getByText("1 0 1")).toBeInTheDocument();
-    expect(
-      screen.getByText("Half-grid shift on flagged axes"),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(/includes Γ/)).not.toBeInTheDocument();
-    expect(screen.getByText("Your override")).toBeInTheDocument();
-    expect(
-      screen.getByText("Explicit grid supplied by the user."),
-    ).toBeInTheDocument();
+        ],
+      },
+      source: "heuristic",
+    };
+    render(<ScientificRecord field={field} />, { wrapper: MantineProvider });
+
     expect(
       screen.getByText("Check convergence for this mesh."),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/internal/)).not.toBeInTheDocument();
+  });
+});
+
+describe("GeneratedInputReview", () => {
+  it("shows a placeholder before any archive has been generated", () => {
+    render(<GeneratedInputReview archive={null} />, {
+      wrapper: MantineProvider,
+    });
+
+    expect(
+      screen.getByText(/Generate input files to preview them here/),
+    ).toBeInTheDocument();
   });
 
-  it("shows publication digests and byte sizes from the archive manifest", () => {
-    render(
-      <>
-        <ScientificRecord name="dft_input_data" result={computationResult} />
-        <GeneratedInputReview result={computationResult} />
-        <PseudopotentialReview result={computationResult} />
-      </>,
-      { wrapper: MantineProvider },
-    );
+  it("unzips a real archive and previews each file with its manifest digest", async () => {
+    const user = userEvent.setup();
+    const archive = buildArchive();
+    render(<GeneratedInputReview archive={archive} />, {
+      wrapper: MantineProvider,
+    });
 
+    // Files list alphabetically (goldilocks.json, scf.in,
+    // pseudo/Si.upf) -- the manifest itself is the default active tab.
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "scf.in" })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: "scf.in" }));
+
+    expect(
+      screen.getByRole("region", { name: "Generated input scf.in" }),
+    ).toHaveTextContent("&CONTROL");
     expect(screen.getByText("cccccccccc")).toBeInTheDocument();
-    expect(screen.getByText("dddddddd")).toHaveAttribute(
-      "title",
-      "d".repeat(64),
-    );
-    expect(
-      screen.getByText("inputs/qe.in · input · 11 bytes"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("pseudo/Si.upf · pseudopotential · 128 bytes"),
-    ).toBeInTheDocument();
   });
-
-  it.each([
-    { name: "missing", manifest: {} },
-    {
-      name: "malformed",
-      manifest: {
-        files: {
-          "inputs/qe.in": null,
-          "pseudo/Si.upf": { sha256: 42, size_bytes: "128" },
-        },
-      },
-    },
-  ])(
-    "keeps file review usable with $name manifest metadata",
-    ({ manifest }) => {
-      const inputData = computationResult.records.dft_input_data;
-      if (inputData === undefined)
-        throw new Error("Missing input data fixture");
-      const result = {
-        ...computationResult,
-        records: {
-          ...computationResult.records,
-          dft_input_data: {
-            ...inputData,
-            manifest: { ...inputData.manifest, files: manifest.files },
-          },
-        },
-      };
-      render(
-        <>
-          <ScientificRecord name="dft_input_data" result={result} />
-          <GeneratedInputReview result={result} />
-          <PseudopotentialReview result={result} />
-        </>,
-        { wrapper: MantineProvider },
-      );
-
-      expect(screen.getByText("inputs/qe.in · input")).toBeInTheDocument();
-      expect(
-        screen.getByText("pseudo/Si.upf · pseudopotential"),
-      ).toBeInTheDocument();
-      expect(
-        screen.getByRole("region", { name: "Generated input inputs/qe.in" }),
-      ).toHaveTextContent("&CONTROL /");
-      expect(screen.getByText("Si.upf")).toBeInTheDocument();
-      expect(screen.queryByText("cccccccccc")).not.toBeInTheDocument();
-      expect(screen.queryByText("dddddddd")).not.toBeInTheDocument();
-      expect(screen.queryByText(/bytes/)).not.toBeInTheDocument();
-    },
-  );
 });

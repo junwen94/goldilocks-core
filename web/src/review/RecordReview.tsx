@@ -1,39 +1,62 @@
-import { Accordion, Code, Group, Stack, Text, Title } from "@mantine/core";
+import {
+  Accordion,
+  Badge,
+  Code,
+  Group,
+  Stack,
+  Text,
+  Title,
+} from "@mantine/core";
 
-import type { ComputationResult } from "../api/coreClient";
+import type { ResolvedField } from "../api/coreClient";
 import { ScientificRecord } from "./ScientificRecord";
 
+const STATUS_COLORS: Record<ResolvedField["status"], string> = {
+  resolved: "green",
+  unavailable: "yellow",
+  blocked: "red",
+};
+
 export function RecordReview({
-  result,
+  records,
 }: {
-  readonly result: ComputationResult;
+  readonly records: Readonly<Record<string, ResolvedField>>;
 }) {
-  const records = Object.keys(result.records);
+  const names = Object.keys(records).sort();
   return (
     <Stack component="section" gap="xs" miw={0}>
       <Group component="header" justify="space-between">
         <Title order={3}>Scientific records</Title>
         <Text size="sm" c="dimmed">
-          {records.length} records
+          {names.length} records
         </Text>
       </Group>
       <Accordion multiple order={4}>
-        {records.map((name) => (
-          <Accordion.Item key={name} value={name} className="record-card">
-            <Accordion.Control>
-              <Group justify="space-between">
-                <span>{readableName(name)}</span>
-                <Code>{name}</Code>
-              </Group>
-            </Accordion.Control>
-            <Accordion.Panel>
-              <ScientificRecord
-                name={name as keyof ComputationResult["records"]}
-                result={result}
-              />
-            </Accordion.Panel>
-          </Accordion.Item>
-        ))}
+        {names.map((name) => {
+          const field = records[name];
+          if (field === undefined) return null;
+          return (
+            <Accordion.Item key={name} value={name} className="record-card">
+              <Accordion.Control>
+                <Group justify="space-between" wrap="nowrap">
+                  <Group gap="xs" wrap="nowrap">
+                    <Badge
+                      size="xs"
+                      circle
+                      color={STATUS_COLORS[field.status]}
+                      aria-hidden="true"
+                    />
+                    <span>{readableName(name)}</span>
+                  </Group>
+                  <Code>{name}</Code>
+                </Group>
+              </Accordion.Control>
+              <Accordion.Panel>
+                <ScientificRecord field={field} />
+              </Accordion.Panel>
+            </Accordion.Item>
+          );
+        })}
       </Accordion>
     </Stack>
   );

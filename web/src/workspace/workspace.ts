@@ -2,24 +2,46 @@ import { createStore } from "zustand/vanilla";
 
 import type {
   ArchiveDownload,
-  CalculationDraft,
+  CalcTask,
   Capabilities,
+  ComputeRequest,
   CoreClient,
-  PreparedComputation,
+  ExplainResult,
+  StructureInput,
   StructureInspection,
-  StructureSource,
 } from "../api/coreClient";
 import { CoreFailure } from "../api/coreClient";
 
-export type WorkspaceOperation = "capabilities" | "inspect" | "compute";
+export type WorkspaceOperation =
+  "capabilities" | "inspect" | "explain" | "download";
+
+/** The v2 request shape has no `intent`/`hints` vocabulary: every tunable
+ * knob is a flat `overrides` entry reflected from `capabilities().settings`/
+ * `.facts` (see `capabilities.py`'s own "add an advisor, its settings
+ * automatically appear" design goal). A key's absence from `overrides`
+ * means "let the heuristic/ml/llm chain decide" -- there is no separate
+ * "automatic" sentinel value, matching `--set`'s own semantics. */
+export interface CalculationDraft {
+  readonly code: string;
+  readonly task: CalcTask;
+  readonly hpc: string | null;
+  readonly overrides: Readonly<Record<string, unknown>>;
+  readonly fetchMissing: boolean;
+}
 
 export interface WorkspaceSnapshot {
   readonly capabilities: Capabilities | null;
-  readonly source: StructureSource | null;
-  readonly attemptedSource: StructureSource | null;
+  readonly structureInput: StructureInput | null;
+  readonly attemptedStructureInput: StructureInput | null;
   readonly inspection: StructureInspection | null;
   readonly draft: CalculationDraft | null;
-  readonly reviewed: PreparedComputation | null;
+  /** The last `/explain` preview -- records + warnings, no files. Never
+   * carries an archive: `/explain` never calls `generate()`, so it can
+   * succeed even when a `/run` would still refuse with
+   * `advice_incomplete` (the tri-state "diagnosis is always available"
+   * promise). Downloading real files is a separate `review.download`
+   * step against `/run`. */
+  readonly reviewed: ExplainResult | null;
   readonly outOfDate: boolean;
   readonly lastDownload: ArchiveDownload | null;
   readonly operation: WorkspaceOperation | null;
@@ -29,12 +51,15 @@ export interface WorkspaceSnapshot {
 
 export type WorkspaceAction =
   | { readonly type: "workspace.start" }
-  | { readonly type: "source.open"; readonly source: StructureSource }
+  | { readonly type: "source.open"; readonly input: StructureInput }
   | {
       readonly type: "draft.patch";
-      readonly intent?: Partial<NonNullable<CalculationDraft["intent"]>>;
-      readonly hints?: Partial<NonNullable<CalculationDraft["hints"]>>;
-      readonly pseudoTable?: string | null;
+      readonly task?: CalcTask;
+      readonly hpc?: string | null;
+      /** Shallow-merged into the current overrides. A value of
+       * `undefined` clears that key back to "automatic" rather than
+       * setting it to `undefined` on the wire. */
+      readonly overrides?: Readonly<Record<string, unknown>>;
     }
   | { readonly type: "review.compute" }
   | { readonly type: "review.download" }
@@ -56,8 +81,8 @@ interface OperationOwner {
 
 const EMPTY_SNAPSHOT: WorkspaceSnapshot = {
   capabilities: null,
-  source: null,
-  attemptedSource: null,
+  structureInput: null,
+  attemptedStructureInput: null,
   inspection: null,
   draft: null,
   reviewed: null,
@@ -67,6 +92,45 @@ const EMPTY_SNAPSHOT: WorkspaceSnapshot = {
   failure: null,
   failureOperation: null,
 };
+
+function defaultDraft(capabilities: Capabilities): CalculationDraft {
+  return {
+    code: capabilities.codes[0]?.id ?? "quantum_espresso",
+    task:
+      (capabilities.tasks[0]?.id as CalcTask | undefined) ?? "scf_single_point",
+    hpc: null,
+    overrides: {},
+    fetchMissing: false,
+  };
+}
+
+function toComputeRequest(
+  structureInput: StructureInput,
+  draft: CalculationDraft,
+): ComputeRequest {
+  return {
+    structure_content: structureInput.structure_content,
+    structure_name: structureInput.structure_name,
+    ...(structureInput.structure_format
+      ? { structure_format: structureInput.structure_format }
+      : {}),
+    code: draft.code,
+    task: draft.task,
+    hpc: draft.hpc,
+    overrides: draft.overrides,
+    fetch_missing: draft.fetchMissing,
+  };
+}
+
+function mergeOverrides(
+  current: Readonly<Record<string, unknown>>,
+  patch: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  const merged = { ...current, ...patch };
+  return Object.fromEntries(
+    Object.entries(merged).filter(([, value]) => value !== undefined),
+  );
+}
 
 export function createWorkspace(
   core: CoreClient,
@@ -130,24 +194,20 @@ export function createWorkspace(
     return promise;
   }
 
-  async function openSource(source: StructureSource): Promise<void> {
+  async function openSource(input: StructureInput): Promise<void> {
     const capabilities = store.getState().capabilities;
     if (capabilities === null) return;
     const owner = beginOperation("inspect");
-    store.setState({ attemptedSource: source });
+    store.setState({ attemptedStructureInput: input });
     try {
-      const inspection = await core.inspectStructure(source);
+      const inspection = await core.inspectStructure(input);
       if (activeOperation !== owner) return;
       draftRevision = 0;
       completeOperation(owner, {
-        source,
-        attemptedSource: null,
+        structureInput: input,
+        attemptedStructureInput: null,
         inspection,
-        draft: {
-          structure: source,
-          intent: capabilities.default_intent,
-          hints: capabilities.default_hints,
-        },
+        draft: defaultDraft(capabilities),
         reviewed: null,
         outOfDate: false,
         lastDownload: null,
@@ -162,19 +222,16 @@ export function createWorkspace(
   ): void {
     const snapshot = store.getState();
     const currentDraft = snapshot.draft;
-    if (
-      !currentDraft?.intent ||
-      !currentDraft.hints ||
-      snapshot.operation === "inspect"
-    ) {
-      return;
-    }
+    if (currentDraft === null || snapshot.operation === "inspect") return;
     draftRevision += 1;
     const draft: CalculationDraft = {
       ...currentDraft,
-      intent: { ...currentDraft.intent, ...action.intent },
-      hints: { ...currentDraft.hints, ...action.hints },
-      ...("pseudoTable" in action ? { pseudo_table: action.pseudoTable } : {}),
+      ...("task" in action ? { task: action.task } : {}),
+      ...("hpc" in action ? { hpc: action.hpc } : {}),
+      overrides:
+        action.overrides === undefined
+          ? currentDraft.overrides
+          : mergeOverrides(currentDraft.overrides, action.overrides),
     };
     store.setState({
       draft,
@@ -186,17 +243,20 @@ export function createWorkspace(
 
   async function computeReview(): Promise<void> {
     const snapshot = store.getState();
-    if (snapshot.draft === null || snapshot.operation !== null) return;
+    if (
+      snapshot.structureInput === null ||
+      snapshot.draft === null ||
+      snapshot.operation !== null
+    ) {
+      return;
+    }
     const revision = draftRevision;
-    const submittedDraft = snapshot.draft;
-    const owner = beginOperation("compute");
+    const request = toComputeRequest(snapshot.structureInput, snapshot.draft);
+    const owner = beginOperation("explain");
     try {
-      const prepared = await core.compute({
-        draft: submittedDraft,
-        selection: { preset: "generate" },
-      });
+      const reviewed = await core.explain(request);
       completeOperation(owner, {
-        reviewed: prepared,
+        reviewed,
         outOfDate: revision !== draftRevision,
         lastDownload: null,
       });
@@ -205,24 +265,42 @@ export function createWorkspace(
     }
   }
 
-  function downloadReviewed(): void {
+  async function downloadReviewed(): Promise<void> {
     const snapshot = store.getState();
-    const archive = snapshot.reviewed?.archive;
-    if (!archive || snapshot.outOfDate) return;
-    store.setState({ lastDownload: archive });
-    saveArchive(archive);
+    if (
+      snapshot.structureInput === null ||
+      snapshot.draft === null ||
+      snapshot.reviewed === null ||
+      snapshot.outOfDate ||
+      snapshot.operation !== null
+    ) {
+      return;
+    }
+    const request = toComputeRequest(snapshot.structureInput, snapshot.draft);
+    const owner = beginOperation("download");
+    try {
+      const archive = await core.runArchive(request);
+      completeOperation(owner, { lastDownload: archive });
+      saveArchive(archive);
+    } catch (error) {
+      failOperation(owner, error);
+    }
   }
 
   async function retryFailure(): Promise<void> {
-    const { failureOperation, attemptedSource } = store.getState();
+    const { failureOperation, attemptedStructureInput } = store.getState();
     switch (failureOperation) {
       case "capabilities":
         return start();
       case "inspect":
-        if (attemptedSource !== null) await openSource(attemptedSource);
+        if (attemptedStructureInput !== null) {
+          await openSource(attemptedStructureInput);
+        }
         return;
-      case "compute":
+      case "explain":
         return computeReview();
+      case "download":
+        return downloadReviewed();
       case null:
         return;
     }
@@ -254,7 +332,7 @@ export function createWorkspace(
         await start();
         return;
       case "source.open":
-        await openSource(action.source);
+        await openSource(action.input);
         return;
       case "draft.patch":
         patchDraft(action);
@@ -263,14 +341,14 @@ export function createWorkspace(
         await computeReview();
         return;
       case "review.download":
-        downloadReviewed();
+        await downloadReviewed();
         return;
       case "failure.retry":
         return retryFailure();
       case "failure.dismiss":
         if (store.getState().capabilities === null) return;
         store.setState({
-          attemptedSource: null,
+          attemptedStructureInput: null,
           failure: null,
           failureOperation: null,
         });

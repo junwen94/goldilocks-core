@@ -11,7 +11,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/capabilities": "http://127.0.0.1:8000",
-      "/compute": "http://127.0.0.1:8000",
+      "/explain": "http://127.0.0.1:8000",
+      "/run": "http://127.0.0.1:8000",
       "/inspect": "http://127.0.0.1:8000",
       "/health": "http://127.0.0.1:8000",
       "/ready": "http://127.0.0.1:8000",
