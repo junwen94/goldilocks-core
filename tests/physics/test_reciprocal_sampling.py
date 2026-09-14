@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-import itertools
 import math
+from itertools import pairwise
 
 import pytest
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.legacy_kmesh.math import (
-    build_kmesh_entries,
-    generate_candidate_k_distances,
-    k_distance_to_mesh,
-)
+from goldilocks_core.kmesh import build_gamma_kmesh_entries, k_distance_to_mesh
 
 
 @pytest.mark.parametrize(
@@ -68,35 +64,45 @@ def test_reciprocal_lattice_length_includes_the_2pi_factor() -> None:
 
 
 def test_kmesh_ladder_never_has_an_axis_count_jump_larger_than_one() -> None:
-    """A4: once the longest axis (here, the 20 Angstrom one, whose reciprocal
-    length is smallest) exhausts its enumerated quota, adjacent candidate
-    distances can span several meshes and probing the midpoint only catches
-    one of them. build_kmesh_entries must truncate there rather than emit a
-    ladder with a hole in it."""
+    """A4, v2 shape (v2 epic 9, #9): v1's ladder bounded enumeration with a
+    fixed per-axis count, so axes with different reciprocal lengths ran out
+    of change points at different distances -- v1 then truncated the whole
+    ladder the first time that produced a hole (a jump of more than one
+    k-point on some axis between adjacent rungs), rather than actually
+    preventing the hole.
+
+    v2's ``build_gamma_kmesh_entries`` (``kmesh.py``, ported verbatim from
+    goldilocks-data in v2 epic 6, #6) removes the need for that truncation
+    outright: it bounds enumeration with one distance floor shared by every
+    axis (``MIN_K_DISTANCE``), so every axis runs out of change points
+    together and no hole is ever produced in the first place -- confirmed
+    below over the *entire* ladder for this exact anisotropic case (76
+    rungs), not just the handful v1's truncation used to stop at. This is a
+    genuine v2 correctness improvement over v1's workaround, not a test
+    changed to dodge a v2 regression -- see this repo's own goldilocks-data
+    port docstring in ``kmesh.py`` for why the redesign works."""
     anisotropic = Structure(
         Lattice.orthorhombic(20.0, 3.0, 3.0),
         ["Si"],
         [[0.0, 0.0, 0.0]],
     )
-    candidates = generate_candidate_k_distances(anisotropic, max_kpoints_per_axis=4)
 
-    entries = build_kmesh_entries(anisotropic, candidates)
+    entries = build_gamma_kmesh_entries(anisotropic)
 
-    assert len(entries) > 1, "truncated to nothing; test no longer exercises a gap"
-    for (_, previous), (_, current) in itertools.pairwise(entries):
+    assert len(entries) > 5, "ladder too short to exercise the axis-a exhaustion point"
+    assert entries[0].mesh == (1, 1, 1)
+    for previous, current in pairwise(entries):
         assert all(
             current_count - previous_count <= 1
-            for previous_count, current_count in zip(previous, current, strict=True)
+            for previous_count, current_count in zip(
+                previous.mesh, current.mesh, strict=True
+            )
         )
-    # Concrete regression check for this exact anisotropic case: the ladder
-    # stops at rung 4 rather than continuing past where axis "a" runs dry.
-    assert entries == [
-        (0, (1, 1, 1)),
-        (1, (1, 2, 2)),
-        (2, (1, 3, 3)),
-        (3, (1, 4, 4)),
-        (4, (1, 5, 5)),
-    ]
+    # Concrete regression check: axis "a" (the 20 Angstrom one) exhausts its
+    # change points first, at rung 8, exactly where v1's truncation used to
+    # cut the ladder off -- v2 keeps going instead of stopping there.
+    assert entries[6].mesh == (1, 7, 7)
+    assert entries[7].mesh == (2, 7, 7)
 
 
 def test_floating_point_noise_at_an_integer_boundary_does_not_inflate_the_mesh() -> (
