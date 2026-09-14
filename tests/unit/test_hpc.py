@@ -6,6 +6,7 @@ from goldilocks_core.inputs.hpc import (
     InvalidHpcProfile,
     list_hpc_profiles,
     load_hpc_profile,
+    resolve_hpc_profile,
 )
 
 
@@ -99,3 +100,22 @@ def test_a_profile_with_two_default_partitions_is_rejected(
 
     with pytest.raises(InvalidHpcProfile, match="exactly one default"):
         load_hpc_profile("broken")
+
+
+def test_resolve_hpc_profile_uses_the_explicit_name_when_given() -> None:
+    profile = resolve_hpc_profile("scarf")
+
+    assert profile.name == "scarf"
+
+
+def test_resolve_hpc_profile_defaults_when_exactly_one_is_installed() -> None:
+    assert len(list_hpc_profiles()) == 1, "test assumes exactly one shipped profile"
+
+    profile = resolve_hpc_profile(None)
+
+    assert profile.name == "scarf"
+
+
+def test_resolve_hpc_profile_rejects_an_unknown_name() -> None:
+    with pytest.raises(InvalidHpcProfile):
+        resolve_hpc_profile("does-not-exist")

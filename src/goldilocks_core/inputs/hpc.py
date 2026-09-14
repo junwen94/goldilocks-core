@@ -120,6 +120,29 @@ def list_hpc_profiles() -> tuple[str, ...]:
     return tuple(sorted(names))
 
 
+def resolve_hpc_profile(name: str | None, *, field: str = "hpc") -> HpcProfile:
+    """The one policy for turning an optional caller-given profile name
+    into a real ``HpcProfile``, shared by the CLI's ``--hpc`` and HTTP/
+    MCP's ``hpc`` request field (v2 epic 8, #8) -- an explicit name
+    always wins; with none given, exactly one installed profile is an
+    unambiguous default, and more than one requires the caller to
+    choose. ``field`` only changes the wording of that error, so a CLI
+    caller sees ``--hpc`` and a transport caller sees the request field
+    name it actually used.
+    """
+    if name is not None:
+        return load_hpc_profile(name)
+    available = list_hpc_profiles()
+    if len(available) == 1:
+        return load_hpc_profile(available[0])
+    if not available:
+        raise InvalidHpcProfile("no HPC profiles are installed under inputs/profiles/")
+    raise InvalidHpcProfile(
+        f"{field} is required when more than one profile is installed: "
+        + ", ".join(available)
+    )
+
+
 def _parse_profile(name: str, data: dict[str, object]) -> HpcProfile:
     try:
         hardware_defaults = data["hardware"]

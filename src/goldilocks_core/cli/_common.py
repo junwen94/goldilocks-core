@@ -17,12 +17,7 @@ from pathlib import Path
 
 from pymatgen.core import Structure
 
-from goldilocks_core.inputs.hpc import (
-    HpcProfile,
-    InvalidHpcProfile,
-    list_hpc_profiles,
-    load_hpc_profile,
-)
+from goldilocks_core.inputs.hpc import HpcProfile, resolve_hpc_profile
 from goldilocks_core.inputs.structure import PathStructureSource, normalize_structure
 from goldilocks_core.resolution import Blocked, FieldState, Resolved, ResolvedField
 from goldilocks_core.service import RunOverrides
@@ -73,17 +68,7 @@ def resolve_structure(path: str) -> Structure:
 
 
 def resolve_hpc(name: str | None) -> HpcProfile:
-    if name is not None:
-        return load_hpc_profile(name)
-    available = list_hpc_profiles()
-    if len(available) == 1:
-        return load_hpc_profile(available[0])
-    if not available:
-        raise InvalidHpcProfile("no HPC profiles are installed under inputs/profiles/")
-    raise InvalidHpcProfile(
-        "--hpc is required when more than one profile is installed: "
-        + ", ".join(available)
-    )
+    return resolve_hpc_profile(name, field="--hpc")
 
 
 def resolve_overrides(args: argparse.Namespace) -> RunOverrides:

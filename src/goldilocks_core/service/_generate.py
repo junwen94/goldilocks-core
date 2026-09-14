@@ -24,9 +24,15 @@ class AdviceIncomplete(ExpectedFailure, ValueError):
 
     def __init__(self, report: CheckReport) -> None:
         self.report = report
-        super().__init__(
-            "cannot generate a runnable input: " + "; ".join(report.blocking)
-        )
+        # report.blocking has one entry per blocked field, not per
+        # distinct root cause -- many fields sharing one upstream
+        # failure (e.g. every pseudopotential-dependent field, once
+        # pseudo_table itself is Unavailable) would otherwise repeat
+        # the same sentence once per field. dict.fromkeys dedupes while
+        # keeping the first-seen order, which collect_blocked's own
+        # order already is.
+        reasons = dict.fromkeys(report.blocking)
+        super().__init__("cannot generate a runnable input: " + "; ".join(reasons))
 
 
 def generate(

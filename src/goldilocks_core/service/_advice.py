@@ -90,6 +90,27 @@ class Advice:
         }
         return {name: _json_safe_state(state) for name, state in merged.items()}
 
+    def warnings(self) -> list[str]:
+        """Every advisor decision's own prose ``.warnings`` tuple,
+        flattened into one machine-actionable list -- goldilocks-agent
+        -design.md's "tool return value must carry a warnings array,
+        the agent must relay it verbatim" requirement. Each advisor
+        still only emits prose (v2 epics 4-7 predate
+        ``resolution.Warning``'s code/level/category shape -- see
+        ``capabilities.py``'s own docstring on why that catalogue ships
+        empty), so this can't yet group by code or severity; it is
+        still a real, flat JSON array a caller can iterate without
+        knowing which nested record shape carries warnings, which is
+        the actual, literal ask."""
+        collected: list[str] = []
+        for name, state in sorted(self.records().items()):
+            if isinstance(state, Resolved) and isinstance(state.value, dict):
+                collected.extend(
+                    f"{name}: {message}"
+                    for message in state.value.get("warnings") or ()
+                )
+        return collected
+
 
 def _json_safe_value(value: object) -> object:
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
