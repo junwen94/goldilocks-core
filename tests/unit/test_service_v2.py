@@ -199,9 +199,7 @@ class TestAdviseDegradation:
         assert advice.system.functional.ok
         assert advice.step.kpoints.k_sampling.ok
 
-    def test_soc_on_a_lanthanide_blocks_the_whole_relativistic_chain(
-        self, hpc
-    ) -> None:
+    def test_soc_on_a_lanthanide_blocks_the_whole_relativistic_chain(self, hpc) -> None:
         """v2 epic 9 (#9)'s "SOC on Ce" acceptance scenario: SSSP is the
         only table lanthanides are allowed to use (``requires_sssp``), but
         no SSSP table is fully relativistic -- so requesting spin-orbit
@@ -319,6 +317,39 @@ class TestAdviseDegradation:
 
         assert advice.system.pseudo.metadata.ok
         assert advice.system.cutoffs.ok
+
+
+def test_forced_spin_polarization_survives_generation_on_a_labeled_structure(
+    hpc, installed_table
+) -> None:
+    """Regression for #32 (v2 epic 9, #9): the plain, non-AFM path used
+    to crash inside generate() with a bare KeyError whenever the
+    structure's own per-site labels differ from its element symbols --
+    true for every bundled example structure (pymatgen's own CIF
+    writer/reader default), not something specific to AFM relabeling.
+    Uses the silicon-covering installed_table fixture (real Fe pseudo
+    coverage isn't fixtured) with spin_polarized forced on -- the
+    crash reproduces for any spin-polarized, label-carrying structure,
+    not only genuinely magnetic elements."""
+    store, _table = installed_table
+    two_silicon_sites = Structure(
+        Lattice.cubic(5.43),
+        ["Si", "Si"],
+        [[0.0, 0.0, 0.0], [0.25, 0.25, 0.25]],
+        labels=["Si0", "Si1"],
+    )
+    overrides = RunOverrides(
+        system=SystemOverrides(magnetic=MagneticConfigHumanInput(spin_polarized=True))
+    )
+
+    advice = advise(two_silicon_sites, hpc=hpc, overrides=overrides, store=store)
+    report = check(advice)
+
+    assert report.ok, report.blocking
+    steps = generate(advice, report, ctx=default_shared_context())
+    content = steps[0].files["scf.in"]
+    assert "starting_magnetization(1)" in content
+    assert "starting_magnetization(2)" in content
 
 
 @pytest.mark.skipif(

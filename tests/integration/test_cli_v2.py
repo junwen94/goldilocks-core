@@ -315,6 +315,32 @@ class TestRunAndExplainAgainstRealAssets:
         assert "  Fe1  " in content
         assert "  Fe2  " in content
 
+    def test_run_default_magnetic_structure_publishes_without_crashing(
+        self, real_assets: None, tmp_path: Path
+    ) -> None:
+        """Regression for #32: the bundled Fe_bcc.cif example (like every
+        structure loaded through pymatgen's own CIF reader) carries
+        per-site labels ('Fe0'/'Fe1') distinct from its element symbol
+        ('Fe') even with zero --set flags and no AFM relabeling -- this
+        used to crash goldilocks run with an uncaught KeyError on the
+        plain default heuristic path, a regression #27 introduced while
+        fixing the AFM-specific case."""
+        destination = tmp_path / "out"
+
+        completed = _run_cli(
+            "run",
+            str(structure("Fe_bcc.cif")),
+            "--hpc",
+            "scarf",
+            "-o",
+            str(destination),
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        content = (destination / "scf.in").read_text()
+        assert "starting_magnetization(1)" in content
+        assert "starting_magnetization(2)" in content
+
     def test_run_json_output_is_stable_and_sorted(self, real_assets: None) -> None:
         silicon = structure("Si.cif")
 
