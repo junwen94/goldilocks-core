@@ -29,13 +29,23 @@ Two v1 bugs fixed here, per this epic's Section (c):
 - **`materialize()`'s `StopIteration`-prone round-trip**
   (`pseudo/source.py:114-129`) -- matching each selected pseudopotential
   back to its metadata used a bare `next(... for ... if ...)` with no
-  default, an opaque `StopIteration` on any miss. `match_selected_metadata`
-  below builds a lookup once instead of re-scanning per selection, and
-  returns `Unavailable` with which element failed to match, not an
-  undiagnosable crash.
+  default, an opaque `StopIteration` on any miss.
+  `select_metadata_for_elements` below builds a lookup once instead of
+  re-scanning per selection, and returns `Unavailable` with which element
+  failed to match, not an undiagnosable crash.
 
 `_requires_sssp` (a private helper called from three separate places in v1)
 is `requires_sssp` here: one explicit, named, directly-testable policy.
+
+**`match_selected_metadata` (this port's first attempt at the above,
+v2 epic 5) removed (v2 epic 9, #9).** It matched a v1 `SelectionRecord`
+-shaped dict back to metadata -- a genuine v1 dependency that would have
+outlived v1's own deletion with nothing left able to construct its input
+type. `select_metadata_for_elements` (v2 epic 8, #8) is the real
+production path (`service/_pseudo.py`) and was already a full,
+independent replacement, never built on top of this one; it was simply
+never deleted once its predecessor stopped being used. Confirmed unused
+outside its own module and tests before removal.
 """
 
 from __future__ import annotations
@@ -47,7 +57,6 @@ from pymatgen.core.periodic_table import Element
 from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.resolution import FieldState, Provenance, Resolved, Unavailable
-from goldilocks_core.selection import SelectionRecord
 from goldilocks_core.types import PseudoAccuracy, RelativisticTreatment
 
 
@@ -188,38 +197,6 @@ def _table_problems(
     return problems
 
 
-def match_selected_metadata(
-    selection: SelectionRecord, metadata: tuple[PseudoMetadata, ...]
-) -> FieldState[tuple[PseudoMetadata, ...]]:
-    lookup = {
-        (
-            item.element,
-            item.filename,
-            item.filepath,
-            item.table_id or item.provider or item.source_identifier,
-        ): item
-        for item in metadata
-    }
-    matched: list[PseudoMetadata] = []
-    for selected in selection["pseudopotentials"]:
-        key = (
-            selected["element"],
-            selected["filename"],
-            selected["filepath"],
-            selected["provenance"].data_source,
-        )
-        candidate = lookup.get(key)
-        if candidate is None:
-            return Unavailable(
-                reason=(
-                    f"selected pseudopotential for {selected['element']!r} has no "
-                    "matching metadata entry"
-                )
-            )
-        matched.append(candidate)
-    return Resolved(tuple(matched), Provenance(source="heuristic"))
-
-
 def select_metadata_for_elements(
     metadata: tuple[PseudoMetadata, ...], elements: set[str]
 ) -> FieldState[tuple[PseudoMetadata, ...]]:
@@ -227,18 +204,18 @@ def select_metadata_for_elements(
     requested elements (v2 epic 8, #8).
 
     This is deliberately not a port of v1's `selection.py` cross-table
-    `_select_for_element`/`_candidate_rank` ranking machinery, and it does not
-    use `match_selected_metadata` above. Both of those exist to rank
-    candidates drawn from *multiple* tables/functionals/accuracies at once --
-    the problem v1 had because it never committed to one table before picking
-    per-element files. v2's `select_pseudopotential_table` already commits to
-    one table first, and `_table_problems` there already confirmed that
-    table's functional/accuracy/relativistic and element coverage satisfy the
-    request. Every entry in `metadata` (one table's installed manifest,
-    loaded via `assets.pseudopotentials.importers.load_installed_table`)
-    therefore already satisfies the request -- there is nothing left to rank,
-    only to look up by element and confirm the table gives exactly one file
-    per element (not zero, not several)."""
+    `_select_for_element`/`_candidate_rank` ranking machinery: that exists to
+    rank candidates drawn from *multiple* tables/functionals/accuracies at
+    once -- the problem v1 had because it never committed to one table
+    before picking per-element files. v2's `select_pseudopotential_table`
+    already commits to one table first, and `_table_problems` there already
+    confirmed that table's functional/accuracy/relativistic and element
+    coverage satisfy the request. Every entry in `metadata` (one table's
+    installed manifest, loaded via
+    `assets.pseudopotentials.importers.load_installed_table`) therefore
+    already satisfies the request -- there is nothing left to rank, only to
+    look up by element and confirm the table gives exactly one file per
+    element (not zero, not several)."""
     by_element: dict[str, list[PseudoMetadata]] = {}
     for item in metadata:
         if item.element is not None:

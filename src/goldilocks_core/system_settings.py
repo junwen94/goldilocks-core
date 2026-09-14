@@ -28,7 +28,7 @@ layers") needs one.
 element in the structure being generated (one entry per element, no
 AFM species-splitting yet -- see ``advisors/magnetic_config.py``'s own
 ``relabeled_structure`` note), i.e. ``pseudo_selection.py``'s
-``match_selected_metadata`` output, not the raw selection record.
+``select_metadata_for_elements`` output, not a raw selection record.
 """
 
 from __future__ import annotations
