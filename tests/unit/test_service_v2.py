@@ -204,6 +204,28 @@ class TestAdviseEndToEnd:
         # proving the override actually reached pseudo_requirements().
         assert not advice.system.pseudo.table.ok
 
+    def test_human_override_of_an_analysis_fact_flows_through(
+        self, silicon, hpc, installed_table
+    ) -> None:
+        """`capabilities()` advertises the four analysis facts as
+        overridable (v2 epic 8, #8) -- confirm `advise()`'s own end of
+        that promise, not just that `set_overrides.build_overrides` can
+        construct the ``RunOverrides`` (``test_set_overrides.py`` covers
+        that half)."""
+        from goldilocks_core.analysis.is_metal import IsMetalHumanInput
+        from goldilocks_core.service._analysis import AnalysisOverrides
+
+        store, _ = installed_table
+        overrides = RunOverrides(
+            analysis=AnalysisOverrides(is_metal=IsMetalHumanInput(is_metal=True))
+        )
+
+        advice = advise(silicon, hpc=hpc, store=store, overrides=overrides)
+
+        assert advice.analysis.is_metal.ok
+        assert advice.analysis.is_metal.value == "metal"
+        assert advice.analysis.is_metal.source == "human"
+
 
 class TestAdviseDegradation:
     """No asset store or network involved -- these exercise Blocked/

@@ -208,6 +208,23 @@ class TestFacts:
         for fact in capabilities()["facts"]:
             assert fact["overridable"] is True
 
+    def test_every_fact_marked_overridable_actually_has_a_set_binding(self) -> None:
+        """`overridable: True` is a promise the settings-schema reflection
+        makes about `--set`/override support, not just a display flag --
+        this once shipped True for all four facts while `bindings()` (the
+        thing `--set` actually consults) had no entry for any of them, so
+        `--set is_metal=true` failed with "unknown setting". Every
+        overridable fact's key must resolve in `bindings()`."""
+        from goldilocks_core.capabilities import bindings
+
+        catalogue = bindings()
+        for fact in capabilities()["facts"]:
+            if fact["overridable"]:
+                assert fact["key"] in catalogue, (
+                    f"{fact['key']!r} claims overridable=True but has no "
+                    "--set binding"
+                )
+
 
 class TestPseudopotentialTablesAndHpcProfiles:
     def test_pseudopotential_tables_are_populated_from_the_real_registry(self) -> None:

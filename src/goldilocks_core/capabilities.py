@@ -95,6 +95,7 @@ from goldilocks_core.analysis.is_metal import Metallicity
 from goldilocks_core.assets.pseudopotentials.registry import load_tables
 from goldilocks_core.inputs.hpc import list_hpc_profiles, load_hpc_profile
 from goldilocks_core.service import (
+    AnalysisOverrides,
     KpointsOverrides,
     ResourceOverrides,
     SystemOverrides,
@@ -479,7 +480,7 @@ class SettingBinding:
 
     key: str
     group: str
-    branch: Literal["system", "kpoints", "resources"]
+    branch: Literal["analysis", "system", "kpoints", "resources"]
     outer_field: str
     inner_field: str | None
     human_input_cls: type | None
@@ -490,7 +491,7 @@ class SettingBinding:
 
 
 def _leaves_from_human_input(
-    branch: Literal["system", "kpoints", "resources"],
+    branch: Literal["analysis", "system", "kpoints", "resources"],
     outer_field: str,
     human_input_cls: type,
     *,
@@ -499,7 +500,13 @@ def _leaves_from_human_input(
 ) -> list[SettingBinding]:
     leaves = []
     for name, info in human_input_cls.model_fields.items():
-        extra = _SETTING_META.get(name, {})
+        # Analysis leaves always keep their bare field name: they must
+        # match `_FACTS`'s own keys exactly (`_settings()` filters them
+        # out by that same key), and `_SETTING_META`'s one rename entry
+        # ("needs_correlation" -> "hubbard_needs_correlation") exists
+        # for hubbard_u's *own* field of the same inner name, not this
+        # one -- see this module's own docstring on that collision.
+        extra = _SETTING_META.get(name, {}) if branch != "analysis" else {}
         leaves.append(
             SettingBinding(
                 key=extra.get("key", name),
@@ -520,7 +527,7 @@ def _leaves_from_human_input(
 def _leaves_from_overrides(
     overrides_cls: type,
     *,
-    branch: Literal["system", "kpoints", "resources"],
+    branch: Literal["analysis", "system", "kpoints", "resources"],
     scope: Literal["system", "per_step"],
 ) -> list[SettingBinding]:
     hints = typing.get_type_hints(overrides_cls)
@@ -557,6 +564,7 @@ def _leaves_from_overrides(
 
 def _leaves() -> list[SettingBinding]:
     return [
+        *_leaves_from_overrides(AnalysisOverrides, branch="analysis", scope="system"),
         *_leaves_from_overrides(SystemOverrides, branch="system", scope="system"),
         *_leaves_from_overrides(KpointsOverrides, branch="kpoints", scope="per_step"),
         *_leaves_from_overrides(
@@ -598,7 +606,19 @@ def _setting_from_leaf(leaf: SettingBinding) -> Setting:
 
 
 def _settings() -> list[Setting]:
-    return [_setting_from_leaf(leaf) for leaf in _leaves()]
+    """Every ``--set``-able leaf *except* the four analysis facts
+    (``is_metal``/``is_magnetic``/``needs_soc``/``needs_correlation``):
+    those are already fully described in ``facts()`` (their real type is
+    the fact's own enum/boolean meaning, not the raw ``bool`` their
+    ``HumanInput`` happens to store it as) -- listing them a second time
+    here, with a different declared ``type``, would contradict ``facts()``
+    instead of complementing it. They still walk through ``_leaves()``
+    so ``bindings()`` (the `--set`/override construction path) accepts
+    them; only this JSON projection skips them."""
+    fact_keys = {fact["key"] for fact in _FACTS}
+    return [
+        _setting_from_leaf(leaf) for leaf in _leaves() if leaf.key not in fact_keys
+    ]
 
 
 def _facts() -> list[Fact]:

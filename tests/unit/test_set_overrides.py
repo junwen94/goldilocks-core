@@ -159,6 +159,35 @@ class TestBuildOverrides:
 
         assert overrides.system.hubbard.needs_correlation is True
 
+    def test_analysis_fact_settings_land_under_analysis(self) -> None:
+        overrides = build_overrides(
+            {
+                "is_metal": True,
+                "is_magnetic": False,
+                "needs_soc": True,
+                "needs_correlation": True,
+            }
+        )
+
+        assert overrides.analysis.is_metal.is_metal is True
+        assert overrides.analysis.is_magnetic.is_magnetic is False
+        assert overrides.analysis.needs_soc.needs_soc is True
+        assert overrides.analysis.needs_correlation.needs_correlation is True
+
+    def test_needs_correlation_and_hubbard_needs_correlation_are_independent(
+        self,
+    ) -> None:
+        """The two ``needs_correlation``-named fields (the general analysis
+        fact and hubbard's own escalation override) share an inner Python
+        field name but must not collide as `--set` keys -- see
+        ``capabilities.py``'s own docstring on this exact collision."""
+        overrides = build_overrides(
+            {"needs_correlation": True, "hubbard_needs_correlation": False}
+        )
+
+        assert overrides.analysis.needs_correlation.needs_correlation is True
+        assert overrides.system.hubbard.needs_correlation is False
+
     def test_unknown_key_raises(self) -> None:
         with pytest.raises(InvalidSetting):
             build_overrides({"not_a_real_setting": 1})
@@ -172,6 +201,7 @@ class TestBuildOverrides:
     def test_empty_assignments_gives_all_defaults(self) -> None:
         overrides = build_overrides({})
 
+        assert overrides.analysis.is_metal is None
         assert overrides.system.functional is None
         assert overrides.step.kpoints.occupations is None
         assert overrides.step.resources.job is None

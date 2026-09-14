@@ -48,6 +48,7 @@ from pydantic import ValidationError
 from goldilocks_core.capabilities import SettingBinding, bindings
 from goldilocks_core.failures import ExpectedFailure
 from goldilocks_core.service import (
+    AnalysisOverrides,
     KpointsOverrides,
     ResourceOverrides,
     RunOverrides,
@@ -187,6 +188,7 @@ def build_overrides(assignments: dict[str, object]) -> RunOverrides:
         grouped.setdefault(slot, {})[field_name] = value
 
     branch_fields: dict[str, dict[str, object]] = {
+        "analysis": {},
         "system": {},
         "kpoints": {},
         "resources": {},
@@ -204,6 +206,7 @@ def build_overrides(assignments: dict[str, object]) -> RunOverrides:
             ) from error
 
     return RunOverrides(
+        analysis=AnalysisOverrides(**branch_fields["analysis"]),
         system=SystemOverrides(**branch_fields["system"]),
         step=StepOverrides(
             kpoints=KpointsOverrides(**branch_fields["kpoints"]),
