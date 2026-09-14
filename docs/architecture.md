@@ -11,13 +11,13 @@ From the repository root:
 ```bash
 uv sync --group dev
 uv run pre-commit install
-uv run poe check
+uv run just check
 ```
 
-`poe check` runs Ruff lint, format, and complexity checks, then pytest. Use
-`uv run poe fmt` to apply Python formatting. The commit hooks run the same checks
-and pytest with branch coverage. For frontend checks and API-schema refresh, follow the
-[Workbench guide](../web/README.md).
+`just check` runs Ruff lint, format, and complexity checks, then pytest with
+branch coverage. Use `uv run just fmt` to apply Python formatting. The commit
+hooks run the same lint and complexity checks. For frontend checks and
+API-schema refresh, follow the [Workbench guide](../web/README.md).
 
 ## Cut a release
 
@@ -26,20 +26,22 @@ frontend ships inside the same image rather than carrying its own version.
 Treat API/schema changes (the OpenAPI export) as at least a minor bump during
 `0.x`; frontend-only fixes can be patches.
 
-To publish, merge a PR that bumps `pyproject.toml` to the release version, then
+To publish, bump the version with `uv run just bump patch` (or `minor`,
+`major`, or an explicit `X.Y.Z`); the recipe edits `pyproject.toml`, refreshes
+`uv.lock`, and prints the tag to use. Commit the bump in a release PR, then
 from `main`:
 
 ```bash
-git tag -a v0.1.0 -m "v0.1.0"
-git push origin v0.1.0
+git tag -a v0.2.1 -m "v0.2.1"
+git push origin v0.2.1
 ```
 
-CI runs the full suite on the tagged commit, then pushes
+The release workflow runs the full suite on the tagged commit, checks that the
+tag equals the `pyproject.toml` version, then pushes
 `ghcr.io/stfc/goldilocks-workbench` with `X.Y.Z`, `X.Y`, `X`, and `latest` tags,
 and creates a GitHub Release containing the sdist and wheel. Nightly builds of
 `main` publish `nightly` and `nightly-<date>` image tags at 03:00 UTC; PRs and
-plain `main` pushes publish nothing. Keep the tag and `pyproject.toml` version
-identical — nothing else validates the pairing. The first publish creates the
+plain `main` pushes publish nothing. The first publish creates the
 container package private; flip it to public once in the package settings so
 anonymous pulls work.
 

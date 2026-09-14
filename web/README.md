@@ -15,7 +15,7 @@ newer installed:
 uv sync --extra http
 npm --prefix web ci
 uv run goldilocks assets install workbench
-uv run --extra http poe workbench
+uv run --extra http just workbench
 ```
 
 The asset step installs the models and pseudopotential tables. The final command
@@ -25,7 +25,7 @@ Open **http://127.0.0.1:5173**.
 To serve a built frontend instead, stop those servers and run:
 
 ```bash
-uv run --extra http poe stage
+uv run --extra http just stage
 ```
 
 Then open **http://127.0.0.1:8000**.

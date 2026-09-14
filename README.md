@@ -23,7 +23,7 @@ With Node.js 24 or newer installed, run:
 uv sync --extra http
 npm --prefix web ci
 uv run goldilocks assets install workbench
-uv run --extra http poe workbench
+uv run --extra http just workbench
 ```
 
 The asset step installs the models and pseudopotential tables. Open
@@ -33,7 +33,7 @@ settings, and download the generated inputs.
 For a built frontend instead, stop the development servers and run:
 
 ```bash
-uv run --extra http poe stage
+uv run --extra http just stage
 ```
 
 Then open **http://127.0.0.1:8000**. See the [Workbench guide](web/README.md)

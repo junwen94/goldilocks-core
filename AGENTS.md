@@ -6,19 +6,23 @@ Upstream Python package for DFT input recommendation.
 
 ```bash
 uv sync --group dev
-uv run poe check        # ruff check + format gate + pytest
-uv run poe web-check    # workbench frontend: lint + vitest + build
+uv run just check       # lint, complexity ceilings, pytest with branch coverage
+uv run just mutation    # focused mutation testing against the score gate
+uv run just web-check   # workbench frontend: lint + vitest + build
+uv run just dist        # build the sdist/wheel and validate its contents
+uv run just image-e2e   # build the production image and run the Playwright e2e suite
 uv run pre-commit run --all-files
 ```
 
-`uv run poe` lists tasks, including `workbench` (backend :8000 + Vite :5173 in one command).
+`uv run just` lists recipes, including `workbench` (backend :8000 + Vite :5173 in one command).
 
-Run `pre-commit` before committing. CI (on `main` and PRs) runs Ruff, pytest with branch coverage, focused mutation testing, and distribution validation — all via `uv`.
+Run `pre-commit` before committing. CI (on `main` and PRs) and the release workflow run the same `just` recipes: Ruff, pytest with branch coverage, focused mutation testing, and distribution validation — all via `uv`. `release.yml` adds publishing on `v*` tags, the nightly schedule, and manual dispatch.
 
 ## Releases and versioning
 
 - One version for the repository: `pyproject.toml` owns it. `web/package.json` is vestigial; the Workbench frontend ships inside the image.
-- Publishing is gated on `v*` tags and the nightly schedule, never on merges to `main` or PRs. Bump the version in a merged PR, then tag from `main`: tag must equal the `pyproject.toml` version (nothing else validates the pairing).
+- Publishing is gated on `v*` tags and the nightly schedule, never on merges to `main` or PRs. Bump with `uv run just bump patch` (or `minor`, `major`, or explicit `X.Y.Z`) in a release PR — it edits `pyproject.toml`, refreshes `uv.lock`, and prints the tag — then tag from `main` after the merge.
+- The publish job checks the tag against the `pyproject.toml` version (`scripts/check_release_tag.py`) and stops on a mismatch.
 - Published artifacts: GHCR image `ghcr.io/stfc/goldilocks-workbench` (semver + `latest` on tags; `nightly` from the daily schedule; `sha-<ref>` on manual dispatch) and sdist+wheel as GitHub Release assets. The Python package is never published to PyPI.
 
 ## Code style
