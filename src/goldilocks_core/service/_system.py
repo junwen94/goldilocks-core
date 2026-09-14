@@ -16,6 +16,19 @@ calls it twice: once with ``z_valences=None`` to get a provisional
 again after a table is chosen, with the real per-element ``z_valence``
 values, for the calibrated ``starting_magnetization`` that actually
 lands in ``SystemAdvice.magnetic``.
+
+**``symmetry_eff`` (v2 epic 9, #9)**: ``AnalysisFacts.symmetry`` (phase 1)
+is computed from the plain input ``structure``, before magnetism is
+decided at all. Once ``magnetic_config`` has run and produced
+``relabeled_structure`` (identical to ``structure`` unless AFM species
+splitting actually happened), symmetry needs recomputing against
+*that* structure -- goldilocks-core-design.md:3116-3126's "symmetry must
+be recomputed once after species-splitting, not reused from phase 1".
+``n_irr_k``/``k_sampling`` (``_step_kpoints.py``) consume
+``magnetic.relabeled_structure`` directly rather than this field's own
+value; ``symmetry_eff`` exists as its own named, independently-checkable
+fact (not only an internal step of computing something else), matching
+how the design doc's own SOC-on-Ce/AFM acceptance scenarios name it.
 """
 
 from __future__ import annotations
@@ -37,6 +50,7 @@ from goldilocks_core.advisors.magnetic_config import (
     magnetic_config,
 )
 from goldilocks_core.advisors.vdw_method import VdwFacts, vdw_method
+from goldilocks_core.analysis.symmetry import SymmetryFacts, symmetry
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.resolution import Blocked, FieldState, blocked_by
 from goldilocks_core.service._analysis import AnalysisFacts
@@ -49,6 +63,7 @@ class SystemAdvice:
     functional: FieldState[str]
     pseudo: PseudoAdvice
     magnetic: FieldState[MagneticConfigFacts]
+    symmetry_eff: FieldState[SymmetryFacts]
     cutoffs: FieldState[CutoffsDecision]
     electron_count: FieldState[ElectronCountDecision]
     vdw: FieldState[VdwFacts]
@@ -64,6 +79,7 @@ class SystemAdvice:
             self.pseudo.table,
             self.pseudo.metadata,
             self.pseudo.relativistic,
+            self.symmetry_eff,
             self.cutoffs,
             self.electron_count,
             self.vdw,
@@ -78,6 +94,7 @@ class SystemAdvice:
             "pseudopotentials": self.pseudo.metadata,
             "relativistic": self.pseudo.relativistic,
             "magnetic": self.magnetic,
+            "symmetry_eff": self.symmetry_eff,
             "cutoffs": self.cutoffs,
             "electron_count": self.electron_count,
             "vdw": self.vdw,
@@ -151,10 +168,17 @@ def system_advice(
     else:
         magnetic_state = magnetic_provisional
 
+    symmetry_eff_state: FieldState[SymmetryFacts] = (
+        symmetry(magnetic_state.value.relabeled_structure)
+        if magnetic_state.ok
+        else Blocked(by=magnetic_state)
+    )
+
     return SystemAdvice(
         functional=functional_state,
         pseudo=pseudo,
         magnetic=magnetic_state,
+        symmetry_eff=symmetry_eff_state,
         cutoffs=cutoffs(pseudo.metadata, pseudo.table, overrides.cutoffs),
         electron_count=electron_count(
             structure, pseudo.metadata, overrides.electron_count

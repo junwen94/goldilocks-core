@@ -97,14 +97,22 @@ def electronic_step_advice(
         overrides.occupations,
         overrides.occupations_llm,
     )
+    # Post-relabeling structure when one exists (AFM species-splitting,
+    # v2 epic 9, #9) -- the actual simulated cell, not the pre-magnetic
+    # one ``analysis`` was computed from. Falls back to ``structure``
+    # when ``magnetic`` itself is blocked; k_sampling/n_irr_k do not need
+    # magnetic to succeed, only some structure to work with.
+    kmesh_structure = (
+        system.magnetic.value.relabeled_structure if system.magnetic.ok else structure
+    )
     k_sampling_state = k_sampling(
         analysis.is_metal,
-        structure,
+        kmesh_structure,
         occupations_state,
         overrides.k_sampling,
         overrides.k_sampling_llm,
     )
-    n_irr_k_state = n_irr_k(structure, k_sampling_state, overrides.n_irr_k)
+    n_irr_k_state = n_irr_k(kmesh_structure, k_sampling_state, overrides.n_irr_k)
 
     if system.electron_count.ok:
         nbnd_state = nbnd(

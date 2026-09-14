@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import shutil
 import tarfile
 from pathlib import Path
 
@@ -384,6 +385,56 @@ class TestAdviseDegradation:
 
         assert advice.system.pseudo.metadata.ok
         assert advice.system.cutoffs.ok
+
+
+@pytest.mark.skipif(
+    shutil.which("enum.x") is None and shutil.which("multienum.x") is None,
+    reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
+)
+class TestAfmRelabeling:
+    """v2 epic 9 (#9)'s AFM acceptance scenario, through the real
+    ``advise()`` orchestrator -- not just ``magnetic_config()`` in
+    isolation (that half is ``test_advisors_magnetic_config.py``'s job).
+    No asset store needed: table *selection* (which is all AFM relabeling
+    itself depends on) works off the bundled registry data alone."""
+
+    def test_afm_ordering_produces_a_relabeled_structure_and_a_different_symmetry_eff(
+        self, hpc
+    ) -> None:
+        rock_salt_feo = Structure(
+            Lattice.cubic(4.3), ["Fe", "O"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
+        )
+        overrides = RunOverrides(
+            system=SystemOverrides(
+                magnetic=MagneticConfigHumanInput(magnetic_ordering="afm")
+            )
+        )
+
+        advice = advise(rock_salt_feo, hpc=hpc, overrides=overrides)
+
+        assert advice.system.magnetic.ok
+        relabeled = advice.system.magnetic.value.relabeled_structure
+        assert len(set(relabeled.species)) > len(set(rock_salt_feo.species))
+
+        assert advice.analysis.symmetry.ok
+        assert advice.system.symmetry_eff.ok
+        assert advice.system.symmetry_eff.value != advice.analysis.symmetry.value
+
+        # k_sampling/n_irr_k consumed the relabeled (bigger) cell, not the
+        # original one, and did not crash doing it.
+        assert advice.step.kpoints.k_sampling.ok
+        assert advice.step.kpoints.n_irr_k.ok
+
+    def test_fm_default_keeps_symmetry_eff_identical_to_symmetry(self, hpc) -> None:
+        rock_salt_feo = Structure(
+            Lattice.cubic(4.3), ["Fe", "O"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
+        )
+
+        advice = advise(rock_salt_feo, hpc=hpc)
+
+        assert advice.system.magnetic.ok
+        assert advice.system.magnetic.value.relabeled_structure == rock_salt_feo
+        assert advice.system.symmetry_eff.value == advice.analysis.symmetry.value
 
 
 def test_pseudo_requirements_reflects_first_pass_spin_orbit(

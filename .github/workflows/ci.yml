@@ -33,6 +33,21 @@ jobs:
       - name: Install frozen dependencies
         run: uv sync --group dev --all-extras
 
+      - name: Build enumlib (external dependency for AFM species-splitting)
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gfortran
+          git clone --recursive --depth 1 https://github.com/msg-byu/enumlib.git /tmp/enumlib
+          make -C /tmp/enumlib/symlib/src F90=gfortran
+          make -C /tmp/enumlib/src F90=gfortran
+          make -C /tmp/enumlib/src F90=gfortran enum.x
+          install -d /tmp/enumlib-bin
+          install /tmp/enumlib/src/enum.x /tmp/enumlib-bin/enum.x
+          sed "1s|.*|#!${{ github.workspace }}/.venv/bin/python3|" \
+            /tmp/enumlib/aux_src/makeStr.py > /tmp/enumlib-bin/makeStr.py
+          chmod +x /tmp/enumlib-bin/makeStr.py
+          echo "/tmp/enumlib-bin" >> "$GITHUB_PATH"
+
       - name: Ruff check
         run: uv run ruff check src tests scripts
 

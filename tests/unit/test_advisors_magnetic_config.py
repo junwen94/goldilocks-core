@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import shutil
+
+import pytest
 from pymatgen.core import Lattice, Structure
 
+from goldilocks_core.advisors import magnetic_config as magnetic_config_module
 from goldilocks_core.advisors.magnetic_config import (
     MagneticConfigHumanInput,
     magnetic_config,
@@ -11,6 +15,13 @@ from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailabl
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
 _SILICON = Structure(Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]])
+_ROCK_SALT_FEO = Structure(
+    Lattice.cubic(4.3), ["Fe", "O"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
+)
+
+_ENUMLIB_MISSING = (
+    shutil.which("enum.x") is None and shutil.which("multienum.x") is None
+)
 
 
 def test_magnetic_structure_gets_spin_polarized_and_a_starting_magnetization() -> None:
@@ -174,9 +185,108 @@ def test_soc_is_never_auto_enabled_even_when_needs_soc_says_yes() -> None:
     )
 
 
-def test_relabeled_structure_is_the_identity_for_now() -> None:
-    """AFM species-splitting itself is a later extension -- the shape exists
-    now, the behaviour ships FM-only."""
+def test_relabeled_structure_is_the_identity_by_default() -> None:
+    """AFM species-splitting (v2 epic 9, #9) is opt-in via
+    ``magnetic_ordering="afm"`` -- without it, ``relabeled_structure`` stays
+    the FM identity pass-through, same as before that feature existed."""
     state = magnetic_config(_IRON, is_magnetic(_IRON))
 
     assert state.value.relabeled_structure == _IRON
+
+
+@pytest.mark.skipif(
+    _ENUMLIB_MISSING,
+    reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
+)
+def test_afm_ordering_finds_a_real_compensated_split() -> None:
+    """v2 epic 9 (#9)'s AFM acceptance scenario: rock-salt FeO has one Fe
+    sublattice by symmetry, so a real, compensated antiferromagnetic
+    ordering needs distinguishing the two Fe sites -- proving
+    relabeled_structure genuinely has more species than structure, not
+    just that the type accepts it."""
+    state = magnetic_config(
+        _ROCK_SALT_FEO,
+        is_magnetic(_ROCK_SALT_FEO),
+        human=MagneticConfigHumanInput(magnetic_ordering="afm"),
+    )
+
+    assert state.ok
+    facts = state.value
+    assert len(set(facts.relabeled_structure.species)) > len(
+        set(_ROCK_SALT_FEO.species)
+    )
+    fe_moments = [
+        value
+        for label, value in facts.starting_magnetization.items()
+        if label.startswith("Fe")
+    ]
+    assert len(fe_moments) == 2
+    assert any(moment > 0 for moment in fe_moments)
+    assert any(moment < 0 for moment in fe_moments)
+    assert any(
+        warning.code == "magnetic.afm_ordering_applied" for warning in facts.warnings
+    )
+
+
+def test_afm_ordering_degrades_when_enumlib_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    state = magnetic_config(
+        _ROCK_SALT_FEO,
+        is_magnetic(_ROCK_SALT_FEO),
+        human=MagneticConfigHumanInput(magnetic_ordering="afm"),
+    )
+
+    assert state.ok
+    assert state.value.relabeled_structure == _ROCK_SALT_FEO
+    assert any(
+        warning.code == "magnetic.afm_ordering_unavailable"
+        and "enumlib" in warning.message
+        for warning in state.value.warnings
+    )
+
+
+def test_afm_ordering_degrades_for_oversized_structures() -> None:
+    oversized = _ROCK_SALT_FEO * (3, 3, 3)  # 54 sites, over the ceiling
+
+    state = magnetic_config(
+        oversized,
+        is_magnetic(oversized),
+        human=MagneticConfigHumanInput(magnetic_ordering="afm"),
+    )
+
+    assert state.ok
+    assert state.value.relabeled_structure == oversized
+    assert any(
+        warning.code == "magnetic.afm_ordering_unavailable"
+        and "ceiling" in warning.message
+        for warning in state.value.warnings
+    )
+
+
+def test_afm_ordering_degrades_when_no_compensated_ordering_is_found(
+    monkeypatch,
+) -> None:
+    class _NoAfmCandidates:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.ordered_structures = [_IRON]
+            self.ordered_structure_origins = ["fm"]
+
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/enum.x")
+    monkeypatch.setattr(
+        magnetic_config_module, "MagneticStructureEnumerator", _NoAfmCandidates
+    )
+
+    state = magnetic_config(
+        _IRON,
+        is_magnetic(_IRON),
+        human=MagneticConfigHumanInput(magnetic_ordering="afm"),
+    )
+
+    assert state.ok
+    assert state.value.relabeled_structure == _IRON
+    assert any(
+        warning.code == "magnetic.afm_ordering_unavailable"
+        and "no compensated" in warning.message
+        for warning in state.value.warnings
+    )

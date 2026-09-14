@@ -237,6 +237,14 @@ _SETTING_META: dict[str, _SettingExtra] = {
             "valence-electron-based heuristic."
         ),
     },
+    "magnetic_ordering": {
+        "description": (
+            "Opt in to a compensated antiferromagnetic ordering search "
+            "('afm') instead of the ferromagnetic default ('fm' or unset); "
+            "degrades to ferromagnetic with a warning if no ordering can "
+            "be found."
+        ),
+    },
     "use_vdw": {
         "description": (
             "Force whether a van der Waals dispersion correction is applied."

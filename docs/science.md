@@ -75,6 +75,17 @@ elements. Enabling it changes the required pseudopotentials and the QE spin
 settings. See [relativistic modes](conventions.md#relativistic-modes) and the
 [table restrictions](pseudopotentials.md#choose-a-table).
 
+Set `magnetic_ordering` to `afm` to opt in to a compensated antiferromagnetic
+search instead of the ferromagnetic default. Goldilocks cannot tell you which
+magnetic ordering is the true ground state -- that needs comparing total
+energies from several actual calculations -- so this only gives one
+reasonable, deterministic starting point (the smallest compensated ordering
+found), for you to run and compare against the ferromagnetic guess yourself.
+This needs the external `enumlib` executables (`enum.x`, `makeStr.py`) on
+`PATH`; without them, or if no compensated ordering exists for your
+structure, it degrades to the ferromagnetic default with a warning rather
+than failing.
+
 ## Check dispersion and dimensionality
 
 Dispersion accounts for long-range interactions that common semilocal
