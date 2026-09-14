@@ -119,6 +119,19 @@ _TASK = "scf_single_point"
 _PROGRAM = "pw.x"
 
 
+def _approaches(ml_target: str | None) -> list[str]:
+    """Design point (1)-b: ``ml_target`` is a static declaration;
+    ``approaches`` is what's *actually* usable right now, computed as
+    ``["human"] + (["ml"] if that target has an installed model) +
+    ["heuristic"]``. No target has an installed model yet -- ml
+    integration is deliberately last (v2 epic 11, #11) -- so this
+    always resolves to ``["human", "heuristic"]`` today regardless of
+    ``ml_target``; the parameter is threaded through now so epic 11
+    only has to change this one function's body, not any caller."""
+    del ml_target  # unused until epic 11 wires a real installed-model check
+    return ["human", "heuristic"]
+
+
 class Setting(TypedDict, total=False):
     key: str
     group: str
@@ -132,6 +145,7 @@ class Setting(TypedDict, total=False):
     programs: list[str] | None
     scope: Literal["system", "per_step"]
     ml_target: str | None
+    approaches: list[str]
     description: str
 
 
@@ -140,6 +154,7 @@ class Fact(TypedDict):
     type: str
     values: list[str] | None
     ml_target: str | None
+    approaches: list[str]
     overridable: bool
     description: str
 
@@ -374,6 +389,7 @@ _FACTS: tuple[Fact, ...] = (
         type="enum",
         values=list(typing.get_args(Metallicity)),
         ml_target="is_metal",
+        approaches=_approaches("is_metal"),
         overridable=True,
         description="Whether the structure is metallic, from composition alone.",
     ),
@@ -382,6 +398,7 @@ _FACTS: tuple[Fact, ...] = (
         type="enum",
         values=list(typing.get_args(Magnetism)),
         ml_target="is_magnetic",
+        approaches=_approaches("is_magnetic"),
         overridable=True,
         description="Whether the structure is expected to be magnetic.",
     ),
@@ -390,6 +407,7 @@ _FACTS: tuple[Fact, ...] = (
         type="boolean",
         values=None,
         ml_target=None,
+        approaches=_approaches(None),
         overridable=True,
         description=(
             "Whether spin-orbit coupling is likely relevant for this structure."
@@ -400,6 +418,7 @@ _FACTS: tuple[Fact, ...] = (
         type="boolean",
         values=None,
         ml_target=None,
+        approaches=_approaches(None),
         overridable=True,
         description="Whether a Hubbard +U (or hybrid) correction is likely needed.",
     ),
@@ -557,6 +576,7 @@ def bindings() -> dict[str, SettingBinding]:
 
 def _setting_from_leaf(leaf: SettingBinding) -> Setting:
     extra = _SETTING_META.get(leaf.inner_field or leaf.outer_field, {})
+    ml_target = extra.get("ml_target")
     setting: Setting = {
         "key": leaf.key,
         "group": leaf.group,
@@ -566,7 +586,8 @@ def _setting_from_leaf(leaf: SettingBinding) -> Setting:
         "tasks": None,
         "programs": leaf.programs,
         "scope": leaf.scope,
-        "ml_target": extra.get("ml_target"),
+        "ml_target": ml_target,
+        "approaches": _approaches(ml_target),
         "description": extra.get("description", ""),
     }
     if "default" in extra:

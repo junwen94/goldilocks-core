@@ -172,6 +172,16 @@ class TestSettingsCompleteness:
 
         assert settings["k_distance"]["ml_target"] == "k_index"
 
+    def test_approaches_never_includes_ml_since_no_model_is_installed(self) -> None:
+        """Design point (1)-b: ml_target is a static declaration,
+        approaches is runtime-computed -- k_distance declares an
+        ml_target but must not claim "ml" is usable when epic 11
+        hasn't wired any model in yet."""
+        settings = {s["key"]: s for s in capabilities()["settings"]}
+
+        assert settings["k_distance"]["approaches"] == ["human", "heuristic"]
+        assert settings["functional"]["approaches"] == ["human", "heuristic"]
+
     def test_units_are_present_where_physically_meaningful(self) -> None:
         settings = {s["key"]: s for s in capabilities()["settings"]}
 
@@ -192,6 +202,7 @@ class TestFacts:
 
         assert set(facts["is_metal"]["values"]) == {"metal", "non_metal"}
         assert facts["is_metal"]["ml_target"] == "is_metal"
+        assert facts["is_metal"]["approaches"] == ["human", "heuristic"]
 
     def test_all_facts_are_overridable(self) -> None:
         for fact in capabilities()["facts"]:

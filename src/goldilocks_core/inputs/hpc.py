@@ -39,6 +39,8 @@ import tomllib
 from dataclasses import dataclass
 from importlib import resources
 
+from goldilocks_core.failures import ExpectedFailure
+
 
 @dataclass(frozen=True, slots=True)
 class Hardware:
@@ -81,8 +83,15 @@ class HpcProfile:
             ) from None
 
 
-class InvalidHpcProfile(ValueError):
-    """A profile TOML file is missing required fields or malformed."""
+class InvalidHpcProfile(ExpectedFailure, ValueError):
+    """A profile TOML file is missing required fields or malformed, or a
+    named profile doesn't exist. Made an ``ExpectedFailure`` in v2 epic
+    8 (#8): a bad ``--hpc`` name is a user-input error like any other
+    (``StructureInputError``, ``GenerationError``, ...), not a bug --
+    the one CLI/HTTP/MCP validation path needs to be able to catch it
+    the same uniform way."""
+
+    kind = "invalid_hpc_profile"
 
 
 def load_hpc_profile(name: str) -> HpcProfile:
