@@ -86,6 +86,7 @@ from __future__ import annotations
 
 import types
 import typing
+from dataclasses import dataclass
 from importlib.metadata import version as package_version
 from typing import Literal, TypedDict
 
@@ -437,66 +438,146 @@ def _json_type(annotation: object) -> dict[str, object]:
     return {"type": "string"}
 
 
-def _settings_from_human_input(group: str, human_input_cls: type) -> list[Setting]:
-    settings: list[Setting] = []
+@dataclass(frozen=True, slots=True)
+class SettingBinding:
+    """One ``--set``-able key's construction recipe, alongside its
+    display metadata -- the single walk ``_leaves()`` below performs
+    once, shared by ``capabilities()`` (projects to JSON) and the
+    shared request-validation layer, so the two can never drift apart
+    by walking the override tree two different ways.
+
+    ``branch`` says which of ``RunOverrides``' three sub-trees this key
+    belongs to; ``outer_field`` is that sub-tree's own field name
+    (``SystemOverrides.cutoffs``, say); ``inner_field`` is the field
+    *inside* the ``HumanInput`` class for a wrapped setting, or ``None``
+    for a plain-typed one (``pseudo_table_id``) where ``outer_field``
+    *is* the setting. ``json_type`` is ``_json_type(annotation)``,
+    computed once here rather than re-derived by every consumer --
+    the shared request-validation layer's CLI string-coercion reads
+    ``json_type["type"]`` directly instead of importing this module's
+    own private type-mapping helper.
+    """
+
+    key: str
+    group: str
+    branch: Literal["system", "kpoints", "resources"]
+    outer_field: str
+    inner_field: str | None
+    human_input_cls: type | None
+    annotation: object
+    json_type: dict[str, object]
+    scope: Literal["system", "per_step"]
+    programs: list[str] | None
+
+
+def _leaves_from_human_input(
+    branch: Literal["system", "kpoints", "resources"],
+    outer_field: str,
+    human_input_cls: type,
+    *,
+    scope: Literal["system", "per_step"],
+    programs: list[str] | None,
+) -> list[SettingBinding]:
+    leaves = []
     for name, info in human_input_cls.model_fields.items():
         extra = _SETTING_META.get(name, {})
-        key = extra.get("key", name)
-        setting: Setting = {"key": key, "group": group, **_json_type(info.annotation)}
-        setting["unit"] = extra.get("unit")
-        if "default" in extra:
-            setting["default"] = extra["default"]
-        if "enum_from" in extra:
-            setting["enum_from"] = extra["enum_from"]
-        setting["ml_target"] = extra.get("ml_target")
-        setting["description"] = extra.get("description", "")
-        settings.append(setting)
-    return settings
+        leaves.append(
+            SettingBinding(
+                key=extra.get("key", name),
+                group=outer_field,
+                branch=branch,
+                outer_field=outer_field,
+                inner_field=name,
+                human_input_cls=human_input_cls,
+                annotation=info.annotation,
+                json_type=_json_type(info.annotation),
+                scope=scope,
+                programs=programs,
+            )
+        )
+    return leaves
 
 
-def _settings_from_overrides(
-    overrides_cls: type, *, scope: Literal["system", "per_step"]
-) -> list[Setting]:
+def _leaves_from_overrides(
+    overrides_cls: type,
+    *,
+    branch: Literal["system", "kpoints", "resources"],
+    scope: Literal["system", "per_step"],
+) -> list[SettingBinding]:
     hints = typing.get_type_hints(overrides_cls)
     programs = None if scope == "system" else [_PROGRAM]
-    settings: list[Setting] = []
+    leaves: list[SettingBinding] = []
     for name, annotation in hints.items():
         if name.endswith("_llm"):
             continue
         inner = _unwrap_optional(annotation)
         if isinstance(inner, type) and hasattr(inner, "model_fields"):
-            for setting in _settings_from_human_input(name, inner):
-                setting["codes"] = None
-                setting["tasks"] = None
-                setting["programs"] = programs
-                setting["scope"] = scope
-                settings.append(setting)
+            leaves.extend(
+                _leaves_from_human_input(
+                    branch, name, inner, scope=scope, programs=programs
+                )
+            )
         else:
             extra = _SETTING_META.get(name, {})
-            setting: Setting = {
-                "key": extra.get("key", name),
-                "group": name,
-                **_json_type(inner),
-                "unit": extra.get("unit"),
-                "codes": None,
-                "tasks": None,
-                "programs": programs,
-                "scope": scope,
-                "ml_target": extra.get("ml_target"),
-                "description": extra.get("description", ""),
-            }
-            if "default" in extra:
-                setting["default"] = extra["default"]
-            settings.append(setting)
-    return settings
+            leaves.append(
+                SettingBinding(
+                    key=extra.get("key", name),
+                    group=name,
+                    branch=branch,
+                    outer_field=name,
+                    inner_field=None,
+                    human_input_cls=None,
+                    annotation=inner,
+                    json_type=_json_type(inner),
+                    scope=scope,
+                    programs=programs,
+                )
+            )
+    return leaves
+
+
+def _leaves() -> list[SettingBinding]:
+    return [
+        *_leaves_from_overrides(SystemOverrides, branch="system", scope="system"),
+        *_leaves_from_overrides(KpointsOverrides, branch="kpoints", scope="per_step"),
+        *_leaves_from_overrides(
+            ResourceOverrides, branch="resources", scope="per_step"
+        ),
+    ]
+
+
+def bindings() -> dict[str, SettingBinding]:
+    """Every ``--set``-able key's construction recipe, keyed by its
+    exposed capabilities key -- used by the shared request-validation
+    layer to turn ``{key: value}`` into a real ``RunOverrides``, and by
+    nothing inside this module (``_settings()`` below projects the same
+    ``_leaves()`` call to JSON instead)."""
+    return {leaf.key: leaf for leaf in _leaves()}
+
+
+def _setting_from_leaf(leaf: SettingBinding) -> Setting:
+    extra = _SETTING_META.get(leaf.inner_field or leaf.outer_field, {})
+    setting: Setting = {
+        "key": leaf.key,
+        "group": leaf.group,
+        **leaf.json_type,
+        "unit": extra.get("unit"),
+        "codes": None,
+        "tasks": None,
+        "programs": leaf.programs,
+        "scope": leaf.scope,
+        "ml_target": extra.get("ml_target"),
+        "description": extra.get("description", ""),
+    }
+    if "default" in extra:
+        setting["default"] = extra["default"]
+    if "enum_from" in extra:
+        setting["enum_from"] = extra["enum_from"]
+    return setting
 
 
 def _settings() -> list[Setting]:
-    return [
-        *_settings_from_overrides(SystemOverrides, scope="system"),
-        *_settings_from_overrides(KpointsOverrides, scope="per_step"),
-        *_settings_from_overrides(ResourceOverrides, scope="per_step"),
-    ]
+    return [_setting_from_leaf(leaf) for leaf in _leaves()]
 
 
 def _facts() -> list[Fact]:
