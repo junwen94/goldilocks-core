@@ -25,10 +25,15 @@ from goldilocks_core.server.documents import (
 from goldilocks_core.server.readiness import AssetReadiness
 from goldilocks_core.service import (
     advise,
+    advise_dos,
     check,
+    check_dos,
     generate,
+    generate_dos,
     render_submission,
+    render_submission_dos,
     to_bundle_input,
+    to_bundle_input_dos,
 )
 from goldilocks_core.set_overrides import build_overrides
 from goldilocks_core.steps import default_shared_context
@@ -74,13 +79,22 @@ def explain(document: ComputeRequestDocument) -> dict[str, Any]:
     structure = normalize_structure(_structure_source(document)).structure
     hpc = resolve_hpc_profile(document.hpc, field=_HPC_FIELD_NAME)
     overrides = build_overrides(document.overrides)
-    advice = advise(
-        structure,
-        code=document.code,
-        hpc=hpc,
-        overrides=overrides,
-        fetch_missing=document.fetch_missing,
-    )
+    if document.task == "dos":
+        advice = advise_dos(
+            structure,
+            code=document.code,
+            hpc=hpc,
+            overrides=overrides,
+            fetch_missing=document.fetch_missing,
+        )
+    else:
+        advice = advise(
+            structure,
+            code=document.code,
+            hpc=hpc,
+            overrides=overrides,
+            fetch_missing=document.fetch_missing,
+        )
     return {
         "records": _records_document(advice.records()),
         "warnings": advice.warnings(),
@@ -95,21 +109,36 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
     structure = normalize_structure(_structure_source(document)).structure
     hpc = resolve_hpc_profile(document.hpc, field=_HPC_FIELD_NAME)
     overrides = build_overrides(document.overrides)
-    advice = advise(
-        structure,
-        code=document.code,
-        hpc=hpc,
-        overrides=overrides,
-        fetch_missing=document.fetch_missing,
-    )
-    report = check(advice)
-    steps = generate(advice, report)  # raises AdviceIncomplete if report is not ok
     ctx = default_shared_context()
-    script = render_submission(advice, hpc, document.code, ctx, steps)
-    bundle_input = to_bundle_input(advice, steps, script, ctx)
+    if document.task == "dos":
+        dos_advice = advise_dos(
+            structure,
+            code=document.code,
+            hpc=hpc,
+            overrides=overrides,
+            fetch_missing=document.fetch_missing,
+        )
+        dos_report = check_dos(dos_advice)
+        steps = generate_dos(dos_advice, dos_report, ctx=ctx)
+        script = render_submission_dos(dos_advice, hpc, document.code, ctx, steps)
+        bundle_input = to_bundle_input_dos(dos_advice, steps, script, ctx)
+        records, adv_warnings = dos_advice.records(), dos_advice.warnings()
+    else:
+        advice = advise(
+            structure,
+            code=document.code,
+            hpc=hpc,
+            overrides=overrides,
+            fetch_missing=document.fetch_missing,
+        )
+        report = check(advice)
+        steps = generate(advice, report)  # raises AdviceIncomplete if not ok
+        script = render_submission(advice, hpc, document.code, ctx, steps)
+        bundle_input = to_bundle_input(advice, steps, script, ctx)
+        records, adv_warnings = advice.records(), advice.warnings()
     summary = {
         "files": [file["path"] for file in bundle_files(bundle_input)],
-        "records": _records_document(advice.records()),
-        "warnings": advice.warnings(),
+        "records": _records_document(records),
+        "warnings": adv_warnings,
     }
     return summary, bundle_input

@@ -121,6 +121,7 @@ tiers, per design point (5)."""
 
 _CODE = "quantum_espresso"
 _TASK = "scf_single_point"
+_DOS_TASK = "dos"
 _PROGRAM = "pw.x"
 
 
@@ -195,8 +196,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "pseudo_table_id": {
         "description": (
-            "Pin an explicit pseudopotential table id instead of automatic "
-            "selection."
+            "Pin an explicit pseudopotential table id instead of automatic selection."
         ),
     },
     "ecutwfc_ry": {
@@ -373,14 +373,12 @@ _SETTING_META: dict[str, _SettingExtra] = {
     "walltime_h": {
         "unit": "hours",
         "description": (
-            "Requested job walltime; heuristic default is the partition's "
-            "own maximum."
+            "Requested job walltime; heuristic default is the partition's own maximum."
         ),
     },
     "account": {
         "description": (
-            "HPC accounting/billing code; personal to the submitter, never "
-            "guessed."
+            "HPC accounting/billing code; personal to the submitter, never guessed."
         ),
     },
     "npool": {
@@ -628,9 +626,7 @@ def _settings() -> list[Setting]:
     so ``bindings()`` (the `--set`/override construction path) accepts
     them; only this JSON projection skips them."""
     fact_keys = {fact["key"] for fact in _FACTS}
-    return [
-        _setting_from_leaf(leaf) for leaf in _leaves() if leaf.key not in fact_keys
-    ]
+    return [_setting_from_leaf(leaf) for leaf in _leaves() if leaf.key not in fact_keys]
 
 
 def _facts() -> list[Fact]:
@@ -671,7 +667,7 @@ def _hpc_profiles() -> list[dict[str, object]]:
 
 
 def _codes() -> list[dict[str, object]]:
-    return [{"id": _CODE, "name": "Quantum ESPRESSO", "tasks": [_TASK]}]
+    return [{"id": _CODE, "name": "Quantum ESPRESSO", "tasks": [_TASK, _DOS_TASK]}]
 
 
 def _tasks() -> list[dict[str, object]]:
@@ -683,7 +679,18 @@ def _tasks() -> list[dict[str, object]]:
             "codes": [_CODE],
             "step_count": 1,
             "executables": [_PROGRAM],
-        }
+        },
+        {
+            "id": _DOS_TASK,
+            "name": "Density of states",
+            "description": (
+                "scf, then a denser nscf pass, then dos.x -- three steps "
+                "sharing one prefix/outdir (v2 epic 9, #9)."
+            ),
+            "codes": [_CODE],
+            "step_count": 3,
+            "executables": [_PROGRAM, _PROGRAM, "dos.x"],
+        },
     ]
 
 

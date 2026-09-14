@@ -97,6 +97,36 @@ class TestToolCalls:
         assert result.is_error is False
         assert "scf.in" in result.structured_content["files"]
 
+    def test_run_tool_dos_task_generates_all_three_steps(
+        self, real_assets, silicon_cif: str
+    ) -> None:
+        """v2 epic 9 (#9, #28): the MCP `run` tool used to silently
+        ignore `task`, always running the scf-only pipeline -- this
+        confirms it actually routes to advise_dos/generate_dos through
+        the real MCP transport (the same shared _handlers.run HTTP
+        calls, so this is really pinning that the document.task field
+        reaches it, not re-testing the routing logic itself)."""
+        server = create_server()
+
+        result = asyncio.run(
+            server.call_tool(
+                "run",
+                {
+                    "document": {
+                        "structure_content": silicon_cif,
+                        "hpc": "scarf",
+                        "task": "dos",
+                    }
+                },
+            )
+        )
+
+        assert result.is_error is False
+        files = result.structured_content["files"]
+        assert "scf.in" in files
+        assert "nscf.in" in files
+        assert "dos.in" in files
+
     def test_unknown_top_level_argument_raises_tool_error(
         self, silicon_cif: str
     ) -> None:

@@ -50,15 +50,18 @@ from goldilocks_core.advisors.dos import (
 from goldilocks_core.advisors.k_sampling import KSamplingHumanInput
 from goldilocks_core.advisors.occupations import OccupationsHumanInput
 from goldilocks_core.assets.store import AssetStore
+from goldilocks_core.bundle import BundleInput
 from goldilocks_core.checks import CheckReport, collect_blocked
 from goldilocks_core.generation.quantum_espresso.dos import write_qe_dos
 from goldilocks_core.inputs.hpc import HpcProfile
 from goldilocks_core.resolution import FieldState
-from goldilocks_core.service._advice import Advice, RunOverrides
+from goldilocks_core.service._advice import Advice, RunOverrides, warnings_from_records
+from goldilocks_core.service._bundle import assemble_bundle_input
 from goldilocks_core.service._generate import AdviceIncomplete, generate
 from goldilocks_core.service._pipeline import advise, check
 from goldilocks_core.step_settings import DosSettings
 from goldilocks_core.steps import SharedContext, Step, default_shared_context
+from goldilocks_core.submission.slurm import render_slurm_script
 
 _NSCF_K_DISTANCE = 0.10
 """Å^-1. aiida-quantumespresso's own ``pdos.yaml`` "balanced" protocol
@@ -73,6 +76,26 @@ class DosAdvice:
 
     def field_states(self) -> tuple[FieldState[object], ...]:
         return self.scf.field_states() + self.nscf.field_states() + (self.dos,)
+
+    def records(self) -> dict[str, FieldState[object]]:
+        """``scf``'s records unprefixed (system-level fields --
+        ``functional``/``cutoffs``/``pseudopotentials``/``magnetic``/
+        etc. -- are identical between ``scf`` and ``nscf``, since only
+        per-step overrides differ between the two ``advise()`` calls
+        ``advise_dos`` makes), ``nscf``'s own per-step fields under an
+        ``nscf_`` prefix (v2 epic 9, #9, #28's delivery-layer routing --
+        the first caller that ever needs to tell the two steps' k
+        -sampling/occupations/nbnd/convergence/job apart), plus ``dos``
+        itself."""
+        merged: dict[str, FieldState[object]] = dict(self.scf.records())
+        merged.update(
+            {f"nscf_{name}": state for name, state in self.nscf.step.records().items()}
+        )
+        merged["dos"] = self.dos
+        return merged
+
+    def warnings(self) -> list[dict[str, object]]:
+        return warnings_from_records(self.records())
 
 
 def _nscf_overrides(overrides: RunOverrides) -> RunOverrides:
@@ -163,3 +186,40 @@ def generate_dos(
     )
     dos_steps = write_qe_dos(dos_settings_value, shared_ctx)
     return scf_steps + nscf_steps + tuple(dos_steps)
+
+
+def render_submission_dos(
+    advice: DosAdvice,
+    hpc: HpcProfile,
+    code: str,
+    ctx: SharedContext,
+    steps: tuple[Step, ...],
+) -> str:
+    """One shared script for a ``dos`` task's three steps (v2 epic 9,
+    #9, #28's delivery-layer routing). ``render_slurm_script`` takes
+    exactly one ``JobDecision`` for its ``#SBATCH`` directives, but
+    ``DosAdvice`` carries two independent ones (``scf``, ``nscf``) --
+    the scf step's governs the shared allocation, a documented choice:
+    it is normally the dominant cost, and ``dos.x`` itself is fast."""
+    return render_slurm_script(
+        hpc, advice.scf.step.resources.job.value, code, ctx, list(steps)
+    )
+
+
+def to_bundle_input_dos(
+    advice: DosAdvice,
+    steps: tuple[Step, ...],
+    submission_script: str,
+    ctx: SharedContext,
+) -> BundleInput:
+    """``service/_bundle.py``'s ``to_bundle_input``, for a ``dos``
+    task. Pseudopotential file bytes come from ``advice.scf`` -- the
+    same system-level decision as ``advice.nscf``'s, since only
+    per-step settings differ between the two ``advise()`` calls."""
+    return assemble_bundle_input(
+        advice.scf.system.pseudo.metadata,
+        steps,
+        submission_script,
+        ctx,
+        advice.records(),
+    )

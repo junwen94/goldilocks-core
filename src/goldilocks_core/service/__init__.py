@@ -50,7 +50,14 @@ from __future__ import annotations
 from goldilocks_core.service._advice import Advice, RunOverrides
 from goldilocks_core.service._analysis import AnalysisFacts, AnalysisOverrides
 from goldilocks_core.service._bundle import render_submission, to_bundle_input
-from goldilocks_core.service._dos import DosAdvice, advise_dos, check_dos, generate_dos
+from goldilocks_core.service._dos import (
+    DosAdvice,
+    advise_dos,
+    check_dos,
+    generate_dos,
+    render_submission_dos,
+    to_bundle_input_dos,
+)
 from goldilocks_core.service._generate import AdviceIncomplete, generate
 from goldilocks_core.service._pipeline import advise, check
 from goldilocks_core.service._pseudo import PseudoAdvice
@@ -85,5 +92,7 @@ __all__ = [
     "generate",
     "generate_dos",
     "render_submission",
+    "render_submission_dos",
     "to_bundle_input",
+    "to_bundle_input_dos",
 ]
