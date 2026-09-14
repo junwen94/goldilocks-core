@@ -235,6 +235,28 @@ class TestBuildOverrides:
         with pytest.raises(InvalidSetting):
             build_overrides({key: value})
 
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("k_distance", 0.0),
+            ("k_distance", -0.3),
+            ("k_grid", [0, 4, 4]),
+            ("k_grid", [-1, 4, 4]),
+            ("shift", [5, 5, 5]),
+            ("shift", [-1, 0, 1]),
+        ],
+    )
+    def test_k_sampling_invalid_override_raises_invalid_setting_not_a_crash(
+        self, key: str, value: object
+    ) -> None:
+        """Regression for #48: each of these used to be accepted
+        silently (k_grid/shift, written verbatim into the K_POINTS
+        card) or crash downstream with a raw ZeroDivisionError
+        (k_distance<=0), instead of a clean InvalidSetting -- the one
+        advisor #35's sweep never touched."""
+        with pytest.raises(InvalidSetting):
+            build_overrides({key: value})
+
     def test_empty_assignments_gives_all_defaults(self) -> None:
         overrides = build_overrides({})
 

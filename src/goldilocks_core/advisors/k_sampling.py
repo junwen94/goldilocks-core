@@ -61,7 +61,9 @@ isotropic and does not special-case low-dimensional structures.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Annotated
 
+from pydantic import Field
 from pymatgen.core import Structure
 
 from goldilocks_core.advisors.occupations import OccupationsDecision
@@ -75,6 +77,13 @@ from goldilocks_core.resolution import (
     Resolved,
     Warning,
 )
+
+_PositiveInt = Annotated[int, Field(gt=0)]
+_ZeroOrOne = Annotated[int, Field(ge=0, le=1)]
+"""Not `Literal[0, 1]` (`types.KPointShift`): `capabilities.py`'s
+`_json_type` renders any `Literal` as a string enum, which would be
+wrong for an integer domain -- a `ge`/`le`-bounded int keeps the
+exposed schema's `items` type as `integer`."""
 
 _GAMMA_SHIFT = (0, 0, 0)
 _METAL_K_DISTANCE = 0.15
@@ -104,13 +113,20 @@ class KSamplingDecision:
 
 
 class KSamplingHumanInput(HumanInput):
-    k_grid: tuple[int, int, int] | None = None
-    k_distance: float | None = None
-    shift: tuple[int, int, int] | None = None
+    k_grid: tuple[_PositiveInt, _PositiveInt, _PositiveInt] | None = None
+    """Each axis count must be >= 1 (#-- found in the epic 5/6/7 delivery
+    -layer audit): a 0 or negative entry used to be accepted, resolved,
+    and written verbatim into the K_POINTS card, silently telling QE to
+    sample zero or a negative number of points along that axis."""
+    k_distance: float | None = Field(default=None, gt=0)
+    shift: tuple[_ZeroOrOne, _ZeroOrOne, _ZeroOrOne] | None = None
+    """QE's own K_POINTS automatic card requires each shift component to
+    be exactly 0 or 1 (INPUT_PW.txt, checked 2026-09-14) -- any other
+    integer used to be accepted and written verbatim."""
 
 
 class KSamplingLlmInput(LlmInput):
-    k_distance: float | None = None
+    k_distance: float | None = Field(default=None, gt=0)
 
 
 def k_sampling(
