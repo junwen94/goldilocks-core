@@ -44,7 +44,7 @@ export function RecordReview({
                       size="xs"
                       circle
                       color={STATUS_COLORS[field.status]}
-                      aria-label={`Status: ${field.status}`}
+                      aria-hidden="true"
                     />
                     <span>{readableName(name)}</span>
                   </Group>

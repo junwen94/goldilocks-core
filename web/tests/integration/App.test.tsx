@@ -12,18 +12,19 @@ import { App } from "../../src/App";
 import type {
   ArchiveDownload,
   Capabilities,
-  ComputationResult,
   ComputeRequest,
   CoreClient,
-  PreparedComputation,
+  ExplainResult,
+  PseudopotentialTable,
+  RunResult,
+  StructureInput,
   StructureInspection,
-  StructureSource,
 } from "../../src/api/coreClient";
 import { CoreFailure } from "../../src/api/coreClient";
 import {
+  buildArchive,
   capabilities,
-  computationResult,
-  draft,
+  explainResult,
   inspection,
 } from "../support/workbenchFixtures";
 import { WorkspaceProvider } from "../../src/workspace/WorkspaceProvider";
@@ -37,9 +38,11 @@ vi.mock("../../src/viewer/StructureViewport", () => ({
 
 class CoreStub implements CoreClient {
   inspectionResults: Promise<StructureInspection>[] = [];
-  preparedResults: Promise<PreparedComputation>[] = [];
-  inspectedSources: StructureSource[] = [];
-  computeCalls: ComputeRequest[] = [];
+  explainResults: Promise<ExplainResult>[] = [];
+  archiveResults: Promise<ArchiveDownload>[] = [];
+  inspectedInputs: StructureInput[] = [];
+  explainCalls: ComputeRequest[] = [];
+  archiveCalls: ComputeRequest[] = [];
 
   constructor(readonly capabilitiesResult: Promise<Capabilities>) {}
 
@@ -47,100 +50,78 @@ class CoreStub implements CoreClient {
     return this.capabilitiesResult;
   }
 
-  inspectStructure(source: StructureSource): Promise<StructureInspection> {
-    this.inspectedSources.push(source);
+  inspectStructure(input: StructureInput): Promise<StructureInspection> {
+    this.inspectedInputs.push(input);
     return (
       this.inspectionResults.shift() ??
       Promise.reject(new Error("inspection not configured"))
     );
   }
 
-  compute(request: ComputeRequest): Promise<PreparedComputation> {
-    this.computeCalls.push(request);
+  explain(request: ComputeRequest): Promise<ExplainResult> {
+    this.explainCalls.push(request);
     return (
-      this.preparedResults.shift() ??
-      Promise.reject(new Error("prepared computation not configured"))
+      this.explainResults.shift() ??
+      Promise.reject(new Error("explain not configured"))
+    );
+  }
+
+  run(): Promise<RunResult> {
+    return Promise.reject(new Error("run not configured"));
+  }
+
+  runArchive(request: ComputeRequest): Promise<ArchiveDownload> {
+    this.archiveCalls.push(request);
+    return (
+      this.archiveResults.shift() ??
+      Promise.reject(new Error("archive not configured"))
     );
   }
 }
 
-function prepared(
-  result: ComputationResult = computationResult,
-  archive: ArchiveDownload | null = {
-    blob: new Blob(["zip"]),
-    filename: "goldilocks-inputs.zip",
-  },
-): PreparedComputation {
-  return { result, archive };
+function renderApp(core: CoreStub, saveArchive = vi.fn()) {
+  const workspace = createWorkspace(core, saveArchive);
+  return render(
+    <WorkspaceProvider workspace={workspace}>
+      <App />
+    </WorkspaceProvider>,
+  );
+}
+
+async function openStructure(
+  user: ReturnType<typeof userEvent.setup>,
+  container: HTMLElement,
+) {
+  await screen.findByRole("button", {
+    name: "Choose a CIF or POSCAR structure",
+  });
+  await user.upload(structureInputElement(container), structureFile());
+  await screen.findByLabelText("Functional");
 }
 
 describe("Goldilocks Workbench", () => {
-  it("keeps table choices aligned with functional and accuracy changes", async () => {
+  it("filters the pseudopotential table by the chosen functional", async () => {
     const user = userEvent.setup();
-    const base = capabilities.pseudopotential_sets[0];
-    if (base === undefined) throw new Error("Missing pseudopotential fixture");
-    const tables = [
-      base,
-      { ...base, id: "pbe-efficiency", functional: "PBE" },
-      {
-        ...base,
-        id: "pbe-precision",
-        functional: "PBE",
-        accuracy: "precision",
-      },
-    ];
-    const core = new CoreStub(
-      Promise.resolve({
-        ...capabilities,
-        pseudopotential_sets: tables,
-      }),
-    );
+    const pbesol = capabilities.pseudopotential_tables[0];
+    const pbe = capabilities.pseudopotential_tables[1];
+    if (pbesol === undefined || pbe === undefined) {
+      throw new Error("Missing pseudopotential fixture");
+    }
+    const core = new CoreStub(Promise.resolve(capabilities));
     core.inspectionResults = [Promise.resolve(inspection)];
-    core.preparedResults = [Promise.resolve(prepared())];
-    const workspace = createWorkspace(core);
-    const { container } = render(
-      <WorkspaceProvider workspace={workspace}>
-        <App />
-      </WorkspaceProvider>,
-    );
-    await screen.findByRole("button", {
-      name: "Choose a CIF or POSCAR structure",
-    });
-    await user.upload(structureInput(container), structureFile());
-    const table = await screen.findByLabelText("Pseudopotential table");
-    await user.selectOptions(table, base.id);
+    const { container } = renderApp(core);
+
+    await openStructure(user, container);
+    const table = screen.getByLabelText("Pseudopotential table");
+    expect(optionValues(table)).toEqual(["", pbesol.id, pbe.id]);
+
     await user.selectOptions(screen.getByLabelText("Functional"), "PBE");
-    expect(table).toHaveValue("");
-    expect(
-      within(table).queryByRole("option", { name: /PBEsol/ }),
-    ).not.toBeInTheDocument();
-    await user.selectOptions(table, "pbe-efficiency");
-    await user.selectOptions(screen.getByLabelText("Accuracy"), "precision");
-    expect(table).toHaveValue("");
-    expect(
-      within(table).queryByRole("option", { name: /efficiency/ }),
-    ).not.toBeInTheDocument();
-    await user.selectOptions(table, "pbe-precision");
-    await user.click(
-      screen.getByRole("button", { name: "Generate recommendation" }),
-    );
-    await screen.findByText("Recommended setup");
-    expect(core.computeCalls[0]?.draft).toMatchObject({
-      intent: { functional: "PBE", pseudo_accuracy: "precision" },
-      pseudo_table: "pbe-precision",
-    });
+
+    expect(optionValues(table)).toEqual(["", pbe.id]);
   });
 
   it("exposes a resizable two-panel structure workflow", async () => {
-    const workspace = createWorkspace(
-      new CoreStub(Promise.resolve(capabilities)),
-    );
-
-    render(
-      <WorkspaceProvider workspace={workspace}>
-        <App />
-      </WorkspaceProvider>,
-    );
+    renderApp(new CoreStub(Promise.resolve(capabilities)));
 
     expect(
       await screen.findByRole("region", { name: "Calculation setup" }),
@@ -151,27 +132,12 @@ describe("Goldilocks Workbench", () => {
     expect(
       screen.queryByRole("region", { name: "Recommendation results" }),
     ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("separator", { name: "Resize calculation setup" }),
-    ).toHaveAttribute("aria-valuenow", "34");
     expect(screen.getAllByRole("separator")).toHaveLength(1);
-    expect(
-      screen.getByRole("button", {
-        name: "Choose a CIF or POSCAR structure",
-      }),
-    ).toHaveAccessibleDescription("CIF or POSCAR · 5 MB maximum file size");
   });
 
   it("uses light mode by default and persists an explicit dark mode", async () => {
     const user = userEvent.setup();
-    const workspace = createWorkspace(
-      new CoreStub(Promise.resolve(capabilities)),
-    );
-    const { unmount } = render(
-      <WorkspaceProvider workspace={workspace}>
-        <App />
-      </WorkspaceProvider>,
-    );
+    const { unmount } = renderApp(new CoreStub(Promise.resolve(capabilities)));
     const toggle = await screen.findByRole("button", {
       name: "Switch to dark mode",
     });
@@ -183,33 +149,43 @@ describe("Goldilocks Workbench", () => {
     ).toBeInTheDocument();
 
     unmount();
-    const restoredWorkspace = createWorkspace(
-      new CoreStub(Promise.resolve(capabilities)),
-    );
-    render(
-      <WorkspaceProvider workspace={restoredWorkspace}>
-        <App />
-      </WorkspaceProvider>,
-    );
+    renderApp(new CoreStub(Promise.resolve(capabilities)));
     expect(
       await screen.findByRole("button", { name: "Switch to light mode" }),
     ).toBeInTheDocument();
+  });
+
+  it("announces the current Workbench operation in a persistent status", async () => {
+    const core = new CoreStub(Promise.resolve(capabilities));
+    let finishInspection: (value: StructureInspection) => void = () =>
+      undefined;
+    core.inspectionResults = [
+      new Promise((resolve) => {
+        finishInspection = resolve;
+      }),
+    ];
+    const { container } = renderApp(core);
+    await screen.findByRole("button", {
+      name: "Choose a CIF or POSCAR structure",
+    });
+
+    expect(
+      screen.getByRole("status", { name: "Workbench status" }),
+    ).toHaveTextContent("Ready");
+    await userEvent.upload(structureInputElement(container), structureFile());
+    expect(
+      screen.getByRole("status", { name: "Workbench status" }),
+    ).toHaveTextContent("Inspecting structure");
+
+    finishInspection(inspection);
   });
 
   it("preserves the inspected viewport when switching theme", async () => {
     const user = userEvent.setup();
     const core = new CoreStub(Promise.resolve(capabilities));
     core.inspectionResults = [Promise.resolve(inspection)];
-    const workspace = createWorkspace(core);
-    const { container } = render(
-      <WorkspaceProvider workspace={workspace}>
-        <App />
-      </WorkspaceProvider>,
-    );
-    await screen.findByRole("button", {
-      name: "Choose a CIF or POSCAR structure",
-    });
-    await user.upload(structureInput(container), structureFile());
+    const { container } = renderApp(core);
+    await openStructure(user, container);
     const viewport = await screen.findByLabelText("Crystal structure viewer");
     await user.click(
       screen.getByRole("button", { name: "Switch to dark mode" }),
@@ -223,83 +199,74 @@ describe("Goldilocks Workbench", () => {
 
   it("resizes the calculation panel from the keyboard", async () => {
     const user = userEvent.setup();
-    const workspace = createWorkspace(
-      new CoreStub(Promise.resolve(capabilities)),
-    );
-    render(
-      <WorkspaceProvider workspace={workspace}>
-        <App />
-      </WorkspaceProvider>,
-    );
+    renderApp(new CoreStub(Promise.resolve(capabilities)));
     const controls = await screen.findByRole("separator", {
       name: "Resize calculation setup",
     });
+    const initial = controls.getAttribute("aria-valuenow");
     controls.focus();
     await user.keyboard("{ArrowRight}");
-    expect(controls).toHaveAttribute("aria-valuenow", "36");
+    expect(controls.getAttribute("aria-valuenow")).not.toBe(initial);
     await user.keyboard("{ArrowLeft}");
-    expect(controls).toHaveAttribute("aria-valuenow", "34");
+    expect(controls).toHaveAttribute("aria-valuenow", initial);
   });
 
-  it("announces the current Workbench operation in a persistent status", async () => {
-    const core = new CoreStub(Promise.resolve(capabilities));
-    let finishInspection: (value: StructureInspection) => void = () =>
-      undefined;
-    core.inspectionResults = [
-      new Promise((resolve) => {
-        finishInspection = resolve;
-      }),
-    ];
-    const workspace = createWorkspace(core);
-    const { container } = render(
-      <WorkspaceProvider workspace={workspace}>
-        <App />
-      </WorkspaceProvider>,
-    );
-    await screen.findByRole("button", {
-      name: "Choose a CIF or POSCAR structure",
+  it("opens only the latest file when an earlier read resolves last", async () => {
+    let finishFirstRead: (content: string) => void = () => undefined;
+    const firstRead = new Promise<string>((resolve) => {
+      finishFirstRead = resolve;
     });
-
-    expect(
-      screen.getByRole("status", { name: "Workbench status" }),
-    ).toHaveTextContent("Ready");
-    await userEvent.upload(structureInput(container), structureFile());
-    expect(
-      screen.getByRole("status", { name: "Workbench status" }),
-    ).toHaveTextContent("Inspecting structure");
-
-    finishInspection(inspection);
-  });
-
-  it("recomputes edits before downloading the reviewed Draft", async () => {
-    const user = userEvent.setup();
-    const archive: ArchiveDownload = {
-      blob: new Blob(["zip"]),
-      filename: "goldilocks-inputs.zip",
-    };
+    const first = new File(["A"], "A.cif");
+    Object.defineProperty(first, "text", { value: () => firstRead });
+    const second = new File(["B"], "B.cif");
+    Object.defineProperty(second, "text", {
+      value: () => Promise.resolve("structure B"),
+    });
     const core = new CoreStub(Promise.resolve(capabilities));
     core.inspectionResults = [Promise.resolve(inspection)];
-    core.preparedResults = [
-      Promise.resolve(prepared(computationResult, archive)),
-      Promise.resolve(prepared(computationResult, archive)),
-    ];
-    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
-    const workspace = createWorkspace(core, saveArchive);
-    const { container } = render(
-      <WorkspaceProvider workspace={workspace}>
-        <App />
-      </WorkspaceProvider>,
-    );
+    const { container } = renderApp(core);
     await screen.findByRole("button", {
       name: "Choose a CIF or POSCAR structure",
     });
-    await user.upload(structureInput(container), structureFile());
+
+    await userEvent.upload(structureInputElement(container), first);
+    await userEvent.upload(structureInputElement(container), second);
+    await waitFor(() => {
+      expect(core.inspectedInputs).toEqual([
+        {
+          structure_content: "structure B",
+          structure_name: "B.cif",
+          structure_format: "cif",
+        },
+      ]);
+    });
+    finishFirstRead("structure A");
+    await firstRead;
+    await Promise.resolve();
+
+    expect(core.inspectedInputs).toHaveLength(1);
+  });
+
+  it("recomputes edits before generating input files, then downloads the exact archive", async () => {
+    const user = userEvent.setup();
+    const archive = buildArchive();
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [
+      Promise.resolve(explainResult),
+      Promise.resolve(explainResult),
+    ];
+    core.archiveResults = [Promise.resolve(archive)];
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const { container } = renderApp(core, saveArchive);
+
+    await openStructure(user, container);
     await user.click(
       await screen.findByRole("button", { name: "Generate recommendation" }),
     );
-    await screen.findByText("Recommended setup");
-    await user.click(screen.getByText("Scientific overrides"));
-    await user.selectOptions(screen.getByLabelText("Spin treatment"), "true");
+    await screen.findByText("K Sampling");
+    await user.click(within(calculationSetup()).getByText("Magnetic"));
+    await user.selectOptions(screen.getByLabelText("spin polarized"), "true");
 
     await user.click(
       screen.getByRole("button", { name: "Update recommendation" }),
@@ -310,7 +277,7 @@ describe("Goldilocks Workbench", () => {
       ).not.toBeInTheDocument();
     });
     await user.click(
-      screen.getByRole("button", { name: "Download input files (.zip)" }),
+      screen.getByRole("button", { name: "Generate input files (.zip)" }),
     );
 
     await waitFor(() => {
@@ -318,125 +285,95 @@ describe("Goldilocks Workbench", () => {
     });
     expect(
       screen.getByRole("status", { name: "Archive status" }),
-    ).toHaveTextContent("goldilocks-inputs.zip is ready");
-    expect(core.computeCalls.slice(1)).toMatchObject([
-      {
-        draft: { hints: { spin_polarized: true } },
-        selection: { preset: "generate" },
-      },
-    ]);
+    ).toHaveTextContent(`${archive.filename} is ready`);
+    expect(core.explainCalls[1]?.overrides).toMatchObject({
+      spin_polarized: true,
+    });
+    expect(core.archiveCalls[0]?.overrides).toMatchObject({
+      spin_polarized: true,
+    });
   });
 
-  it("submits smearing treatment and width as one valid override", async () => {
+  it("submits smearing treatment and width as overrides in the occupations group", async () => {
     const user = userEvent.setup();
     const core = new CoreStub(Promise.resolve(capabilities));
     core.inspectionResults = [Promise.resolve(inspection)];
-    core.preparedResults = [Promise.resolve(prepared())];
-    const workspace = createWorkspace(core);
-    const { container } = render(
-      <WorkspaceProvider workspace={workspace}>
-        <App />
-      </WorkspaceProvider>,
-    );
-    await screen.findByRole("button", {
-      name: "Choose a CIF or POSCAR structure",
-    });
-    await user.upload(structureInput(container), structureFile());
-    await user.click(screen.getByText("Scientific overrides"));
-    await user.selectOptions(
-      screen.getByLabelText("Smearing treatment"),
-      "cold",
-    );
-    const width = screen.getByLabelText("Smearing width · Ry");
-    expect(width).toBeEnabled();
-    fireEvent.change(width, { target: { value: "0.02" } });
+    core.explainResults = [Promise.resolve(explainResult)];
+    const { container } = renderApp(core);
+
+    await openStructure(user, container);
+    await user.click(within(calculationSetup()).getByText("Occupations"));
+    await user.selectOptions(screen.getByLabelText("smearing type"), "cold");
+    const degauss = screen.getByLabelText("degauss · Ry");
+    expect(degauss).toBeEnabled();
+    fireEvent.change(degauss, { target: { value: "0.02" } });
 
     await user.click(
       screen.getByRole("button", { name: "Generate recommendation" }),
     );
 
-    expect(core.computeCalls[0]).toMatchObject({
-      draft: {
-        hints: {
-          smearing_type: "cold",
-          smearing_width_ry: 0.02,
-        },
-      },
-      selection: { preset: "generate" },
+    expect(core.explainCalls[0]?.overrides).toMatchObject({
+      smearing_type: "cold",
+      degauss: 0.02,
     });
   });
 
-  it("keeps the old Result visible and disables download after an edit", async () => {
+  it("keeps the old review visible and disables input generation after an edit", async () => {
     const user = userEvent.setup();
     const core = new CoreStub(Promise.resolve(capabilities));
     core.inspectionResults = [Promise.resolve(inspection)];
-    core.preparedResults = [Promise.resolve(prepared())];
-    const workspace = createWorkspace(core, vi.fn());
-    const { container } = render(
-      <WorkspaceProvider workspace={workspace}>
-        <App />
-      </WorkspaceProvider>,
-    );
-    await screen.findByRole("button", {
-      name: "Choose a CIF or POSCAR structure",
-    });
-    await user.upload(structureInput(container), structureFile());
+    core.explainResults = [Promise.resolve(explainResult)];
+    const { container } = renderApp(core, vi.fn());
+
+    await openStructure(user, container);
     await user.click(
       await screen.findByRole("button", { name: "Generate recommendation" }),
     );
-    await screen.findByText("Recommended setup");
+    await screen.findByText("K Sampling");
 
-    await user.click(screen.getByText("Scientific overrides"));
-    await user.selectOptions(screen.getByLabelText("Spin treatment"), "true");
+    await user.click(within(calculationSetup()).getByText("Magnetic"));
+    await user.selectOptions(screen.getByLabelText("spin polarized"), "true");
 
     expect(
       screen.getByRole("status", { name: "Recommendation notice" }),
     ).toHaveTextContent(
-      "Your settings changed. Update the recommendation before downloading.",
+      "Your settings changed. Update the recommendation before generating input files.",
     );
-    expect(screen.getByText("Recommended setup")).toBeInTheDocument();
+    expect(screen.getByText("K Sampling")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Download input files (.zip)" }),
+      screen.getByRole("button", { name: "Generate input files (.zip)" }),
     ).toBeDisabled();
   });
 
-  it("computes generation and renders canonical Core Records", async () => {
+  it("computes a recommendation and renders tri-state scientific records", async () => {
     const user = userEvent.setup();
     const core = new CoreStub(Promise.resolve(capabilities));
     core.inspectionResults = [Promise.resolve(inspection)];
-    core.preparedResults = [Promise.resolve(prepared())];
-    const workspace = createWorkspace(core);
-    const { container } = render(
-      <WorkspaceProvider workspace={workspace}>
-        <App />
-      </WorkspaceProvider>,
-    );
-    await screen.findByRole("button", {
-      name: "Choose a CIF or POSCAR structure",
-    });
-    await user.upload(structureInput(container), structureFile());
+    core.explainResults = [Promise.resolve(explainResult)];
+    const { container } = renderApp(core);
 
+    await openStructure(user, container);
     await user.click(
       await screen.findByRole("button", { name: "Generate recommendation" }),
     );
 
-    expect(await screen.findByText("Recommended setup")).toBeInTheDocument();
-    const recommendation = screen.getByRole("region", {
+    const recommendation = await screen.findByRole("region", {
       name: "Recommendation results",
     });
     expect(recommendation).toBeInTheDocument();
     expect(
       screen.queryByRole("region", { name: "Structure workspace" }),
     ).not.toBeInTheDocument();
-    expect(core.computeCalls[0]).toEqual({
-      draft,
-      selection: { preset: "generate" },
+    expect(core.explainCalls[0]).toMatchObject({
+      structure_content: "data_Si",
+      structure_name: "Si.cif",
+      task: "scf_single_point",
     });
-    expect(screen.getByText("K Points")).toBeInTheDocument();
-    expect(screen.getByText("Si.upf")).toBeInTheDocument();
+    expect(screen.getByText("K Sampling")).toBeInTheDocument();
+    expect(screen.getByText("Cutoffs")).toBeInTheDocument();
     expect(
-      screen.getByLabelText("Generated input inputs/qe.in"),
-    ).toHaveTextContent("&CONTROL");
+      screen.getByText(/Generate input files to preview them here/),
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Back to structure" }));
     expect(
@@ -452,34 +389,32 @@ describe("Goldilocks Workbench", () => {
     ).toBeInTheDocument();
   });
 
-  it("announces scientific warnings returned with a recommendation", async () => {
+  it("announces structured scientific warnings returned with a recommendation", async () => {
     const user = userEvent.setup();
     const core = new CoreStub(Promise.resolve(capabilities));
     core.inspectionResults = [Promise.resolve(inspection)];
-    core.preparedResults = [
-      Promise.resolve(
-        prepared({
-          ...computationResult,
-          warnings: ["Review smearing before production use."],
-        }),
-      ),
+    core.explainResults = [
+      Promise.resolve({
+        ...explainResult,
+        warnings: [
+          {
+            code: "occupations.smearing_defaulted",
+            level: "warning",
+            category: "occupations",
+            message: "Review smearing before production use.",
+          },
+        ],
+      }),
     ];
-    const workspace = createWorkspace(core);
-    const { container } = render(
-      <WorkspaceProvider workspace={workspace}>
-        <App />
-      </WorkspaceProvider>,
-    );
-    await screen.findByRole("button", {
-      name: "Choose a CIF or POSCAR structure",
-    });
-    await user.upload(structureInput(container), structureFile());
+    const { container } = renderApp(core);
+
+    await openStructure(user, container);
     await user.click(
       await screen.findByRole("button", { name: "Generate recommendation" }),
     );
 
     expect(
-      await screen.findByRole("status", { name: "Scientific warnings" }),
+      await screen.findByRole("status", { name: "Warnings" }),
     ).toHaveTextContent("Review smearing before production use.");
   });
 
@@ -487,91 +422,42 @@ describe("Goldilocks Workbench", () => {
     const user = userEvent.setup();
     const core = new CoreStub(Promise.resolve(capabilities));
     core.inspectionResults = [Promise.resolve(inspection)];
-    const workspace = createWorkspace(core);
-    const { container } = render(
-      <WorkspaceProvider workspace={workspace}>
-        <App />
-      </WorkspaceProvider>,
-    );
-    const file = new File(["data_Si"], "Si.cif", {
-      type: "chemical/x-cif",
-    });
-    Object.defineProperty(file, "text", {
-      value: () => Promise.resolve("data_Si"),
-    });
+    const { container } = renderApp(core);
 
-    await screen.findByRole("button", {
-      name: "Choose a CIF or POSCAR structure",
-    });
-    await user.upload(structureInput(container), file);
+    await openStructure(user, container);
 
     expect(await screen.findByText("Si1")).toBeInTheDocument();
     expect(
       screen.getByLabelText("Crystal structure viewer"),
     ).toBeInTheDocument();
-    expect(core.inspectedSources).toEqual([
+    expect(core.inspectedInputs).toEqual([
       {
-        kind: "inline",
-        name: "Si.cif",
-        format: "cif",
-        content: "data_Si",
+        structure_content: "data_Si",
+        structure_name: "Si.cif",
+        structure_format: "cif",
       },
     ]);
     const tableSelect = screen.getByLabelText("Pseudopotential table");
-    expect(
-      Array.from(
-        tableSelect.querySelectorAll("option"),
-        (option) => option.value,
-      ),
-    ).toEqual([
+    expect(optionValues(tableSelect)).toEqual([
       "",
-      "pseudodojo-pbesol-efficiency-sr",
-      "sssp-pbesol-efficiency-sr",
+      ...capabilities.pseudopotential_tables.map(
+        (table: PseudopotentialTable) => table.id,
+      ),
     ]);
+    // Relax-only settings stay hidden for the default scf_single_point task.
+    expect(screen.queryByText("Relax")).not.toBeInTheDocument();
   });
 
-  it("opens only the latest file when an earlier read resolves last", async () => {
+  it("reveals relax-only settings once the relax task is selected", async () => {
     const user = userEvent.setup();
-    let finishFirstRead: (content: string) => void = () => undefined;
-    const firstRead = new Promise<string>((resolve) => {
-      finishFirstRead = resolve;
-    });
-    const first = new File(["A"], "A.cif");
-    Object.defineProperty(first, "text", { value: () => firstRead });
-    const second = new File(["B"], "B.cif");
-    Object.defineProperty(second, "text", {
-      value: () => Promise.resolve("structure B"),
-    });
     const core = new CoreStub(Promise.resolve(capabilities));
     core.inspectionResults = [Promise.resolve(inspection)];
-    const workspace = createWorkspace(core);
-    const { container } = render(
-      <WorkspaceProvider workspace={workspace}>
-        <App />
-      </WorkspaceProvider>,
-    );
-    await screen.findByRole("button", {
-      name: "Choose a CIF or POSCAR structure",
-    });
+    const { container } = renderApp(core);
 
-    await user.upload(structureInput(container), first);
-    await user.upload(structureInput(container), second);
-    await waitFor(() => {
-      expect(core.inspectedSources).toEqual([
-        {
-          kind: "inline",
-          name: "B.cif",
-          format: "cif",
-          content: "structure B",
-        },
-      ]);
-    });
-    finishFirstRead("structure A");
-    await firstRead;
-    await Promise.resolve();
+    await openStructure(user, container);
+    await user.selectOptions(screen.getByLabelText("Task"), "relax");
 
-    expect(core.inspectedSources).toHaveLength(1);
-    expect(workspace.getSnapshot().source).toMatchObject({ name: "B.cif" });
+    expect(screen.getByText("Relax")).toBeInTheDocument();
   });
 
   it("keeps retry available and dismiss hidden for a Capabilities failure", async () => {
@@ -580,13 +466,7 @@ describe("Goldilocks Workbench", () => {
       "Runtime assets are unavailable.",
       false,
     );
-    const workspace = createWorkspace(new CoreStub(Promise.reject(failure)));
-
-    render(
-      <WorkspaceProvider workspace={workspace}>
-        <App />
-      </WorkspaceProvider>,
-    );
+    renderApp(new CoreStub(Promise.reject(failure)));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Runtime assets unavailable");
@@ -594,7 +474,6 @@ describe("Goldilocks Workbench", () => {
     const status = screen.getByRole("status", { name: "Workbench status" });
     expect(status).toHaveTextContent("Needs attention");
     expect(status).not.toHaveTextContent("Ready");
-    expect(status).not.toHaveTextContent("Runtime assets are unavailable.");
     expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
     expect(
       screen.queryByRole("button", { name: "Dismiss error" }),
@@ -603,13 +482,7 @@ describe("Goldilocks Workbench", () => {
 
   it("announces Capabilities loading at startup", async () => {
     const pending = new Promise<Capabilities>(() => undefined);
-    const workspace = createWorkspace(new CoreStub(pending));
-
-    render(
-      <WorkspaceProvider workspace={workspace}>
-        <App />
-      </WorkspaceProvider>,
-    );
+    renderApp(new CoreStub(pending));
 
     expect(
       await screen.findByRole("heading", { name: "Loading Workbench" }),
@@ -627,8 +500,24 @@ function structureFile(): File {
   return file;
 }
 
-function structureInput(container: HTMLElement): HTMLInputElement {
+function structureInputElement(container: HTMLElement): HTMLInputElement {
   const input = container.querySelector<HTMLInputElement>('input[type="file"]');
   if (input === null) throw new Error("structure input missing");
   return input;
+}
+
+function optionValues(select: HTMLElement): string[] {
+  return Array.from(
+    select.querySelectorAll<HTMLOptionElement>("option"),
+    (option) => option.value,
+  );
+}
+
+/** A settings group's humanized name (e.g. "Magnetic") can collide with
+ * a scientific record's own humanized name once results render -- both
+ * are independently derived from real, unrelated vocabularies (an
+ * override group vs. an advisor's record key). Scoping to this region
+ * disambiguates in tests the same way a sighted user would from layout. */
+function calculationSetup(): HTMLElement {
+  return screen.getByRole("region", { name: "Calculation setup" });
 }

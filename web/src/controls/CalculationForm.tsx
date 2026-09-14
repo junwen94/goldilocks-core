@@ -125,7 +125,16 @@ export function CalculationForm({
           ]}
           onChange={(event) => {
             const raw = event.currentTarget.value;
-            patchOverrides({ functional: raw === "" ? undefined : raw });
+            // A pinned table pinned under the old functional may no
+            // longer be a valid choice (and won't even appear in the
+            // now-refiltered dropdown) -- clear it rather than silently
+            // keep submitting a now-invisible override, matching how a
+            // pseudopotential-table pin has always been invalidated by
+            // changing the functional it was chosen under.
+            patchOverrides({
+              functional: raw === "" ? undefined : raw,
+              pseudo_table_id: undefined,
+            });
           }}
         />
         <PseudoTableControl
