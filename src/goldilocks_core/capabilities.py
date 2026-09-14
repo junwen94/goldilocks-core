@@ -584,8 +584,16 @@ def _leaves_from_human_input(
     scope: Literal["system", "per_step"],
     programs: list[str] | None,
 ) -> list[SettingBinding]:
+    # `include_extras=False` (the default) strips any per-element
+    # `Annotated[int, Field(gt=0)]` metadata a field's own tuple members
+    # carry (e.g. KSamplingHumanInput.k_grid) back down to the plain
+    # `tuple[int, int, int]` shape `_json_type` below expects -- reading
+    # `model_fields[name].annotation` directly would leave `Annotated`
+    # wrappers in place instead, since pydantic keeps per-element
+    # constraint metadata on the type itself, not lifted to `FieldInfo`.
+    hints = typing.get_type_hints(human_input_cls)
     leaves = []
-    for name, info in human_input_cls.model_fields.items():
+    for name in human_input_cls.model_fields:
         # Analysis leaves always keep their bare field name: they must
         # match `_FACTS`'s own keys exactly (`_settings()` filters them
         # out by that same key), and `_SETTING_META`'s one rename entry
@@ -601,8 +609,8 @@ def _leaves_from_human_input(
                 outer_field=outer_field,
                 inner_field=name,
                 human_input_cls=human_input_cls,
-                annotation=info.annotation,
-                json_type=_json_type(info.annotation),
+                annotation=hints[name],
+                json_type=_json_type(hints[name]),
                 scope=scope,
                 programs=programs,
             )
