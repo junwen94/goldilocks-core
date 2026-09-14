@@ -4,6 +4,7 @@ from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.occupations import OccupationsDecision
+from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.checks import check_all, collect_blocked
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
@@ -104,7 +105,60 @@ def test_the_moment_check_is_scoped_to_the_scf_step_only() -> None:
     assert report.ok
 
 
+def test_the_moment_check_also_applies_to_relax_and_vc_relax() -> None:
+    """relax/vc-relax re-run their own scf loop at every ionic step (v2
+    epic 10, #10) -- unlike nscf, which reads a prior step's already
+    -converged density/spin."""
+    for purpose in ("relax", "vc-relax"):
+        report = check_all(
+            occupations=_FIXED, magnetic=_magnetic(True, 2.5), purpose=purpose
+        )
+
+        assert not report.ok, purpose
+        assert "integer tot_magnetization" in report.blocking[0]
+
+
 def test_blocked_occupations_surfaces_once_via_the_generic_scan() -> None:
     report = check_all(occupations=Blocked(by="functional undecided"), purpose="scf")
 
     assert report.blocking == ("functional undecided",)
+
+
+def _relax(ion_dynamics: str = "bfgs"):
+    return Resolved(
+        RelaxOptions(ion_dynamics=ion_dynamics), Provenance(source="heuristic")
+    )
+
+
+def _vc_relax(ion_dynamics: str = "bfgs"):
+    return Resolved(
+        VcRelaxOptions(ion_dynamics=ion_dynamics), Provenance(source="heuristic")
+    )
+
+
+def test_vc_relax_with_bfgs_ion_dynamics_is_ok() -> None:
+    report = check_all(relax=_vc_relax("bfgs"), purpose="vc-relax")
+
+    assert report.ok
+
+
+def test_vc_relax_with_non_bfgs_ion_dynamics_blocks() -> None:
+    report = check_all(relax=_vc_relax("damp"), purpose="vc-relax")
+
+    assert not report.ok
+    assert "ion_dynamics='bfgs'" in report.blocking[0]
+    assert "'damp'" in report.blocking[0]
+
+
+def test_plain_relax_with_non_bfgs_ion_dynamics_is_unaffected() -> None:
+    """The bfgs-only restriction is vc-relax-specific -- QE genuinely
+    supports damp/fire for a plain relax."""
+    report = check_all(relax=_relax("damp"), purpose="relax")
+
+    assert report.ok
+
+
+def test_relax_blocked_field_state_surfaces_via_the_generic_scan() -> None:
+    report = check_all(relax=Blocked(by="convergence undecided"), purpose="vc-relax")
+
+    assert report.blocking == ("convergence undecided",)

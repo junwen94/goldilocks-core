@@ -22,3 +22,15 @@ def test_dos_expands_to_scf_then_nscf_then_dos_in_order() -> None:
 
 def test_default_task_is_still_scf_single_point() -> None:
     assert expand_task(Task()) == expand_task(Task(task="scf_single_point"))
+
+
+def test_relax_expands_to_exactly_one_step() -> None:
+    steps = expand_task(Task(task="relax"))
+
+    assert steps == (PlannedStep(purpose="relax", program="pw.x"),)
+
+
+def test_vc_relax_expands_to_exactly_one_step() -> None:
+    steps = expand_task(Task(task="vc-relax"))
+
+    assert steps == (PlannedStep(purpose="vc-relax", program="pw.x"),)

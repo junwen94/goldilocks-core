@@ -25,6 +25,7 @@ from goldilocks_core.advisors.occupations import WARNING_CATALOGUE as _OCCUPATIO
 from goldilocks_core.advisors.parallelisation import (
     WARNING_CATALOGUE as _PARALLELISATION,
 )
+from goldilocks_core.advisors.relax import WARNING_CATALOGUE as _RELAX
 from goldilocks_core.advisors.vdw_method import WARNING_CATALOGUE as _VDW
 
 WARNING_CATALOGUE = (
@@ -37,5 +38,6 @@ WARNING_CATALOGUE = (
     + _NBND
     + _OCCUPATIONS
     + _PARALLELISATION
+    + _RELAX
     + _VDW
 )

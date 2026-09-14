@@ -7,8 +7,10 @@ from __future__ import annotations
 
 from typing import Literal
 
+from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.checks import CheckReport
 from goldilocks_core.failures import ExpectedFailure
+from goldilocks_core.generation.quantum_espresso.relax import write_qe_relax
 from goldilocks_core.generation.quantum_espresso.scf import write_qe_scf
 from goldilocks_core.service._advice import Advice
 from goldilocks_core.step_settings import PwSettings
@@ -42,7 +44,8 @@ def generate(
     report: CheckReport,
     *,
     ctx: SharedContext | None = None,
-    purpose: Literal["scf", "nscf"] = "scf",
+    purpose: Literal["scf", "nscf", "relax", "vc-relax"] = "scf",
+    relax: RelaxOptions | VcRelaxOptions | None = None,
 ) -> tuple[Step, ...]:
     """Delivery: raises ``AdviceIncomplete`` if ``report`` is not ``ok``,
     per the "generate() refuses iff a needed field is unavailable/blocked"
@@ -51,10 +54,20 @@ def generate(
     in normal operation; this raise is the hard boundary, not the
     primary way a caller learns what is missing.
 
-    ``purpose`` (v2 epic 9, #9): forwarded to ``write_qe_scf`` unchanged
-    -- see that function's own docstring. Every existing caller renders
-    an scf step; ``service/_dos.py``'s nscf pass is the first to pass
+    ``purpose`` (v2 epic 9, #9): selects the writer and QE's own
+    ``calculation`` value -- see ``write_qe_scf``/``write_qe_relax``'s
+    own docstrings. Every existing caller renders an scf step;
+    ``service/_dos.py``'s nscf pass is the first to pass
     ``purpose="nscf"``.
+
+    ``relax`` (v2 epic 10, #10): only ``service/_relax.py`` ever passes
+    this -- it is threaded onto ``PwSettings.relax`` and dispatches to
+    ``write_qe_relax`` instead of ``write_qe_scf`` whenever ``purpose``
+    is ``"relax"``/``"vc-relax"``. Reusing this function rather than a
+    parallel ``generate_relax`` duplicating the ``SystemSettings``/
+    ``PwSettings`` construction above: nothing about assembling those
+    two differs between an scf step and a relax step, only which
+    writer gets called and what ``PwSettings.relax`` holds.
     """
     if not report.ok:
         raise AdviceIncomplete(report)
@@ -79,10 +92,11 @@ def generate(
         nbnd=kpoints.nbnd.value,
         convergence=kpoints.convergence.value,
         parallel=advice.step.resources.parallelisation.value,
-        relax=None,
+        relax=relax,
     )
+    writer = write_qe_relax if purpose in ("relax", "vc-relax") else write_qe_scf
     return tuple(
-        write_qe_scf(
+        writer(
             system,
             step_settings,
             advice.step.resources.job.value,

@@ -51,12 +51,20 @@ from dataclasses import dataclass
 
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.occupations import OccupationsDecision
+from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.resolution import Blocked, FieldState
 
 _MISSING_TOT_MAGNETIZATION = (
     "occupations='fixed' with a spin-polarized system requires an explicit "
     "integer tot_magnetization, but none was set."
 )
+_SCF_LIKE_PURPOSES = frozenset({"scf", "relax", "vc-relax"})
+"""``purpose``s that run their own electronic-structure scf loop and so
+still need the fixed-occupations/integer-moment rule below -- unlike
+``nscf``, which reads a prior step's already-converged density/spin and
+does not re-derive it (v2 epic 9, #9's original scoping). ``relax``/
+``vc-relax`` re-run scf at every ionic step (v2 epic 10, #10), so the
+same constraint applies to them too."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +94,7 @@ def check_all(
     *field_states: FieldState[object],
     occupations: FieldState[OccupationsDecision] | None = None,
     magnetic: FieldState[MagneticConfigFacts] | None = None,
+    relax: FieldState[RelaxOptions | VcRelaxOptions] | None = None,
     purpose: str = "scf",
 ) -> CheckReport:
     """The single hard-fail gate.
@@ -93,15 +102,19 @@ def check_all(
     ``field_states`` is every ``FieldState`` a caller has assembled so
     far (from any advisor) -- any that are ``Blocked`` land in
     ``report.blocking`` via ``collect_blocked``. ``occupations``/
-    ``magnetic``/``purpose`` additionally opt into the one named
-    cross-parameter rule this epic implements; passing them here also
+    ``magnetic``/``relax``/``purpose`` additionally opt into the named
+    cross-parameter rules this module implements; passing them here also
     folds them into the generic ``Blocked`` scan, so a caller does not
     need to repeat them in ``field_states`` as well.
     """
-    optional = tuple(s for s in (occupations, magnetic) if s is not None)
+    optional = tuple(s for s in (occupations, magnetic, relax) if s is not None)
     blocking = list(collect_blocked(*field_states, *optional))
 
     reason = _fixed_occupations_needs_integer_moment(occupations, magnetic, purpose)
+    if reason is not None:
+        blocking.append(reason)
+
+    reason = _vc_relax_requires_bfgs_ion_dynamics(relax, purpose)
     if reason is not None:
         blocking.append(reason)
 
@@ -113,7 +126,7 @@ def _fixed_occupations_needs_integer_moment(
     magnetic: FieldState[MagneticConfigFacts] | None,
     purpose: str,
 ) -> str | None:
-    if purpose != "scf" or occupations is None or magnetic is None:
+    if purpose not in _SCF_LIKE_PURPOSES or occupations is None or magnetic is None:
         return None
     if not (occupations.ok and magnetic.ok):
         return None  # already surfaced via collect_blocked, or genuinely unknown
@@ -126,5 +139,30 @@ def _fixed_occupations_needs_integer_moment(
         return (
             "occupations='fixed' with a spin-polarized system requires an "
             f"integer tot_magnetization; got {tot!r}."
+        )
+    return None
+
+
+def _vc_relax_requires_bfgs_ion_dynamics(
+    relax: FieldState[RelaxOptions | VcRelaxOptions] | None,
+    purpose: str,
+) -> str | None:
+    """QE couples ``cell_dynamics`` to ``ion_dynamics`` for vc-relax
+    (``advisors/relax.py``'s own docstring, audit finding B5): this
+    codebase's ``VcRelaxOptions.cell_dynamics`` is a derived property
+    that always mirrors ``ion_dynamics``, which only produces a valid QE
+    keyword when ``ion_dynamics == 'bfgs'`` (the only vc-relax
+    ``cell_dynamics`` value this codebase's generation layer renders).
+    ``ion_dynamics`` in {'damp', 'fire'} is real, QE-documented syntax
+    for a plain ``relax`` -- only vc-relax is restricted here."""
+    if purpose != "vc-relax" or relax is None or not relax.ok:
+        return None
+    if relax.value.ion_dynamics != "bfgs":
+        return (
+            "vc-relax requires ion_dynamics='bfgs' in this codebase (got "
+            f"{relax.value.ion_dynamics!r}): QE couples cell_dynamics to "
+            "ion_dynamics for vc-relax, and only the bfgs/bfgs combination "
+            "is modelled here -- damp-paired cell dynamics is a future "
+            "epic's scope."
         )
     return None

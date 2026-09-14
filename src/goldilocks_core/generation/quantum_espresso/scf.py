@@ -10,8 +10,8 @@ choice, only translation and formatting").
 
 Card-writing knowledge (``ATOMIC_SPECIES``/``ATOMIC_POSITIONS``/
 ``CELL_PARAMETERS``/``K_POINTS``) is reused as content from v1's
-``_atomic_species``/``_atomic_positions``/``_cell_parameters``/
-``_k_points`` (``generation/qe/scf.py:225-262``), restructured against
+``atomic_species``/``atomic_positions``/``cell_parameters``/
+``k_points`` (``generation/qe/scf.py:225-262``), restructured against
 the new types; namelist formatting (``&CONTROL``/``&SYSTEM``/
 ``&ELECTRONS``) is delegated to ``namelists.render_namelist`` instead of
 v1's own hand-written ``_control_section``/``_system_section``/
@@ -75,9 +75,12 @@ makes that impossible by construction.
   consults ``etot_conv_thr``/``forc_conv_thr`` for ionic minimization
   (``calculation`` in ``{relax, vc-relax, md, ...}``); a plain ``scf``
   calculation has no ionic loop to compare energies across, so this
-  writer never emits either -- ``ConvergenceDecision`` keeps the field
-  for whichever future ``generation/quantum_espresso/relax.py`` needs
-  it (epic 10).
+  writer never emits either -- ``generation/quantum_espresso/relax.py``
+  (v2 epic 10, #10) is the writer that does, reusing this module's own
+  ``control_keywords``/``system_keywords``/``electrons_keywords``/
+  ``atomic_species``/``cell_parameters``/``atomic_positions``/
+  ``k_points``/``validated_pseudo_by_element`` (un-privatized for that
+  reuse) rather than duplicating them.
 - ``nosym``/``noinv``/``no_t_rev``. ``advisors/n_irr_k.py``'s ``nosym``
   input only affects *that advisor's own* irreducible-k-point count; no
   field on ``KSamplingDecision``/``PwSettings`` carries a resolved
@@ -157,23 +160,23 @@ def write_qe_scf(
         )
 
     elements = sorted({site.specie.symbol for site in structure})
-    pseudo_by_element = _validated_pseudo_by_element(elements, system)
+    pseudo_by_element = validated_pseudo_by_element(elements, system)
     species_labels = sorted({site.label for site in structure})
     label_to_element = {site.label: site.specie.symbol for site in structure}
     species_index = {label: index + 1 for index, label in enumerate(species_labels)}
 
     keywords: dict[str, object] = {}
-    keywords.update(_control_keywords(ctx, step, job, purpose))
+    keywords.update(control_keywords(ctx, step, job, purpose))
     keywords.update(
-        _system_keywords(structure, system, step, len(species_labels), species_index)
+        system_keywords(structure, system, step, len(species_labels), species_index)
     )
-    keywords.update(_electrons_keywords(step))
+    keywords.update(electrons_keywords(step))
 
     lines = [render_namelist(keywords)]
-    lines.append(_atomic_species(species_labels, label_to_element, pseudo_by_element))
-    lines.append(_cell_parameters(structure))
-    lines.append(_atomic_positions(structure))
-    lines.append(_k_points(step))
+    lines.append(atomic_species(species_labels, label_to_element, pseudo_by_element))
+    lines.append(cell_parameters(structure))
+    lines.append(atomic_positions(structure))
+    lines.append(k_points(step))
     content = "\n".join(lines)
 
     args = ["-npool", str(step.parallel.npool)]
@@ -192,7 +195,7 @@ def write_qe_scf(
     ]
 
 
-def _validated_pseudo_by_element(
+def validated_pseudo_by_element(
     elements: list[str], system: SystemSettings
 ) -> dict[str, object]:
     pseudo_by_element = {pseudo.element: pseudo for pseudo in system.pseudopotentials}
@@ -220,11 +223,11 @@ def _validated_pseudo_by_element(
     return pseudo_by_element
 
 
-def _control_keywords(
+def control_keywords(
     ctx: SharedContext,
     step: PwSettings,
     job: JobDecision,
-    purpose: Literal["scf", "nscf"],
+    purpose: Literal["scf", "nscf", "relax", "vc-relax"],
 ) -> dict[str, object]:
     keywords: dict[str, object] = {
         "calculation": purpose,
@@ -237,10 +240,20 @@ def _control_keywords(
     }
     if step.disk_io is not None:
         keywords["disk_io"] = step.disk_io
+    if step.relax is not None:
+        # forc_conv_thr/etot_conv_thr/nstep are real &CONTROL keys, not
+        # &IONS ones (INPUT_PW.txt, ASE's own ALL_KEYS['pw']['control']
+        # registry, both checked 2026-09-14) -- only reachable when
+        # step.relax is set, i.e. only from write_qe_relax
+        # (generation/quantum_espresso/relax.py, v2 epic 10, #10);
+        # write_qe_scf itself still rejects a non-None step.relax.
+        keywords["forc_conv_thr"] = step.relax.forc_conv_thr
+        keywords["etot_conv_thr"] = step.relax.etot_conv_thr
+        keywords["nstep"] = step.relax.nstep
     return keywords
 
 
-def _system_keywords(
+def system_keywords(
     structure,
     system: SystemSettings,
     step: PwSettings,
@@ -340,7 +353,7 @@ def _charge_keywords(structure, system: SystemSettings) -> dict[str, object]:
     return {"tot_charge": tot_charge}
 
 
-def _electrons_keywords(step: PwSettings) -> dict[str, object]:
+def electrons_keywords(step: PwSettings) -> dict[str, object]:
     decision = step.convergence
     keywords: dict[str, object] = {
         "conv_thr": decision.conv_thr,
@@ -353,7 +366,7 @@ def _electrons_keywords(step: PwSettings) -> dict[str, object]:
     return keywords
 
 
-def _cell_parameters(structure) -> str:
+def cell_parameters(structure) -> str:
     lines = ["CELL_PARAMETERS angstrom"]
     lines.extend(
         "  " + "  ".join(_format_float(value) for value in vector)
@@ -362,7 +375,7 @@ def _cell_parameters(structure) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _atomic_species(
+def atomic_species(
     species_labels: list[str],
     label_to_element: dict[str, str],
     pseudo_by_element: dict[str, object],
@@ -382,7 +395,7 @@ def _atomic_species(
     return "\n".join(lines) + "\n"
 
 
-def _atomic_positions(structure) -> str:
+def atomic_positions(structure) -> str:
     lines = ["ATOMIC_POSITIONS crystal"]
     for site in structure:
         coords = "  ".join(_format_float(value) for value in site.frac_coords)
@@ -390,7 +403,7 @@ def _atomic_positions(structure) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _k_points(step: PwSettings) -> str:
+def k_points(step: PwSettings) -> str:
     grid = step.k_sampling.mesh
     shift = step.k_sampling.shift
     return (

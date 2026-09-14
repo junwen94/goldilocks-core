@@ -27,9 +27,10 @@ RecordId = str
 
 CodeName = str
 
-CalcTask = Literal["scf_single_point", "dos"]
-"""``dos`` added v2 epic 9, #9 -- the second task ``plan.py``'s
-``expand_task`` knows how to turn into a step sequence."""
+CalcTask = Literal["scf_single_point", "dos", "relax", "vc-relax"]
+"""``dos`` added v2 epic 9, #9. ``relax``/``vc-relax`` added v2 epic 10,
+#10 -- both single-step (one ``pw.x`` run with ``calculation`` set
+accordingly), unlike ``dos``'s three-step scf/nscf/dos.x sequence."""
 
 SmearingType = Literal["fixed", "gaussian", "mp", "cold"]
 

@@ -100,7 +100,10 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
             "Returns every decision (with its source) and a warnings array "
             "the caller must relay verbatim. task='dos' explains all three "
             "of the density-of-states task's steps (scf, nscf, dos.x); "
-            "its nscf-step decisions are returned under nscf_-prefixed keys."
+            "its nscf-step decisions are returned under nscf_-prefixed keys. "
+            "task='relax'/'vc-relax' explains one pw.x step with ionic (and, "
+            "for vc-relax, cell) relaxation parameters resolved under the "
+            "'relax' key."
         )
     )
     async def explain(document: ComputeRequestDocument) -> dict[str, Any]:
@@ -112,7 +115,9 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
             "every decision, and a warnings array the caller must relay "
             "verbatim -- fails if any required field is unavailable or "
             "blocked. task='dos' generates all three steps (scf, nscf, "
-            "dos.x) sharing one submission script, not just a single scf."
+            "dos.x) sharing one submission script, not just a single scf. "
+            "task='relax'/'vc-relax' generates one pw.x input with "
+            "calculation='relax'/'vc-relax' set accordingly."
         )
     )
     async def run(document: ComputeRequestDocument) -> dict[str, Any]:

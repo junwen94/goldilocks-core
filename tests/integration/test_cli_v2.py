@@ -249,6 +249,93 @@ class TestRunAndExplainAgainstRealAssets:
         assert (destination / "dos.in").exists()
         assert (destination / "submit.sh").exists()
 
+    def test_explain_relax_task_reports_the_relax_record(
+        self, real_assets: None
+    ) -> None:
+        """v2 epic 10 (#10): confirms --task relax actually routes to
+        advise_relax through the real CLI subprocess, the same
+        end-to-end check #28 added for --task dos."""
+        silicon = structure("Si.cif")
+
+        completed = _run_cli(
+            "explain", str(silicon), "--hpc", "scarf", "--task", "relax", "--json"
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        records = json.loads(completed.stdout)["records"]
+        assert records["relax"]["value"]["ion_dynamics"] == "bfgs"
+
+    def test_run_relax_task_publishes_relax_in(
+        self, real_assets: None, tmp_path: Path
+    ) -> None:
+        silicon = structure("Si.cif")
+        destination = tmp_path / "out"
+
+        completed = _run_cli(
+            "run",
+            str(silicon),
+            "--hpc",
+            "scarf",
+            "--task",
+            "relax",
+            "-o",
+            str(destination),
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        assert (destination / "relax.in").exists()
+        content = (destination / "relax.in").read_text()
+        assert "calculation      = 'relax'" in content
+
+    def test_run_vc_relax_task_publishes_vc_relax_in(
+        self, real_assets: None, tmp_path: Path
+    ) -> None:
+        silicon = structure("Si.cif")
+        destination = tmp_path / "out"
+
+        completed = _run_cli(
+            "run",
+            str(silicon),
+            "--hpc",
+            "scarf",
+            "--task",
+            "vc-relax",
+            "-o",
+            str(destination),
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        assert (destination / "vc-relax.in").exists()
+        content = (destination / "vc-relax.in").read_text()
+        assert "calculation      = 'vc-relax'" in content
+        assert "&CELL" in content
+
+    def test_set_nstep_reaches_the_generated_relax_input(
+        self, real_assets: None, tmp_path: Path
+    ) -> None:
+        """Regression-shaped guard, same class of bug #34 fixed for
+        other settings: an accepted --set must actually reach the
+        rendered file, not just validate and get dropped."""
+        silicon = structure("Si.cif")
+        destination = tmp_path / "out"
+
+        completed = _run_cli(
+            "run",
+            str(silicon),
+            "--hpc",
+            "scarf",
+            "--task",
+            "relax",
+            "--set",
+            "nstep=123",
+            "-o",
+            str(destination),
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        content = (destination / "relax.in").read_text()
+        assert "nstep            = 123" in content
+
     def test_unknown_task_is_an_operator_error_not_a_silent_fallback(self) -> None:
         silicon = structure("Si.cif")
 

@@ -36,6 +36,8 @@ module into one file. Split by pipeline phase instead, matching
 - ``_bundle.py`` -- submission-script rendering + bundle assembly
 - ``_dos.py`` -- ``dos`` task multi-step path (epic 9), reusing the
   single-step phases above twice rather than a fourth phase of its own
+- ``_relax.py`` -- ``relax``/``vc-relax`` task path (epic 10), reusing
+  the single-step phases above once (single-step tasks, unlike ``dos``)
 
 This ``__init__.py`` only re-exports; per ``check_complexity.py``'s own
 logic, a package's pure-export ``__init__.py`` is exempt from the
@@ -61,7 +63,15 @@ from goldilocks_core.service._dos import (
 from goldilocks_core.service._generate import AdviceIncomplete, generate
 from goldilocks_core.service._pipeline import advise, check
 from goldilocks_core.service._pseudo import PseudoAdvice
-from goldilocks_core.service._step import StepAdvice, StepOverrides
+from goldilocks_core.service._relax import (
+    RelaxAdvice,
+    advise_relax,
+    check_relax,
+    generate_relax,
+    render_submission_relax,
+    to_bundle_input_relax,
+)
+from goldilocks_core.service._step import RelaxOverrides, StepAdvice, StepOverrides
 from goldilocks_core.service._step_kpoints import ElectronicStepAdvice, KpointsOverrides
 from goldilocks_core.service._step_resources import (
     ResourceOverrides,
@@ -78,6 +88,8 @@ __all__ = [
     "ElectronicStepAdvice",
     "KpointsOverrides",
     "PseudoAdvice",
+    "RelaxAdvice",
+    "RelaxOverrides",
     "ResourceOverrides",
     "ResourceStepAdvice",
     "RunOverrides",
@@ -87,12 +99,17 @@ __all__ = [
     "SystemOverrides",
     "advise",
     "advise_dos",
+    "advise_relax",
     "check",
     "check_dos",
+    "check_relax",
     "generate",
     "generate_dos",
+    "generate_relax",
     "render_submission",
     "render_submission_dos",
+    "render_submission_relax",
     "to_bundle_input",
     "to_bundle_input_dos",
+    "to_bundle_input_relax",
 ]

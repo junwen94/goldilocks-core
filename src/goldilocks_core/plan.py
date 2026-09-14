@@ -38,15 +38,22 @@ class PlannedStep:
     for it -- just *what* runs and *why* (``purpose``), not yet *how*.
     ``purpose`` is deliberately not ``types.CalcTask``: a multi-step task
     like ``dos`` has steps with purposes (``"scf"``, ``"nscf"``) that are
-    not tasks in their own right, only ever ingredients of one."""
+    not tasks in their own right, only ever ingredients of one. ``relax``/
+    ``vc-relax`` (v2 epic 10, #10) *are* both a task and their own single
+    step's purpose -- one ``pw.x`` run does the whole task."""
 
-    purpose: Literal["scf", "nscf", "dos"]
+    purpose: Literal["scf", "nscf", "dos", "relax", "vc-relax"]
     program: Literal["pw.x", "dos.x"]
 
 
 def expand_task(task: Task) -> tuple[PlannedStep, ...]:
+    """``CalcTask`` is an exhaustive ``Literal`` (``types.py``), so these
+    branches are provably complete -- no fallback/raise branch is needed
+    or added speculatively for a task that cannot exist."""
     if task.task == "scf_single_point":
         return (PlannedStep(purpose="scf", program="pw.x"),)
+    if task.task in ("relax", "vc-relax"):
+        return (PlannedStep(purpose=task.task, program="pw.x"),)
     return (
         PlannedStep(purpose="scf", program="pw.x"),
         PlannedStep(purpose="nscf", program="pw.x"),

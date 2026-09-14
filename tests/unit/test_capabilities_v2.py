@@ -19,17 +19,22 @@ from goldilocks_core.capabilities import (
     _unwrap_optional,
     capabilities,
 )
-from goldilocks_core.service import KpointsOverrides, ResourceOverrides, SystemOverrides
+from goldilocks_core.service import (
+    KpointsOverrides,
+    RelaxOverrides,
+    ResourceOverrides,
+    SystemOverrides,
+)
 
 
 def _expected_setting_field_count() -> int:
     """Independently recomputes how many settings should exist, by
-    walking the same three composing classes capabilities.py reflects
+    walking the same composing classes capabilities.py reflects
     over -- a completeness guard that fails loudly if the walker ever
     silently drops a field, without hardcoding a magic number that
     would need editing by hand every time an advisor gains a field."""
     total = 0
-    for cls in (SystemOverrides, KpointsOverrides, ResourceOverrides):
+    for cls in (SystemOverrides, KpointsOverrides, ResourceOverrides, RelaxOverrides):
         hints = typing.get_type_hints(cls)
         for name, annotation in hints.items():
             if name.endswith("_llm"):
@@ -106,21 +111,26 @@ class TestTopLevelShape:
     def test_codes_and_tasks_reflect_only_what_actually_runs(self) -> None:
         """v2 epic 9 (#9, #28): ``dos`` joined ``scf_single_point`` once
         the delivery layers actually routed it, not before -- this list
-        names every task a caller can request today, no more, no less."""
+        names every task a caller can request today, no more, no less.
+        ``relax``/``vc-relax`` joined the same way in v2 epic 10 (#10)."""
         caps = capabilities()
         assert caps["codes"] == [
             {
                 "id": "quantum_espresso",
                 "name": "Quantum ESPRESSO",
-                "tasks": ["scf_single_point", "dos"],
+                "tasks": ["scf_single_point", "dos", "relax", "vc-relax"],
             }
         ]
-        assert len(caps["tasks"]) == 2
+        assert len(caps["tasks"]) == 4
         by_id = {task["id"]: task for task in caps["tasks"]}
         assert by_id["scf_single_point"]["executables"] == ["pw.x"]
         assert by_id["scf_single_point"]["step_count"] == 1
         assert by_id["dos"]["executables"] == ["pw.x", "pw.x", "dos.x"]
         assert by_id["dos"]["step_count"] == 3
+        assert by_id["relax"]["executables"] == ["pw.x"]
+        assert by_id["relax"]["step_count"] == 1
+        assert by_id["vc-relax"]["executables"] == ["pw.x"]
+        assert by_id["vc-relax"]["step_count"] == 1
 
 
 class TestSettingsCompleteness:

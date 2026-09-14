@@ -60,6 +60,7 @@ from goldilocks_core.failures import ExpectedFailure
 from goldilocks_core.service import (
     AnalysisOverrides,
     KpointsOverrides,
+    RelaxOverrides,
     ResourceOverrides,
     RunOverrides,
     StepOverrides,
@@ -203,6 +204,7 @@ def build_overrides(assignments: dict[str, object]) -> RunOverrides:
         "system": {},
         "kpoints": {},
         "resources": {},
+        "relax": {},
     }
     for (branch, outer_field), field_values in grouped.items():
         cls = outer_cls[(branch, outer_field)]
@@ -222,6 +224,7 @@ def build_overrides(assignments: dict[str, object]) -> RunOverrides:
         step=StepOverrides(
             kpoints=KpointsOverrides(**branch_fields["kpoints"]),
             resources=ResourceOverrides(**branch_fields["resources"]),
+            relax=RelaxOverrides(**branch_fields["relax"]),
         ),
     )
 

@@ -26,14 +26,19 @@ from goldilocks_core.server.readiness import AssetReadiness
 from goldilocks_core.service import (
     advise,
     advise_dos,
+    advise_relax,
     check,
     check_dos,
+    check_relax,
     generate,
     generate_dos,
+    generate_relax,
     render_submission,
     render_submission_dos,
+    render_submission_relax,
     to_bundle_input,
     to_bundle_input_dos,
+    to_bundle_input_relax,
 )
 from goldilocks_core.set_overrides import build_overrides
 from goldilocks_core.steps import default_shared_context
@@ -87,6 +92,15 @@ def explain(document: ComputeRequestDocument) -> dict[str, Any]:
             overrides=overrides,
             fetch_missing=document.fetch_missing,
         )
+    elif document.task in ("relax", "vc-relax"):
+        advice = advise_relax(
+            structure,
+            calculation=document.task,
+            code=document.code,
+            hpc=hpc,
+            overrides=overrides,
+            fetch_missing=document.fetch_missing,
+        )
     else:
         advice = advise(
             structure,
@@ -123,6 +137,21 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
         script = render_submission_dos(dos_advice, hpc, document.code, ctx, steps)
         bundle_input = to_bundle_input_dos(dos_advice, steps, script, ctx)
         records, adv_warnings = dos_advice.records(), dos_advice.warnings()
+    elif document.task in ("relax", "vc-relax"):
+        relax_advice = advise_relax(
+            structure,
+            calculation=document.task,
+            code=document.code,
+            hpc=hpc,
+            overrides=overrides,
+            fetch_missing=document.fetch_missing,
+        )
+        relax_report = check_relax(relax_advice)
+        # raises AdviceIncomplete if not ok
+        steps = generate_relax(relax_advice, relax_report, ctx=ctx)
+        script = render_submission_relax(relax_advice, hpc, document.code, ctx, steps)
+        bundle_input = to_bundle_input_relax(relax_advice, steps, script, ctx)
+        records, adv_warnings = relax_advice.records(), relax_advice.warnings()
     else:
         advice = advise(
             structure,
