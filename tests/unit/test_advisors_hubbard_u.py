@@ -32,6 +32,29 @@ def test_metallic_transition_metal_does_not_get_plus_u() -> None:
     assert state.value.plan == "not_needed"
 
 
+def test_forced_needs_correlation_on_a_non_correlated_structure_is_not_needed() -> None:
+    """Regression for #36 (v2 epic 9, #9): forcing needs_correlation=True
+    on a structure with zero transition-metal/lanthanide/actinide
+    content (e.g. plain Si) used to fall through to plan='table' with
+    an EMPTY u_by_element plus two Hubbard-specific warnings that make
+    no sense with no +U term present -- and since write_qe_scf treats
+    any plan != 'not_needed' as a real +U resolution, this failed with
+    a factually wrong 'a Hubbard +U correction was resolved' error."""
+    silicon = _structure("Si")
+
+    state = hubbard_u(
+        silicon,
+        needs_correlation(composition(silicon)),
+        "PBEsol",
+        human=HubbardUHumanInput(needs_correlation=True),
+    )
+
+    assert state.ok
+    assert state.value.plan == "not_needed"
+    assert state.value.u_by_element == {}
+    assert state.value.warnings == ()
+
+
 def test_common_3d_oxide_uses_the_package_default_table() -> None:
     nio = _structure("Ni", "O")
 

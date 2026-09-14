@@ -256,6 +256,13 @@ _SETTING_META: dict[str, _SettingExtra] = {
             "implemented)."
         ),
     },
+    "assume_isolated": {
+        "description": (
+            "Force the electrostatic boundary-condition treatment for a "
+            "periodic cell (e.g. 'martyna-tuckerman' for an isolated "
+            "molecule/wire); 'none' for the normal fully-periodic case."
+        ),
+    },
     "needs_correlation": {
         "key": "hubbard_needs_correlation",
         "description": (

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from goldilocks_core.advisors.boundary import boundary
+from goldilocks_core.advisors.boundary import (
+    BoundaryHumanInput,
+    BoundaryLlmInput,
+    boundary,
+)
 from goldilocks_core.analysis.geometry import GeometryFacts
 from goldilocks_core.resolution import Blocked, Provenance, Resolved
 
@@ -53,3 +57,30 @@ def test_blocked_geometry_propagates() -> None:
     assert not state.ok
     assert state.status == "blocked"
     assert state.root_cause() == "synthetic failure"
+
+
+def test_human_override_bypasses_a_blocked_geometry() -> None:
+    """Regression for #36 (v2 epic 9, #9): boundary() used to have no
+    override path at all, unlike its sibling vdw_method (same epic,
+    same GeometryFacts input) -- a Blocked/Unavailable geometry (e.g. a
+    disordered structure dimensionality classification can't handle)
+    unconditionally blocked the whole run via this one field, with no
+    escape hatch, even if the caller supplied every other override."""
+    state = boundary(
+        Blocked(by="synthetic failure"),
+        human=BoundaryHumanInput(assume_isolated="martyna-tuckerman"),
+    )
+
+    assert state.ok
+    assert state.value.assume_isolated == "martyna-tuckerman"
+    assert state.source == "human"
+
+
+def test_llm_override_bypasses_a_blocked_geometry_too() -> None:
+    state = boundary(
+        Blocked(by="synthetic failure"),
+        llm=BoundaryLlmInput(assume_isolated="none"),
+    )
+
+    assert state.ok
+    assert state.source == "llm"

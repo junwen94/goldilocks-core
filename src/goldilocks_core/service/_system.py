@@ -186,7 +186,9 @@ def system_advice(
         vdw=vdw_method(
             analysis.geometry, functional_value, overrides.vdw, overrides.vdw_llm
         ),
-        boundary=boundary(analysis.geometry),
+        boundary=boundary(
+            analysis.geometry, overrides.boundary, overrides.boundary_llm
+        ),
         hubbard=hubbard_u(
             structure,
             analysis.needs_correlation,
