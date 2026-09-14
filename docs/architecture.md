@@ -19,6 +19,48 @@ branch coverage. Use `uv run just fmt` to apply Python formatting. The commit
 hooks run the same lint and complexity checks. For frontend checks and
 API-schema refresh, follow the [Workbench guide](../web/README.md).
 
+## CI gates and workflows
+
+Every check has one canonical entry point: a `just` recipe for Python gates, an
+npm script for frontend checks, and a Python script under `scripts/` for release
+gates. Workflows call the same entry points that local development uses; check
+recipes are not inlined in workflow YAML.
+
+| Entry point | Checks |
+| --- | --- |
+| `just lint` | Ruff lint and format; complexity ceilings |
+| `just test` | pytest with branch coverage |
+| `just check` | `lint`, then `test`; the pre-PR gate |
+| `just mutation` | focused mutation testing against the score gate |
+| `just dist` | sdist and wheel build into a fresh directory, then content validation |
+| `just web-check` | Workbench lint, unit tests, and production build |
+| `just image-e2e` | production image build, boot, and Playwright e2e (needs Docker) |
+| `just bump <target>` | version bump in `pyproject.toml` plus `uv.lock` refresh |
+
+`.github/workflows/quality.yml` defines the shared verification jobs and holds
+no triggers itself. Two workflows call it:
+
+- `ci.yml` runs on pushes to `main` and on pull requests. Its concurrency group
+  cancels a superseded run on the same ref.
+- `release.yml` runs on `v*` tags, the nightly schedule at 03:00 UTC, and manual
+  dispatch. It runs the same quality jobs, then publishes. Its concurrency group
+  serializes releases and never cancels one mid-flight.
+
+The quality jobs run `just check` and `just mutation`; `npm run check` plus the
+image e2e through `scripts/image_e2e.sh`; and the distribution build and
+validation. The distribution job runs `uv build` and the validator directly so
+it never syncs the development environment. Pre-commit runs the fast gates only:
+Ruff and the complexity ceilings.
+
+`scripts/` holds the Python gates the recipes and workflows call:
+`check_complexity.py` (import and cyclomatic ceilings), `check_mutation_score.py`
+(the enforced score and the CI step summary), `validate_distribution.py` (wheel
+and sdist contents), `check_release_tag.py` (tag equals the `pyproject.toml`
+version), `bump_version.py` (version bump and relock), and
+`export_workbench_openapi.py` (HTTP contract export for the Workbench and the
+image build). Published artifacts are described under
+[Cut a release](#cut-a-release).
+
 ## Cut a release
 
 One version covers the repository: `pyproject.toml` owns it, and the Workbench
@@ -270,3 +312,5 @@ npm --prefix web run test:e2e
 Tests use `http://127.0.0.1:8000`; they do not start a server.
 `WORKBENCH_BASE_URL` selects another address.
 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` selects an existing Chromium installation.
+`uv run just image-e2e` builds the production image, boots it, and runs the same
+suite against it.

@@ -50,7 +50,10 @@ npm --prefix web run check
 ```
 
 This runs formatting, lint, tests, and the build. With the built frontend served
-on port 8000, run `npm --prefix web run test:e2e` for real-browser checks.
+on port 8000, run `npm --prefix web run test:e2e` for real-browser checks. To run
+the same suite against the production image, run `uv run just image-e2e` from
+the repository root; it builds the image, boots it, and starts the Playwright
+suite (needs Docker).
 `web/openapi.json` and `web/src/api/schema.d.ts` are ignored build products.
 The frontend `dev`, `lint`, `test`, `test:e2e`, `build`, and `check` commands
 regenerate them from the local Python package before running. Install the Python

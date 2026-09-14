@@ -16,6 +16,8 @@ uv run pre-commit run --all-files
 
 `uv run just` lists recipes, including `workbench` (backend :8000 + Vite :5173 in one command).
 
+Every check has one canonical entry point (a `just` recipe, an npm script, or a `scripts/` file). Workflows, pre-commit, and docs call the same entry points; keep check recipes out of workflow YAML.
+
 Run `pre-commit` before committing. CI (on `main` and PRs) and the release workflow run the same `just` recipes: Ruff, pytest with branch coverage, focused mutation testing, and distribution validation — all via `uv`. `release.yml` adds publishing on `v*` tags, the nightly schedule, and manual dispatch.
 
 ## Releases and versioning
