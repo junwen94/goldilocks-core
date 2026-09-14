@@ -120,6 +120,48 @@ def test_account_is_never_guessed() -> None:
     assert state.value.account is None
 
 
+def test_ntasks_alone_derives_a_self_consistent_nodes_count() -> None:
+    """Regression for #35 (v2 epic 9, #9): ntasks given with no nodes
+    override used to leave nodes at the memory-estimate heuristic value
+    regardless, so ntasks-per-node (fixed to the partition's
+    cores_per_node) times nodes could be smaller than the requested
+    ntasks -- an internally self-contradictory submit.sh."""
+    state = job_resources(_SMALL_ESTIMATE, _profile(), human=JobHumanInput(ntasks=200))
+
+    assert state.value.ntasks == 200
+    assert state.value.ntasks <= state.value.nodes * state.value.ntasks_per_node
+
+
+def test_nodes_exceeding_the_partition_ceiling_warns() -> None:
+    """Regression for #35 (v2 epic 9, #9): nodes had no upper-bound
+    check against the chosen partition's own max_nodes at all."""
+    state = job_resources(
+        _SMALL_ESTIMATE,
+        _profile(with_bigmem=True),
+        human=JobHumanInput(partition="bigmem", nodes=50),
+    )
+
+    assert state.value.nodes == 50
+    assert any(
+        warning.code == "job.nodes_exceeds_partition_ceiling"
+        for warning in state.value.warnings
+    )
+
+
+def test_walltime_exceeding_the_partition_ceiling_warns() -> None:
+    """Regression for #35 (v2 epic 9, #9): walltime_h had no upper
+    -bound check against the chosen partition's own max_walltime_h."""
+    state = job_resources(
+        _SMALL_ESTIMATE, _profile(), human=JobHumanInput(walltime_h=999.0)
+    )
+
+    assert state.value.walltime_h == 999.0
+    assert any(
+        warning.code == "job.walltime_exceeds_partition_ceiling"
+        for warning in state.value.warnings
+    )
+
+
 def test_human_account_passes_through() -> None:
     state = job_resources(
         _SMALL_ESTIMATE, _profile(), human=JobHumanInput(account="scd")

@@ -32,12 +32,12 @@ def test_smearing_type_and_degauss_apply_without_also_setting_occupations() -> N
     since only the explicit-occupations branch ever read them."""
     state = occupations(
         is_metal(_IRON),
-        human=OccupationsHumanInput(smearing_type="methfessel-paxton", degauss=0.05),
+        human=OccupationsHumanInput(smearing_type="mp", degauss=0.05),
     )
 
     assert state.ok
     assert state.value.occupations == "smearing"
-    assert state.value.smearing_type == "methfessel-paxton"
+    assert state.value.smearing_type == "mp"
     assert state.value.degauss == 0.05
 
 

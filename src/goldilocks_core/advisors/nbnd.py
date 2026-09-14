@@ -66,6 +66,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from pydantic import Field
+
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
@@ -74,6 +76,7 @@ from goldilocks_core.resolution import (
     FieldState,
     Provenance,
     Resolved,
+    Unavailable,
     Warning,
     blocked_by,
 )
@@ -114,7 +117,15 @@ class NbndDecision:
 
 
 class NbndHumanInput(HumanInput):
-    nbnd: int | None = None
+    """``nbnd`` (#35, v2 epic 9, #9) must be a positive integer at
+    construction -- before this, ``nbnd=0``/negative was accepted and
+    written straight into the generated ``&SYSTEM`` card as a
+    ``Resolved`` success. ``extra_bands`` stays unconstrained here
+    (it is a signed adjustment to the heuristic base, legitimately
+    negative) -- the combined total is checked in ``nbnd()`` below,
+    where the heuristic base is actually known."""
+
+    nbnd: int | None = Field(default=None, gt=0)
     extra_bands: int | None = None
 
 
@@ -154,8 +165,24 @@ def nbnd(
     else:
         extra, source = 0, "heuristic"
 
+    total = base + extra
+    if total <= 0:
+        # #35 (v2 epic 9, #9): extra_bands is a legitimately-signed
+        # adjustment (Field(gt=0) on it alone would reject valid
+        # negative reductions), but the combined total must still be a
+        # physically meaningful band count -- before this, a
+        # sufficiently negative extra_bands silently produced a
+        # zero/negative &SYSTEM nbnd card, reported as a resolved
+        # success.
+        return Unavailable(
+            reason=(
+                f"heuristic nbnd={base} + extra_bands={extra} = {total}, which "
+                "is not a valid number of bands (must be positive)"
+            )
+        )
+
     warnings = _spin_note(magnetic)
-    decision = NbndDecision(nbnd=base + extra, warnings=warnings)
+    decision = NbndDecision(nbnd=total, warnings=warnings)
     return Resolved(decision, Provenance(source=source))
 
 

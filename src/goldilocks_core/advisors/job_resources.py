@@ -52,6 +52,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from pydantic import Field
+
 from goldilocks_core.advisors.size import ResourceEstimate
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
@@ -97,6 +99,24 @@ WARNING_CATALOGUE = (
             "ceiling instead of a guessed value."
         ),
     ),
+    Warning(
+        code="job.nodes_exceeds_partition_ceiling",
+        level="warning",
+        category="job",
+        message=(
+            "nodes exceeds the chosen partition's own ceiling; the scheduler "
+            "will likely refuse this request."
+        ),
+    ),
+    Warning(
+        code="job.walltime_exceeds_partition_ceiling",
+        level="warning",
+        category="job",
+        message=(
+            "walltime_h exceeds the chosen partition's own ceiling; the "
+            "scheduler will likely refuse this request."
+        ),
+    ),
 )
 """Every warning code this module can emit -- ``capabilities.py``'s
 ``warnings[]`` catalogue aggregates one of these tuples per advisor. The
@@ -118,16 +138,28 @@ class JobDecision:
 
 
 class JobHumanInput(HumanInput):
+    """``nodes``/``ntasks``/``walltime_h`` must be positive at
+    construction (#35, v2 epic 9, #9) -- before this, e.g. ``nodes=0``
+    or a negative ``walltime_h`` was accepted and reached ``#SBATCH``
+    verbatim, or crashed downstream with an unrelated traceback rather
+    than a clean ``InvalidSetting`` error. Upper bounds against the
+    chosen partition's own ceilings (``max_nodes``/``max_walltime_h``)
+    can't be pydantic field constraints -- they need the partition,
+    which isn't known yet at this class's construction time -- so those
+    stay advisory warnings inside ``job_resources()`` below, same
+    warn-don't-block pattern as ``advisors/parallelisation.py``'s own
+    QE-will-refuse-this cases."""
+
     partition: str | None = None
-    nodes: int | None = None
-    ntasks: int | None = None
-    walltime_h: float | None = None
+    nodes: int | None = Field(default=None, gt=0)
+    ntasks: int | None = Field(default=None, gt=0)
+    walltime_h: float | None = Field(default=None, gt=0)
     account: str | None = None
 
 
 class JobLlmInput(LlmInput):
     partition: str | None = None
-    walltime_h: float | None = None
+    walltime_h: float | None = Field(default=None, gt=0)
 
 
 def job_resources(
@@ -148,14 +180,52 @@ def job_resources(
         )
 
     partition, warnings = _pick_partition(estimate, hpc, human, llm)
-
-    nodes = human.nodes if human.nodes is not None else _nodes_needed(
-        estimate, partition.hardware
-    )
     ntasks_per_node = partition.hardware.cores_per_node
+
+    if human.nodes is not None:
+        nodes = human.nodes
+    elif human.ntasks is not None:
+        # #35 (v2 epic 9, #9): ntasks given alone (no nodes) used to
+        # leave nodes at the memory-estimate-derived heuristic value,
+        # independent of the requested ntasks -- ntasks-per-node stays
+        # fixed to the partition's cores_per_node regardless, so the two
+        # could disagree (ntasks > nodes * ntasks_per_node), rendering a
+        # submit.sh SLURM would reject as internally inconsistent.
+        # Deriving nodes from ntasks here keeps the two self-consistent.
+        nodes = math.ceil(human.ntasks / ntasks_per_node)
+    else:
+        nodes = _nodes_needed(estimate, partition.hardware)
     ntasks = human.ntasks if human.ntasks is not None else nodes * ntasks_per_node
 
+    if nodes > partition.hardware.max_nodes:
+        warnings.append(
+            Warning(
+                code="job.nodes_exceeds_partition_ceiling",
+                level="warning",
+                category="job",
+                message=(
+                    f"nodes={nodes} exceeds partition {partition.name!r}'s own "
+                    f"ceiling ({partition.hardware.max_nodes}); the scheduler "
+                    "will likely refuse this request."
+                ),
+            )
+        )
+
     walltime_h = _pick_walltime(partition, human, llm, warnings)
+    if walltime_h > partition.hardware.max_walltime_h:
+        warnings.append(
+            Warning(
+                code="job.walltime_exceeds_partition_ceiling",
+                level="warning",
+                category="job",
+                message=(
+                    f"walltime_h={walltime_h} exceeds partition "
+                    f"{partition.name!r}'s own ceiling "
+                    f"({partition.hardware.max_walltime_h}h); the scheduler "
+                    "will likely refuse this request."
+                ),
+            )
+        )
     max_seconds = int(walltime_h * 3600 * _MAX_SECONDS_FRACTION)
 
     decision = JobDecision(

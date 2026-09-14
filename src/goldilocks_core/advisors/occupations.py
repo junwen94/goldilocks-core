@@ -57,6 +57,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from pydantic import Field
+
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.analysis.is_metal import Metallicity
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
@@ -67,6 +69,7 @@ from goldilocks_core.resolution import (
     Resolved,
     Warning,
 )
+from goldilocks_core.types import SmearingType
 
 Occupations = Literal["fixed", "smearing", "tetrahedra_opt"]
 
@@ -97,9 +100,18 @@ class OccupationsDecision:
 
 
 class OccupationsHumanInput(HumanInput):
+    """``smearing_type``/``degauss`` (#35, v2 epic 9, #9) are validated
+    here, at construction, not deep inside this module's own logic --
+    the same ``set_overrides.build_overrides`` boundary that already
+    turns a bad ``occupations`` enum member into a clean
+    ``InvalidSetting``. ``smearing_type`` reuses ``types.SmearingType``
+    (the same closed vocabulary QE's own writer expects), rather than
+    accepting any string; ``degauss`` must be a real, positive smearing
+    width."""
+
     occupations: Occupations | None = None
-    smearing_type: str | None = None
-    degauss: float | None = None
+    smearing_type: SmearingType | None = None
+    degauss: float | None = Field(default=None, gt=0)
 
 
 class OccupationsLlmInput(LlmInput):
