@@ -9,6 +9,7 @@ and the archive response mode.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -22,6 +23,51 @@ from goldilocks_core.server.http import create_app
 @pytest.fixture
 def client() -> TestClient:
     return TestClient(create_app())
+
+
+class TestWorkbenchStaticMount:
+    """v2 epic 12 (#12): the frontend is served off the same origin as
+    the API, gated behind an env var so plain API use (every other test
+    in this file) never needs a frontend build lying around."""
+
+    def test_root_is_a_404_when_the_env_var_is_unset(self, client: TestClient) -> None:
+        response = client.get("/")
+
+        assert response.status_code == 404
+
+    def test_root_serves_the_built_frontend_when_configured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "index.html").write_text("<!doctype html><title>Workbench</title>")
+        monkeypatch.setenv("GOLDILOCKS_WORKBENCH_STATIC_ROOT", str(tmp_path))
+
+        client = TestClient(create_app())
+        response = client.get("/")
+
+        assert response.status_code == 200
+        assert "Workbench" in response.text
+
+    def test_api_routes_still_win_over_the_mount(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "index.html").write_text("<!doctype html><title>Workbench</title>")
+        monkeypatch.setenv("GOLDILOCKS_WORKBENCH_STATIC_ROOT", str(tmp_path))
+
+        client = TestClient(create_app())
+        response = client.get("/capabilities")
+
+        assert response.status_code == 200
+        assert response.json()["vocabulary_version"]
+
+    def test_a_missing_static_root_fails_fast_at_startup(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(
+            "GOLDILOCKS_WORKBENCH_STATIC_ROOT", str(tmp_path / "does-not-exist")
+        )
+
+        with pytest.raises(RuntimeError, match="does not exist"):
+            create_app()
 
 
 class TestOperationalRoutes:
