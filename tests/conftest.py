@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from pymatgen.core import Lattice, Structure
+from support import REAL_ASSET_ROOT, default_profile_installed
 
 from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 
@@ -13,6 +14,18 @@ from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 @pytest.fixture(autouse=True)
 def isolated_default_asset_root(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GOLDILOCKS_ASSET_ROOT", str(tmp_path / "default-assets"))
+
+
+@pytest.fixture
+def real_assets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opts a test back into the real, developer-machine asset root
+    (undoing ``isolated_default_asset_root`` above) -- skips itself
+    when the default pseudopotential profile isn't installed there,
+    rather than failing every contributor's/CI's machine that hasn't
+    run ``goldilocks assets install``."""
+    if not default_profile_installed():
+        pytest.skip(f"default asset profile not installed at {REAL_ASSET_ROOT}")
+    monkeypatch.setenv("GOLDILOCKS_ASSET_ROOT", str(REAL_ASSET_ROOT))
 
 
 @pytest.fixture

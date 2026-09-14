@@ -7,18 +7,18 @@ module does not replace (v2 epic 9 deletes the v1 tree, not this one).
 
 from __future__ import annotations
 
-import hashlib
-import io
 import json
-import tarfile
-from pathlib import Path
+import shutil
 
 import pytest
 from pymatgen.core import Lattice, Structure
+from support import (
+    SSSP_FIXTURE_UPF as _UPF,
+    sssp_fixture_table_spec as _sssp_table_spec,
+)
 
+from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
-from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
-from goldilocks_core.assets.records import AssetFile, AssetSpec
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.bundle import DirectoryOutput, is_complete, publish
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
@@ -34,70 +34,6 @@ from goldilocks_core.service import (
     to_bundle_input,
 )
 from goldilocks_core.steps import default_shared_context
-
-_UPF = (
-    b'<UPF version="2.0.1">\n'
-    b'<PP_HEADER element="Si" pseudo_type="NC" functional="PBEsol" '
-    b'relativistic="scalar" z_valence="4.0"/>\n'
-    b"</UPF>\n"
-)
-
-
-def _archive(path: Path, members: dict[str, bytes]) -> None:
-    with tarfile.open(path, "w:gz") as tar:
-        for name, payload in members.items():
-            info = tarfile.TarInfo(name)
-            info.size = len(payload)
-            tar.addfile(info, io.BytesIO(payload))
-
-
-def _sssp_table_spec(tmp_path: Path) -> tuple[AssetSpec, PseudoTable]:
-    """Build one real, fully-offline SSSP-shaped pseudopotential asset
-    (file:// sources, no network), matching the pattern already used by
-    ``tests/unit/test_pseudo_importers.py``'s ``install_sssp_fixture``."""
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    upfs = tmp_path / "table.tar.gz"
-    sidecar = tmp_path / "table.json"
-    licence = tmp_path / "LICENSE.txt"
-    _archive(upfs, {"nested/Si.upf": _UPF})
-    sidecar.write_text(
-        json.dumps(
-            {
-                "Si": {
-                    "filename": "Si.upf",
-                    "md5": hashlib.md5(_UPF).hexdigest(),
-                    "cutoff_wfc": 30.0,
-                    "cutoff_rho": 120.0,
-                    "pseudopotential": "Si fixture",
-                }
-            }
-        )
-    )
-    licence.write_text("SSSP fixture licence\n")
-    spec = AssetSpec(
-        "pseudopotentials/sssp-fixture",
-        "1",
-        (
-            AssetFile("pseudopotentials", "source/table.tar.gz", upfs.as_uri()),
-            AssetFile("metadata", "source/table.json", sidecar.as_uri()),
-            AssetFile("licence", "source/LICENSE.txt", licence.as_uri()),
-        ),
-    )
-    registry_table = PseudoTable(
-        id="sssp-fixture",
-        provider="sssp",
-        upstream_table="fixture",
-        version="1",
-        functional="PBEsol",
-        relativistic="scalar",
-        accuracy="efficiency",
-        licence="fixture licence",
-        citation="Synthetic SSSP fixture, cite me.",
-        elements=("Si",),
-        asset=spec,
-        default=True,
-    )
-    return spec, registry_table
 
 
 @pytest.fixture
@@ -248,6 +184,8 @@ class TestAdviseDegradation:
 
         assert isinstance(advice.system.pseudo.table, Unavailable)
         assert isinstance(advice.system.pseudo.metadata, Blocked)
+        assert isinstance(advice.system.pseudo.relativistic, Blocked)
+        assert isinstance(advice.system.magnetic, Blocked)
         assert isinstance(advice.system.cutoffs, Blocked)
         assert isinstance(advice.system.electron_count, Blocked)
         assert isinstance(advice.step.kpoints.nbnd, Blocked)
@@ -258,6 +196,35 @@ class TestAdviseDegradation:
         # metal -- so it is not asserted here; see is_metal.py's own
         # docstring on why composition alone never confirms "non_metal".)
         assert advice.analysis.composition.ok
+        assert advice.system.functional.ok
+        assert advice.step.kpoints.k_sampling.ok
+
+    def test_soc_on_a_lanthanide_blocks_the_whole_relativistic_chain(
+        self, hpc
+    ) -> None:
+        """v2 epic 9 (#9)'s "SOC on Ce" acceptance scenario: SSSP is the
+        only table lanthanides are allowed to use (``requires_sssp``), but
+        no SSSP table is fully relativistic -- so requesting spin-orbit
+        coupling on a lanthanide can never be satisfied by any table in
+        the registry, real or synthetic, no asset store needed to prove
+        it (table *selection* fails before any file is ever touched)."""
+        cerium = Structure(Lattice.cubic(5.16), ["Ce"], [[0.0, 0.0, 0.0]])
+        overrides = RunOverrides(
+            system=SystemOverrides(
+                magnetic=MagneticConfigHumanInput(spin_orbit_coupling=True)
+            )
+        )
+
+        advice = advise(cerium, hpc=hpc, overrides=overrides)
+
+        assert isinstance(advice.system.pseudo.table, Unavailable)
+        assert "Ce" in advice.system.pseudo.table.reason
+        assert isinstance(advice.system.pseudo.metadata, Blocked)
+        assert isinstance(advice.system.pseudo.relativistic, Blocked)
+        assert isinstance(advice.system.magnetic, Blocked)
+        assert isinstance(advice.system.cutoffs, Blocked)
+        # Genuinely unrelated decisions -- never fed pseudo/magnetic data
+        # at all -- still resolve normally.
         assert advice.system.functional.ok
         assert advice.step.kpoints.k_sampling.ok
         assert advice.step.kpoints.occupations.ok
@@ -324,6 +291,14 @@ class TestAdviseDegradation:
         assert isinstance(advice.system.pseudo.metadata, Unavailable)
         assert "not installed" in advice.system.pseudo.metadata.reason
         assert isinstance(advice.system.cutoffs, Blocked)
+        # A table *was* selected (only the asset isn't downloaded yet) --
+        # ``relativistic`` is already confirmed, and magnetic still falls
+        # back to its pre-pseudo provisional guess rather than blocking:
+        # this is an ordinary preview-without-download run, not a chain
+        # failure (contrast the SOC-on-a-lanthanide test above, where no
+        # table can ever be selected at all).
+        assert advice.system.pseudo.relativistic.ok
+        assert advice.system.magnetic.ok
 
     def test_fetch_missing_true_installs_then_succeeds(
         self, silicon, hpc, tmp_path, monkeypatch
@@ -344,6 +319,56 @@ class TestAdviseDegradation:
 
         assert advice.system.pseudo.metadata.ok
         assert advice.system.cutoffs.ok
+
+
+@pytest.mark.skipif(
+    shutil.which("enum.x") is None and shutil.which("multienum.x") is None,
+    reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
+)
+class TestAfmRelabeling:
+    """v2 epic 9 (#9)'s AFM acceptance scenario, through the real
+    ``advise()`` orchestrator -- not just ``magnetic_config()`` in
+    isolation (that half is ``test_advisors_magnetic_config.py``'s job).
+    No asset store needed: table *selection* (which is all AFM relabeling
+    itself depends on) works off the bundled registry data alone."""
+
+    def test_afm_ordering_produces_a_relabeled_structure_and_a_different_symmetry_eff(
+        self, hpc
+    ) -> None:
+        rock_salt_feo = Structure(
+            Lattice.cubic(4.3), ["Fe", "O"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
+        )
+        overrides = RunOverrides(
+            system=SystemOverrides(
+                magnetic=MagneticConfigHumanInput(magnetic_ordering="afm")
+            )
+        )
+
+        advice = advise(rock_salt_feo, hpc=hpc, overrides=overrides)
+
+        assert advice.system.magnetic.ok
+        relabeled = advice.system.magnetic.value.relabeled_structure
+        assert len(set(relabeled.species)) > len(set(rock_salt_feo.species))
+
+        assert advice.analysis.symmetry.ok
+        assert advice.system.symmetry_eff.ok
+        assert advice.system.symmetry_eff.value != advice.analysis.symmetry.value
+
+        # k_sampling/n_irr_k consumed the relabeled (bigger) cell, not the
+        # original one, and did not crash doing it.
+        assert advice.step.kpoints.k_sampling.ok
+        assert advice.step.kpoints.n_irr_k.ok
+
+    def test_fm_default_keeps_symmetry_eff_identical_to_symmetry(self, hpc) -> None:
+        rock_salt_feo = Structure(
+            Lattice.cubic(4.3), ["Fe", "O"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
+        )
+
+        advice = advise(rock_salt_feo, hpc=hpc)
+
+        assert advice.system.magnetic.ok
+        assert advice.system.magnetic.value.relabeled_structure == rock_salt_feo
+        assert advice.system.symmetry_eff.value == advice.analysis.symmetry.value
 
 
 def test_pseudo_requirements_reflects_first_pass_spin_orbit(

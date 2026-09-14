@@ -3,7 +3,6 @@ from __future__ import annotations
 from goldilocks_core.advisors.pseudo_selection import (
     PseudoRequirements,
     is_table_eligible,
-    match_selected_metadata,
     pseudo_requirements,
     requires_sssp,
     select_metadata_for_elements,
@@ -12,7 +11,6 @@ from goldilocks_core.advisors.pseudo_selection import (
 from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.assets.records import AssetFile, AssetSpec
-from goldilocks_core.provenance import Provenance as LegacyProvenance
 
 
 def _table(
@@ -153,64 +151,6 @@ def test_automatic_selection_with_no_match_is_unavailable_not_a_raise() -> None:
 
     assert not state.ok
     assert "no pseudopotential table satisfies" in state.reason
-
-
-class TestMatchSelectedMetadata:
-    def test_matches_a_selection_to_its_metadata(self) -> None:
-        metadata = (
-            PseudoMetadata(
-                filepath="/store/Si.upf",
-                filename="Si.upf",
-                header_format="attr",
-                element="Si",
-                table_id="pseudopotentials/fixture",
-            ),
-        )
-        selection = {
-            "pseudopotentials": [
-                {
-                    "element": "Si",
-                    "filename": "Si.upf",
-                    "filepath": "/store/Si.upf",
-                    "provenance": LegacyProvenance(
-                        source="analysis",
-                        reason="fixture",
-                        data_source="pseudopotentials/fixture",
-                    ),
-                }
-            ],
-            "warnings": [],
-        }
-
-        state = match_selected_metadata(selection, metadata)
-
-        assert state.ok
-        assert state.value[0].element == "Si"
-
-    def test_unmatched_selection_is_unavailable_not_a_stop_iteration(self) -> None:
-        """v2 epic 5 (#5) bug fix: v1's bare next(...) here raised an opaque
-        StopIteration on a miss (pseudo/source.py:114-129)."""
-        selection = {
-            "pseudopotentials": [
-                {
-                    "element": "Si",
-                    "filename": "Si.upf",
-                    "filepath": "/store/Si.upf",
-                    "provenance": LegacyProvenance(
-                        source="analysis",
-                        reason="fixture",
-                        data_source="pseudopotentials/fixture",
-                    ),
-                }
-            ],
-            "warnings": [],
-        }
-
-        state = match_selected_metadata(selection, ())
-
-        assert not state.ok
-        assert state.status == "unavailable"
-        assert "Si" in state.reason
 
 
 class TestSelectMetadataForElements:

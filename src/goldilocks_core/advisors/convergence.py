@@ -51,6 +51,14 @@ confirmed ``Resolved`` value (``Unavailable``, ``Blocked``, or simply
 not supplied) just skips the corresponding optional adjustment --
 ``conv_thr``/``etot_conv_thr``/``mixing_beta``/``electron_maxstep`` do
 not depend on either, so this module never blocks on them.
+
+**``Provenance.field_sources``, populated here first.** The one
+``Provenance`` on this whole ``ConvergenceDecision`` answers "did a
+human/llm touch *anything* in here" (``source`` above); v2 epic 9
+(#9)'s scenario 2 needs the finer "did a human touch *this specific*
+field" (overriding ``mixing_beta`` alone must not make ``conv_thr``/
+``mixing_mode`` look human-sourced too) -- ``field_sources`` carries
+that, one entry per field, using the same priority order as ``_pick``.
 """
 
 from __future__ import annotations
@@ -145,8 +153,16 @@ def convergence(
             _HUBBARD_MIXING_FIXED_NS if hubbard_active else None,
         ),
     )
+    field_sources = {
+        "conv_thr": _field_source(human.conv_thr),
+        "etot_conv_thr": _field_source(human.etot_conv_thr),
+        "mixing_beta": _field_source(human.mixing_beta, llm.mixing_beta),
+        "electron_maxstep": _field_source(human.electron_maxstep, llm.electron_maxstep),
+        "mixing_mode": _field_source(human.mixing_mode, llm.mixing_mode),
+        "mixing_fixed_ns": _field_source(human.mixing_fixed_ns, llm.mixing_fixed_ns),
+    }
     source = "human" if _any_set(human) else "llm" if _any_set(llm) else "heuristic"
-    return Resolved(decision, Provenance(source=source))
+    return Resolved(decision, Provenance(source=source, field_sources=field_sources))
 
 
 def _pick[T](human_value: T | None, llm_value: T | None, default: T) -> T:
@@ -155,6 +171,17 @@ def _pick[T](human_value: T | None, llm_value: T | None, default: T) -> T:
     if llm_value is not None:
         return llm_value
     return default
+
+
+def _field_source(human_value: object | None, llm_value: object | None = None) -> str:
+    """Per-scalar counterpart to ``_pick``'s priority order -- used to
+    populate ``Provenance.field_sources`` (v2 epic 9, #9, scenario 2)
+    without changing what value each field itself resolves to."""
+    if human_value is not None:
+        return "human"
+    if llm_value is not None:
+        return "llm"
+    return "heuristic"
 
 
 def _any_set(overrides: HumanInput) -> bool:

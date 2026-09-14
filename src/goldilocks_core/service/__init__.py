@@ -34,6 +34,8 @@ module into one file. Split by pipeline phase instead, matching
 - ``_pipeline.py`` -- ``advise()``/``check()``
 - ``_generate.py`` -- ``generate()``, the hard-fail boundary
 - ``_bundle.py`` -- submission-script rendering + bundle assembly
+- ``_dos.py`` -- ``dos`` task multi-step path (epic 9), reusing the
+  single-step phases above twice rather than a fourth phase of its own
 
 This ``__init__.py`` only re-exports; per ``check_complexity.py``'s own
 logic, a package's pure-export ``__init__.py`` is exempt from the
@@ -48,6 +50,7 @@ from __future__ import annotations
 from goldilocks_core.service._advice import Advice, RunOverrides
 from goldilocks_core.service._analysis import AnalysisFacts, AnalysisOverrides
 from goldilocks_core.service._bundle import render_submission, to_bundle_input
+from goldilocks_core.service._dos import DosAdvice, advise_dos, check_dos, generate_dos
 from goldilocks_core.service._generate import AdviceIncomplete, generate
 from goldilocks_core.service._pipeline import advise, check
 from goldilocks_core.service._pseudo import PseudoAdvice
@@ -64,6 +67,7 @@ __all__ = [
     "AdviceIncomplete",
     "AnalysisFacts",
     "AnalysisOverrides",
+    "DosAdvice",
     "ElectronicStepAdvice",
     "KpointsOverrides",
     "PseudoAdvice",
@@ -75,8 +79,11 @@ __all__ = [
     "SystemAdvice",
     "SystemOverrides",
     "advise",
+    "advise_dos",
     "check",
+    "check_dos",
     "generate",
+    "generate_dos",
     "render_submission",
     "to_bundle_input",
 ]

@@ -12,41 +12,11 @@ layer that exercises real argument parsing end to end.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 
-import pytest
+from support import run_cli as _run_cli
 
-from goldilocks_core.assets.runtime import statuses
-from goldilocks_core.assets.store import AssetStore, asset_root
 from goldilocks_core.examples.structures import structure
-
-REAL_ASSET_ROOT = asset_root()
-
-
-def _default_profile_installed() -> bool:
-    store = AssetStore(REAL_ASSET_ROOT)
-    return all(state == "installed" for _, _, state in statuses("default", store=store))
-
-
-@pytest.fixture
-def real_assets(monkeypatch: pytest.MonkeyPatch) -> None:
-    if not _default_profile_installed():
-        pytest.skip(f"default asset profile not installed at {REAL_ASSET_ROOT}")
-    monkeypatch.setenv("GOLDILOCKS_ASSET_ROOT", str(REAL_ASSET_ROOT))
-
-
-def _run_cli(
-    *arguments: str, cwd: Path | None = None
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, "-m", "goldilocks_core.cli.core", *arguments],
-        cwd=cwd,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
 
 
 def test_help_lists_the_design_docs_commands() -> None:

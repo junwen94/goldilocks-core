@@ -1,3 +1,15 @@
+"""Tests for goldilocks_core.assets.pseudopotentials.importers.
+
+Two tests trimmed for v2 epic 9 (#9): they used to also exercise v1's
+``selection.select_pseudopotentials`` against the freshly-loaded
+metadata to prove element/functional/accuracy matching worked; that
+selection logic is v2's own ``advisors/pseudo_selection.py`` now,
+covered by ``test_advisors_pseudo_selection.py``. What's left here is
+the part unique to this module: that the importer normalizes the
+right cutoffs/relativistic treatment onto ``PseudoMetadata`` in the
+first place.
+"""
+
 import hashlib
 import io
 import json
@@ -6,9 +18,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.advice.parameters import PseudopotentialRequirements
 from goldilocks_core.assets.pseudopotentials.importers import (
     PseudoImportError,
     load_installed_table,
@@ -18,8 +28,6 @@ from goldilocks_core.assets.pseudopotentials.importers import (
 from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 from goldilocks_core.assets.records import AssetFile, AssetSpec, InstalledAsset
 from goldilocks_core.assets.store import AssetCorrupt, AssetStore
-from goldilocks_core.provenance import Provenance
-from goldilocks_core.selection import select_pseudopotentials
 
 UPF = (
     b'<UPF version="2.0.1">\n'
@@ -246,61 +254,9 @@ def test_pseudodojo_accepts_nonrelativistic_header_in_scalar_table(
 
     assert metadata[0].relativistic == "non-relativistic"
     assert metadata[0].pseudo_info["upf_relativistic"] == "non-relativistic"
-
-    structure = Structure(Lattice.cubic(4.0), ["Si"], [[0, 0, 0]])
-    requirements = PseudopotentialRequirements(
-        functional="PBEsol",
-        accuracy="efficiency",
-        pseudo_type="NC",
-        relativistic="scalar",
-        provenance=Provenance(source="default", reason="test requirements"),
-    )
-    selection = select_pseudopotentials(structure, requirements, metadata)
-
-    pseudo = selection["pseudopotentials"][0]
-    assert pseudo["filename"] == "Si.upf"
-    assert pseudo["filepath"] == str(installed.path("pseudos/Si.upf"))
-    assert pseudo["ecutwfc_ry"] == 40.0
-    assert pseudo["ecutrho_ry"] == 160.0
-    assert pseudo["relativistic"] == "non-relativistic"
-    assert metadata[0].relativistic == "non-relativistic"
-
-    full = select_pseudopotentials(
-        structure, {**requirements, "relativistic": "full"}, metadata
-    )
-    assert full["pseudopotentials"][0]["filename"] is None
-    assert "full PBEsol" in full["warnings"][0]
-
-
-@pytest.mark.parametrize(
-    ("pseudo_type", "accuracy", "diagnostic"),
-    [
-        ("PAW", "efficiency", "matches type PAW"),
-        ("NC", "precision", "matches registered accuracy precision"),
-    ],
-)
-def test_pseudodojo_scalar_nr_reports_unsatisfied_requirements(
-    tmp_path: Path, pseudo_type: str, accuracy: str, diagnostic: str
-) -> None:
-    upf = UPF.replace(b'relativistic="scalar"', b'relativistic="non-relativistic"')
-    installed, _ = install_dojo_fixture(tmp_path, upf=upf)
-    metadata = load_installed_table(installed)
-    requirements = PseudopotentialRequirements(
-        functional="PBEsol",
-        accuracy=accuracy,
-        pseudo_type=pseudo_type,
-        relativistic="scalar",
-        provenance=Provenance(source="default", reason="test requirements"),
-    )
-
-    selection = select_pseudopotentials(
-        Structure(Lattice.cubic(4.0), ["Si"], [[0, 0, 0]]),
-        requirements,
-        metadata,
-    )
-
-    assert selection["pseudopotentials"][0]["filename"] is None
-    assert diagnostic in selection["warnings"][0]
+    assert metadata[0].filepath == str(installed.path("pseudos/Si.upf"))
+    assert metadata[0].cutoffs["ecutwfc_ry"] == 40.0
+    assert metadata[0].cutoffs["ecutrho_ry"] == 160.0
 
 
 def test_sssp_rejects_sidecar_registry_disagreement(tmp_path: Path) -> None:
@@ -326,27 +282,8 @@ def test_sssp_accepts_nonrelativistic_header_in_scalar_table(tmp_path: Path) -> 
 
     assert metadata[0].relativistic == "non-relativistic"
     assert metadata[0].pseudo_info["upf_relativistic"] == "non-relativistic"
-    structure = Structure(Lattice.cubic(4.0), ["Si"], [[0, 0, 0]])
-    requirements = PseudopotentialRequirements(
-        functional="PBEsol",
-        accuracy="efficiency",
-        pseudo_type="NC",
-        relativistic="scalar",
-        provenance=Provenance(source="default", reason="test requirements"),
-    )
-    selection = select_pseudopotentials(structure, requirements, metadata)
-
-    pseudo = selection["pseudopotentials"][0]
-    assert pseudo["filename"] == "Si.upf"
-    assert pseudo["relativistic"] == "non-relativistic"
-    assert pseudo["ecutwfc_ry"] == 30.0
-    assert pseudo["ecutrho_ry"] == 120.0
-
-    full = select_pseudopotentials(
-        structure, {**requirements, "relativistic": "full"}, metadata
-    )
-    assert full["pseudopotentials"][0]["filename"] is None
-    assert "full PBEsol" in full["warnings"][0]
+    assert metadata[0].cutoffs["ecutwfc_ry"] == 30.0
+    assert metadata[0].cutoffs["ecutrho_ry"] == 120.0
 
 
 def test_installed_pseudo_manifest_rejects_unknown_entry_fields(

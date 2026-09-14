@@ -79,10 +79,10 @@ class Advice:
         ``PseudoTable.asset``, and tuples of them like
         ``pseudopotentials``); the one exception is
         ``MagneticConfigFacts.relabeled_structure``, a pymatgen
-        ``Structure`` (not JSON-encodable and, today, always identical
-        to the input structure already implicit in the bundle -- see
-        that field's own docstring), which is dropped rather than
-        converted.
+        ``Structure`` (not JSON-encodable, and -- since v2 epic 9, #9's
+        AFM species-splitting -- no longer even always identical to the
+        input structure already implicit in the bundle), which is
+        dropped rather than converted.
         """
         merged = {
             **self.analysis.records(),

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.advisors.magnetic_config import magnetic_config
+from goldilocks_core.advisors.magnetic_config import (
+    MagneticConfigHumanInput,
+    magnetic_config,
+)
 from goldilocks_core.advisors.nbnd import NbndHumanInput, NbndLlmInput, nbnd
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.analysis.is_magnetic import is_magnetic
@@ -108,3 +111,50 @@ def test_non_magnetic_system_has_no_spin_note() -> None:
     state = nbnd(8.0, _FIXED, magnetic=magnetic)
 
     assert state.value.warnings == ()
+
+
+def test_noncollinear_insulator_uses_the_full_electron_count_not_half() -> None:
+    """QE's noncollinear bands hold one electron each (a two-component
+    spinor), not two -- doubling the nominal insulator formula relative
+    to a comparable collinear run (v2 epic 9, #9)."""
+    magnetic = magnetic_config(
+        _SILICON,
+        is_magnetic(_SILICON),
+        human=MagneticConfigHumanInput(spin_orbit_coupling=True),
+    )
+
+    state = nbnd(20.0, _FIXED, magnetic=magnetic)
+
+    assert state.value.nbnd == 20
+
+
+def test_noncollinear_metal_pads_from_the_full_electron_count() -> None:
+    # nelec=200 -> valence_bands=200 (noncollinear, not halved);
+    # 1.2*200=240 beats 200+4=204.
+    magnetic = magnetic_config(
+        _SILICON,
+        is_magnetic(_SILICON),
+        human=MagneticConfigHumanInput(spin_orbit_coupling=True),
+    )
+
+    state = nbnd(200.0, _SMEARING, magnetic=magnetic)
+
+    assert state.value.nbnd == 240
+
+
+def test_noncollinear_gets_its_own_note_not_the_nspin_two_one() -> None:
+    magnetic = magnetic_config(
+        _IRON,
+        is_magnetic(_IRON),
+        human=MagneticConfigHumanInput(spin_orbit_coupling=True),
+    )
+
+    state = nbnd(16.0, _FIXED, magnetic=magnetic)
+
+    assert any(
+        "one electron" in warning.message for warning in state.value.warnings
+    )
+    assert not any(
+        "not the number of bands" in warning.message
+        for warning in state.value.warnings
+    )

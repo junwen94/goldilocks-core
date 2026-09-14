@@ -164,6 +164,26 @@ def test_writes_one_scf_step_with_pure_translated_content(
     assert "vdw_corr" not in content
 
 
+def test_purpose_nscf_renames_the_step_and_the_calculation_keyword(
+    silicon_structure, pseudo_metadata_factory
+) -> None:
+    """v2 epic 9 (#9): DOS's nscf step is the same writer, a different
+    ``purpose`` -- QE's own documented ``calculation='nscf'`` value, not
+    a new scientific decision this writer makes."""
+    system = _system(silicon_structure, pseudo_metadata_factory)
+    step = _step()
+
+    steps = write_qe_scf(system, step, _JOB, _CTX, purpose="nscf")
+
+    assert len(steps) == 1
+    rendered = steps[0]
+    assert rendered.name == "nscf"
+    assert rendered.args == ("-npool", "2", "-in", "nscf.in")
+    assert rendered.stdout == "nscf.out"
+    content = rendered.files["nscf.in"]
+    assert "calculation      = 'nscf'" in content
+
+
 def test_ndiag_is_appended_to_args_when_resolved(
     silicon_structure, pseudo_metadata_factory
 ) -> None:
@@ -251,6 +271,16 @@ def test_spin_orbit_magnetic_emits_noncolin_lspinorb_and_angles(
     assert "angle1(1)" in content
     assert "angle2(1)" in content
     assert "nspin" not in content
+    # QE 7.3 hard-rejects the Gamma-only *algorithm* (real-valued
+    # wavefunctions) together with noncolin (PW/src/setup.f90) -- sampling
+    # at Gamma is fine, but it must never be spelled as the special
+    # "K_POINTS gamma" card, only "K_POINTS automatic" with an explicit
+    # 1 1 1 grid (v2 epic 9, #9; goldilocks-core-design.md's own 2026-09-09
+    # correction on this exact point). v2 never emits the "gamma" card at
+    # all, under any settings -- this pins that invariant specifically for
+    # the one combination QE would otherwise refuse to run.
+    assert "K_POINTS automatic" in content
+    assert "K_POINTS gamma" not in content
 
 
 def test_vdw_method_translates_to_qe_keyword(

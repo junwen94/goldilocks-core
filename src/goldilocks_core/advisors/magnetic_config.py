@@ -38,12 +38,23 @@ enforced constraint -- verified against QE 7.3's `PW/src/input.f90`). Both
 are accepted here as independent, unrelated overrides; this advisor never
 treats supplying both as a blocking error.
 
-`relabeled_structure` ships with AFM-ready shape but FM-only behaviour, per
-goldilocks-core-design.md:3116-3136's "the duality needs to exist even before
-species-splitting itself does, or every downstream advisor needs a second
-signature later": it always equals the input `structure` for now. Actual
-AFM species-splitting (producing distinct Fe1/Fe2 sites) is a later
-extension, not this epic's job.
+**AFM species-splitting (v2 epic 9, #9)**: `relabeled_structure` equals the
+input `structure` unless a caller explicitly opts in with
+`human.magnetic_ordering="afm"` -- opt-in, not a new default, for the same
+reason SOC stays opt-in below (real cost: this calls out to
+`pymatgen.analysis.magnetism.analyzer.MagneticStructureEnumerator`, which
+shells out to the external `enumlib` executables and can take seconds, not
+milliseconds). Finding which magnetic configuration is the true ground
+state needs comparing several SCF total energies -- explicitly an
+agent-level job in the design doc (goldilocks-core-design.md:2076), not
+something this stateless, single-call heuristic tier can or should attempt.
+What this tier gives instead is a *reasonable, deterministic* compensated
+ordering (the smallest antiferromagnetic candidate the enumerator finds),
+useful as a real starting point for a human/agent to actually run and
+compare against the plain ferromagnetic guess -- degrading back to the FM
+identity pass-through, with a warning naming why, whenever enumlib is
+missing, the structure exceeds a small site-count ceiling, or no
+compensated ordering exists at all. See `_attempt_afm_relabeling` below.
 
 SOC stays opt-in, matching v1's own policy: `needs_soc` only ever produces a
 warning recommending it be considered, never enables it automatically --
@@ -83,8 +94,11 @@ package's invention) rather than either guessing a `z_valence` or leaving
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
+from typing import Literal
 
+from pymatgen.analysis.magnetism.analyzer import MagneticStructureEnumerator
 from pymatgen.core import Structure
 
 from goldilocks_core.analysis.composition import composition
@@ -97,6 +111,15 @@ from goldilocks_core.resolution import (
     Resolved,
     Warning,
 )
+
+_MAX_SITES_FOR_AFM_ENUMERATION = 16
+"""Combinatorial enumeration cost grows quickly with site count; this
+matches the order of magnitude the design doc itself treats as the
+practical ceiling for magnetic sublattice counts (QE's own 3-character
+``ATOMIC_SPECIES`` label limit already makes ``>=10`` inequivalent
+magnetic sites "extremely rare" by goldilocks-core-design.md's own F19
+note) -- not a benchmarked number, just a guard against a multi-minute
+call for a case this heuristic tier was never meant to serve."""
 
 DEFAULT_MAGNETIZATION_FRACTION = 0.1
 """aiida-quantumespresso's own flat default for elements with no specific
@@ -175,6 +198,24 @@ WARNING_CATALOGUE = (
         category="magnetic",
         message="magnetism could not be determined; defaulted to non-magnetic.",
     ),
+    Warning(
+        code="magnetic.afm_ordering_unavailable",
+        level="warning",
+        category="magnetic",
+        message=(
+            "antiferromagnetic ordering was requested but could not be "
+            "produced; kept ferromagnetic order."
+        ),
+    ),
+    Warning(
+        code="magnetic.afm_ordering_applied",
+        level="info",
+        category="magnetic",
+        message=(
+            "a compensated antiferromagnetic ordering was found and applied; "
+            "relabeled_structure now differs from structure."
+        ),
+    ),
 )
 """Every warning code this module can emit -- ``capabilities.py``'s
 ``warnings[]`` catalogue aggregates one of these tuples per advisor. The
@@ -206,6 +247,12 @@ class MagneticConfigHumanInput(HumanInput):
     path (direct `parameters['SYSTEM']['starting_magnetization']`), as
     opposed to its "Using the SpinType" path (a physical moment scaled by
     `z_valences`, which is what the heuristic tier below does)."""
+    magnetic_ordering: Literal["fm", "afm"] | None = None
+    """Opt-in only (default ``None`` behaves exactly like ``"fm"``): stays
+    off by default because attempting ``"afm"`` calls out to an external
+    process and can take seconds, and because which ordering is *actually*
+    the ground state is not something this module can determine on its
+    own -- see the module docstring."""
 
 
 class MagneticConfigLlmInput(LlmInput):
@@ -234,13 +281,23 @@ def magnetic_config(
 
     magnetic_elements = _magnetic_elements(structure) if spin_polarized else ()
 
+    relabeled_structure = structure
+    if spin_polarized and human.magnetic_ordering == "afm":
+        relabeled_structure, afm_warnings = _attempt_afm_relabeling(
+            structure, magnetic_elements
+        )
+        warnings = (*warnings, *afm_warnings)
+
     starting_magnetization = None
     if spin_polarized:
-        starting_magnetization = (
-            dict(human.starting_magnetization)
-            if human.starting_magnetization is not None
-            else _starting_magnetization(structure, z_valences)
-        )
+        if human.starting_magnetization is not None:
+            starting_magnetization = dict(human.starting_magnetization)
+        elif relabeled_structure is not structure:
+            starting_magnetization = _starting_magnetization_by_label(
+                relabeled_structure, z_valences
+            )
+        else:
+            starting_magnetization = _starting_magnetization(structure, z_valences)
 
     spin_orbit_enabled = human.spin_orbit_coupling is True
     needs_soc_resolved_true = needs_soc is not None and needs_soc.ok and needs_soc.value
@@ -265,7 +322,7 @@ def magnetic_config(
         angle2 = dict.fromkeys(starting_magnetization, 0.0)
 
     facts = MagneticConfigFacts(
-        relabeled_structure=structure,
+        relabeled_structure=relabeled_structure,
         spin_polarized=spin_polarized,
         magnetic_elements=magnetic_elements,
         starting_magnetization=starting_magnetization,
@@ -333,3 +390,138 @@ def _fraction_for(symbol: str, z_valences: dict[str, float] | None) -> float:
         # calibrated value yet.
         return DEFAULT_MAGNETIZATION_FRACTION
     return target / z_valences[symbol]
+
+
+def _afm_unavailable(reason: str) -> Warning:
+    return Warning(
+        code="magnetic.afm_ordering_unavailable",
+        level="warning",
+        category="magnetic",
+        message=f"{reason}; kept ferromagnetic order.",
+    )
+
+
+def _attempt_afm_relabeling(
+    structure: Structure, magnetic_elements: tuple[str, ...]
+) -> tuple[Structure, tuple[Warning, ...]]:
+    """Try to find one genuine, compensated two-sublattice antiferromagnetic
+    ordering via pymatgen's own ``MagneticStructureEnumerator`` (itself
+    backed by ``MagOrderingTransformation``'s symmetry-aware enumeration) --
+    degrading to the FM identity pass-through, with a named reason, on any
+    failure. The failure modes here are numerous and not fully enumerable
+    up front (missing external executables, enumlib subprocess errors,
+    pymatgen-internal symmetry-analysis failures on an awkward structure) --
+    consistent with this module's own "never let external-library failure
+    modes become a raise" policy, the broad ``except Exception`` below is
+    deliberate, not a caught-in-passing accident."""
+    if len(structure) > _MAX_SITES_FOR_AFM_ENUMERATION:
+        return structure, (
+            _afm_unavailable(
+                f"structure has {len(structure)} sites, over the "
+                f"{_MAX_SITES_FOR_AFM_ENUMERATION}-site ceiling this "
+                "heuristic enumerates within"
+            ),
+        )
+    if shutil.which("enum.x") is None and shutil.which("multienum.x") is None:
+        return structure, (
+            _afm_unavailable(
+                "antiferromagnetic ordering needs the enumlib executables "
+                "(enum.x/multienum.x plus makeStr.py) on PATH and none "
+                "were found"
+            ),
+        )
+
+    try:
+        enumerator = MagneticStructureEnumerator(
+            structure,
+            default_magmoms=dict.fromkeys(magnetic_elements, 5.0),
+            strategies=("ferromagnetic", "antiferromagnetic"),
+            truncate_by_symmetry=True,
+            max_orderings=16,
+        )
+    except Exception as error:  # noqa: BLE001 -- see docstring
+        return structure, (_afm_unavailable(f"AFM enumeration failed ({error})"),)
+
+    candidates = [
+        candidate
+        for candidate, origin in zip(
+            enumerator.ordered_structures,
+            enumerator.ordered_structure_origins,
+            strict=True,
+        )
+        if origin == "afm"
+    ]
+    if not candidates:
+        return structure, (
+            _afm_unavailable("no compensated antiferromagnetic ordering was found"),
+        )
+
+    winner = min(candidates, key=lambda candidate: candidate.num_sites)
+    relabeled = _label_by_spin(winner)
+    applied = Warning(
+        code="magnetic.afm_ordering_applied",
+        level="info",
+        category="magnetic",
+        message=(
+            f"antiferromagnetic ordering applied: {relabeled.num_sites} sites, "
+            f"{len(set(relabeled.labels))} distinct species (was "
+            f"{structure.num_sites} sites, {len(set(structure.species))} "
+            "species)."
+        ),
+    )
+    return relabeled, (applied,)
+
+
+def _label_by_spin(candidate: Structure) -> Structure:
+    """Turn a spin-decorated ``MagneticStructureEnumerator`` candidate's
+    per-site spin into QE-``ATOMIC_SPECIES``-shaped labels (``Fe1``/``Fe2``),
+    per goldilocks-core-design.md's F1/F8 label-expansion rule -- an
+    element with only one spin value among its sites keeps its plain
+    symbol; one with more than one gets numbered suffixes, most-positive
+    spin first, for a deterministic (not enumeration-order-dependent)
+    result."""
+    spins_by_element: dict[str, list[float]] = {}
+    for site in candidate:
+        spin = getattr(site.specie, "spin", None) or 0.0
+        spins_by_element.setdefault(site.specie.symbol, [])
+        if spin not in spins_by_element[site.specie.symbol]:
+            spins_by_element[site.specie.symbol].append(spin)
+
+    label_by_key: dict[tuple[str, float], str] = {}
+    for element, spins in spins_by_element.items():
+        if len(spins) == 1:
+            label_by_key[(element, spins[0])] = element
+            continue
+        for index, spin in enumerate(sorted(spins, reverse=True), start=1):
+            label_by_key[(element, spin)] = f"{element}{index}"
+
+    labels = [
+        label_by_key[(site.specie.symbol, getattr(site.specie, "spin", None) or 0.0)]
+        for site in candidate
+    ]
+    return Structure(
+        candidate.lattice,
+        candidate.species,
+        candidate.frac_coords,
+        labels=labels,
+        site_properties=candidate.site_properties,
+    )
+
+
+def _starting_magnetization_by_label(
+    structure: Structure, z_valences: dict[str, float] | None
+) -> dict[str, float]:
+    """Same calibration as ``_starting_magnetization``, but keyed by the
+    relabeled structure's per-sublattice label rather than by element, and
+    signed by each sublattice's own spin direction -- QE's
+    ``starting_magnetization`` is given per ``ATOMIC_SPECIES`` entry, and
+    after AFM relabeling that is no longer the same thing as per element."""
+    result: dict[str, float] = {}
+    for site in structure:
+        label = site.label
+        if label in result:
+            continue
+        spin = getattr(site.specie, "spin", None) or 0.0
+        sign = -1.0 if spin < 0 else 1.0
+        result[label] = sign * _fraction_for(site.specie.symbol, z_valences)
+    return result

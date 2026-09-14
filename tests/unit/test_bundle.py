@@ -96,6 +96,7 @@ def test_manifest_records_are_tri_state_aware(tmp_path: Path) -> None:
         "status": "resolved",
         "value": "PBEsol",
         "source": "human",
+        "field_sources": None,
         "reason": None,
         "blocked_by": None,
     }

@@ -136,6 +136,7 @@ class TestResolvedFieldBoundaryProjection:
             "status": "resolved",
             "value": 0.4,
             "source": "heuristic",
+            "field_sources": None,
             "reason": None,
             "blocked_by": None,
         }
