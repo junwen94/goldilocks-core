@@ -214,6 +214,7 @@ max-complexity = 10
 goldilocks_core = [
     "ml/registry.toml",
     "assets/pseudopotentials/registry.toml",
+    "inputs/profiles/*.toml",
     "examples/structures/*.cif",
     "examples/structures/README.md",
 ]

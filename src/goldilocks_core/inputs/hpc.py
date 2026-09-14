@@ -1,0 +1,150 @@
+"""hpc: cluster profile schema and TOML loader.
+
+New in v2 (v2 epic 7, #7); no v1 precedent -- v1's CLI wizard
+(`cli/wizard/hpc.py`, deleted from the v2 tree) did live runtime
+auto-detection via `sinfo`/`sacctmgr`/`module avail` rather than a
+stored profile. This codebase instead ships static profile files:
+`advisors/job_resources.py`/`advisors/parallelisation.py` read a
+profile's hardware/partition specs directly, rather than re-probing a
+live scheduler at every call (this package does not assume it is even
+running on the cluster it is generating inputs for).
+
+``[hardware]`` is the baseline; ``[partitions.<name>]`` override only
+what differs, inheriting everything else -- the same pattern
+aiida-quantumespresso's own protocol files use (a shared
+``default_inputs`` baseline, each protocol only listing its diffs).
+Exactly one partition must set ``default = true``.
+
+Units are baked into field names (``mem_per_node_gb``, not
+``"256GB"``) so no unit-string parser is needed -- TOML numbers are
+just numbers.
+
+``inputs/profiles/scarf.toml`` is STFC SCARF's real configuration,
+verified against live ``sinfo``/``scontrol show partition``/
+``sacctmgr`` output (2026-09-14), not an invented example: SCARF's
+``scarf``/``devel``/``preemptable`` partitions share one heterogeneous
+node pool where ``sinfo`` reports only a *minimum* guaranteed spec
+(e.g. "64+ CPUs", "257000+ MB") -- many nodes have more, but sizing off
+the minimum is the only safe default across a mixed pool. ``ibis`` is
+excluded (restricted to a different account than this profile assumes
+access for). ``account`` is deliberately not a profile field at all --
+it is personal to whoever is submitting, not a property of the
+cluster, so it stays a human override (``--set account=...``), never a
+package-shipped default.
+"""
+
+from __future__ import annotations
+
+import tomllib
+from dataclasses import dataclass
+from importlib import resources
+
+
+@dataclass(frozen=True, slots=True)
+class Hardware:
+    cores_per_node: int
+    mem_per_node_gb: float
+    max_nodes: int
+    max_walltime_h: float
+
+
+@dataclass(frozen=True, slots=True)
+class Partition:
+    name: str
+    hardware: Hardware
+    default: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class HpcProfile:
+    name: str
+    scheduler: str
+    launcher: str
+    modules: dict[str, tuple[str, ...]]
+    has_scalapack: dict[str, bool]
+    partitions: dict[str, Partition]
+
+    def default_partition(self) -> Partition:
+        for partition in self.partitions.values():
+            if partition.default:
+                return partition
+        raise ValueError(f"hpc profile {self.name!r} declares no default partition")
+
+    def partition(self, name: str) -> Partition:
+        try:
+            return self.partitions[name]
+        except KeyError:
+            available = ", ".join(sorted(self.partitions))
+            raise ValueError(
+                f"hpc profile {self.name!r} has no partition {name!r}; "
+                f"available: {available}"
+            ) from None
+
+
+class InvalidHpcProfile(ValueError):
+    """A profile TOML file is missing required fields or malformed."""
+
+
+def load_hpc_profile(name: str) -> HpcProfile:
+    resource = resources.files("goldilocks_core.inputs.profiles").joinpath(
+        f"{name}.toml"
+    )
+    try:
+        with resource.open("rb") as source:
+            data = tomllib.load(source)
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise InvalidHpcProfile(f"cannot read hpc profile {name!r}: {error}") from error
+    return _parse_profile(name, data)
+
+
+def _parse_profile(name: str, data: dict[str, object]) -> HpcProfile:
+    try:
+        hardware_defaults = data["hardware"]
+        raw_partitions = data["partitions"]
+        scheduler = data["scheduler"]
+        launcher = data["launcher"]
+    except KeyError as error:
+        raise InvalidHpcProfile(
+            f"hpc profile {name!r} is missing required field {error}"
+        ) from error
+
+    partitions: dict[str, Partition] = {}
+    for partition_name, overrides in raw_partitions.items():
+        merged = {**hardware_defaults, **overrides}
+        hardware = Hardware(
+            cores_per_node=merged["cores_per_node"],
+            mem_per_node_gb=merged["mem_per_node_gb"],
+            max_nodes=merged["max_nodes"],
+            max_walltime_h=merged["max_walltime_h"],
+        )
+        partitions[partition_name] = Partition(
+            name=partition_name,
+            hardware=hardware,
+            default=bool(overrides.get("default", False)),
+        )
+
+    defaults = [
+        partition.name for partition in partitions.values() if partition.default
+    ]
+    if len(defaults) != 1:
+        found = ", ".join(defaults) or "none"
+        raise InvalidHpcProfile(
+            f"hpc profile {name!r} must have exactly one default partition; "
+            f"found {found}"
+        )
+
+    codes = data.get("codes", {})
+    return HpcProfile(
+        name=name,
+        scheduler=scheduler,
+        launcher=launcher,
+        modules={
+            code: tuple(module_lines)
+            for code, module_lines in data.get("modules", {}).items()
+        },
+        has_scalapack={
+            code: bool(config.get("has_scalapack", False))
+            for code, config in codes.items()
+        },
+        partitions=partitions,
+    )
