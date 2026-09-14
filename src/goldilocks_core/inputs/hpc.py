@@ -97,6 +97,20 @@ def load_hpc_profile(name: str) -> HpcProfile:
     return _parse_profile(name, data)
 
 
+def list_hpc_profiles() -> tuple[str, ...]:
+    """Every profile name shipped under ``inputs/profiles/`` -- added for
+    v2 epic 8's ``capabilities`` contract (``hpc_profiles[]``), which
+    needs every profile, not just one named one. No consumer needed this
+    before now: ``--hpc``'s own choices and ``goldilocks assets``-style
+    listing both live in the delivery layer, not here."""
+    names = [
+        entry.name.removesuffix(".toml")
+        for entry in resources.files("goldilocks_core.inputs.profiles").iterdir()
+        if entry.name.endswith(".toml")
+    ]
+    return tuple(sorted(names))
+
+
 def _parse_profile(name: str, data: dict[str, object]) -> HpcProfile:
     try:
         hardware_defaults = data["hardware"]
