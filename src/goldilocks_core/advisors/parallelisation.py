@@ -129,10 +129,13 @@ class ParallelisationHumanInput(HumanInput):
     ``math.isqrt`` on a negative operand, both unhandled Python
     exceptions instead of a clean ``InvalidSetting`` error. Squareness
     and the ``has_scalapack`` gate on ``ndiag`` stay advisory warnings
-    (``_ndiag_advisory_warnings`` below), matching this module's own
-    established pattern of warning rather than blocking on a
-    QE-will-refuse-this constraint (see ``npool_does_not_divide_ntasks``
-    above)."""
+    (``_ndiag_advisory_warnings`` below) -- genuine QE-will-likely-ignore
+    -or-reject *preferences*, not the same category as ``npool`` not
+    dividing ``ntasks``, which is a hard MPI-layout requirement QE
+    itself refuses outright (found not to be enforced during the epic
+    5/6/7 delivery-layer audit; now a blocking rule in ``checks.py``'s
+    ``_npool_must_divide_ntasks``, not just the warning still emitted
+    below)."""
 
     npool: int | None = Field(default=None, gt=0)
     ndiag: int | None = Field(default=None, gt=0)

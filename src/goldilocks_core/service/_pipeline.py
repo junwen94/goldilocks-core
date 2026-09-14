@@ -88,11 +88,18 @@ def check(
     ``relax`` (v2 epic 10, #10): only ever passed by ``service/_relax.py``,
     which does not have a plain ``Advice`` field to fold it into --
     every other caller leaves it ``None``.
+
+    ``job``/``parallel``: always read straight off ``advice`` (every
+    ``Advice`` has both) -- the ``npool``-must-divide-``ntasks`` rule
+    (``checks.py``'s own ``_npool_must_divide_ntasks``) applies
+    regardless of ``purpose``.
     """
     return check_all(
         *advice.field_states(),
         occupations=advice.step.kpoints.occupations,
         magnetic=advice.system.magnetic,
         relax=relax,
+        job=advice.step.resources.job,
+        parallel=advice.step.resources.parallelisation,
         purpose=purpose,
     )
