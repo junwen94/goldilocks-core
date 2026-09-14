@@ -8,6 +8,7 @@ from goldilocks_core.advisors.convergence import ConvergenceDecision
 from goldilocks_core.advisors.cutoffs import CutoffsDecision
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.hubbard_u import HubbardUDecision
+from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.k_sampling import KSamplingDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.nbnd import NbndDecision
@@ -21,6 +22,15 @@ from goldilocks_core.steps import SharedContext
 from goldilocks_core.system_settings import SystemSettings
 
 _CTX = SharedContext(prefix="pwscf", outdir="./out", pseudo_dir="./pseudo")
+_JOB = JobDecision(
+    partition="scarf",
+    nodes=1,
+    ntasks=64,
+    ntasks_per_node=64,
+    walltime_h=168.0,
+    max_seconds=574560,
+    account=None,
+)
 
 
 def _magnetic(
@@ -125,7 +135,7 @@ def test_writes_one_scf_step_with_pure_translated_content(
     system = _system(silicon_structure, pseudo_metadata_factory)
     step = _step()
 
-    steps = write_qe_scf(system, step, _CTX)
+    steps = write_qe_scf(system, step, _JOB, _CTX)
 
     assert len(steps) == 1
     rendered = steps[0]
@@ -141,6 +151,7 @@ def test_writes_one_scf_step_with_pure_translated_content(
     assert "pseudo_dir       = './pseudo'" in content
     assert "ecutwfc          = 30.0" in content
     assert "ecutrho          = 120.0" in content
+    assert "max_seconds      = 574560" in content
     assert "ATOMIC_SPECIES" in content
     assert "Si  " in content and "Si.UPF" in content
     assert "CELL_PARAMETERS angstrom" in content
@@ -159,7 +170,7 @@ def test_ndiag_is_appended_to_args_when_resolved(
     system = _system(silicon_structure, pseudo_metadata_factory)
     step = _step(parallel=ParallelisationDecision(npool=4, ndiag=16))
 
-    steps = write_qe_scf(system, step, _CTX)
+    steps = write_qe_scf(system, step, _JOB, _CTX)
 
     assert steps[0].args == ("-npool", "4", "-ndiag", "16", "-in", "scf.in")
 
@@ -177,7 +188,7 @@ def test_spin_polarized_starting_magnetization_survives_unclobbered(
     system = _system(structure, pseudo_metadata_factory, magnetic=magnetic)
     step = _step()
 
-    content = write_qe_scf(system, step, _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, step, _JOB, _CTX)[0].files["scf.in"]
 
     assert "nspin            = 2" in content
     assert "starting_magnetization(1) = 0.6923" in content
@@ -196,7 +207,7 @@ def test_tot_magnetization_emitted_only_without_spin_orbit(
     )
     system = _system(structure, pseudo_metadata_factory, magnetic=magnetic)
 
-    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, _step(), _JOB, _CTX)[0].files["scf.in"]
 
     assert "tot_magnetization = 2.0" in content
 
@@ -215,7 +226,7 @@ def test_tot_magnetization_with_spin_orbit_is_rejected(pseudo_metadata_factory) 
     system = _system(structure, pseudo_metadata_factory, magnetic=magnetic)
 
     with pytest.raises(GenerationError, match="tot_magnetization"):
-        write_qe_scf(system, _step(), _CTX)
+        write_qe_scf(system, _step(), _JOB, _CTX)
 
 
 def test_spin_orbit_magnetic_emits_noncolin_lspinorb_and_angles(
@@ -232,7 +243,7 @@ def test_spin_orbit_magnetic_emits_noncolin_lspinorb_and_angles(
     )
     system = _system(structure, pseudo_metadata_factory, magnetic=magnetic)
 
-    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, _step(), _JOB, _CTX)[0].files["scf.in"]
 
     assert "noncolin         = .true." in content
     assert "lspinorb         = .true." in content
@@ -251,7 +262,7 @@ def test_vdw_method_translates_to_qe_keyword(
         vdw=VdwFacts(use_vdw=True, method="d3bj"),
     )
 
-    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, _step(), _JOB, _CTX)[0].files["scf.in"]
 
     assert "vdw_corr         = 'grimme-d3'" in content
     assert "dftd3_version    = 4" in content
@@ -266,7 +277,7 @@ def test_boundary_assume_isolated_emitted_when_not_none(
         boundary=BoundaryFacts(assume_isolated="martyna-tuckerman"),
     )
 
-    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, _step(), _JOB, _CTX)[0].files["scf.in"]
 
     assert "assume_isolated  = 'martyna-tuckerman'" in content
 
@@ -281,7 +292,7 @@ def test_smearing_occupations_emit_smearing_type_and_degauss(
         )
     )
 
-    content = write_qe_scf(system, step, _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, step, _JOB, _CTX)[0].files["scf.in"]
 
     assert "occupations      = 'smearing'" in content
     assert "smearing         = 'cold'" in content
@@ -298,7 +309,7 @@ def test_hubbard_plan_not_yet_supported_raises_generation_error(
     )
 
     with pytest.raises(GenerationError, match="Hubbard"):
-        write_qe_scf(system, _step(), _CTX)
+        write_qe_scf(system, _step(), _JOB, _CTX)
 
 
 @pytest.mark.parametrize(
@@ -311,7 +322,7 @@ def test_missing_required_step_setting_raises_generation_error(
     step = _step(**{field: None})
 
     with pytest.raises(GenerationError, match=field):
-        write_qe_scf(system, step, _CTX)
+        write_qe_scf(system, step, _JOB, _CTX)
 
 
 def test_relax_settings_on_an_scf_step_is_rejected(
@@ -323,7 +334,7 @@ def test_relax_settings_on_an_scf_step_is_rejected(
     step = _step(relax=RelaxOptions())
 
     with pytest.raises(GenerationError, match="relax"):
-        write_qe_scf(system, step, _CTX)
+        write_qe_scf(system, step, _JOB, _CTX)
 
 
 def test_missing_pseudopotential_element_raises_generation_error(
@@ -344,7 +355,7 @@ def test_missing_pseudopotential_element_raises_generation_error(
     )
 
     with pytest.raises(GenerationError, match="missing"):
-        write_qe_scf(system, _step(), _CTX)
+        write_qe_scf(system, _step(), _JOB, _CTX)
 
 
 def test_pseudopotential_functional_mismatch_raises_generation_error(
@@ -362,7 +373,7 @@ def test_pseudopotential_functional_mismatch_raises_generation_error(
     )
 
     with pytest.raises(GenerationError, match="functional mismatch"):
-        write_qe_scf(system, _step(), _CTX)
+        write_qe_scf(system, _step(), _JOB, _CTX)
 
 
 def test_disordered_structure_is_rejected(pseudo_metadata_factory) -> None:
@@ -384,4 +395,4 @@ def test_disordered_structure_is_rejected(pseudo_metadata_factory) -> None:
     )
 
     with pytest.raises(GenerationError, match="disordered"):
-        write_qe_scf(system, _step(), _CTX)
+        write_qe_scf(system, _step(), _JOB, _CTX)

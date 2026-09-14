@@ -17,6 +17,17 @@ the new types; namelist formatting (``&CONTROL``/``&SYSTEM``/
 v1's own hand-written ``_control_section``/``_system_section``/
 ``_electrons_section``.
 
+Takes a ``JobDecision`` (``advisors/job_resources.py``) alongside
+``SystemSettings``/``PwSettings`` for exactly one field: ``max_seconds``
+(&CONTROL). This has to be baked into the input file at generation time,
+not injected by ``submission/slurm.py`` at runtime -- editing the input
+file after generation to add a dynamically-shrinking time budget would
+mean the published ``goldilocks.json`` sha256 no longer describes the
+bytes actually run (goldilocks-core-design.md:1230-1237, publication
+guarantee 3). The rest of ``JobDecision`` (``nodes``/``ntasks``/
+``walltime_h``/``partition``) is ``submission/slurm.py``'s concern, not
+this writer's.
+
 Structure always comes from ``system.magnetic.relabeled_structure``,
 never a separately-passed ``Structure`` -- goldilocks-qe-pw-parameter-audit
 finding F18 (also goldilocks-core-design.md:2854): every card in a
@@ -81,6 +92,7 @@ import re
 
 from pymatgen.core.periodic_table import Element
 
+from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.namelists import render_namelist
 from goldilocks_core.step_settings import PwSettings
@@ -100,7 +112,7 @@ _SAFE_FILENAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
 
 
 def write_qe_scf(
-    system: SystemSettings, step: PwSettings, ctx: SharedContext
+    system: SystemSettings, step: PwSettings, job: JobDecision, ctx: SharedContext
 ) -> list[Step]:
     structure = system.magnetic.relabeled_structure
     if not structure.is_ordered:
@@ -134,7 +146,7 @@ def write_qe_scf(
     species_index = {symbol: index + 1 for index, symbol in enumerate(elements)}
 
     keywords: dict[str, object] = {}
-    keywords.update(_control_keywords(ctx, step))
+    keywords.update(_control_keywords(ctx, step, job))
     keywords.update(
         _system_keywords(structure, system, step, len(elements), species_index)
     )
@@ -191,7 +203,9 @@ def _validated_pseudo_by_element(
     return pseudo_by_element
 
 
-def _control_keywords(ctx: SharedContext, step: PwSettings) -> dict[str, object]:
+def _control_keywords(
+    ctx: SharedContext, step: PwSettings, job: JobDecision
+) -> dict[str, object]:
     keywords: dict[str, object] = {
         "calculation": "scf",
         "prefix": ctx.prefix,
@@ -199,6 +213,7 @@ def _control_keywords(ctx: SharedContext, step: PwSettings) -> dict[str, object]
         "pseudo_dir": ctx.pseudo_dir,
         "tprnfor": True,
         "tstress": True,
+        "max_seconds": job.max_seconds,
     }
     if step.disk_io is not None:
         keywords["disk_io"] = step.disk_io
