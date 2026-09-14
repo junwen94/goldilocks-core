@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import inspect
+import threading
+from functools import cache
 
 import numpy as np
 from pymatgen.core import Structure
@@ -8,6 +10,9 @@ from pymatgen.core import Structure
 from goldilocks_core.ml.models import QrfFeatureSettings, StructureFeatureVector
 
 QRF_FEATURE_COUNT = 483
+
+# Shared matminer/dscribe instances are not documented thread-safe; serialize.
+_FEATURIZER_LOCK = threading.Lock()
 
 _CRYSTAL_SYSTEM_ID = {
     "triclinic": 0,
@@ -90,23 +95,19 @@ def extract_qrf_features(
     )
 
 
-def _require_finite(values: object, block_name: str) -> np.ndarray:
-    converted = np.asarray(values, dtype=float)
-    if not np.isfinite(converted).all():
-        raise ValueError(f"{block_name} contains non-finite values.")
-    return converted
+def warm_feature_pipeline(
+    settings: QrfFeatureSettings, metal_model: object, atom_init_path: str
+) -> None:
+    from pymatgen.core import Lattice
+
+    dummy = Structure(Lattice.cubic(3.0), ["Si"], [[0.0, 0.0, 0.0]])
+    extract_qrf_features(dummy, metal_model, atom_init_path, settings)
 
 
-def _composition_features(
-    structure: Structure,
-    settings: QrfFeatureSettings,
-) -> np.ndarray:
+@cache
+def _composition_featurizer(settings: QrfFeatureSettings):
     import matminer.featurizers.composition as composition_featurizers
     from matminer.featurizers.base import MultipleFeaturizer
-    from pymatgen.core.composition import Composition
-
-    integer_formula = Composition(structure.formula).get_integer_formula_and_factor()[0]
-    composition = Composition(Composition(integer_formula).iupac_formula)
 
     methods = []
     for name in settings.composition_featurizers:
@@ -122,15 +123,11 @@ def _composition_features(
             else:
                 method = featurizer_cls()
         methods.append(method)
-
-    featurizer = MultipleFeaturizer(methods)
-    return _require_finite(featurizer.featurize(composition), "QRF composition block")
+    return MultipleFeaturizer(methods)
 
 
-def _structure_features(
-    structure: Structure,
-    settings: QrfFeatureSettings,
-) -> np.ndarray:
+@cache
+def _structure_featurizer(settings: QrfFeatureSettings):
     import matminer.featurizers.structure as structure_featurizers
     from matminer.featurizers.base import MultipleFeaturizer
 
@@ -147,18 +144,14 @@ def _structure_features(
         else:
             raise ValueError(f"Unsupported QRF structure featurizer: {name!r}.")
         methods.append(method)
-    featurizer = MultipleFeaturizer(methods)
-    return _require_finite(featurizer.featurize(structure), "QRF structure block")
+    return MultipleFeaturizer(methods)
 
 
-def _soap_features(
-    structure: Structure,
-    settings: QrfFeatureSettings,
-) -> np.ndarray:
+@cache
+def _soap_descriptor(settings: QrfFeatureSettings):
     from dscribe.descriptors import SOAP
-    from pymatgen.io.ase import AseAtomsAdaptor
 
-    soap = SOAP(
+    return SOAP(
         species=[settings.soap_species],
         r_cut=settings.soap_r_cut,
         n_max=settings.soap_n_max,
@@ -167,9 +160,49 @@ def _soap_features(
         periodic=settings.soap_periodic,
         sparse=settings.soap_sparse,
     )
+
+
+def _require_finite(values: object, block_name: str) -> np.ndarray:
+    converted = np.asarray(values, dtype=float)
+    if not np.isfinite(converted).all():
+        raise ValueError(f"{block_name} contains non-finite values.")
+    return converted
+
+
+def _composition_features(
+    structure: Structure,
+    settings: QrfFeatureSettings,
+) -> np.ndarray:
+    from pymatgen.core.composition import Composition
+
+    integer_formula = Composition(structure.formula).get_integer_formula_and_factor()[0]
+    composition = Composition(Composition(integer_formula).iupac_formula)
+    with _FEATURIZER_LOCK:
+        return _require_finite(
+            _composition_featurizer(settings).featurize(composition),
+            "QRF composition block",
+        )
+
+
+def _structure_features(
+    structure: Structure,
+    settings: QrfFeatureSettings,
+) -> np.ndarray:
+    featurizer = _structure_featurizer(settings)
+    with _FEATURIZER_LOCK:
+        return _require_finite(featurizer.featurize(structure), "QRF structure block")
+
+
+def _soap_features(
+    structure: Structure,
+    settings: QrfFeatureSettings,
+) -> np.ndarray:
+    from pymatgen.io.ase import AseAtomsAdaptor
+
     atoms = AseAtomsAdaptor.get_atoms(structure)
     atoms.set_chemical_symbols([settings.soap_species] * len(atoms))
-    values = soap.create(atoms)
+    with _FEATURIZER_LOCK:
+        values = _soap_descriptor(settings).create(atoms)
     if settings.soap_reduction == "mean":
         values = values.mean(axis=0)
     return _require_finite(values, "QRF SOAP block")

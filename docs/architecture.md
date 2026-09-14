@@ -19,6 +19,30 @@ uv run poe check
 and pytest with branch coverage. For frontend checks and API-schema refresh, follow the
 [Workbench guide](../web/README.md).
 
+## Cut a release
+
+One version covers the repository: `pyproject.toml` owns it, and the Workbench
+frontend ships inside the same image rather than carrying its own version.
+Treat API/schema changes (the OpenAPI export) as at least a minor bump during
+`0.x`; frontend-only fixes can be patches.
+
+To publish, merge a PR that bumps `pyproject.toml` to the release version, then
+from `main`:
+
+```bash
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
+```
+
+CI runs the full suite on the tagged commit, then pushes
+`ghcr.io/stfc/goldilocks-workbench` with `X.Y.Z`, `X.Y`, `X`, and `latest` tags,
+and creates a GitHub Release containing the sdist and wheel. Nightly builds of
+`main` publish `nightly` and `nightly-<date>` image tags at 03:00 UTC; PRs and
+plain `main` pushes publish nothing. Keep the tag and `pyproject.toml` version
+identical — nothing else validates the pairing. The first publish creates the
+container package private; flip it to public once in the package settings so
+anonymous pulls work.
+
 ## Follow a request
 
 `Service` exposes three operations: `capabilities`, `inspect_structure`, and
@@ -92,7 +116,7 @@ Paths below are relative to `src/goldilocks_core/` unless stated otherwise.
 | Scientific behavior | `analysis.py`, `advice/`, `kmesh/`, `selection.py`: facts, recommendations, grids, and pseudopotential selection.                                                                                                                      |
 | Assets              | `assets/`: installation and integrity; `ml/models.py`: model declarations; `pseudo/registry.py` and `pseudo/import_*`: table declarations and provider normalization; `pseudo/source.py`: selection and deferred publication material. |
 | Output              | `generation/`: target-code writers; `input_data.py`: complete input assembly; `publication.py`: directory and ZIP layout; `serialization.py`: JSON projections.                                                                        |
-| Transports          | `cli/core.py`: local commands; `server/documents.py`: strict native request conversion and derived response schemas; `server/http.py` and `server/mcp.py`: adapters; `server/readiness.py`: cached asset checks.                       |
+| Transports          | `cli/core.py`: local commands; `server/documents.py`: strict native request conversion and derived response schemas; `server/http.py` and `server/mcp.py`: adapters; `server/readiness.py`: cached asset checks; `server/workers.py`: HTTP worker planning.                       |
 | Browser             | Repository `web/src/api/`: HTTP client and generated types; `web/src/workspace/`: draft, request, result, and download state.                                                                                                          |
 
 ## Extend a workflow
