@@ -103,8 +103,7 @@ def test_human_npool_exceeding_n_irr_k_warns_about_real_idle_pools() -> None:
 
     assert state.value.npool == 8
     assert any(
-        "no k-point to work on" in warning.message
-        for warning in state.value.warnings
+        "no k-point to work on" in warning.message for warning in state.value.warnings
     )
 
 
@@ -115,3 +114,33 @@ def test_human_ndiag_override_bypasses_scalapack_gate() -> None:
 
     assert state.value.ndiag == 16
     assert state.source == "human"
+
+
+def test_human_ndiag_without_scalapack_warns() -> None:
+    """Regression for #35 (v2 epic 9, #9): a human ndiag was silently
+    accepted even on a profile with no ScaLAPACK, where QE ignores
+    -ndiag outright -- now advisory, not blocking (this module's own
+    established pattern), but no longer silent."""
+    state = parallelisation(
+        _JOB, has_scalapack=False, human=ParallelisationHumanInput(ndiag=16)
+    )
+
+    assert any(
+        warning.code == "parallelisation.ndiag_ignored_no_scalapack"
+        for warning in state.value.warnings
+    )
+
+
+def test_human_ndiag_that_is_not_a_square_integer_warns() -> None:
+    """Regression for #35 (v2 epic 9, #9): a non-square ndiag was
+    silently accepted even though QE's own default-selection rule
+    always produces a square integer."""
+    state = parallelisation(
+        _JOB, has_scalapack=True, human=ParallelisationHumanInput(ndiag=10)
+    )
+
+    assert state.value.ndiag == 10
+    assert any(
+        warning.code == "parallelisation.ndiag_not_a_square_integer"
+        for warning in state.value.warnings
+    )

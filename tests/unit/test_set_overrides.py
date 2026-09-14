@@ -209,6 +209,32 @@ class TestBuildOverrides:
         with pytest.raises(InvalidSetting, match="occupations"):
             build_overrides({"occupations": "bogus"})
 
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("npool", 0),
+            ("npool", -1),
+            ("ndiag", 0),
+            ("nodes", 0),
+            ("ntasks", 0),
+            ("walltime_h", -5.0),
+            ("nbnd", -5),
+            ("degauss", -0.5),
+            ("smearing_type", "totally-bogus-value"),
+        ],
+    )
+    def test_physically_invalid_override_raises_invalid_setting_not_a_crash(
+        self, key: str, value: object
+    ) -> None:
+        """Regression for #35 (v2 epic 9, #9): each of these used to
+        either be accepted silently or crash downstream with an
+        unrelated Python exception (ZeroDivisionError, a negative
+        math.isqrt argument, ...) instead of a clean InvalidSetting at
+        the same boundary an unknown key or a bad enum member already
+        gets."""
+        with pytest.raises(InvalidSetting):
+            build_overrides({key: value})
+
     def test_empty_assignments_gives_all_defaults(self) -> None:
         overrides = build_overrides({})
 

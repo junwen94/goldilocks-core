@@ -87,6 +87,17 @@ def test_human_extra_bands_adds_to_the_computed_base() -> None:
     assert state.source == "human"
 
 
+def test_extra_bands_driving_the_total_non_positive_is_unavailable() -> None:
+    """Regression for #35 (v2 epic 9, #9): extra_bands is a legitimately
+    -signed adjustment (can't just be Field(gt=0)), but a sufficiently
+    negative value used to silently drive the combined nbnd to zero or
+    negative, reported as a resolved success rather than degrading."""
+    state = nbnd(20.0, _FIXED, human=NbndHumanInput(extra_bands=-15))
+
+    assert not state.ok
+    assert state.status == "unavailable"
+
+
 def test_llm_extra_bands_used_when_no_human_override() -> None:
     state = nbnd(20.0, _FIXED, llm=NbndLlmInput(extra_bands=3))
 
@@ -100,8 +111,7 @@ def test_spin_polarized_system_gets_an_informational_note() -> None:
     state = nbnd(16.0, _FIXED, magnetic=magnetic)
 
     assert any(
-        "not the number of bands" in warning.message
-        for warning in state.value.warnings
+        "not the number of bands" in warning.message for warning in state.value.warnings
     )
 
 
@@ -151,10 +161,7 @@ def test_noncollinear_gets_its_own_note_not_the_nspin_two_one() -> None:
 
     state = nbnd(16.0, _FIXED, magnetic=magnetic)
 
-    assert any(
-        "one electron" in warning.message for warning in state.value.warnings
-    )
+    assert any("one electron" in warning.message for warning in state.value.warnings)
     assert not any(
-        "not the number of bands" in warning.message
-        for warning in state.value.warnings
+        "not the number of bands" in warning.message for warning in state.value.warnings
     )
