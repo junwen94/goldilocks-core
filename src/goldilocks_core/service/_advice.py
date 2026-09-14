@@ -15,6 +15,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass, field
 
+from pydantic import BaseModel
 from pymatgen.core import Structure
 
 from goldilocks_core.resolution import FieldState, Resolved
@@ -90,13 +91,33 @@ class Advice:
         }
         return {name: _json_safe_state(state) for name, state in merged.items()}
 
+    def warnings(self) -> list[dict[str, object]]:
+        """Every advisor decision's own ``resolution.Warning`` tuple,
+        flattened into one machine-actionable list -- goldilocks-agent
+        -design.md's "tool return value must carry a warnings array,
+        the agent must relay it verbatim" requirement. Each entry is
+        already a plain ``{"code", "level", "category", "message"}``
+        dict (``_json_safe_value`` below converts every ``Warning``
+        instance on the way into ``records()``), so a caller can
+        filter/group by ``code``/``category`` without parsing text --
+        the actual, literal ask, not just prose relayed verbatim."""
+        collected: list[dict[str, object]] = []
+        for _name, state in sorted(self.records().items()):
+            if isinstance(state, Resolved) and isinstance(state.value, dict):
+                collected.extend(state.value.get("warnings") or ())
+        return collected
+
 
 def _json_safe_value(value: object) -> object:
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         data = dataclasses.asdict(value)
         data.pop("relabeled_structure", None)
-        return data
-    if isinstance(value, tuple):
+        return _json_safe_value(data)
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    if isinstance(value, dict):
+        return {key: _json_safe_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
         return [_json_safe_value(item) for item in value]
     return value
 

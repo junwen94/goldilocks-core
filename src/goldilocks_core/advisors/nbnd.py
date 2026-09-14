@@ -64,16 +64,32 @@ from goldilocks_core.resolution import (
     FieldState,
     Provenance,
     Resolved,
+    Warning,
     blocked_by,
 )
 
 _METAL_LIKE_OCCUPATIONS = frozenset({"smearing", "tetrahedra_opt"})
 
+SPIN_NOTE = Warning(
+    code="nbnd.spin_channel_note",
+    level="info",
+    category="nbnd",
+    message=(
+        "nspin=2 doubles the number of k-points QE solves internally, "
+        "not the number of bands -- nbnd here is per spin channel, "
+        "unchanged from the non-spin-polarized formula."
+    ),
+)
+
+WARNING_CATALOGUE = (SPIN_NOTE,)
+"""Every warning code this module can emit -- ``capabilities.py``'s
+``warnings[]`` catalogue aggregates one of these tuples per advisor."""
+
 
 @dataclass(frozen=True, slots=True)
 class NbndDecision:
     nbnd: int
-    warnings: tuple[str, ...] = ()
+    warnings: tuple[Warning, ...] = ()
 
 
 class NbndHumanInput(HumanInput):
@@ -126,11 +142,7 @@ def _formula(nelec: float, is_metal_like: bool) -> int:
     return max(1, math.ceil(max(valence_bands * 1.2, valence_bands + 4)))
 
 
-def _spin_note(magnetic: FieldState[MagneticConfigFacts] | None) -> tuple[str, ...]:
+def _spin_note(magnetic: FieldState[MagneticConfigFacts] | None) -> tuple[Warning, ...]:
     if magnetic is not None and magnetic.ok and magnetic.value.spin_polarized:
-        return (
-            "nspin=2 doubles the number of k-points QE solves internally, "
-            "not the number of bands -- nbnd here is per spin channel, "
-            "unchanged from the non-spin-polarized formula.",
-        )
+        return (SPIN_NOTE,)
     return ()

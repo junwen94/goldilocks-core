@@ -74,7 +74,8 @@ def test_pseudodojo_style_pseudopotentials_derive_ecutrho_via_table_dual() -> No
     assert state.value.ecutwfc_ry == 45.0
     assert state.value.ecutrho_ry == 180.0  # max(40*4, 45*4)
     assert len(state.value.warnings) == 2
-    assert "derived" in state.value.warnings[0]
+    assert "derived" in state.value.warnings[0].message
+    assert state.value.warnings[0].code == "cutoffs.ecutrho_derived_from_dual"
 
 
 def test_missing_ecutrho_and_no_dual_blocks() -> None:

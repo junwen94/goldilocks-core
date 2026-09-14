@@ -79,7 +79,7 @@ def test_human_k_grid_and_k_distance_together_warns_and_grid_wins() -> None:
     )
 
     assert state.value.mesh == (4, 4, 4)
-    assert any("k_grid wins" in warning for warning in state.value.warnings)
+    assert any("k_grid wins" in warning.message for warning in state.value.warnings)
 
 
 def test_human_k_distance_without_a_grid_is_converted_to_a_mesh() -> None:

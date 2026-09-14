@@ -1,28 +1,34 @@
-"""FastAPI transport over one process-owned Core service.
+"""FastAPI transport over the v2 ``service``/``capabilities``/
+``set_overrides`` stack (v2 epic 8, #8).
 
-Endpoints validate external inputs into native Core requests, dispatch through
-one process-owned ``Service``, and serialize trusted results directly. Input
-validation and named domain errors map to explicit 4xx responses; unexpected
-defects remain 500 responses.
-Behind the optional ``[http]`` extra; importing :mod:`goldilocks_core` never
-imports FastAPI.
+Replaces v1's ``Service``/``Runtime``-backed transport: every route now
+calls ``server/_handlers.py``'s free functions, the exact same path
+``server/mcp.py`` calls -- one shared request-validation/dispatch
+implementation for both transports, not two.
 
-Scientific endpoints accept inline Structure Sources, intent, hints, a
-registered pseudopotential-table ID, and a Preset or Record selection.
-Pseudopotential contents, models, and publication locations are resolved from
-the server's environment; request bodies never name server paths or loadable
-artifacts.
+**No Workbench static-file mount.** v1's ``create_app`` also served the
+built frontend off ``/`` when a static root was configured. Wiring the
+Workbench back up to this epic's shapes (regenerated TypeScript types,
+new tri-state/warnings rendering) is v2 epic 12 (#12)'s explicit scope,
+not this one's -- see this epic's own issue, "downstream" section.
+
+Behind the optional ``[http]`` extra; importing ``goldilocks_core``
+never imports FastAPI (P7).
 """
 
-import json
-import os
-import secrets
-from contextlib import asynccontextmanager
-from pathlib import Path
+from __future__ import annotations
+
 from typing import Any
 
-from goldilocks_core.runtime.service import OperationFailure, Service
-from goldilocks_core.server.readiness import AssetReadiness
+from goldilocks_core.bundle import archive_bytes
+from goldilocks_core.capabilities import capabilities
+from goldilocks_core.failures import ExpectedFailure
+from goldilocks_core.server import _handlers
+from goldilocks_core.server.documents import (
+    ComputeRequestDocument,
+    InlineStructureDocument,
+    RunRequestDocument,
+)
 
 __all__ = ["create_app", "serve"]
 
@@ -30,116 +36,45 @@ _MISSING_HTTP_EXTRA = (
     "The HTTP transport requires goldilocks-core[http]. "
     "Install it with `uv sync --extra http`."
 )
-WORKBENCH_STATIC_ROOT_ENV = "GOLDILOCKS_WORKBENCH_STATIC_ROOT"
+_STATUS_BY_CATEGORY = {"input": 422, "dependency": 424, "local": 500}
 
 
-def _workbench_static_root(value: str | Path | None) -> Path | None:
-    configured = (
-        value if value is not None else os.environ.get(WORKBENCH_STATIC_ROOT_ENV)
-    )
-    if configured is None:
-        return None
-    root = Path(configured).expanduser().resolve()
-    if not root.is_dir():
-        raise FileNotFoundError(f"Workbench static root is not a directory: {root}")
-    if not (root / "index.html").is_file():
-        raise FileNotFoundError(f"Workbench static root has no index.html: {root}")
-    return root
-
-
-def create_app(
-    service: Service | None = None,
-    *,
-    static_root: str | Path | None = None,
-) -> Any:
+def create_app() -> Any:
     try:
         from fastapi import FastAPI
         from fastapi.responses import JSONResponse, Response
-        from fastapi.staticfiles import StaticFiles
     except ImportError as error:
         raise ImportError(_MISSING_HTTP_EXTRA) from error
-    from goldilocks_core.server.documents import (
-        CapabilitiesDocument,
-        ComputeRequestDocument,
-        ErrorResponseDocument,
-        InspectRequestDocument,
-        StructureInspectionDocument,
-        prepared_computation_document,
-    )
 
-    owns_service = service is None
-    state = service if service is not None else Service()
-    readiness = AssetReadiness(
-        state.runtime.asset_store,
-        model_registry_path=getattr(state.runtime, "model_registry_path", None),
-        pseudo_registry_path=getattr(state.runtime, "pseudo_registry_path", None),
-    )
-    workbench_static_root = _workbench_static_root(static_root)
-
-    @asynccontextmanager
-    async def lifespan(_app: FastAPI):
-        try:
-            yield
-        finally:
-            if owns_service:
-                state.close()
-
-    app = FastAPI(title="goldilocks-core", lifespan=lifespan)
-    app.state.goldilocks = state
+    readiness = _handlers.build_readiness()
+    app = FastAPI(title="goldilocks-core")
     app.state.asset_readiness = readiness
-    error_responses = {
-        status: {"model": ErrorResponseDocument, "content": {"application/json": {}}}
-        for status in (422, 424)
-    }
-    prepared_document = prepared_computation_document(state.capabilities()["tasks"])
+    _register_error_handlers(app)
+    _register_operational_routes(app, readiness)
 
-    @app.get("/capabilities", response_model=CapabilitiesDocument)
-    def capabilities() -> Response:
-        return JSONResponse(state.capabilities_document())
+    @app.get("/capabilities")
+    def get_capabilities() -> Any:
+        return capabilities()
 
-    @app.post(
-        "/inspect",
-        response_model=StructureInspectionDocument,
-        responses={422: {"model": ErrorResponseDocument}},
-    )
-    def inspect(body: InspectRequestDocument) -> Response:
-        return JSONResponse(state.inspect_document(body.source))
+    @app.post("/inspect")
+    def inspect(body: InlineStructureDocument) -> Any:
+        return _handlers.inspect(body)
 
-    @app.post(
-        "/compute",
-        response_model=prepared_document,
-        response_class=Response,
-        responses={
-            200: {
-                "description": "Computation Result and its exact optional archive.",
-                "content": {
-                    "multipart/form-data": {
-                        "schema": {"$ref": "#/components/schemas/PreparedComputation"}
-                    }
-                },
-            },
-            **error_responses,
-        },
-    )
-    def compute(body: ComputeRequestDocument) -> Response:
-        prepared = state.compute_document(body, prepare_archive=True)
-        result = json.dumps(prepared.result, separators=(",", ":")).encode("utf-8")
-        payload, media_type = _prepared_multipart(result, prepared.archive)
-        return Response(payload, media_type=media_type)
+    @app.post("/explain")
+    def explain(body: ComputeRequestDocument) -> Any:
+        return _handlers.explain(body)
 
-    _operational_routes(app, readiness)
-
-    if workbench_static_root is not None:
-        app.mount(
-            "/",
-            StaticFiles(directory=workbench_static_root, html=True),
-            name="workbench-static",
-        )
+    @app.post("/run")
+    def run(body: RunRequestDocument) -> Response:
+        summary, bundle_input = _handlers.run(body)
+        if body.respond_with == "archive":
+            return Response(archive_bytes(bundle_input), media_type="application/zip")
+        return JSONResponse(summary)
 
     return app
 
 
-def _operational_routes(app: Any, readiness: AssetReadiness) -> None:
+def _register_error_handlers(app: Any) -> None:
     from fastapi import Request
     from fastapi.exceptions import RequestValidationError
     from fastapi.responses import JSONResponse
@@ -148,6 +83,10 @@ def _operational_routes(app: Any, readiness: AssetReadiness) -> None:
     async def validation_error_handler(
         _request: Request, error: RequestValidationError
     ) -> JSONResponse:
+        # pydantic's own error.errors() embeds the raw exception object
+        # in ctx for custom validators (e.g. this module's own
+        # _reject_path_shaped_content) -- not JSON-safe. Keep only the
+        # string fields, same sanitization v1's handler already did.
         validation_errors = [
             {
                 "path": ".".join(str(part) for part in item["loc"]),
@@ -162,22 +101,21 @@ def _operational_routes(app: Any, readiness: AssetReadiness) -> None:
                 "error": {
                     "kind": "invalid_request",
                     "message": "The request does not match the transport contract.",
-                    "retryable": False,
                     "details": {"validation_errors": validation_errors},
                 }
             },
         )
 
-    @app.exception_handler(OperationFailure)
-    async def operation_failure_handler(
-        _request: Request, error: OperationFailure
+    @app.exception_handler(ExpectedFailure)
+    async def expected_failure_handler(
+        _request: Request, error: ExpectedFailure
     ) -> JSONResponse:
-        if error.http_status is None:
-            raise error.__cause__ or error
-        return JSONResponse(
-            status_code=error.http_status,
-            content={"error": error.error},
-        )
+        status = _STATUS_BY_CATEGORY.get(error.category, 500)
+        return JSONResponse(status_code=status, content={"error": error.public_error()})
+
+
+def _register_operational_routes(app: Any, readiness: Any) -> None:
+    from fastapi.responses import JSONResponse
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -197,83 +135,19 @@ def _operational_routes(app: Any, readiness: AssetReadiness) -> None:
                         f"Required runtime asset {report.asset_id}@{report.version} "
                         f"is {report.state}."
                     ),
-                    "retryable": False,
                     "details": {
                         "asset_id": report.asset_id,
                         "version": report.version,
                         "state": report.state,
-                        "required_asset_count": report.asset_count,
                     },
                 }
             },
         )
 
 
-def serve(
-    *,
-    host: str = "127.0.0.1",
-    port: int = 8000,
-    static_root: str | Path | None = None,
-) -> None:
+def serve(*, host: str = "127.0.0.1", port: int = 8000) -> None:
     try:
         import uvicorn
     except ImportError as error:
         raise ImportError(_MISSING_HTTP_EXTRA) from error
-    uvicorn.run(
-        create_app(
-            static_root=static_root,
-        ),
-        host=host,
-        port=port,
-    )
-
-
-def _prepared_multipart(result: bytes, archive: bytes | None) -> tuple[bytes, str]:
-    payloads = (result,) if archive is None else (result, archive)
-    while True:
-        boundary = f"goldilocks-{secrets.token_hex(24)}"
-        marker = boundary.encode("ascii")
-        if all(marker not in payload for payload in payloads):
-            break
-
-    parts = [
-        _multipart_part(
-            boundary,
-            name="result",
-            filename="result.json",
-            media_type="application/json",
-            content=result,
-        )
-    ]
-    if archive is not None:
-        parts.append(
-            _multipart_part(
-                boundary,
-                name="archive",
-                filename="goldilocks-inputs.zip",
-                media_type="application/zip",
-                content=archive,
-            )
-        )
-    parts.append(f"--{boundary}--\r\n".encode("ascii"))
-    return b"".join(parts), f'multipart/form-data; boundary="{boundary}"'
-
-
-def _multipart_part(
-    boundary: str,
-    *,
-    name: str,
-    filename: str,
-    media_type: str,
-    content: bytes,
-) -> bytes:
-    return (
-        (
-            f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
-            f"Content-Type: {media_type}\r\n"
-            "\r\n"
-        ).encode("ascii")
-        + content
-        + b"\r\n"
-    )
+    uvicorn.run(create_app(), host=host, port=port)

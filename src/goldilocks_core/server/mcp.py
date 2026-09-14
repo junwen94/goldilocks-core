@@ -1,16 +1,37 @@
+"""MCP stdio transport over the v2 ``service``/``capabilities``/
+``set_overrides`` stack (v2 epic 8, #8).
+
+Every tool calls ``server/_handlers.py``'s free functions -- the exact
+same path ``server/http.py`` calls -- so validation/dispatch can never
+drift between the two transports (this epic's own "one shared
+request-validation path" scope item).
+
+Four tools, not v1's three: ``capabilities``, ``inspect_structure``,
+``explain`` (new: the tri-state "diagnosis always available" half of
+the promise, with no v1 precedent at the transport layer), and ``run``
+(replaces v1's ``compute``). ``run`` never returns raw bundle bytes --
+only the file list, every decision, and ``warnings`` -- matching MCP's
+own JSON/text idiom; fetching actual file contents has no MCP-shaped
+answer yet (out of scope, tracked with web/agent integration, not this
+epic's ``/run archive`` HTTP route).
+
+Fixes issue #8's own evidence #3: v1 hardcoded ``version="0.1.0"``,
+disagreeing with ``capabilities.py``'s real
+``importlib.metadata.version("goldilocks-core")``. Now the same call.
+"""
+
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+from importlib.metadata import version as package_version
 from typing import Any
 
-from goldilocks_core.request import ComputeRequest
-from goldilocks_core.runtime.service import OperationFailure, Service
+from goldilocks_core.capabilities import capabilities as build_capabilities
+from goldilocks_core.failures import ExpectedFailure
+from goldilocks_core.server import _handlers
 from goldilocks_core.server.documents import (
-    DraftDocument,
+    ComputeRequestDocument,
     InlineStructureDocument,
-    MemoryOutputDocument,
-    SelectionDocument,
 )
 
 try:
@@ -26,6 +47,11 @@ __all__ = ["create_server", "serve"]
 
 
 class _StrictMCPServer(MCPServer):
+    """``additionalProperties: false`` on every tool's schema, and every
+    call re-checked against that same schema -- reused unchanged from
+    v1 (issue #8's own "v1 code leaned on as-is" section): the one hard
+    gate at the LLM/core boundary."""
+
     async def list_tools(self) -> list[Any]:
         tools = await super().list_tools()
         for tool in tools:
@@ -48,70 +74,55 @@ class _StrictMCPServer(MCPServer):
         return await super().call_tool(name, arguments, context)
 
 
-def create_server(
-    service: Service | None = None, *, name: str = "goldilocks-core"
-) -> MCPServer:
-    owns_service = service is None
-    state = service if service is not None else Service()
-
-    @asynccontextmanager
-    async def lifespan(server: MCPServer):
-        del server
-        try:
-            yield state
-        finally:
-            if owns_service:
-                state.close()
-
+def create_server(*, name: str = "goldilocks-core") -> MCPServer:
     server = _StrictMCPServer(
         name=name,
-        version="0.1.0",
+        version=package_version("goldilocks-core"),
         instructions=(
-            "Inspect structures and compute Goldilocks Core records or named presets."
+            "Inspect structures and generate Goldilocks Core DFT inputs. "
+            "structure_content must be file text (e.g. CIF), never a path."
         ),
-        lifespan=lifespan,
     )
 
     @server.tool(
-        description="Describe Core tasks, presets, records, codes, and assets."
+        description="Describe available codes, tasks, settings, facts, and assets."
     )
     async def capabilities() -> dict[str, Any]:
-        try:
-            return await asyncio.to_thread(state.capabilities_document)
-        except OperationFailure as error:
-            raise ToolError(str(error)) from error
+        return await asyncio.to_thread(build_capabilities)
 
-    @server.tool(description="Normalize and inspect an inline structure source.")
-    async def inspect_structure(
-        source: InlineStructureDocument,
-    ) -> dict[str, Any]:
-        try:
-            return await asyncio.to_thread(state.inspect_document, source)
-        except OperationFailure as error:
-            raise ToolError(str(error)) from error
+    @server.tool(description="Normalize and inspect an inline structure.")
+    async def inspect_structure(document: InlineStructureDocument) -> dict[str, Any]:
+        return await _call(_handlers.inspect, document)
 
     @server.tool(
         description=(
-            "Compute one named preset or selected record ids. Omitted output "
-            "automatically publishes complete DFT Input Data."
+            "Run analysis and advisors only, without generating any files. "
+            "Returns every decision (with its source) and a warnings array "
+            "the caller must relay verbatim."
         )
     )
-    async def compute(
-        draft: DraftDocument,
-        selection: SelectionDocument,
-        output: MemoryOutputDocument | None = None,
-    ) -> dict[str, Any]:
-        try:
-            prepared = await asyncio.to_thread(
-                state.compute_document,
-                ComputeRequest(draft, selection),
-                publication="auto" if output is None else "memory",
-            )
-        except OperationFailure as error:
-            raise ToolError(str(error)) from error
-        return prepared.result
+    async def explain(document: ComputeRequestDocument) -> dict[str, Any]:
+        return await _call(_handlers.explain, document)
+
+    @server.tool(
+        description=(
+            "Generate a runnable input. Returns the published file list, "
+            "every decision, and a warnings array the caller must relay "
+            "verbatim -- fails if any required field is unavailable or blocked."
+        )
+    )
+    async def run(document: ComputeRequestDocument) -> dict[str, Any]:
+        summary, _bundle_input = await _call(_handlers.run, document)
+        return summary
 
     return server
+
+
+async def _call(handler: Any, document: Any) -> Any:
+    try:
+        return await asyncio.to_thread(handler, document)
+    except ExpectedFailure as error:
+        raise ToolError(str(error)) from error
 
 
 def serve() -> None:

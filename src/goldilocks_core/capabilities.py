@@ -68,13 +68,14 @@ override at all (``analysis/composition.py``'s and
 ``analysis/symmetry.py``'s own docstrings say so explicitly) and don't
 fit this shape; they are not exposed here.
 
-**`warnings[]` ships empty.** ``resolution.Warning`` (code/level/category)
-is defined but not one advisor constructs it yet -- every advisor's own
-``.warnings`` field is still a plain prose ``tuple[str, ...]`` (v2 epics
-4-7). A catalogue of codes that don't exist would be worse than an empty,
-honest list; wiring advisors to emit structured warnings is the
-transport-response-shape work ("warnings array in every CLI/HTTP/MCP
-response") tracked for this epic's later modules, not this one.
+**`warnings[]` is aggregated, not hand-listed**, the same reflection
+-over-imports-elsewhere-in-the-codebase spirit as `settings[]`: every
+advisor that can emit a ``resolution.Warning`` declares its own
+``WARNING_CATALOGUE`` constant (code/level/category/a generic
+description), and ``advisors/warning_catalogue.py`` -- a dedicated
+aggregator, not this module -- imports all ten of them so this module
+itself only needs one import to get the full list without blowing its
+own import-surface ceiling.
 
 **`models[]` ships empty.** ml integration is deliberately last (v2 epic
 11, #11); until then no ``target`` has an installed model, so
@@ -86,14 +87,19 @@ from __future__ import annotations
 
 import types
 import typing
+from dataclasses import dataclass
 from importlib.metadata import version as package_version
 from typing import Literal, TypedDict
 
+from goldilocks_core.advisors.warning_catalogue import (
+    WARNING_CATALOGUE as _ADVISOR_WARNING_CATALOGUE,
+)
 from goldilocks_core.analysis.is_magnetic import Magnetism
 from goldilocks_core.analysis.is_metal import Metallicity
 from goldilocks_core.assets.pseudopotentials.registry import load_tables
 from goldilocks_core.inputs.hpc import list_hpc_profiles, load_hpc_profile
 from goldilocks_core.service import (
+    AnalysisOverrides,
     KpointsOverrides,
     ResourceOverrides,
     SystemOverrides,
@@ -118,6 +124,19 @@ _TASK = "scf_single_point"
 _PROGRAM = "pw.x"
 
 
+def _approaches(ml_target: str | None) -> list[str]:
+    """Design point (1)-b: ``ml_target`` is a static declaration;
+    ``approaches`` is what's *actually* usable right now, computed as
+    ``["human"] + (["ml"] if that target has an installed model) +
+    ["heuristic"]``. No target has an installed model yet -- ml
+    integration is deliberately last (v2 epic 11, #11) -- so this
+    always resolves to ``["human", "heuristic"]`` today regardless of
+    ``ml_target``; the parameter is threaded through now so epic 11
+    only has to change this one function's body, not any caller."""
+    del ml_target  # unused until epic 11 wires a real installed-model check
+    return ["human", "heuristic"]
+
+
 class Setting(TypedDict, total=False):
     key: str
     group: str
@@ -131,6 +150,7 @@ class Setting(TypedDict, total=False):
     programs: list[str] | None
     scope: Literal["system", "per_step"]
     ml_target: str | None
+    approaches: list[str]
     description: str
 
 
@@ -139,6 +159,7 @@ class Fact(TypedDict):
     type: str
     values: list[str] | None
     ml_target: str | None
+    approaches: list[str]
     overridable: bool
     description: str
 
@@ -373,6 +394,7 @@ _FACTS: tuple[Fact, ...] = (
         type="enum",
         values=list(typing.get_args(Metallicity)),
         ml_target="is_metal",
+        approaches=_approaches("is_metal"),
         overridable=True,
         description="Whether the structure is metallic, from composition alone.",
     ),
@@ -381,6 +403,7 @@ _FACTS: tuple[Fact, ...] = (
         type="enum",
         values=list(typing.get_args(Magnetism)),
         ml_target="is_magnetic",
+        approaches=_approaches("is_magnetic"),
         overridable=True,
         description="Whether the structure is expected to be magnetic.",
     ),
@@ -389,6 +412,7 @@ _FACTS: tuple[Fact, ...] = (
         type="boolean",
         values=None,
         ml_target=None,
+        approaches=_approaches(None),
         overridable=True,
         description=(
             "Whether spin-orbit coupling is likely relevant for this structure."
@@ -399,6 +423,7 @@ _FACTS: tuple[Fact, ...] = (
         type="boolean",
         values=None,
         ml_target=None,
+        approaches=_approaches(None),
         overridable=True,
         description="Whether a Hubbard +U (or hybrid) correction is likely needed.",
     ),
@@ -437,65 +462,166 @@ def _json_type(annotation: object) -> dict[str, object]:
     return {"type": "string"}
 
 
-def _settings_from_human_input(group: str, human_input_cls: type) -> list[Setting]:
-    settings: list[Setting] = []
+@dataclass(frozen=True, slots=True)
+class SettingBinding:
+    """One ``--set``-able key's construction recipe, alongside its
+    display metadata -- the single walk ``_leaves()`` below performs
+    once, shared by ``capabilities()`` (projects to JSON) and the
+    shared request-validation layer, so the two can never drift apart
+    by walking the override tree two different ways.
+
+    ``branch`` says which of ``RunOverrides``' three sub-trees this key
+    belongs to; ``outer_field`` is that sub-tree's own field name
+    (``SystemOverrides.cutoffs``, say); ``inner_field`` is the field
+    *inside* the ``HumanInput`` class for a wrapped setting, or ``None``
+    for a plain-typed one (``pseudo_table_id``) where ``outer_field``
+    *is* the setting. ``json_type`` is ``_json_type(annotation)``,
+    computed once here rather than re-derived by every consumer --
+    the shared request-validation layer's CLI string-coercion reads
+    ``json_type["type"]`` directly instead of importing this module's
+    own private type-mapping helper.
+    """
+
+    key: str
+    group: str
+    branch: Literal["analysis", "system", "kpoints", "resources"]
+    outer_field: str
+    inner_field: str | None
+    human_input_cls: type | None
+    annotation: object
+    json_type: dict[str, object]
+    scope: Literal["system", "per_step"]
+    programs: list[str] | None
+
+
+def _leaves_from_human_input(
+    branch: Literal["analysis", "system", "kpoints", "resources"],
+    outer_field: str,
+    human_input_cls: type,
+    *,
+    scope: Literal["system", "per_step"],
+    programs: list[str] | None,
+) -> list[SettingBinding]:
+    leaves = []
     for name, info in human_input_cls.model_fields.items():
-        extra = _SETTING_META.get(name, {})
-        key = extra.get("key", name)
-        setting: Setting = {"key": key, "group": group, **_json_type(info.annotation)}
-        setting["unit"] = extra.get("unit")
-        if "default" in extra:
-            setting["default"] = extra["default"]
-        if "enum_from" in extra:
-            setting["enum_from"] = extra["enum_from"]
-        setting["ml_target"] = extra.get("ml_target")
-        setting["description"] = extra.get("description", "")
-        settings.append(setting)
-    return settings
+        # Analysis leaves always keep their bare field name: they must
+        # match `_FACTS`'s own keys exactly (`_settings()` filters them
+        # out by that same key), and `_SETTING_META`'s one rename entry
+        # ("needs_correlation" -> "hubbard_needs_correlation") exists
+        # for hubbard_u's *own* field of the same inner name, not this
+        # one -- see this module's own docstring on that collision.
+        extra = _SETTING_META.get(name, {}) if branch != "analysis" else {}
+        leaves.append(
+            SettingBinding(
+                key=extra.get("key", name),
+                group=outer_field,
+                branch=branch,
+                outer_field=outer_field,
+                inner_field=name,
+                human_input_cls=human_input_cls,
+                annotation=info.annotation,
+                json_type=_json_type(info.annotation),
+                scope=scope,
+                programs=programs,
+            )
+        )
+    return leaves
 
 
-def _settings_from_overrides(
-    overrides_cls: type, *, scope: Literal["system", "per_step"]
-) -> list[Setting]:
+def _leaves_from_overrides(
+    overrides_cls: type,
+    *,
+    branch: Literal["analysis", "system", "kpoints", "resources"],
+    scope: Literal["system", "per_step"],
+) -> list[SettingBinding]:
     hints = typing.get_type_hints(overrides_cls)
     programs = None if scope == "system" else [_PROGRAM]
-    settings: list[Setting] = []
+    leaves: list[SettingBinding] = []
     for name, annotation in hints.items():
         if name.endswith("_llm"):
             continue
         inner = _unwrap_optional(annotation)
         if isinstance(inner, type) and hasattr(inner, "model_fields"):
-            for setting in _settings_from_human_input(name, inner):
-                setting["codes"] = None
-                setting["tasks"] = None
-                setting["programs"] = programs
-                setting["scope"] = scope
-                settings.append(setting)
+            leaves.extend(
+                _leaves_from_human_input(
+                    branch, name, inner, scope=scope, programs=programs
+                )
+            )
         else:
             extra = _SETTING_META.get(name, {})
-            setting: Setting = {
-                "key": extra.get("key", name),
-                "group": name,
-                **_json_type(inner),
-                "unit": extra.get("unit"),
-                "codes": None,
-                "tasks": None,
-                "programs": programs,
-                "scope": scope,
-                "ml_target": extra.get("ml_target"),
-                "description": extra.get("description", ""),
-            }
-            if "default" in extra:
-                setting["default"] = extra["default"]
-            settings.append(setting)
-    return settings
+            leaves.append(
+                SettingBinding(
+                    key=extra.get("key", name),
+                    group=name,
+                    branch=branch,
+                    outer_field=name,
+                    inner_field=None,
+                    human_input_cls=None,
+                    annotation=inner,
+                    json_type=_json_type(inner),
+                    scope=scope,
+                    programs=programs,
+                )
+            )
+    return leaves
+
+
+def _leaves() -> list[SettingBinding]:
+    return [
+        *_leaves_from_overrides(AnalysisOverrides, branch="analysis", scope="system"),
+        *_leaves_from_overrides(SystemOverrides, branch="system", scope="system"),
+        *_leaves_from_overrides(KpointsOverrides, branch="kpoints", scope="per_step"),
+        *_leaves_from_overrides(
+            ResourceOverrides, branch="resources", scope="per_step"
+        ),
+    ]
+
+
+def bindings() -> dict[str, SettingBinding]:
+    """Every ``--set``-able key's construction recipe, keyed by its
+    exposed capabilities key -- used by the shared request-validation
+    layer to turn ``{key: value}`` into a real ``RunOverrides``, and by
+    nothing inside this module (``_settings()`` below projects the same
+    ``_leaves()`` call to JSON instead)."""
+    return {leaf.key: leaf for leaf in _leaves()}
+
+
+def _setting_from_leaf(leaf: SettingBinding) -> Setting:
+    extra = _SETTING_META.get(leaf.inner_field or leaf.outer_field, {})
+    ml_target = extra.get("ml_target")
+    setting: Setting = {
+        "key": leaf.key,
+        "group": leaf.group,
+        **leaf.json_type,
+        "unit": extra.get("unit"),
+        "codes": None,
+        "tasks": None,
+        "programs": leaf.programs,
+        "scope": leaf.scope,
+        "ml_target": ml_target,
+        "approaches": _approaches(ml_target),
+        "description": extra.get("description", ""),
+    }
+    if "default" in extra:
+        setting["default"] = extra["default"]
+    if "enum_from" in extra:
+        setting["enum_from"] = extra["enum_from"]
+    return setting
 
 
 def _settings() -> list[Setting]:
+    """Every ``--set``-able leaf *except* the four analysis facts
+    (``is_metal``/``is_magnetic``/``needs_soc``/``needs_correlation``):
+    those are already fully described in ``facts()`` (their real type is
+    the fact's own enum/boolean meaning, not the raw ``bool`` their
+    ``HumanInput`` happens to store it as) -- listing them a second time
+    here, with a different declared ``type``, would contradict ``facts()``
+    instead of complementing it. They still walk through ``_leaves()``
+    so ``bindings()`` (the `--set`/override construction path) accepts
+    them; only this JSON projection skips them."""
+    fact_keys = {fact["key"] for fact in _FACTS}
     return [
-        *_settings_from_overrides(SystemOverrides, scope="system"),
-        *_settings_from_overrides(KpointsOverrides, scope="per_step"),
-        *_settings_from_overrides(ResourceOverrides, scope="per_step"),
+        _setting_from_leaf(leaf) for leaf in _leaves() if leaf.key not in fact_keys
     ]
 
 
@@ -553,6 +679,10 @@ def _tasks() -> list[dict[str, object]]:
     ]
 
 
+def _warnings() -> list[dict[str, object]]:
+    return [warning.model_dump() for warning in _ADVISOR_WARNING_CATALOGUE]
+
+
 def capabilities() -> Capabilities:
     """Everything the design doc's S4.2 shape lists. Cacheable in-process
     per that section's own note ("static... only `models` needs to query
@@ -570,6 +700,6 @@ def capabilities() -> Capabilities:
         "pseudopotential_tables": _pseudopotential_tables(),
         "hpc_profiles": _hpc_profiles(),
         "models": [],
-        "warnings": [],
+        "warnings": _warnings(),
         "sources": list(SOURCES),
     }

@@ -36,16 +36,33 @@ from goldilocks_core.resolution import (
     FieldState,
     Provenance,
     Resolved,
+    Warning,
     blocked_by,
 )
 
 AssumeIsolated = Literal["none", "martyna-tuckerman"]
 
+DIPOLE_CORRECTION_SUGGESTED = Warning(
+    code="boundary.dipole_correction_suggested",
+    level="info",
+    category="boundary",
+    message=(
+        "2D structure in a periodic cell: consider a dipole correction "
+        "(tefield/dipfield) if the slab is asymmetric along the vacuum "
+        "direction -- not set automatically here."
+    ),
+)
+
+
+WARNING_CATALOGUE = (DIPOLE_CORRECTION_SUGGESTED,)
+"""Every warning code this module can emit -- ``capabilities.py``'s
+``warnings[]`` catalogue aggregates one of these tuples per advisor."""
+
 
 @dataclass(frozen=True, slots=True)
 class BoundaryFacts:
     assume_isolated: AssumeIsolated
-    warnings: tuple[str, ...] = ()
+    warnings: tuple[Warning, ...] = ()
 
 
 def boundary(geometry: FieldState[GeometryFacts]) -> FieldState[BoundaryFacts]:
@@ -74,13 +91,6 @@ def _heuristic(facts: GeometryFacts) -> FieldState[BoundaryFacts]:
     # 2D slabs: image interaction is normally handled by a dipole correction,
     # not assume_isolated -- deferred (pitfall A9), not guessed at here.
     return Resolved(
-        BoundaryFacts(
-            "none",
-            warnings=(
-                "2D structure in a periodic cell: consider a dipole correction "
-                "(tefield/dipfield) if the slab is asymmetric along the vacuum "
-                "direction -- not set automatically here.",
-            ),
-        ),
+        BoundaryFacts("none", warnings=(DIPOLE_CORRECTION_SUGGESTED,)),
         Provenance(source="heuristic"),
     )

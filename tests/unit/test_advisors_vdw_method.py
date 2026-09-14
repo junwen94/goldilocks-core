@@ -52,7 +52,8 @@ def test_vdw_inclusive_functional_warns_if_a_method_was_explicitly_requested() -
     # runs -- but human.method being set should still surface a warning.
     assert state.value.use_vdw is False
     assert len(state.value.warnings) == 1
-    assert "double-counting" in state.value.warnings[0]
+    assert "double-counting" in state.value.warnings[0].message
+    assert state.value.warnings[0].code == "vdw.double_counting_avoided"
 
 
 def test_human_override_wins_over_heuristic() -> None:

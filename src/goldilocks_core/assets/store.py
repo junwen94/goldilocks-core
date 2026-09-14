@@ -24,6 +24,12 @@ from goldilocks_core.failures import ExpectedFailure
 ASSET_ROOT_ENV = "GOLDILOCKS_ASSET_ROOT"
 _MANIFEST_SCHEMA_VERSION = 2
 _MANIFEST = "manifest.json"
+MANIFEST_FILENAME = _MANIFEST
+"""Public alias for callers outside this module that need to name the
+manifest file without duplicating the literal (v2 epic 8, #8:
+``server/readiness.py`` reads it directly for a cheap cache-invalidation
+check, without going through the full ``verify_spec`` validation this
+module's own ``_read_manifest`` performs)."""
 
 
 class AssetNotInstalled(ExpectedFailure, FileNotFoundError):

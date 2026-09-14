@@ -65,9 +65,27 @@ WarningLevel = Literal["info", "warning", "error"]
 
 
 class Warning(BaseModel):
+    """A machine-actionable warning an advisor's decision can carry
+    alongside its value (goldilocks-agent-design.md: the tool-response
+    ``warnings`` array must be structured, not prose-only, so an agent
+    can relay/filter/group it without parsing text).
+
+    ``code`` is a stable identifier (``"<record>.<slug>"``, e.g.
+    ``"job.walltime_defaulted"``) an advisor commits not to rename once
+    shipped -- callers may match on it. ``category`` is the same record
+    name used throughout ``Advice.records()``/``capabilities()``
+    (``"job"``, ``"hubbard"``, ...): reusing that existing, already
+    -stable vocabulary instead of inventing a second one a frontend
+    would need a separate legend for. ``message`` is the human-readable
+    text, with any per-occurrence values (an element, a number) already
+    interpolated in -- the whole reason this array exists is so a
+    caller never has to parse it to know what happened, but the text is
+    still there for direct display."""
+
     code: str
     level: WarningLevel
     category: str
+    message: str
 
 
 class Provenance(BaseModel):

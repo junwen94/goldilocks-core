@@ -33,6 +33,7 @@ from goldilocks_core.resolution import (
     FieldState,
     Provenance,
     Resolved,
+    Warning,
     blocked_by,
 )
 
@@ -44,12 +45,27 @@ _VDW_INCLUSIVE_FUNCTIONAL_MARKERS = ("vdw", "vv10")
 functional is not double-corrected. No functional this codebase currently
 recognizes matches; this is a guard for one that eventually will."""
 
+WARNING_CATALOGUE = (
+    Warning(
+        code="vdw.double_counting_avoided",
+        level="info",
+        category="vdw",
+        message=(
+            "a vdW correction method was requested, but the chosen functional "
+            "already includes dispersion physics; no correction was added to "
+            "avoid double-counting it."
+        ),
+    ),
+)
+"""Every warning code this module can emit -- ``capabilities.py``'s
+``warnings[]`` catalogue aggregates one of these tuples per advisor."""
+
 
 @dataclass(frozen=True, slots=True)
 class VdwFacts:
     use_vdw: bool
     method: VdwMethod | None
-    warnings: tuple[str, ...] = ()
+    warnings: tuple[Warning, ...] = ()
 
 
 class VdwMethodHumanInput(HumanInput):
@@ -84,12 +100,19 @@ def vdw_method(
         )
 
     if _is_vdw_inclusive(functional):
-        warnings: tuple[str, ...] = ()
+        warnings: tuple[Warning, ...] = ()
         if human.method is not None or llm.method is not None:
             warnings = (
-                f"A vdW correction method was requested, but {functional!r} "
-                "already includes dispersion physics; no correction was added "
-                "to avoid double-counting it.",
+                Warning(
+                    code="vdw.double_counting_avoided",
+                    level="info",
+                    category="vdw",
+                    message=(
+                        f"A vdW correction method was requested, but "
+                        f"{functional!r} already includes dispersion physics; "
+                        "no correction was added to avoid double-counting it."
+                    ),
+                ),
             )
         return Resolved(
             VdwFacts(use_vdw=False, method=None, warnings=warnings),

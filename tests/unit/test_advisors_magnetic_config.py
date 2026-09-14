@@ -87,7 +87,10 @@ def test_unavailable_magnetism_defaults_to_non_magnetic_not_blocked() -> None:
 
     assert state.ok
     assert state.value.spin_polarized is False
-    assert any("could not be determined" in warning for warning in state.value.warnings)
+    assert any(
+        "could not be determined" in warning.message
+        for warning in state.value.warnings
+    )
 
 
 def test_blocked_magnetism_propagates_as_blocked() -> None:
@@ -166,7 +169,9 @@ def test_soc_is_never_auto_enabled_even_when_needs_soc_says_yes() -> None:
     state = magnetic_config(_IRON, is_magnetic(_IRON), needs_soc=always_true)
 
     assert state.value.spin_orbit_enabled is False
-    assert any("consider enabling" in warning for warning in state.value.warnings)
+    assert any(
+        "consider enabling" in warning.message for warning in state.value.warnings
+    )
 
 
 def test_relabeled_structure_is_the_identity_for_now() -> None:

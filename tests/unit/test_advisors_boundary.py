@@ -43,7 +43,8 @@ def test_2d_slab_gets_a_warning_instead_of_a_guess() -> None:
 
     assert state.value.assume_isolated == "none"
     assert len(state.value.warnings) == 1
-    assert "dipole correction" in state.value.warnings[0]
+    assert "dipole correction" in state.value.warnings[0].message
+    assert state.value.warnings[0].code == "boundary.dipole_correction_suggested"
 
 
 def test_blocked_geometry_propagates() -> None:

@@ -173,6 +173,21 @@ class TestAdviseEndToEnd:
         assert (destination / "scf.in").exists()
         assert (destination / "submit.sh").exists()
 
+    def test_warnings_flattens_every_record_s_structured_warnings(
+        self, silicon, hpc, installed_table
+    ) -> None:
+        store, _table = installed_table
+
+        advice = advise(silicon, hpc=hpc, store=store)
+
+        warnings = advice.warnings()
+        assert warnings  # scarf's own missing-walltime warning always fires
+        assert all(
+            warning.keys() == {"code", "level", "category", "message"}
+            for warning in warnings
+        )
+        assert any(warning["code"] == "job.walltime_defaulted" for warning in warnings)
+
     def test_human_overrides_flow_through_to_generated_input(
         self, silicon, hpc, installed_table
     ) -> None:
@@ -192,6 +207,28 @@ class TestAdviseEndToEnd:
         # so downstream table selection correctly can't find a match --
         # proving the override actually reached pseudo_requirements().
         assert not advice.system.pseudo.table.ok
+
+    def test_human_override_of_an_analysis_fact_flows_through(
+        self, silicon, hpc, installed_table
+    ) -> None:
+        """`capabilities()` advertises the four analysis facts as
+        overridable (v2 epic 8, #8) -- confirm `advise()`'s own end of
+        that promise, not just that `set_overrides.build_overrides` can
+        construct the ``RunOverrides`` (``test_set_overrides.py`` covers
+        that half)."""
+        from goldilocks_core.analysis.is_metal import IsMetalHumanInput
+        from goldilocks_core.service._analysis import AnalysisOverrides
+
+        store, _ = installed_table
+        overrides = RunOverrides(
+            analysis=AnalysisOverrides(is_metal=IsMetalHumanInput(is_metal=True))
+        )
+
+        advice = advise(silicon, hpc=hpc, store=store, overrides=overrides)
+
+        assert advice.analysis.is_metal.ok
+        assert advice.analysis.is_metal.value == "metal"
+        assert advice.analysis.is_metal.source == "human"
 
 
 class TestAdviseDegradation:
@@ -253,6 +290,24 @@ class TestAdviseDegradation:
         with pytest.raises(AdviceIncomplete) as excinfo:
             generate(advice, report)
         assert excinfo.value.report is report
+
+    def test_advice_incomplete_message_deduplicates_repeated_root_causes(
+        self, silicon, hpc
+    ) -> None:
+        """report.blocking has one entry per blocked field, not per
+        distinct cause -- many fields share the one pseudo_table_id
+        failure here. The exception message must say it once."""
+        overrides = RunOverrides(
+            system=SystemOverrides(pseudo_table_id="does-not-exist")
+        )
+        advice = advise(silicon, hpc=hpc, overrides=overrides)
+        report = check(advice)
+        assert len(report.blocking) > 1, "test assumes multiple fields share one cause"
+
+        with pytest.raises(AdviceIncomplete) as excinfo:
+            generate(advice, report)
+
+        assert str(excinfo.value).count("unknown pseudopotential table") == 1
 
     def test_fetch_missing_false_degrades_without_raising(
         self, silicon, hpc, tmp_path, monkeypatch
