@@ -118,11 +118,28 @@ def test_assets_status_prints_the_asset_root() -> None:
     assert "asset root:" in completed.stdout
 
 
+def test_assets_status_json_carries_asset_root_and_a_list() -> None:
+    completed = _run_cli("assets", "status", "--json")
+
+    assert completed.returncode == 0, completed.stderr
+    document = json.loads(completed.stdout)
+    assert document["asset_root"]  # isolated per-test root; just non-empty
+    assert isinstance(document["assets"], list)
+
+
 def test_examples_path_prints_a_real_directory() -> None:
     completed = _run_cli("examples", "path")
 
     assert completed.returncode == 0, completed.stderr
     assert Path(completed.stdout.strip()).is_dir()
+
+
+def test_examples_path_json_carries_the_same_directory() -> None:
+    completed = _run_cli("examples", "path", "--json")
+
+    assert completed.returncode == 0, completed.stderr
+    document = json.loads(completed.stdout)
+    assert Path(document["path"]).is_dir()
 
 
 def test_unknown_set_key_is_a_did_you_mean_operator_error() -> None:

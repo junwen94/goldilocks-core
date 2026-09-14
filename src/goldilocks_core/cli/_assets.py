@@ -9,6 +9,7 @@ asset-store errors are already ``ExpectedFailure`` subclasses that
 from __future__ import annotations
 
 import argparse
+import json
 
 from goldilocks_core.assets.runtime import (
     install as install_assets,
@@ -32,30 +33,58 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
             default="default",
             help="Asset id or shipped profile name (default: default).",
         )
+        operation.add_argument("--json", action="store_true", help="Print JSON output.")
 
     examples = subparsers.add_parser(
         "examples", help="Inspect the example structures bundled with the package."
     )
     example_commands = examples.add_subparsers(dest="examples_command", required=True)
-    example_commands.add_parser(
+    path_command = example_commands.add_parser(
         "path", help="Print the directory holding the bundled example structures."
     )
+    path_command.add_argument("--json", action="store_true", help="Print JSON output.")
 
 
 def run(args: argparse.Namespace) -> None:
     if args.command == "examples":
-        print(structures_path())
+        path = str(structures_path())
+        if args.json:
+            print(json.dumps({"path": path}, indent=2, sort_keys=True))
+            return
+        print(path)
         return
 
     store = AssetStore()
-    print(f"asset root: {store.root}")
+    if not args.json:
+        # Printed before install/status/verify runs, not after: if a
+        # requested asset id doesn't exist, the user still immediately
+        # knows where to go looking (design doc: "先打印 asset root").
+        print(f"asset root: {store.root}")
+
     if args.assets_command == "install":
-        for asset in install_assets(args.name, store=store):
-            print(f"{asset.id}@{asset.version}: installed")
+        assets = [
+            {"id": asset.id, "version": asset.version, "state": "installed"}
+            for asset in install_assets(args.name, store=store)
+        ]
+    elif args.assets_command == "status":
+        assets = [
+            {"id": asset_id, "version": version, "state": state}
+            for asset_id, version, state in asset_statuses(args.name, store=store)
+        ]
+    else:
+        assets = [
+            {"id": asset.id, "version": asset.version, "state": "verified"}
+            for asset in verify_assets(args.name, store=store)
+        ]
+
+    if args.json:
+        print(
+            json.dumps(
+                {"asset_root": str(store.root), "assets": assets},
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return
-    if args.assets_command == "status":
-        for asset_id, version, state in asset_statuses(args.name, store=store):
-            print(f"{asset_id}@{version}: {state}")
-        return
-    for asset in verify_assets(args.name, store=store):
-        print(f"{asset.id}@{asset.version}: verified")
+    for asset in assets:
+        print(f"{asset['id']}@{asset['version']}: {asset['state']}")
