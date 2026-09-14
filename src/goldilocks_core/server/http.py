@@ -7,10 +7,15 @@ calls ``server/_handlers.py``'s free functions, the exact same path
 implementation for both transports, not two.
 
 **Workbench static-file mount.** When ``GOLDILOCKS_WORKBENCH_STATIC_ROOT``
-is set, the built Workbench frontend (``web/dist``) is mounted at ``/``
--- same origin as the API, no CORS (v2 epic 12, #12). Unset by default,
-so plain API use (tests, ``goldilocks serve http`` in dev) never needs a
-frontend build lying around.
+is set, or ``create_app()``/``serve()`` is given an explicit
+``static_root``, the built Workbench frontend (``web/dist``) is mounted
+at ``/`` -- same origin as the API, no CORS (v2 epic 12, #12). The
+explicit parameter takes precedence over the env var if both are given.
+Unset by default, so plain API use (tests, ``goldilocks serve http`` in
+dev) never needs a frontend build lying around. ``cli/_serve.py``'s own
+``--static-root`` flag (#59) is the other, CLI-facing way to reach this
+same parameter -- the Docker image uses the env var instead since it has
+no CLI invocation to add a flag to.
 
 Behind the optional ``[http]`` extra; importing ``goldilocks_core``
 never imports FastAPI (P7).
@@ -19,6 +24,7 @@ never imports FastAPI (P7).
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 from goldilocks_core.bundle import archive_bytes
@@ -55,7 +61,7 @@ _STATIC_ROOT_ENV = "GOLDILOCKS_WORKBENCH_STATIC_ROOT"
 _STATUS_BY_CATEGORY = {"input": 422, "dependency": 424, "local": 500}
 
 
-def create_app() -> Any:
+def create_app(*, static_root: str | Path | None = None) -> Any:
     try:
         from fastapi import FastAPI
     except ImportError as error:
@@ -86,12 +92,12 @@ def create_app() -> Any:
             return Response(archive_bytes(bundle_input), media_type="application/zip")
         return JSONResponse(summary)
 
-    _mount_workbench(app)
+    _mount_workbench(app, static_root)
     return app
 
 
-def _mount_workbench(app: Any) -> None:
-    static_root = os.environ.get(_STATIC_ROOT_ENV)
+def _mount_workbench(app: Any, static_root: str | Path | None) -> None:
+    static_root = static_root or os.environ.get(_STATIC_ROOT_ENV)
     if not static_root:
         return
     from fastapi.staticfiles import StaticFiles
@@ -172,9 +178,14 @@ def _register_operational_routes(app: Any, readiness: Any) -> None:
         )
 
 
-def serve(*, host: str = "127.0.0.1", port: int = 8000) -> None:
+def serve(
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    static_root: str | Path | None = None,
+) -> None:
     try:
         import uvicorn
     except ImportError as error:
         raise ImportError(_MISSING_HTTP_EXTRA) from error
-    uvicorn.run(create_app(), host=host, port=port)
+    uvicorn.run(create_app(static_root=static_root), host=host, port=port)

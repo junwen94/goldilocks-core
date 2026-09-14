@@ -39,6 +39,19 @@ def test_help_lists_the_design_docs_commands() -> None:
         assert command in completed.stdout
 
 
+def test_serve_http_help_lists_static_root() -> None:
+    """#59: restores the flag ``poe stage``/the README's local-dev
+    instructions already assumed exists. Real end-to-end verification
+    (a running server actually serving a built Workbench directory) was
+    done manually, not here -- `serve http` blocks forever, so a
+    subprocess integration test can only prove the flag parses, not
+    that the server behaves correctly once it does."""
+    completed = _run_cli("serve", "http", "--help")
+
+    assert completed.returncode == 0, completed.stderr
+    assert "--static-root" in completed.stdout
+
+
 def test_inspect_reports_structure_in_json_and_human_forms() -> None:
     silicon = structure("Si.cif")
 
