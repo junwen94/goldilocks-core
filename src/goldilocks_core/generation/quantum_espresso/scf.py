@@ -158,17 +158,19 @@ def write_qe_scf(
 
     elements = sorted({site.specie.symbol for site in structure})
     pseudo_by_element = _validated_pseudo_by_element(elements, system)
-    species_index = {symbol: index + 1 for index, symbol in enumerate(elements)}
+    species_labels = sorted({site.label for site in structure})
+    label_to_element = {site.label: site.specie.symbol for site in structure}
+    species_index = {label: index + 1 for index, label in enumerate(species_labels)}
 
     keywords: dict[str, object] = {}
     keywords.update(_control_keywords(ctx, step, job, purpose))
     keywords.update(
-        _system_keywords(structure, system, step, len(elements), species_index)
+        _system_keywords(structure, system, step, len(species_labels), species_index)
     )
     keywords.update(_electrons_keywords(step))
 
     lines = [render_namelist(keywords)]
-    lines.append(_atomic_species(elements, pseudo_by_element))
+    lines.append(_atomic_species(species_labels, label_to_element, pseudo_by_element))
     lines.append(_cell_parameters(structure))
     lines.append(_atomic_positions(structure))
     lines.append(_k_points(step))
@@ -303,8 +305,8 @@ def _magnetic_keywords(
     ):
         if not values:
             continue
-        for symbol, value in values.items():
-            keywords[f"{field_name}({species_index[symbol]})"] = value
+        for label, value in values.items():
+            keywords[f"{field_name}({species_index[label]})"] = value
     return keywords
 
 
@@ -330,12 +332,23 @@ def _cell_parameters(structure) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _atomic_species(elements: list[str], pseudo_by_element: dict[str, object]) -> str:
+def _atomic_species(
+    species_labels: list[str],
+    label_to_element: dict[str, str],
+    pseudo_by_element: dict[str, object],
+) -> str:
+    """One line per QE species *label* (``Fe1``/``Fe2``/``O``), not per
+    real element -- an AFM-relabeled structure needs two ``ATOMIC_SPECIES``
+    entries for one physical element, both pointing at the same
+    pseudopotential file (mass/pseudopotential lookup still needs the real
+    element underneath; ``Element("Fe1")`` isn't a real periodic-table
+    symbol)."""
     lines = ["ATOMIC_SPECIES"]
-    for element in elements:
+    for label in species_labels:
+        element = label_to_element[label]
         pseudo = pseudo_by_element[element]
         mass = _format_float(float(Element(element).atomic_mass))
-        lines.append(f"  {element}  {mass}  {pseudo.filename}")
+        lines.append(f"  {label}  {mass}  {pseudo.filename}")
     return "\n".join(lines) + "\n"
 
 
@@ -343,7 +356,7 @@ def _atomic_positions(structure) -> str:
     lines = ["ATOMIC_POSITIONS crystal"]
     for site in structure:
         coords = "  ".join(_format_float(value) for value in site.frac_coords)
-        lines.append(f"  {site.specie.symbol}  {coords}")
+        lines.append(f"  {site.label}  {coords}")
     return "\n".join(lines) + "\n"
 
 
