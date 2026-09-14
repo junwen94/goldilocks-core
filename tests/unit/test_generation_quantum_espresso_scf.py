@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from pymatgen.core import Lattice, Structure
+from pymatgen.core import Lattice, Species, Structure
 
 from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.convergence import ConvergenceDecision
@@ -281,6 +281,57 @@ def test_spin_orbit_magnetic_emits_noncolin_lspinorb_and_angles(
     # the one combination QE would otherwise refuse to run.
     assert "K_POINTS automatic" in content
     assert "K_POINTS gamma" not in content
+
+
+def test_afm_relabeled_species_reach_atomic_species_and_positions(
+    pseudo_metadata_factory,
+) -> None:
+    """Regression for the KeyError crash found while wrapping up v2 epic
+    9 (#9), filed as #27: an AFM-relabeled structure carries two QE
+    species (``Fe1``/``Fe2``) for one real element -- ``elements``
+    (real chemistry, for pseudopotential lookup) and the QE species
+    list (``site.label``, for ATOMIC_SPECIES/ATOMIC_POSITIONS/
+    ``species_index``) must stay two different lists, not one."""
+    original = Structure(
+        Lattice.cubic(4.3), ["Fe", "O"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
+    )
+    relabeled = Structure(
+        Lattice.cubic(4.3),
+        [
+            Species("Fe", spin=5.0),
+            Species("Fe", spin=-5.0),
+            "O",
+            "O",
+        ],
+        [
+            [0.0, 0.0, 0.0],
+            [0.5, 0.0, 0.5],
+            [0.75, 0.5, 0.75],
+            [0.25, 0.5, 0.25],
+        ],
+        labels=["Fe1", "Fe2", "O", "O"],
+    )
+    magnetic = _magnetic(
+        relabeled,
+        spin_polarized=True,
+        starting_magnetization={"Fe1": 0.3125, "Fe2": -0.3125, "O": 0.1},
+    )
+    system = _system(original, pseudo_metadata_factory, magnetic=magnetic)
+
+    content = write_qe_scf(system, _step(), _JOB, _CTX)[0].files["scf.in"]
+
+    assert "ntyp             = 3" in content
+    assert "nat              = 4" in content
+    species = content.split("ATOMIC_SPECIES\n")[1].split("\n\n")[0]
+    assert (
+        species == "  Fe1  55.845  Fe.UPF\n  Fe2  55.845  Fe.UPF\n  O  15.9994  O.UPF"
+    )
+    assert "starting_magnetization(1) = 0.3125" in content
+    assert "starting_magnetization(2) = -0.3125" in content
+    assert "starting_magnetization(3) = 0.1" in content
+    positions = content.split("ATOMIC_POSITIONS")[1]
+    assert "Fe1  0" in positions
+    assert "Fe2  0.5" in positions
 
 
 def test_vdw_method_translates_to_qe_keyword(

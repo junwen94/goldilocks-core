@@ -12,8 +12,11 @@ layer that exercises real argument parsing end to end.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
+import pytest
+from pymatgen.core import Lattice, Structure
 from support import run_cli as _run_cli
 
 from goldilocks_core.examples.structures import structure
@@ -225,6 +228,43 @@ class TestRunAndExplainAgainstRealAssets:
             warning["code"] == "job.walltime_defaulted"
             for warning in manifest["warnings"]
         )
+
+    @pytest.mark.skipif(
+        shutil.which("enum.x") is None and shutil.which("multienum.x") is None,
+        reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
+    )
+    def test_run_afm_ordering_publishes_without_crashing(
+        self, real_assets: None, tmp_path: Path
+    ) -> None:
+        """Regression for #27: an AFM-relabeled structure used to crash
+        ``goldilocks run`` with an uncaught ``KeyError`` (write_qe_scf
+        looked up QE species labels in a dict keyed by real elements) --
+        this reproduces the exact failing case through the real CLI
+        subprocess, not just the writer function in isolation."""
+        rock_salt_feo = tmp_path / "FeO.cif"
+        Structure(
+            Lattice.cubic(4.3), ["Fe", "O"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
+        ).to(filename=str(rock_salt_feo))
+        destination = tmp_path / "out"
+
+        completed = _run_cli(
+            "run",
+            str(rock_salt_feo),
+            "--hpc",
+            "scarf",
+            "--set",
+            "magnetic_ordering=afm",
+            "--set",
+            "hubbard_needs_correlation=false",
+            "-o",
+            str(destination),
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        content = (destination / "scf.in").read_text()
+        assert "ntyp             = 3" in content
+        assert "  Fe1  " in content
+        assert "  Fe2  " in content
 
     def test_run_json_output_is_stable_and_sorted(self, real_assets: None) -> None:
         silicon = structure("Si.cif")
