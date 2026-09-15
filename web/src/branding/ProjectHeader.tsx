@@ -6,6 +6,7 @@ import {
   PROJECT_URL,
   FUNDING_GRANT,
   FUNDING_URL,
+  ALC_URL,
 } from "./project";
 import {
   ActionIcon,
@@ -66,7 +67,9 @@ export function ProjectHeader() {
           <ActionIcon
             variant="default"
             aria-label="About the Goldilocks project"
-            onClick={() => { setOpened(true); }}
+            onClick={() => {
+              setOpened(true);
+            }}
           >
             <Info size={18} strokeWidth={1.75} aria-hidden />
           </ActionIcon>
@@ -75,7 +78,9 @@ export function ProjectHeader() {
 
       <Drawer
         opened={opened}
-        onClose={() => { setOpened(false); }}
+        onClose={() => {
+          setOpened(false);
+        }}
         position="right"
         title="About Goldilocks"
         overlayProps={{ backgroundOpacity: 0.35 }}
@@ -133,6 +138,10 @@ export function ProjectHeader() {
                 fz="sm"
               >
                 {FUNDING_GRANT}
+              </Anchor>
+              , and the{" "}
+              <Anchor href={ALC_URL} target="_blank" rel="noreferrer" fz="sm">
+                Ada Lovelace Centre (ALC)
               </Anchor>
               .
             </Text>

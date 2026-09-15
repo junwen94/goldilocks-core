@@ -23,6 +23,8 @@ export const PROJECT_TEAM: readonly ProjectMember[] = [
 
 export const FUNDING_GRANT = "EP/Z530657/1";
 export const FUNDING_URL = "https://gtr.ukri.org/projects?ref=EP%2FZ530657%2F1";
+export const ALC_URL =
+  "https://www.sc.stfc.ac.uk/programmes/ada-lovelace-centre-alc/";
 export const PROJECT_URL = "https://goldilocks.ac.uk/";
 export const PROJECT_DESCRIPTION =
   "Convergence tools and evidence-based best practices for numerical approximations in Density Functional Theory (DFT) calculations.";
