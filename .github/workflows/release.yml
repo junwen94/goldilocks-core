@@ -164,7 +164,7 @@ jobs:
           $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$TAGS")
           $(printf 'ghcr.io/stfc/goldilocks-workbench@sha256:%s ' *)
         env:
-          TAGS: ${{ steps.meta.outputs.tags }}
+          TAGS: ${{ steps.meta.outputs.json }}
 
       - name: Create release with distributions
         if: startsWith(github.ref, 'refs/tags/v')
