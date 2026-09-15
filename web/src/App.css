@@ -1,6 +1,13 @@
+.workbench-header {
+  position: sticky;
+  top: 0;
+  z-index: 200;
+  border-radius: 0;
+}
+
 .workbench-grid {
   display: grid;
-  min-height: 100dvh;
+  min-height: calc(100dvh - 52px);
   grid-template-columns:
     minmax(22rem, var(--controls-width, 34%))
     0.75rem minmax(32rem, 1fr);
@@ -15,7 +22,7 @@
   position: sticky;
   top: 0;
   min-width: 0;
-  height: 100dvh;
+  height: calc(100dvh - 52px);
   min-height: 34rem;
   overflow: hidden;
   background: var(--mantine-color-body);

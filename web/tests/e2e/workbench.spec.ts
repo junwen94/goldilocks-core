@@ -314,8 +314,10 @@ test("completes the preparation workflow with keyboard-only activation", async (
     name: "Choose a CIF or POSCAR structure",
   });
   await browse.waitFor();
-  await page.keyboard.press("Tab");
-  await page.keyboard.press("Tab");
+  // The header's project actions precede the workspace in the tab order.
+  for (let index = 0; index < 4; index += 1) {
+    await page.keyboard.press("Tab");
+  }
   await expect(browse).toBeFocused();
   const chooserPromise = page.waitForEvent("filechooser");
   await page.keyboard.press("Enter");
@@ -363,6 +365,14 @@ test("keeps keyboard focus visible and primary targets usable", async ({
   });
   await browse.waitFor();
 
+  await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("link", { name: "Goldilocks on GitHub" }),
+  ).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("button", { name: "About the Goldilocks project" }),
+  ).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(
     page.getByRole("button", { name: "Switch to dark mode" }),
