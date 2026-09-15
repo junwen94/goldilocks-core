@@ -5,6 +5,12 @@ name: platform-probe
 
 on:
   workflow_dispatch:
+  push:
+    branches: ["fix/cross-platform"]
+
+concurrency:
+  group: platform-probe-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   UV_FROZEN: "1"
