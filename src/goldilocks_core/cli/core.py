@@ -5,17 +5,20 @@ Replaces v1's 30+-flag, per-advisor-option surface
 option) with the design doc's 6-command shape (``run``/``explain``/
 ``inspect``/``settings``/``models``/``assets``; ``serve`` and
 ``examples`` are the two "small, thoughtful" extras the design doc's
-own P1-P8 section calls out to keep) -- adding an advisor never touches
-this file again, since every override surfaces through ``--set``,
-itself reflected from ``capabilities.bindings()`` (``set_overrides.py``'s
-own docstring).
+own P1-P8 section calls out to keep, and ``capabilities`` is a third,
+added in #62 as a thin CLI entry point onto the same ``capabilities()``
+HTTP/MCP already exposed) -- adding an advisor never touches this file
+again, since every override surfaces through ``--set``, itself
+reflected from ``capabilities.bindings()`` (``set_overrides.py``'s own
+docstring).
 
 Split into one module per command (``_run.py``/``_explain.py``/etc.),
 not kept flat here: this project's own import-surface ceiling
 (``scripts/check_complexity.py``) sets ``cli.core`` specifically to a
-*tighter* limit (8 origins/16 symbols) than the default, so the
+*tighter* limit (9 origins/16 symbols) than the default, so the
 dispatcher stays thin and every command's real logic lives in its own
-file -- v1's own ``cli/core.py`` already sat right at that ceiling.
+file -- one origin per command module, so a new command always needs
+this ceiling bumped by exactly one (see #62's own bump from 8).
 
 P1-P8 (goldilocks-core-design.md:3577-3584), carried forward:
 P1 every command has ``--json``; P2 JSON output is ``sort_keys=True``
@@ -38,6 +41,7 @@ import sys
 
 from goldilocks_core.cli import (
     _assets,
+    _capabilities,
     _explain,
     _inspect,
     _models,
@@ -52,6 +56,7 @@ _COMMANDS = {
     "explain": _explain,
     "inspect": _inspect,
     "settings": _settings,
+    "capabilities": _capabilities,
     "models": _models,
     "assets": _assets,
     "examples": _assets,
@@ -68,6 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     _explain.add_subparser(subparsers)
     _inspect.add_subparser(subparsers)
     _settings.add_subparser(subparsers)
+    _capabilities.add_subparser(subparsers)
     _models.add_subparser(subparsers)
     _assets.add_subparser(subparsers)
     _serve.add_subparser(subparsers)

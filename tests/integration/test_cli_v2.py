@@ -19,6 +19,7 @@ import pytest
 from pymatgen.core import Lattice, Structure
 from support import run_cli as _run_cli
 
+from goldilocks_core.capabilities import capabilities
 from goldilocks_core.examples.structures import structure
 
 
@@ -31,6 +32,7 @@ def test_help_lists_the_design_docs_commands() -> None:
         "explain",
         "inspect",
         "settings",
+        "capabilities",
         "models",
         "assets",
         "examples",
@@ -88,6 +90,32 @@ def test_settings_human_output_lists_sources() -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert "sources: human . heuristic" in completed.stdout
+
+
+def test_capabilities_json_matches_the_real_capabilities_payload() -> None:
+    """#62: the CLI must be a thin third entry point onto the same
+    ``capabilities()`` HTTP's ``GET /capabilities`` and MCP's
+    ``capabilities`` tool already call, not a re-derived subset."""
+    completed = _run_cli("capabilities", "--json")
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == capabilities()
+
+
+def test_capabilities_human_output_summarizes_every_section() -> None:
+    completed = _run_cli("capabilities")
+
+    assert completed.returncode == 0, completed.stderr
+    for expected in (
+        "core_version:",
+        "code: quantum_espresso",
+        "task: scf_single_point",
+        "task: dos",
+        "pseudopotential_table:",
+        "hpc_profile:",
+        "warnings:",
+    ):
+        assert expected in completed.stdout
 
 
 def test_models_list_is_honest_about_having_none_yet() -> None:

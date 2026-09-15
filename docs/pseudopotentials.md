@@ -9,8 +9,8 @@ material Goldilocks installs for you.
 ## Choose a table
 
 List the registered choices and their supported elements, functional, accuracy,
-and relativistic treatment. There is no CLI command for this; call
-`capabilities()` directly, or use the equivalent HTTP/MCP route:
+and relativistic treatment with `uv run goldilocks capabilities --json` (see
+the `pseudopotential_tables` array), or filter it directly in Python:
 
 ```python
 from goldilocks_core.capabilities import capabilities
@@ -20,7 +20,7 @@ for table in capabilities()["pseudopotential_tables"]:
 ```
 
 (Or `GET /capabilities` once `goldilocks serve http` is running, or the MCP
-`capabilities` tool.)
+`capabilities` tool — all four return the same payload.)
 
 The `pseudopotential_tables` array lists the registered tables. Each table's
 `elements` field lists elements permitted by Core's selection policy, not just

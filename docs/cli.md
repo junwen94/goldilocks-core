@@ -30,21 +30,23 @@ unchecked — only `quantum_espresso` is a registered code today, so an
 unrecognised `--code` silently produces a Quantum-ESPRESSO-shaped bundle
 instead of failing.
 
-There is no single command that dumps the full capabilities payload (codes,
-tasks, facts, settings, pseudopotential tables, HPC profiles, models,
-warnings) any more. On the CLI, the closest equivalents are:
+`uv run goldilocks capabilities --json` dumps the same full payload HTTP's
+`GET /capabilities` and the MCP `capabilities` tool return: `codes`, `tasks`
+(with descriptions, step counts, and executables), `facts`, `settings`,
+`pseudopotential_tables`, `hpc_profiles`, `models`, `warnings`, and `sources`.
+Narrower slices are also available directly:
 
 - `uv run goldilocks settings --json` — every `--set`-able key, its type,
-  default, and sources (49 keys today).
+  default, and sources (49 keys today; the same objects as `capabilities`'s
+  `settings[]`).
 - `uv run goldilocks models --json` — installed pluggable ML models (always
   `[]` today; see [Scientific controls](#scientific-controls)).
 - `uv run goldilocks assets status --json` — installed pseudopotential-table
   and model assets.
 
-The full payload is reachable only over HTTP (`GET /capabilities`) or the MCP
-`capabilities` tool; see [Serve HTTP](#serve-http) and
-[Serve local MCP](#serve-local-mcp). `uv run goldilocks examples path` locates
-the bundled example structures.
+See [Serve HTTP](#serve-http) and [Serve local MCP](#serve-local-mcp) for the
+HTTP/MCP equivalents. `uv run goldilocks examples path` locates the bundled
+example structures.
 
 ## Save output or print JSON
 
