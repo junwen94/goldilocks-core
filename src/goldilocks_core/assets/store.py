@@ -317,7 +317,9 @@ def _write_manifest(
         ],
     }
     (root / _MANIFEST).write_text(
-        json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(data, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
     )
 
 

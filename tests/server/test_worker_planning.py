@@ -116,7 +116,10 @@ def _no_op() -> None:
     pass
 
 
-def _report_alive(sender) -> None:
+def _report_alive(sender, diagnostic: bool) -> None:
+    if diagnostic:
+        # [DEBUG-w32m] temporary diagnostic: report the master env it saw
+        sender.send(f"diag: master env={os.environ.get(workers.MASTER_PID_ENV)!r}")
     workers._die_with_master()
     sender.send("alive")
     sender.close()
@@ -127,10 +130,11 @@ def test_die_with_master_keeps_worker_whose_master_is_alive(monkeypatch) -> None
     monkeypatch.setenv(workers.MASTER_PID_ENV, str(os.getpid()))
     context = multiprocessing.get_context("spawn")
     receiver, sender = context.Pipe(False)
-    process = context.Process(target=_report_alive, args=(sender,))
+    process = context.Process(target=_report_alive, args=(sender, True))
     process.start()
     sender.close()
     assert receiver.poll(timeout=30)
+    assert receiver.recv().startswith("diag:")
     assert receiver.recv() == "alive"
     process.join(timeout=30)
     assert process.exitcode == 0
@@ -144,7 +148,7 @@ def test_die_with_master_exits_when_reparented(monkeypatch) -> None:
     gone.join(timeout=30)
     monkeypatch.setenv(workers.MASTER_PID_ENV, str(gone.pid))
     receiver, sender = context.Pipe(False)
-    process = context.Process(target=_report_alive, args=(sender,))
+    process = context.Process(target=_report_alive, args=(sender, False))
     process.start()
     sender.close()
     assert wait([receiver], timeout=30)
@@ -165,6 +169,7 @@ def test_die_with_master_leaves_the_master_alone(monkeypatch) -> None:
     workers._die_with_master()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="fork-based cost measurement")
 def test_measured_worker_cost_propagates_child_failure(monkeypatch) -> None:
     class ExplodingBackend:
         def prewarm(self) -> None:

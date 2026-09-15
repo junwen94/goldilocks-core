@@ -38,7 +38,7 @@ def test_readiness_rechecks_when_installed_asset_state_changes(
     assert readiness.check().ready
 
     data = installed.path("data.bin")
-    modified = data.stat().st_mtime_ns + 1
+    modified = data.stat().st_mtime_ns + 1_000_000_000
     data.write_bytes(b"damaged")
     os.utime(data, ns=(modified, modified))
 

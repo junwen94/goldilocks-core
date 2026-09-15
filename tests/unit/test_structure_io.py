@@ -27,7 +27,7 @@ def test_sources_preserve_structure_and_source_provenance(
 ) -> None:
     content = silicon_structure.to(fmt=format)
     path = tmp_path / f"silicon.{format}"
-    path.write_text(content, encoding="utf-8")
+    path.write_text(content, encoding="utf-8", newline="\n")
     sources = (
         InlineStructureSource(path.name, content),
         PathStructureSource(path),
