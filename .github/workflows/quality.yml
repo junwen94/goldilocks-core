@@ -6,6 +6,9 @@ name: quality
 on:
   workflow_call:
 
+permissions:
+  contents: read
+
 env:
   UV_FROZEN: "1"
   UV_NO_PROGRESS: "1"
