@@ -1,0 +1,43 @@
+# Temporary cross-platform probe. Runs the Python gates on macOS and Windows
+# runners so portability failures surface in CI. Linux coverage stays in
+# quality.yml; Docker/image e2e remain Linux-only.
+name: platform-probe
+
+on:
+  workflow_dispatch:
+
+env:
+  UV_FROZEN: "1"
+  UV_NO_PROGRESS: "1"
+
+jobs:
+  probe:
+    name: Probe ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Install frozen dependencies
+        run: uv sync --group dev --all-extras
+
+      - name: Lint
+        run: uv run just lint
+
+      - name: Tests
+        run: uv run just test
+
+      - name: CLI smoke
+        run: uv run goldilocks --help
+
+      - name: Build distributions
+        run: uv build --no-sources
