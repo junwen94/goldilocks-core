@@ -26,5 +26,6 @@ export const FUNDING_URL = "https://gtr.ukri.org/projects?ref=EP%2FZ530657%2F1";
 export const ALC_URL =
   "https://www.sc.stfc.ac.uk/programmes/ada-lovelace-centre-alc/";
 export const PROJECT_URL = "https://goldilocks.ac.uk/";
+export const REPO_URL = "https://github.com/stfc/goldilocks-core";
 export const PROJECT_DESCRIPTION =
   "Convergence tools and evidence-based best practices for numerical approximations in Density Functional Theory (DFT) calculations.";

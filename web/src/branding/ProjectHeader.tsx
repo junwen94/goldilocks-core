@@ -7,6 +7,7 @@ import {
   FUNDING_GRANT,
   FUNDING_URL,
   ALC_URL,
+  REPO_URL,
 } from "./project";
 import {
   ActionIcon,
@@ -19,6 +20,22 @@ import {
   Text,
   Title,
 } from "@mantine/core";
+
+function GithubIcon({ size = 16 }: { readonly size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      aria-label="GitHub"
+      role="img"
+      style={{ flex: "0 0 auto" }}
+    >
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.36 1.1.13 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
+    </svg>
+  );
+}
 
 function OrcidIcon({ size = 14 }: { readonly size?: number }) {
   return (
@@ -64,15 +81,27 @@ export function ProjectHeader() {
               Workbench
             </Text>
           </Group>
-          <ActionIcon
-            variant="default"
-            aria-label="About the Goldilocks project"
-            onClick={() => {
-              setOpened(true);
-            }}
-          >
-            <Info size={18} strokeWidth={1.75} aria-hidden />
-          </ActionIcon>
+          <Group gap="xs" wrap="nowrap">
+            <ActionIcon
+              component="a"
+              href={REPO_URL}
+              target="_blank"
+              rel="noreferrer"
+              variant="default"
+              aria-label="Goldilocks on GitHub"
+            >
+              <GithubIcon size={17} />
+            </ActionIcon>
+            <ActionIcon
+              variant="default"
+              aria-label="About the Goldilocks project"
+              onClick={() => {
+                setOpened(true);
+              }}
+            >
+              <Info size={18} strokeWidth={1.75} aria-hidden />
+            </ActionIcon>
+          </Group>
         </Group>
       </Paper>
 
@@ -147,12 +176,25 @@ export function ProjectHeader() {
             </Text>
           </Stack>
 
-          <Anchor href={PROJECT_URL} target="_blank" rel="noreferrer" size="sm">
-            <Group gap={6} wrap="nowrap">
-              goldilocks.ac.uk
-              <ExternalLink size={14} strokeWidth={1.75} aria-hidden />
-            </Group>
-          </Anchor>
+          <Stack gap="xs">
+            <Anchor href={REPO_URL} target="_blank" rel="noreferrer" size="sm">
+              <Group gap={6} wrap="nowrap">
+                <GithubIcon size={13} />
+                Source code
+              </Group>
+            </Anchor>
+            <Anchor
+              href={PROJECT_URL}
+              target="_blank"
+              rel="noreferrer"
+              size="sm"
+            >
+              <Group gap={6} wrap="nowrap">
+                goldilocks.ac.uk
+                <ExternalLink size={14} strokeWidth={1.75} aria-hidden />
+              </Group>
+            </Anchor>
+          </Stack>
         </Stack>
       </Drawer>
     </>
