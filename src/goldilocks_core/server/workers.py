@@ -94,17 +94,23 @@ def _master_alive(master_pid: int) -> bool:
         import ctypes
 
         kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(_SYNCHRONIZE, False, master_pid)
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        handle = kernel32.OpenProcess(
+            _SYNCHRONIZE | _PROCESS_QUERY_LIMITED_INFORMATION, False, master_pid
+        )
         if not handle:
             return False
         exit_code = ctypes.c_ulong()
-        kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
-        kernel32.CloseHandle(handle)
-        return exit_code.value == _STILL_ACTIVE
+        succeeded = kernel32.GetExitCodeProcess(
+            ctypes.c_void_p(handle), ctypes.byref(exit_code)
+        )
+        kernel32.CloseHandle(ctypes.c_void_p(handle))
+        return bool(succeeded) and exit_code.value == _STILL_ACTIVE
     return os.getppid() == master_pid
 
 
 _SYNCHRONIZE = 0x00100000
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000
 _STILL_ACTIVE = 259
 
 

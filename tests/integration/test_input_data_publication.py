@@ -362,7 +362,9 @@ def test_installed_pseudopotentials_are_snapshotted_before_publication(
     pseudo_source.write_bytes(pseudo_bytes)
     pseudo_url = pseudo_source.as_uri()
     licence_source = source_root / "LICENSE.txt"
-    licence_source.write_text("Installed exact licence\n", encoding="utf-8")
+    licence_source.write_text(
+        "Installed exact licence\n", encoding="utf-8", newline="\n"
+    )
     table_manifest = source_root / "pseudo-table.json"
     registry = tmp_path / "pseudos.toml"
     registry.write_text(
