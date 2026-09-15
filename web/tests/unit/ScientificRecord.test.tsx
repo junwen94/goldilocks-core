@@ -1,6 +1,5 @@
 import { MantineProvider } from "@mantine/core";
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import type { ResolvedField } from "../../src/api/coreClient";
@@ -83,18 +82,17 @@ describe("GeneratedInputReview", () => {
   });
 
   it("unzips a real archive and previews each file with its manifest digest", async () => {
-    const user = userEvent.setup();
     const archive = buildArchive();
     render(<GeneratedInputReview archive={archive} />, {
       wrapper: MantineProvider,
     });
 
-    // Files list alphabetically (goldilocks.json, scf.in,
-    // pseudo/Si.upf) -- the manifest itself is the default active tab.
+    // Review order (artifacts.ts's displayPriority): scf.in,
+    // goldilocks.json, pseudo/Si.upf -- scf.in is the default active tab,
+    // so its panel renders without switching tabs first.
     await waitFor(() => {
       expect(screen.getByRole("tab", { name: "scf.in" })).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("tab", { name: "scf.in" }));
 
     expect(
       screen.getByRole("region", { name: "Generated input scf.in" }),
