@@ -1,15 +1,14 @@
-# Temporary cross-platform probe. Runs the Python gates on macOS and Windows
-# runners so portability failures surface in CI. Linux coverage stays in
-# quality.yml; Docker/image e2e remain Linux-only.
-name: platform-probe
+# Extra cross-platform check. Runs the Python gates on macOS and Windows
+# runners and the arm64 image build on the native arm runner. Linux coverage
+# stays in quality.yml; Docker/image e2e remain Linux-only there.
+name: platform
 
 on:
+  pull_request:
   workflow_dispatch:
-  push:
-    branches: ["fix/cross-platform"]
 
 concurrency:
-  group: platform-probe-${{ github.ref }}
+  group: platform-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -18,8 +17,6 @@ env:
 
 jobs:
   image-arm64:
-    # Proves the release Dockerfile builds for linux/arm64 before the next
-    # release does it for real. Removed once the multi-arch image ships.
     name: Image arm64 build
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
