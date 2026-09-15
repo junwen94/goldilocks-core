@@ -1,111 +1,93 @@
 # Architecture
 
-This page is for contributors changing Core or its transports. For using the
-library, start with the [Python tutorial](tutorial.md); for browser development,
-use the [Workbench guide](../web/README.md).
+Core turns a crystal structure and a calculation intent into ready-to-run DFT
+input. A request states the structure, the calculation, and which records the
+caller wants; the package computes them as a graph of stages and can publish
+the assembled input as a directory or ZIP. This page describes the control
+flow, the built-in stage graph, and where code lives. Build setup, checks, CI,
+and releases are in [Contributing](contributing.md); the browser app is
+described in the [Workbench guide](../web/README.md).
 
-## Set up a contribution
+## Control flow
 
-From the repository root:
-
-```bash
-uv sync --group dev
-uv run pre-commit install
-uv run poe check
+```mermaid
+flowchart TD
+    draft["CalculationDraft<br/>structure source · intent · hints"] --> request["ComputeRequest<br/>preset or explicit record selection"]
+    request --> service["Service.compute<br/>runtime/service.py"]
+    service --> normalize["normalize_structure<br/>io/structures.py"]
+    normalize --> context["build_context<br/>request-local CalculationResources"]
+    context --> execute["execute_graph<br/>runtime/graph.py"]
+    execute --> result["ComputationResult<br/>requested records and warnings"]
+    result --> publish["Publisher<br/>directory or ZIP, only when requested"]
 ```
 
-`poe check` runs Ruff lint, format, and complexity checks, then pytest. Use
-`uv run poe fmt` to apply Python formatting. The commit hooks run the same checks
-and pytest with branch coverage. For frontend checks and API-schema refresh, follow the
-[Workbench guide](../web/README.md).
+1. The caller builds a `CalculationDraft` — structure source, calculation
+   intent, overrides, hints — and pairs it with a record selection: either a
+   preset (`recommend`, `generate`) or an explicit set of record types.
+2. `Dispatcher.compute` finds the handler registered for the task, resolves the
+   requested outputs, and validates the selection against the task's
+   `selectable_outputs`.
+3. `normalize_structure` runs the source through the same path used by
+   inspection. The result carries the normalized inspection, not the raw
+   source.
+4. The handler's `build_context` builds a request-local context — model
+   backends, pseudopotential source — from the request, the normalized
+   structure, and the shared `Runtime`.
+5. `execute_graph` resolves the requested outputs to stages, runs each stage
+   once in dependency order, and memoizes outputs. Cycles and missing
+   producers are rejected before any stage runs.
+6. `Dispatcher` assembles a `ComputationResult` holding only the requested
+   records plus warnings collected from the executed stages.
+7. If the caller passed an output target, `Service` publishes and attaches
+   publication metadata. Python calls publish nothing by default. CLI and MCP
+   default to an output directory; HTTP keeps the result in memory and returns
+   archive bytes separately.
 
-## Cut a release
+## The built-in stage graph
 
-One version covers the repository: `pyproject.toml` owns it, and the Workbench
-frontend ships inside the same image rather than carrying its own version.
-Treat API/schema changes (the OpenAPI export) as at least a minor bump during
-`0.x`; frontend-only fixes can be patches.
+`runtime/scf.py` declares `scf_single_point`. Each stage is a plain function
+with declared input and output types. In the diagram, an arrow points from a
+stage to a stage that consumes its output record.
 
-To publish, merge a PR that bumps `pyproject.toml` to the release version, then
-from `main`:
+- `load_structure` — the normalized source as a pymatgen `Structure`.
+- `analyze` — structure facts and estimated electronic character.
+- `resolve_k_points` — the k-point grid, from operator hints or a model.
+- `advise` — provenance-backed calculation parameters.
+- `select_pseudopotentials` — one pseudopotential per element.
+- `generate_inputs` — target-code input files.
+- `assemble_dft_input_data` — complete trusted input data for publication.
 
-```bash
-git tag -a v0.1.0 -m "v0.1.0"
-git push origin v0.1.0
+```mermaid
+flowchart TD
+    load["load_structure<br/>Structure"] --> analyze["analyze<br/>StructureAnalysisRecord"]
+    load --> kpoints["resolve_k_points<br/>KPointSelection"]
+    load --> select["select_pseudopotentials<br/>SelectionRecord"]
+    analyze --> advise["advise<br/>ParameterAdvice"]
+    advise --> select
+    load --> generate["generate_inputs<br/>GeneratedFiles"]
+    advise --> generate
+    kpoints --> generate
+    select --> generate
+    analyze --> assemble["assemble_dft_input_data<br/>DftInputData"]
+    advise --> assemble
+    kpoints --> assemble
+    select --> assemble
+    generate --> assemble
 ```
 
-CI runs the full suite on the tagged commit, then pushes
-`ghcr.io/stfc/goldilocks-workbench` with `X.Y.Z`, `X.Y`, `X`, and `latest` tags,
-and creates a GitHub Release containing the sdist and wheel. Nightly builds of
-`main` publish `nightly` and `nightly-<date>` image tags at 03:00 UTC; PRs and
-plain `main` pushes publish nothing. Keep the tag and `pyproject.toml` version
-identical — nothing else validates the pairing. The first publish creates the
-container package private; flip it to public once in the package settings so
-anonymous pulls work.
+- `recommend` returns the analysis, advice, k-point, and selection records.
+- `generate` additionally runs `generate_inputs` and `assemble_dft_input_data`
+  and returns all six records.
+- Explicit selection can request any subset of `selectable_outputs`; the graph
+  runs only the stages those records need.
 
-## Follow a request
+Stage outputs are typed values in a request-local dictionary; scientific
+records are plain dictionaries described by domain-owned `TypedDict` shapes.
+Warning collection inspects intermediate outputs after execution.
 
-`Service` exposes three operations: `capabilities`, `inspect_structure`, and
-`compute`. It reuses a `Runtime` containing model backends and an asset store.
-The top-level `compute(ComputeRequest)` convenience creates and closes a service
-for one call unless a caller-owned runtime is supplied.
+## Modules
 
-A compute request follows this path:
-
-1. `CalculationDraft` holds the structure source, calculation intent, optional
-   overrides, and asset choices. `ComputeRequest` pairs it with a preset or
-   explicit record selection.
-2. `Dispatcher` finds the task handler by `intent.task` and resolves the
-   requested outputs.
-3. `io/structures.py` normalizes the source through the same path used by
-   inspection. The handler builds a request-local context from that structure,
-   request, and runtime.
-4. The graph executor runs the stages needed to produce the requested records,
-   once per stage and in dependency order.
-5. `Dispatcher` creates a `ComputationResult` with the requested records,
-   normalized draft, task revision, and warnings from all executed stages.
-6. If an output target is supplied, `Service` publishes complete input data
-   through `Publisher` and attaches publication metadata.
-
-Python compute defaults to no publication. CLI and MCP adapters choose automatic
-directory publication by default. HTTP computes without an output target and
-builds ZIP response bytes separately from the same result.
-
-## Understand the built-in workflow
-
-`runtime/scf.py` declares the `scf_single_point` graph:
-
-```text
-Load -> Analyze -> Advise
-Load -> Kmesh
-Load + Advice -> Select
-Load + Advice + Select + Kmesh -> Generate
-Analysis + Advice + Kmesh + Select + Generate -> DFT Input Data
-```
-
-`recommend` selects analysis, advice, k-points, and pseudopotential selection.
-`generate` adds generated files and complete input data. They are presets within
-a task, not separate service operations.
-
-Stages are ordinary functions. Their outputs are keyed by types in a
-request-local dictionary; scientific records are plain dictionaries described by
-domain-owned `TypedDict` shapes. These types and named tuple aliases key the
-record map. The load stage supplies a pymatgen `Structure`. The result contains
-only selected records; warning collection can inspect intermediate outputs.
-
-Keep scientific decisions in their owning stages:
-
-- **Analyze** reports structure facts and estimated electronic character.
-- **Advise** recommends parameters with reasons and provenance.
-- **Kmesh** resolves an explicit grid, spacing, or model recommendation.
-- **Select** chooses concrete pseudopotentials satisfying the requirements.
-- **Generate** translates completed choices into target-code syntax.
-- **DFT Input Data** combines the records and immutable byte snapshots of
-  structures, generated files, and selected assets needed for publication.
-
-## Find the code to change
-
-Paths below are relative to `src/goldilocks_core/` unless stated otherwise.
+Paths are relative to `src/goldilocks_core/` unless stated otherwise.
 
 | Area                | Files and responsibility                                                                                                                                                                                                               |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -214,17 +196,6 @@ combines these with completed records rather than rediscovering sources.
   Native operations retain exception identities; document operations classify
   failures for adapters. Unexpected execution defects propagate.
 
-## Complexity gates
-
-`scripts/check_complexity.py` runs in contributor checks, hooks, and CI. Its AST
-import ceiling applies to every production owner: 12 project origin modules and
-24 imported symbols, with stricter limits for CLI, HTTP, MCP, assembly, and SCF.
-It counts local and type-only imports, resolves re-exports, and counts accessed
-module-alias members. Pure export packages are transparent to consumer counts.
-The same gate runs Ruff's McCabe check: at most 10 per production function,
-ignoring `noqa` suppressions. Reduce decisions and duplication; moving import
-blocks or extracting shallow helper fleets does not deepen an interface.
-
 ## Change the HTTP or browser contract
 
 `server/documents.py` converts strict request models directly into native Core
@@ -254,17 +225,3 @@ Frontend lifecycle commands regenerate them from the local Python package;
 generation needs neither a running server nor installed model assets. Commit
 the domain declarations, not generated copies. Docker exports OpenAPI in its
 Python stage and generates TypeScript in its Node stage.
-
-## Run browser tests
-
-Start the [built Workbench](../web/README.md#run-locally) in another terminal,
-then run:
-
-```bash
-npm --prefix web exec -- playwright install chromium
-npm --prefix web run test:e2e
-```
-
-Tests use `http://127.0.0.1:8000`; they do not start a server.
-`WORKBENCH_BASE_URL` selects another address.
-`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` selects an existing Chromium installation.
