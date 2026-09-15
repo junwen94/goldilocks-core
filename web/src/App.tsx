@@ -10,6 +10,7 @@ import {
   useMantineColorScheme,
 } from "@mantine/core";
 
+import { ProjectHeader } from "./branding/ProjectHeader";
 import { GuidedControls } from "./controls/GuidedControls";
 import { ReviewPanel } from "./review/ReviewPanel";
 import { FailureBanner } from "./status/FailureBanner";
@@ -55,6 +56,7 @@ function Workbench() {
 
   return (
     <>
+      <ProjectHeader />
       <OperationStatus
         operation={snapshot.operation}
         hasFailure={snapshot.failure !== null}
