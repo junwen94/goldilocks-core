@@ -9,6 +9,10 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /build/core
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src/ ./src/
+# dscribe ships no linux/arm64 wheel, so the arm64 build compiles its sdist.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y g++ \
+    && rm -rf /var/lib/apt/lists/*
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --extra http --no-editable
 COPY scripts/export_workbench_openapi.py ./scripts/export_workbench_openapi.py

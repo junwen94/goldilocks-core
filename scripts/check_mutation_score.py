@@ -20,7 +20,7 @@ def main() -> int:
     parser.add_argument("--minimum", type=float, default=MINIMUM_SCORE)
     args = parser.parse_args()
 
-    stats = json.loads(args.stats.read_text())
+    stats = json.loads(args.stats.read_text(encoding="utf-8"))
     killed = int(stats["killed"])
     total = int(stats["total"])
     if total <= 0:

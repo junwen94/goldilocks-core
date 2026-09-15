@@ -44,7 +44,9 @@ def preparer(table: PseudoTable):
                 sources["pseudopotentials"], destination, table, reports
             )
             write_table_manifest(destination, table, entries)
-            (destination / "LICENSE.txt").write_text(_LICENCE_NOTICE, encoding="utf-8")
+            (destination / "LICENSE.txt").write_text(
+                _LICENCE_NOTICE, encoding="utf-8", newline="\n"
+            )
         except PseudoImportError:
             raise
         except (

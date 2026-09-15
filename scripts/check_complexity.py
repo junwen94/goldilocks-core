@@ -163,7 +163,7 @@ def main() -> int:
             }
     else:
         sources = {
-            path.relative_to(ROOT / "src").as_posix(): path.read_text()
+            path.relative_to(ROOT / "src").as_posix(): path.read_text(encoding="utf-8")
             for path in (ROOT / "src" / PACKAGE).rglob("*.py")
         }
     reports = analyze(sources)

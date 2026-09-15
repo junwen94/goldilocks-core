@@ -17,7 +17,9 @@ def make_pair() -> Structure:
 
 def test_atom_features_from_structure_looks_up_embeddings(tmp_path) -> None:
     atom_init = tmp_path / "atom_init.json"
-    atom_init.write_text(json.dumps({"14": [1.0, 2.0, 3.0]}))  # Si = 14
+    atom_init.write_text(
+        json.dumps({"14": [1.0, 2.0, 3.0]}), encoding="utf-8"
+    )  # Si = 14
 
     features = atom_features_from_structure(make_pair(), str(atom_init))
 
@@ -26,7 +28,7 @@ def test_atom_features_from_structure_looks_up_embeddings(tmp_path) -> None:
 
 def test_atom_features_missing_element_raises(tmp_path) -> None:
     atom_init = tmp_path / "atom_init.json"
-    atom_init.write_text(json.dumps({"14": [1.0]}))  # no oxygen
+    atom_init.write_text(json.dumps({"14": [1.0]}), encoding="utf-8")  # no oxygen
     structure = Structure(Lattice.cubic(4.0), ["O"], [[0.0, 0.0, 0.0]])
 
     with pytest.raises(ValueError, match="No atom embedding"):

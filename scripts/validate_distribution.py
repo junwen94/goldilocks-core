@@ -43,7 +43,9 @@ def main() -> int:
     args = parser.parse_args()
 
     project = tomllib.loads(
-        (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+        (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
     )["project"]
     wheels = tuple(args.dist_dir.glob("*.whl"))
     source_archives = tuple(args.dist_dir.glob("*.tar.gz"))

@@ -52,7 +52,7 @@ def test_document_python_blocks_run(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     namespace: dict[str, object] = {}
-    for index, body in enumerate(_python_blocks(path.read_text())):
+    for index, body in enumerate(_python_blocks(path.read_text(encoding="utf-8"))):
         exec(compile(body, f"<{path.name} block {index}>", "exec"), namespace)
 
 
@@ -68,14 +68,18 @@ def test_skill_workflow_publishes_recommended_grid(
 ) -> None:
     path = SKILL_REFERENCES / "workflows.md"
     namespace: dict[str, object] = {}
-    for index, body in enumerate(_python_blocks(path.read_text())):
+    for index, body in enumerate(_python_blocks(path.read_text(encoding="utf-8"))):
         exec(compile(body, f"<{path.name} block {index}>", "exec"), namespace)
 
-    manifest = json.loads((tmp_path / "run-dir" / "goldilocks.json").read_text())
+    manifest = json.loads(
+        (tmp_path / "run-dir" / "goldilocks.json").read_text(encoding="utf-8")
+    )
     assert manifest["records"]["analysis"]["reduced_formula"] == "Si"
     assert manifest["records"]["k_points"]["grid"] == [4, 4, 4]
     assert (
-        (tmp_path / "run-dir" / "inputs" / "qe.in").read_text().startswith("&CONTROL\n")
+        (tmp_path / "run-dir" / "inputs" / "qe.in")
+        .read_text(encoding="utf-8")
+        .startswith("&CONTROL\n")
     )
 
 
@@ -84,7 +88,7 @@ def test_skill_scf_extraction_reads_selected_scientific_values(
 ) -> None:
     path = SKILL_REFERENCES / "qe-scf-template.md"
     namespace: dict[str, object] = {}
-    for index, body in enumerate(_python_blocks(path.read_text())):
+    for index, body in enumerate(_python_blocks(path.read_text(encoding="utf-8"))):
         exec(compile(body, f"<{path.name} block {index}>", "exec"), namespace)
 
     assert namespace["elements"] == ("Si",)

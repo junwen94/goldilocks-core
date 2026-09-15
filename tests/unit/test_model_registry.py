@@ -216,7 +216,7 @@ size = 1
 
 def test_incomplete_registry_fails_at_missing_field(tmp_path: Path) -> None:
     registry = tmp_path / "models.toml"
-    registry.write_text("[defaults.kpoints]\nname = 'incomplete'\n")
+    registry.write_text("[defaults.kpoints]\nname = 'incomplete'\n", encoding="utf-8")
 
     with pytest.raises(KeyError):
         load_default_qrf_config(registry)

@@ -4,6 +4,7 @@ import os
 import random
 import re
 import shutil
+import sys
 import threading
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -89,7 +90,7 @@ def test_verify_detects_changed_and_extra_files(tmp_path: Path) -> None:
         store.verify("models/example", "1")
 
     installed.path("data/payload.bin").write_bytes(b"payload")
-    (installed.root / "extra").write_text("unexpected")
+    (installed.root / "extra").write_text("unexpected", encoding="utf-8")
     with pytest.raises(AssetCorrupt, match="file set"):
         store.verify("models/example", "1")
 
@@ -143,6 +144,7 @@ def test_install_repairs_a_corrupt_asset(tmp_path: Path) -> None:
     assert store.status("models/example", "1") == "installed"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX fifo fixture")
 def test_install_repairs_non_directory_asset_paths(tmp_path: Path) -> None:
     source = tmp_path / "source.bin"
     source.write_bytes(b"payload")
@@ -150,7 +152,7 @@ def test_install_repairs_non_directory_asset_paths(tmp_path: Path) -> None:
     store.root.mkdir()
     asset_id_path = store.root / "models" / "example"
     asset_id_path.parent.mkdir()
-    asset_id_path.write_text("corrupt")
+    asset_id_path.write_text("corrupt", encoding="utf-8")
 
     installed = store.install(source_spec(source))
 
@@ -220,6 +222,7 @@ def test_process_concurrent_installers_publish_one_valid_asset(
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX fifo fixture")
 def test_verify_rejects_non_regular_installed_paths(tmp_path: Path) -> None:
     source = tmp_path / "source.bin"
     source.write_bytes(b"payload")

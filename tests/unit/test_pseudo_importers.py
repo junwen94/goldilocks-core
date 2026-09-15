@@ -125,8 +125,8 @@ def install_sssp_fixture(
     }
     if sidecar_functional is not None:
         facts["functional"] = sidecar_functional
-    sidecar.write_text(json.dumps({"Si": facts}))
-    licence.write_text("SSSP fixture licence\n")
+    sidecar.write_text(json.dumps({"Si": facts}), encoding="utf-8")
+    licence.write_text("SSSP fixture licence\n", encoding="utf-8")
     spec = AssetSpec(
         "pseudopotentials/sssp-fixture",
         "1",
@@ -156,7 +156,7 @@ def test_pseudodojo_normalizes_reports_and_verified_upfs(tmp_path: Path) -> None
     assert metadata[0].cutoffs["ecutrho_ry"] == 160.0
     assert metadata[0].table_id == "pseudopotentials/pseudodojo-fixture"
     assert not list(installed.root.rglob("*.tgz"))
-    assert "CC BY 4.0" in installed.path("LICENSE.txt").read_text()
+    assert "CC BY 4.0" in installed.path("LICENSE.txt").read_text(encoding="utf-8")
 
 
 def test_pseudodojo_decodes_serialized_lda_functional(tmp_path: Path) -> None:
@@ -183,7 +183,10 @@ def test_sssp_normalizes_sidecar_and_verified_upfs(tmp_path: Path) -> None:
     assert metadata[0].cutoffs["ecutrho_ry"] == 120.0
     assert metadata[0].table_id == "pseudopotentials/sssp-fixture"
     assert not list(installed.root.rglob("*.tar.gz"))
-    assert installed.path("LICENSE.txt").read_text() == "SSSP fixture licence\n"
+    assert (
+        installed.path("LICENSE.txt").read_text(encoding="utf-8")
+        == "SSSP fixture licence\n"
+    )
 
 
 def test_sssp_preserves_nonrelativistic_upf_provenance(tmp_path: Path) -> None:

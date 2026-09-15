@@ -261,7 +261,7 @@ def test_automatic_directory_allocation_uses_occupancy_and_is_concurrency_safe(
     assert {Path(item["path"]).name for item in publications} == {
         *(f"goldilocks_out_{index}" for index in range(4, 12))
     }
-    assert (tmp_path / "goldilocks_out").read_text() == "occupied"
+    assert (tmp_path / "goldilocks_out").read_text(encoding="utf-8") == "occupied"
     assert (tmp_path / "goldilocks_out_2").is_symlink()
 
 
@@ -362,7 +362,9 @@ def test_installed_pseudopotentials_are_snapshotted_before_publication(
     pseudo_source.write_bytes(pseudo_bytes)
     pseudo_url = pseudo_source.as_uri()
     licence_source = source_root / "LICENSE.txt"
-    licence_source.write_text("Installed exact licence\n", encoding="utf-8")
+    licence_source.write_text(
+        "Installed exact licence\n", encoding="utf-8", newline="\n"
+    )
     table_manifest = source_root / "pseudo-table.json"
     registry = tmp_path / "pseudos.toml"
     registry.write_text(

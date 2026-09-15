@@ -20,7 +20,9 @@ def test_registry_declares_complete_provider_assets() -> None:
         "pseudopotentials",
         "metadata",
     }
-    assert all("pseudo-dojo.org" in file.url for file in dojo.asset.files)
+    assert all(
+        file.url.startswith("https://www.pseudo-dojo.org/") for file in dojo.asset.files
+    )
     assert dojo.asset.preparation_revision == "2"
 
     sssp = tables["sssp-pbe-efficiency-sr"]
@@ -77,7 +79,8 @@ url = "file:///tmp/pseudos.tgz"
 role = "metadata"
 path = "source/metadata.json"
 url = "file:///tmp/metadata.json"
-""".strip()
+""".strip(),
+        encoding="utf-8",
     )
 
     with pytest.raises(InvalidPseudoRegistry, match="extra: unexpected"):

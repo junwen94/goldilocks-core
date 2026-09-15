@@ -81,7 +81,9 @@ def write_table_manifest(
         "entries": sorted(entries, key=lambda entry: entry["element"]),
     }
     (destination / TABLE_MANIFEST).write_text(
-        json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(document, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
     )
 
 

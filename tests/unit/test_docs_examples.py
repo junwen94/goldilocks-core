@@ -53,7 +53,7 @@ def _cli_vocabulary() -> tuple[frozenset[str], frozenset[str]]:
 
 def test_doc_links_resolve() -> None:
     for path in DOC_FILES:
-        for match in _DOC_LINK.finditer(path.read_text()):
+        for match in _DOC_LINK.finditer(path.read_text(encoding="utf-8")):
             target = match.group(1)
             resolved = (path.parent / target).resolve()
             assert resolved.is_file(), (
@@ -66,7 +66,9 @@ def test_doc_links_resolve() -> None:
     [
         pytest.param(path, index, language, body, id=f"{path.name}#{index}")
         for path in DOC_FILES
-        for index, (language, body) in enumerate(_blocks(path.read_text()))
+        for index, (language, body) in enumerate(
+            _blocks(path.read_text(encoding="utf-8"))
+        )
     ],
 )
 def test_fenced_blocks(path: Path, index: int, language: str, body: str) -> None:
