@@ -118,8 +118,7 @@ def _no_op() -> None:
 
 def _report_alive(sender, diagnostic: bool) -> None:
     if diagnostic:
-        # [DEBUG-w32m] temporary diagnostic: report the master env it saw
-        sender.send(f"diag: master env={os.environ.get(workers.MASTER_PID_ENV)!r}")
+        sender.send("starting")
     workers._die_with_master()
     sender.send("alive")
     sender.close()
@@ -134,7 +133,7 @@ def test_die_with_master_keeps_worker_whose_master_is_alive(monkeypatch) -> None
     process.start()
     sender.close()
     assert receiver.poll(timeout=30)
-    assert receiver.recv().startswith("diag:")
+    assert receiver.recv() == "starting"
     assert receiver.recv() == "alive"
     process.join(timeout=30)
     assert process.exitcode == 0
