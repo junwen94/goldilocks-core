@@ -36,8 +36,8 @@ def test_load_pseudo_metadata_parses_only_upfs_under_explicit_root(
     nested = tmp_path / "operator" / "pseudos"
     nested.mkdir(parents=True)
     path = nested / "Si.custom.UPF"
-    path.write_text(make_upf())
-    (nested / "notes.txt").write_text("not a pseudopotential")
+    path.write_text(make_upf(), encoding="utf-8")
+    (nested / "notes.txt").write_text("not a pseudopotential", encoding="utf-8")
 
     metadata = load_pseudo_metadata(tmp_path)
 
@@ -54,7 +54,7 @@ def test_load_pseudo_metadata_parses_only_upfs_under_explicit_root(
 
 def test_sibling_dojo_report_supplies_exact_filename_cutoffs(tmp_path: Path) -> None:
     upf = tmp_path / "Si.upf"
-    upf.write_text(make_upf())
+    upf.write_text(make_upf(), encoding="utf-8")
     digest = hashlib.md5(upf.read_bytes()).hexdigest()
     (tmp_path / "Si.djrepo").write_text(
         json.dumps(
@@ -67,7 +67,8 @@ def test_sibling_dojo_report_supplies_exact_filename_cutoffs(tmp_path: Path) -> 
                     "high": {"ecut": 20},
                 },
             }
-        )
+        ),
+        encoding="utf-8",
     )
 
     metadata = load_pseudo_metadata(tmp_path)[0]
@@ -80,7 +81,7 @@ def test_sibling_dojo_report_supplies_exact_filename_cutoffs(tmp_path: Path) -> 
 
 
 def test_mismatched_dojo_report_is_rejected(tmp_path: Path) -> None:
-    (tmp_path / "Si.upf").write_text(make_upf())
+    (tmp_path / "Si.upf").write_text(make_upf(), encoding="utf-8")
     (tmp_path / "Si.djrepo").write_text(
         json.dumps(
             {
@@ -92,7 +93,8 @@ def test_mismatched_dojo_report_is_rejected(tmp_path: Path) -> None:
                     "high": {"ecut": 20},
                 },
             }
-        )
+        ),
+        encoding="utf-8",
     )
 
     with pytest.raises(PseudoImportError, match="does not match"):
@@ -101,7 +103,7 @@ def test_mismatched_dojo_report_is_rejected(tmp_path: Path) -> None:
 
 def test_multiple_exact_cutoff_sidecars_are_ambiguous(tmp_path: Path) -> None:
     upf = tmp_path / "Si.upf"
-    upf.write_text(make_upf())
+    upf.write_text(make_upf(), encoding="utf-8")
     digest = hashlib.md5(upf.read_bytes()).hexdigest()
     (tmp_path / "Si.djrepo").write_text(
         json.dumps(
@@ -114,7 +116,8 @@ def test_multiple_exact_cutoff_sidecars_are_ambiguous(tmp_path: Path) -> None:
                     "high": {"ecut": 20},
                 },
             }
-        )
+        ),
+        encoding="utf-8",
     )
     (tmp_path / "sssp.json").write_text(
         json.dumps(
@@ -127,7 +130,8 @@ def test_multiple_exact_cutoff_sidecars_are_ambiguous(tmp_path: Path) -> None:
                     "cutoff_rho": 140,
                 }
             }
-        )
+        ),
+        encoding="utf-8",
     )
 
     with pytest.raises(AmbiguousCutoffMetadata, match="multiple cutoff records"):
@@ -135,9 +139,9 @@ def test_multiple_exact_cutoff_sidecars_are_ambiguous(tmp_path: Path) -> None:
 
 
 def test_unrelated_json_does_not_supply_cutoffs(tmp_path: Path) -> None:
-    (tmp_path / "Si.upf").write_text(make_upf())
+    (tmp_path / "Si.upf").write_text(make_upf(), encoding="utf-8")
     (tmp_path / "wrong.json").write_text(
-        json.dumps({"Si": {"filename": "Other.upf", "cutoff_wfc": 1}})
+        json.dumps({"Si": {"filename": "Other.upf", "cutoff_wfc": 1}}), encoding="utf-8"
     )
 
     metadata = load_pseudo_metadata(tmp_path)[0]

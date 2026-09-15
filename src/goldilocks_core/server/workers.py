@@ -215,14 +215,17 @@ def _asset_not_installed_type() -> type:
 def _cgroup_cpu_quota(root: Path = CGROUP_ROOT) -> int | None:
     v2 = root / "cpu.max"
     if v2.is_file():
-        fields = v2.read_text().split()
+        fields = v2.read_text(encoding="utf-8").split()
         if len(fields) != 2 or fields[0] == "max":
             return None
         return _quota_to_cpus(int(fields[0]), int(fields[1]))
     quota_path = root / "cpu" / "cpu.cfs_quota_us"
     period_path = root / "cpu" / "cpu.cfs_period_us"
     if quota_path.is_file() and period_path.is_file():
-        return _quota_to_cpus(int(quota_path.read_text()), int(period_path.read_text()))
+        return _quota_to_cpus(
+            int(quota_path.read_text(encoding="utf-8")),
+            int(period_path.read_text(encoding="utf-8")),
+        )
     return None
 
 
@@ -235,11 +238,11 @@ def _quota_to_cpus(quota: int, period: int) -> int | None:
 def _cgroup_memory_limit_bytes(root: Path = CGROUP_ROOT) -> int | None:
     v2 = root / "memory.max"
     if v2.is_file():
-        value = v2.read_text().strip()
+        value = v2.read_text(encoding="utf-8").strip()
         return None if value == "max" else int(value)
     v1 = root / "memory" / "memory.limit_in_bytes"
     if v1.is_file():
-        value = int(v1.read_text())
+        value = int(v1.read_text(encoding="utf-8"))
         return None if value >= 1 << 60 else value
     return None
 

@@ -57,7 +57,7 @@ def test_qrf_resources_resolve_installed_assets_offline(
     checkpoint = tmp_path / "is_metal.ckpt"
     checkpoint.write_bytes(b"checkpoint")
     atom_init = tmp_path / "atom_init.json"
-    atom_init.write_text("{}")
+    atom_init.write_text("{}", encoding="utf-8")
     store = AssetStore(tmp_path / "assets")
     qrf_asset = AssetSpec(
         "models/qrf-kpoints",
@@ -92,7 +92,7 @@ def test_qrf_resources_resolve_installed_assets_offline(
 
     assert resources.model == {"kind": "qrf"}
     assert resources.metal_model == {"checkpoint": b"checkpoint"}
-    assert Path(resources.atom_init).read_text() == "{}"
+    assert Path(resources.atom_init).read_text(encoding="utf-8") == "{}"
 
 
 def test_explicit_local_resources_bypass_asset_store(
@@ -103,7 +103,7 @@ def test_explicit_local_resources_bypass_asset_store(
     checkpoint = tmp_path / "checkpoint"
     checkpoint.write_bytes(b"local checkpoint")
     atom_init = tmp_path / "atom_init.json"
-    atom_init.write_text("{}")
+    atom_init.write_text("{}", encoding="utf-8")
     config = replace(
         load_default_qrf_config(),
         model=local_model(model_path),

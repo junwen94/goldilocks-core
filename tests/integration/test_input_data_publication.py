@@ -261,7 +261,7 @@ def test_automatic_directory_allocation_uses_occupancy_and_is_concurrency_safe(
     assert {Path(item["path"]).name for item in publications} == {
         *(f"goldilocks_out_{index}" for index in range(4, 12))
     }
-    assert (tmp_path / "goldilocks_out").read_text() == "occupied"
+    assert (tmp_path / "goldilocks_out").read_text(encoding="utf-8") == "occupied"
     assert (tmp_path / "goldilocks_out_2").is_symlink()
 
 

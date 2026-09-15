@@ -16,7 +16,9 @@ def main() -> int:
     args = parser.parse_args()
 
     version = tomllib.loads(
-        (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+        (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
     )["project"]["version"]
     expected = f"v{version}"
     if args.tag != expected:

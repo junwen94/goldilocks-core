@@ -42,52 +42,54 @@ def test_plan_workers_ignores_nonpositive_cost() -> None:
 
 
 def test_cgroup_v2_cpu_quota_converts_to_cpus(tmp_path) -> None:
-    (tmp_path / "cpu.max").write_text("200000 100000\n")
+    (tmp_path / "cpu.max").write_text("200000 100000\n", encoding="utf-8")
     assert workers._cgroup_cpu_quota(tmp_path) == 2
 
 
 def test_cgroup_v2_cpu_quota_rounds_partial_cpus_up(tmp_path) -> None:
-    (tmp_path / "cpu.max").write_text("150000 100000\n")
+    (tmp_path / "cpu.max").write_text("150000 100000\n", encoding="utf-8")
     assert workers._cgroup_cpu_quota(tmp_path) == 2
 
 
 def test_cgroup_v2_unlimited_cpu_quota_is_no_limit(tmp_path) -> None:
-    (tmp_path / "cpu.max").write_text("max 100000\n")
+    (tmp_path / "cpu.max").write_text("max 100000\n", encoding="utf-8")
     assert workers._cgroup_cpu_quota(tmp_path) is None
 
 
 def test_cgroup_v1_cpu_quota_converts_to_cpus(tmp_path) -> None:
     (tmp_path / "cpu").mkdir()
-    (tmp_path / "cpu" / "cpu.cfs_quota_us").write_text("300000\n")
-    (tmp_path / "cpu" / "cpu.cfs_period_us").write_text("100000\n")
+    (tmp_path / "cpu" / "cpu.cfs_quota_us").write_text("300000\n", encoding="utf-8")
+    (tmp_path / "cpu" / "cpu.cfs_period_us").write_text("100000\n", encoding="utf-8")
     assert workers._cgroup_cpu_quota(tmp_path) == 3
 
 
 def test_cgroup_v1_disabled_quota_is_no_limit(tmp_path) -> None:
     (tmp_path / "cpu").mkdir()
-    (tmp_path / "cpu" / "cpu.cfs_quota_us").write_text("-1\n")
-    (tmp_path / "cpu" / "cpu.cfs_period_us").write_text("100000\n")
+    (tmp_path / "cpu" / "cpu.cfs_quota_us").write_text("-1\n", encoding="utf-8")
+    (tmp_path / "cpu" / "cpu.cfs_period_us").write_text("100000\n", encoding="utf-8")
     assert workers._cgroup_cpu_quota(tmp_path) is None
 
 
 def test_cgroup_memory_limit_placeholder_is_no_limit(tmp_path) -> None:
-    (tmp_path / "memory.max").write_text("max\n")
+    (tmp_path / "memory.max").write_text("max\n", encoding="utf-8")
     assert workers._cgroup_memory_limit_bytes(tmp_path) is None
 
 
 def test_cgroup_memory_limit_reads_bytes(tmp_path) -> None:
-    (tmp_path / "memory.max").write_text("4294967296\n")
+    (tmp_path / "memory.max").write_text("4294967296\n", encoding="utf-8")
     assert workers._cgroup_memory_limit_bytes(tmp_path) == 4 * GIB
 
 
 def test_cgroup_v1_huge_limit_is_no_limit(tmp_path) -> None:
     (tmp_path / "memory").mkdir()
-    (tmp_path / "memory" / "memory.limit_in_bytes").write_text(f"{1 << 63}\n")
+    (tmp_path / "memory" / "memory.limit_in_bytes").write_text(
+        f"{1 << 63}\n", encoding="utf-8"
+    )
     assert workers._cgroup_memory_limit_bytes(tmp_path) is None
 
 
 def test_memory_budget_takes_the_smallest_limit(tmp_path, monkeypatch) -> None:
-    (tmp_path / "memory.max").write_text(f"{4 * GIB}\n")
+    (tmp_path / "memory.max").write_text(f"{4 * GIB}\n", encoding="utf-8")
     monkeypatch.setattr(
         workers, "_available_memory_bytes", lambda: 100 * GIB, raising=True
     )

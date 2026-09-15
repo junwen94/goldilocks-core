@@ -110,7 +110,7 @@ def test_structure_file_to_publication_preserves_inputs_and_provenance(
     )
 
     generated_path = destination / "inputs" / "qe.in"
-    manifest = json.loads((destination / "goldilocks.json").read_text())
+    manifest = json.loads((destination / "goldilocks.json").read_text(encoding="utf-8"))
 
     assert generated_path.read_bytes() == result.records[GeneratedFiles][0][
         "content"

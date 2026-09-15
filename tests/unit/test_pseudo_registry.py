@@ -77,7 +77,8 @@ url = "file:///tmp/pseudos.tgz"
 role = "metadata"
 path = "source/metadata.json"
 url = "file:///tmp/metadata.json"
-""".strip()
+""".strip(),
+        encoding="utf-8",
     )
 
     with pytest.raises(InvalidPseudoRegistry, match="extra: unexpected"):

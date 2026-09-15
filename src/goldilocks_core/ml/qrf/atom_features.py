@@ -6,7 +6,7 @@ from pymatgen.core.structure import Structure
 
 
 def load_atom_embeddings(atom_init_path: str) -> dict[str, list[float]]:
-    with open(atom_init_path) as handle:
+    with open(atom_init_path, encoding="utf-8") as handle:
         return json.load(handle)
 
 

@@ -126,7 +126,7 @@ def installed_pseudo_table(tmp_path) -> tuple[AssetStore, PseudoTable]:
             'functional="PBEsol" relativistic="scalar" '
             'z_valence="4.0"/></UPF>'
         )
-        upf.write_text(payload)
+        upf.write_text(payload, encoding="utf-8")
         write_table_manifest(
             destination,
             table,
@@ -260,7 +260,11 @@ def test_analyze_uses_the_installed_default_metallicity_model(
     )
     store = AssetStore(tmp_path / "assets")
     store.install(spec)
-    template = files("goldilocks_core.ml").joinpath("registry.toml").read_text()
+    template = (
+        files("goldilocks_core.ml")
+        .joinpath("registry.toml")
+        .read_text(encoding="utf-8")
+    )
     registry = tmp_path / "models.toml"
     registry.write_text(
         template.split("[defaults.kpoints.metallicity.asset]", 1)[0]
@@ -270,7 +274,8 @@ def test_analyze_uses_the_installed_default_metallicity_model(
             "\n[[defaults.kpoints.metallicity.asset.files]]\n"
             f"role = {asset.role!r}\npath = {asset.path!r}\nurl = {asset.url!r}\n"
             for asset in spec.files
-        )
+        ),
+        encoding="utf-8",
     )
     monkeypatch.setattr(metallicity, "load_metallicity_model", lambda path: object())
     monkeypatch.setattr(

@@ -19,7 +19,7 @@ def main() -> int:
     args = parser.parse_args()
 
     pyproject = Path("pyproject.toml")
-    current = tomllib.loads(pyproject.read_text())["project"]["version"]
+    current = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
     major, minor, patch = (int(part) for part in current.split("."))
     match args.target:
         case "major":
@@ -36,12 +36,12 @@ def main() -> int:
     updated, count = re.subn(
         r'(?m)^version = "[^"]+"$',
         f'version = "{new}"',
-        pyproject.read_text(),
+        pyproject.read_text(encoding="utf-8"),
         count=1,
     )
     if count != 1:
         parser.error("pyproject.toml has no single top-level version line")
-    pyproject.write_text(updated)
+    pyproject.write_text(updated, encoding="utf-8")
     subprocess.run(["uv", "lock"], check=True)
 
     tag = f"v{new}"

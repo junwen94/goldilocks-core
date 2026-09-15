@@ -312,7 +312,7 @@ def test_cli_local_model_publication_requires_explicit_legal_material(
     main()
     result = json.loads(capsys.readouterr().out)
     assert result["publication"]["path"] == str(destination)
-    manifest = json.loads((destination / "goldilocks.json").read_text())
+    manifest = json.loads((destination / "goldilocks.json").read_text(encoding="utf-8"))
     assert (
         manifest["records"]["k_points"]["provenance"]["data_source"] == "operator-kmesh"
     )
@@ -320,10 +320,12 @@ def test_cli_local_model_publication_requires_explicit_legal_material(
         (model["name"], model["version"], model["licence"])
         for model in manifest["runtime"]["models"]
     ] == [("operator-kmesh", "2026", "LicenseRef-Operator")]
-    assert (
-        destination / "licences" / "custom-kmesh-model.txt"
-    ).read_text() == "Operator redistribution terms.\n"
-    assert "Operator k-mesh model (2026)." in (destination / "CITATIONS.md").read_text()
+    assert (destination / "licences" / "custom-kmesh-model.txt").read_text(
+        encoding="utf-8"
+    ) == "Operator redistribution terms.\n"
+    assert "Operator k-mesh model (2026)." in (destination / "CITATIONS.md").read_text(
+        encoding="utf-8"
+    )
 
 
 @pytest.mark.parametrize(
