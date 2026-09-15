@@ -1,8 +1,8 @@
 # goldilocks-core
 
 Goldilocks recommends settings for density functional theory (DFT) calculations
-and generates Quantum ESPRESSO self-consistent field (SCF) input files from a
-crystal structure.
+and generates Quantum ESPRESSO input files (SCF, DOS, relaxation, and
+variable-cell relaxation) from a crystal structure.
 
 ## Try it
 
@@ -46,11 +46,12 @@ inputs for the bundled silicon structure:
 
 ```bash
 uv run goldilocks assets install default
-uv run goldilocks compute src/goldilocks_core/examples/structures/Si.cif --preset generate --out si-run
+uv run goldilocks run src/goldilocks_core/examples/structures/Si.cif --out si-run
 ```
 
-Open `si-run/inputs/qe.in` to see the input. The directory also contains the
-pseudopotentials, structures, and supporting data.
+Open `si-run/scf.in` to see the input. The directory also contains the
+pseudopotential file, a submission script, and `goldilocks.json` (full
+provenance for every setting).
 
 Treat the recommended settings as a starting point: review warnings and check
 convergence for your calculation. The [quickstart](docs/quickstart.md) explains
@@ -61,8 +62,8 @@ the output and how to run it.
 - [First calculation](docs/quickstart.md) — generate, check, and run an input.
 - [Python API](docs/tutorial.md) — use Goldilocks in a script.
 - [Recommendations](docs/science.md) — understand the choices and their limits.
-- [Pseudopotentials](docs/pseudopotentials.md) — choose a table or use your own
-  files.
+- [Pseudopotentials](docs/pseudopotentials.md) — choose a table and understand
+  automatic selection.
 - [CLI reference](docs/cli.md) — commands and options.
 - [Scientific conventions](docs/conventions.md) — units and numerical
   definitions.

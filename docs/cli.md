@@ -9,44 +9,65 @@ Replace `structure.cif` with your CIF or POSCAR:
 
 ```bash
 uv run goldilocks inspect structure.cif --json
-uv run goldilocks compute structure.cif --preset recommend --json
-uv run goldilocks compute structure.cif --preset generate --out silicon-run
+uv run goldilocks explain structure.cif --json
+uv run goldilocks run structure.cif --out silicon-run
 ```
 
-These inspect the structure, recommend settings, and write inputs, respectively.
-Use `uv run goldilocks --help` or a subcommand's `--help` for syntax.
+`inspect` reports structure metadata. `explain` runs analysis and every
+advisor, printing each decision and its source (`human`, `ml`, `llm`, or
+`heuristic`) — it never writes anything, even without `--json`. `run`
+generates a complete runnable input (Quantum ESPRESSO by default) and
+publishes it to `silicon-run` because `-o/--out` was given; omit `-o/--out`
+for a memory-only preview instead. Use `uv run goldilocks --help` or a
+subcommand's `--help` for full syntax.
 
-## Choose results
+`run` and `explain` share the same seven flags: the `structure` path,
+`--code`, `--task {scf_single_point,dos,relax,vc-relax}`, `--hpc`, `--set
+KEY=VALUE` (repeatable), `--config FILE.toml`, and `--json`; both also accept
+`--fetch-missing`, and only `run` additionally accepts `-o/--out`. `--task` is
+validated against the four listed choices; `--code` is passed through
+unchecked — only `quantum_espresso` is a registered code today, so an
+unrecognised `--code` silently produces a Quantum-ESPRESSO-shaped bundle
+instead of failing.
 
-Every `compute` requires one of:
+There is no single command that dumps the full capabilities payload (codes,
+tasks, facts, settings, pseudopotential tables, HPC profiles, models,
+warnings) any more. On the CLI, the closest equivalents are:
 
-| Option               | Results                                                             |
-| -------------------- | ------------------------------------------------------------------- |
-| `--preset recommend` | Analysis, parameter advice, k-points, and pseudopotential selection |
-| `--preset generate`  | Recommendations and complete calculation inputs                     |
-| `--outputs IDS`      | Selected records, such as `analysis,k_points`                       |
+- `uv run goldilocks settings --json` — every `--set`-able key, its type,
+  default, and sources (49 keys today).
+- `uv run goldilocks models --json` — installed pluggable ML models (always
+  `[]` today; see [Scientific controls](#scientific-controls)).
+- `uv run goldilocks assets status --json` — installed pseudopotential-table
+  and model assets.
 
-`uv run goldilocks capabilities --json` lists available tasks, presets, record
-IDs, models, tables, and defaults. `uv run goldilocks examples path` locates the
-bundled structures.
+The full payload is reachable only over HTTP (`GET /capabilities`) or the MCP
+`capabilities` tool; see [Serve HTTP](#serve-http) and
+[Serve local MCP](#serve-local-mcp). `uv run goldilocks examples path` locates
+the bundled example structures.
 
 ## Save output or print JSON
 
-| Option               | Output                                                   |
-| -------------------- | -------------------------------------------------------- |
-| `--out DIRECTORY`    | A new calculation directory                              |
-| `--archive FILE.zip` | The same contents in a ZIP                               |
-| `--no-out`           | Recommendations or inputs in memory, without publication |
+`explain` never writes anything, regardless of flags — it has no `-o/--out`.
+`run` writes only when you pass it:
 
-Choose at most one of these flags. Explicit destinations must not exist. Writing
-a directory or archive requires complete input data: use `--preset generate` or
-`--outputs dft_input_data`.
+| Flag                  | Output                                                        |
+| --------------------- | -------------------------------------------------------------- |
+| `-o/--out DIRECTORY`  | Publish a new calculation directory (must not already exist)   |
+| `-o/--out FILE.zip`   | Publish the same contents as a ZIP archive                     |
+| (omit `-o`/`--out`)   | Memory-only preview to stdout; nothing is written to disk      |
 
-Without an output flag, complete input data is written to `goldilocks_out`, then
-`goldilocks_out_1`, and so on. Recommendations alone do not create a directory.
+Explicit destinations must not already exist; `run` raises an error rather
+than overwrite one. Without `-o/--out`, `run` always builds the full bundle in
+memory and prints a preview listing each file's path and byte size — there is
+no auto-picked output directory (v1's `goldilocks_out`, `goldilocks_out_1`, …
+naming no longer exists in any form).
 
-`--json` prints structured results and warnings. Use `--no-out --json` when you
-want JSON without writing a calculation directory.
+`--json` changes the shape of `run`'s output rather than being combined with
+an output flag: without `-o/--out` it prints `{"files": [...], "records":
+{...}, "warnings": [...]}`; with `-o/--out` it prints `{"files": [...],
+"kind": "directory"|"archive", "path": "..."}`. `explain --json` prints
+`{"records": {...}, "warnings": [...]}`.
 
 ## Scientific controls
 
@@ -54,46 +75,34 @@ Defaults are Quantum ESPRESSO single-point SCF, PBEsol, and efficiency-tier
 pseudopotentials. See [scientific conventions](conventions.md) for numerical
 defaults and override rules.
 
-| Flag                                                     | Values or meaning                                           |
-| -------------------------------------------------------- | ----------------------------------------------------------- |
-| `--code`, `--task`                                       | Built-in values: `quantum_espresso`, `scf_single_point`     |
-| `--functional`                                           | Exchange-correlation functional                             |
-| `--pseudo-accuracy`                                      | `efficiency` or `precision`                                 |
-| `--pseudo-table ID`                                      | Choose a registered table                                   |
-| `--pseudo-root DIRECTORY`                                | Use local UPF files                                         |
-| `--pseudo-type`                                          | `NC`, `USPP`, or `PAW`                                      |
-| `--relativistic-mode`                                    | `scalar`, `full`, or `non-relativistic`                     |
-| `--k-grid NK1 NK2 NK3`                                   | Three positive integers                                     |
-| `--k-spacing`                                            | Positive spacing in Å⁻¹, using the VASP KSPACING convention |
-| `--smearing-type`                                        | `fixed`, `gaussian`, `mp`, or `cold`                        |
-| `--smearing-width-ry`                                    | Smearing width in Ry                                        |
-| `--spin-polarized`, `--spin-orbit-coupling`, `--use-vdw` | `true` or `false`                                           |
-| `--vdw-method`                                           | `d3`, `d3bj`, `ts`, or `mbd`                                |
-| `--conv-thr`                                             | Positive SCF threshold in Ry                                |
-| `--mixing-beta`                                          | Positive density-mixing factor                              |
-| `--electron-maxstep`                                     | Positive maximum number of SCF iterations                   |
+Every scientific parameter is reached through `--set KEY=VALUE` (repeatable)
+or `--config FILE.toml` (same `KEY=VALUE` pairs, TOML-format, merged the same
+way) — there are no dedicated per-parameter flags. `uv run goldilocks
+settings` (or `--json`) is the single source of truth for every override key,
+its type, default, and description; a selection of commonly used keys:
 
-Grid, smearing, spin, dispersion, and convergence overrides are optional. For
-table compatibility and local-file requirements, see
-[Pseudopotentials](pseudopotentials.md).
+| Setting                             | Meaning                                                              |
+| ------------------------------------ | --------------------------------------------------------------------- |
+| `functional`                        | Exchange-correlation functional (default `PBEsol`)                    |
+| `pseudo_table_id`                   | Pin a registered pseudopotential table id instead of automatic selection |
+| `k_grid`                            | Explicit Monkhorst-Pack mesh, e.g. `--set 'k_grid=[8,8,8]'`            |
+| `k_distance`                        | Target k-point spacing (heuristic default 0.15 for metals, 0.30 otherwise) |
+| `smearing_type`                     | Smearing function when `occupations=smearing` (default `cold`)        |
+| `degauss`                           | Smearing width in Ry (default 0.01)                                   |
+| `spin_polarized`, `spin_orbit_coupling` | Force spin polarization / spin-orbit coupling                     |
+| `use_vdw`, `method`                 | Force a dispersion correction; only `d3bj` is implemented today       |
+| `conv_thr`, `mixing_beta`, `electron_maxstep` | SCF energy-convergence threshold, density-mixing factor, max SCF iterations |
 
-`--model`, `--model-name`, and `--model-version` select and identify a local
-k-index model. For `generate`, also supply `--model-licence` (licence identifier),
-`--model-licence-file` (a UTF-8 file containing the full licence text), and
-`--model-citation` (citation text). All five metadata options require `--model`.
-Core refuses to publish a used local model without non-empty licence, licence
-text, and citation; it never supplies a default licence.
+Quote `--set` values that contain brackets or braces (e.g. `--set
+'k_grid=[8,8,8]'`) so the shell does not glob-expand them; array and object
+values must be valid JSON. See [Pseudopotentials](pseudopotentials.md) for how
+tables are chosen, pinned, and checked for compatibility.
 
-```bash
-uv run goldilocks compute Si.cif --preset generate --model model.joblib --model-name my-kmesh --model-version 1 --model-licence LicenseRef-Operator --model-licence-file MODEL-LICENSE.txt --model-citation "Operator model, version 1." --pseudo-root ./pseudos --out ./ready
-```
-
-In Python, pass `model_licence`, `model_licence_text`, and `model_citation` to
-`ComputeRequest.from_local(...)`, or supply
-`ModelSpec(..., licence="LicenseRef-Operator", licence_text=Path("MODEL-LICENSE.txt").read_text(encoding="utf-8"), citation="Operator model, version 1.")`
-as `CalculationDraft.kmesh_model`. These are trusted local configuration controls,
-not remote request options. Explicit `--k-grid` or `--k-spacing` bypasses model
-inference, so an unused model does not require publication material.
+Pluggable, local ML model selection through the CLI is not yet implemented in
+v2 (tracked as epic 11): `uv run goldilocks models` currently always reports
+no installed models, and there is no flag to point `run`/`explain` at a
+custom model file. Every setting above is produced by the built-in heuristic
+advisors.
 
 ## Install and check assets
 
@@ -107,8 +116,10 @@ Use a profile, asset ID, or table ID. `default` installs the two prediction
 models and a PBEsol efficiency PseudoDojo table; `workbench` installs all
 registered models and tables. `install` also repairs corrupt installations.
 
-`compute --fetch-missing` installs missing required dependencies and retries.
-See [asset storage](pseudopotentials.md#find-stored-assets) for locations.
+`run --fetch-missing` (or `explain --fetch-missing`) installs a missing
+pseudopotential table instead of failing, then retries; it does not apply to
+any other kind of missing dependency. See
+[asset storage](pseudopotentials.md#find-stored-assets) for locations.
 
 ## Serve HTTP
 
@@ -120,14 +131,15 @@ uv run --extra http goldilocks serve http
 The server defaults to **http://127.0.0.1:8000**. `--host` and `--port` change
 the address. `--static-root DIRECTORY` also serves a built Workbench.
 
-| Endpoint            | Purpose                                                      |
-| ------------------- | ------------------------------------------------------------ |
-| `GET /capabilities` | Available tasks, records, models, and tables                 |
-| `POST /inspect`     | Structure inspection                                         |
-| `POST /compute`     | Multipart result JSON and, for complete inputs, a ZIP        |
-| `GET /health`       | Process health                                               |
-| `GET /ready`        | Workbench asset readiness; 503 for missing or corrupt assets |
-| `GET /openapi.json` | Request and response schemas                                 |
+| Endpoint            | Purpose                                                                          |
+| ------------------- | --------------------------------------------------------------------------------- |
+| `GET /capabilities` | Codes, tasks, facts, settings, pseudopotential tables, HPC profiles, models, warnings |
+| `POST /inspect`     | Structure inspection (inline `structure_content`, not a path)                     |
+| `POST /explain`     | Analysis and advisor decisions only; never writes anything                        |
+| `POST /run`         | Generate a runnable input; `respond_with: "json"` (default) returns a JSON summary, `respond_with: "archive"` returns ZIP bytes |
+| `GET /health`       | Process health                                                                     |
+| `GET /ready`        | Asset readiness; 503 for missing or corrupt assets                                |
+| `GET /openapi.json` | Request and response schemas                                                      |
 
 Interactive API documentation is at `/docs`.
 
@@ -138,9 +150,10 @@ authentication; restrict network access with a firewall or authenticated reverse
 proxy before exposing it. Configure TLS and request limits there.
 
 HTTP and MCP accept inline structures and registered table IDs, not local
-structure paths, model locations, pseudopotential roots, or publication paths.
-Server operators control installed assets. HTTP returns ZIP bytes without
-writing calculation directories.
+structure paths or publication paths. Server operators control installed
+assets. `/run` never writes to the server's disk: on request it can return
+ZIP bytes directly (`respond_with: "archive"`) or a JSON summary (the
+default), but it always builds and serves the bundle in memory.
 
 ## Serve local MCP
 
@@ -150,8 +163,9 @@ Configure your MCP client to launch this command from the repository root:
 uv run --extra mcp goldilocks serve mcp
 ```
 
-The stdio tools are `capabilities`, `inspect_structure`, and `compute`. By
-default, complete inputs are written to an automatically named `goldilocks_out`
-directory in the server's working directory. Send `"output": {"kind": "memory"}`
-to keep results in memory. Choose the working directory and OS account
-carefully: clients can trigger these writes.
+The stdio tools are `capabilities`, `inspect_structure`, `explain`, and `run`.
+MCP's `run` tool never writes to the server's filesystem — it always returns
+only the published file list, every resolved decision (with its source), and
+a warnings array the caller must relay verbatim. To obtain actual file bytes,
+use the CLI (`goldilocks run ... -o/--out`) or the HTTP transport's `/run`
+endpoint with `respond_with: "archive"`.
