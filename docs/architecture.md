@@ -1,100 +1,93 @@
 # Architecture
 
-This page maps how the repository is organised and where a change belongs. Read
-it after the [quickstart](quickstart.md) or [Python tutorial](tutorial.md); it is
-the map, not the introduction. Build setup, checks, CI, and releases live in
-[Contributing](contributing.md); browser development lives in the
-[Workbench guide](../web/README.md).
+Core turns a crystal structure and a calculation intent into ready-to-run DFT
+input. A request states the structure, the calculation, and which records the
+caller wants; the package computes them as a graph of stages and can publish
+the assembled input as a directory or ZIP. This page describes the control
+flow, the built-in stage graph, and where code lives. Build setup, checks, CI,
+and releases are in [Contributing](contributing.md); the browser app is
+described in the [Workbench guide](../web/README.md).
 
-## Follow a request
+## Control flow
 
 ```mermaid
 flowchart TD
-    op["Operator: CLI · HTTP · MCP · Python"] --> request["CalculationDraft · ComputeRequest"]
+    draft["CalculationDraft<br/>structure source · intent · hints"] --> request["ComputeRequest<br/>preset or explicit record selection"]
     request --> service["Service.compute<br/>runtime/service.py"]
-    service --> io["io/structures.py<br/>source normalisation and inspection"]
-    io --> stages["Dispatcher and graph executor<br/>stage functions run in dependency order"]
-    stages --> result["ComputationResult<br/>records and warnings"]
-    result --> publish["Publisher<br/>output directory or ZIP (optional)"]
+    service --> normalize["normalize_structure<br/>io/structures.py"]
+    normalize --> context["build_context<br/>request-local CalculationResources"]
+    context --> execute["execute_graph<br/>runtime/graph.py"]
+    execute --> result["ComputationResult<br/>requested records and warnings"]
+    result --> publish["Publisher<br/>directory or ZIP, only when requested"]
 ```
 
-`Service` exposes three operations: `capabilities`, `inspect_structure`, and
-`compute`. It reuses a `Runtime` containing model backends and an asset store.
-The top-level `compute(ComputeRequest)` convenience creates and closes a service
-for one call unless a caller-owned runtime is supplied.
+1. The caller builds a `CalculationDraft` — structure source, calculation
+   intent, overrides, hints — and pairs it with a record selection: either a
+   preset (`recommend`, `generate`) or an explicit set of record types.
+2. `Dispatcher.compute` finds the handler registered for the task, resolves the
+   requested outputs, and validates the selection against the task's
+   `selectable_outputs`.
+3. `normalize_structure` runs the source through the same path used by
+   inspection. The result carries the normalized inspection, not the raw
+   source.
+4. The handler's `build_context` builds a request-local context — model
+   backends, pseudopotential source — from the request, the normalized
+   structure, and the shared `Runtime`.
+5. `execute_graph` resolves the requested outputs to stages, runs each stage
+   once in dependency order, and memoizes outputs. Cycles and missing
+   producers are rejected before any stage runs.
+6. `Dispatcher` assembles a `ComputationResult` holding only the requested
+   records plus warnings collected from the executed stages.
+7. If the caller passed an output target, `Service` publishes and attaches
+   publication metadata. Python calls publish nothing by default. CLI and MCP
+   default to an output directory; HTTP keeps the result in memory and returns
+   archive bytes separately.
 
-A compute request follows this path:
+## The built-in stage graph
 
-1. `CalculationDraft` holds the structure source, calculation intent, optional
-   overrides, and asset choices. `ComputeRequest` pairs it with a preset or
-   explicit record selection.
-2. `Dispatcher` finds the task handler by `intent.task` and resolves the
-   requested outputs.
-3. `io/structures.py` normalizes the source through the same path used by
-   inspection. The handler builds a request-local context from that structure,
-   request, and runtime.
-4. The graph executor runs the stages needed to produce the requested records,
-   once per stage and in dependency order.
-5. `Dispatcher` creates a `ComputationResult` with the requested records,
-   normalized draft, task revision, and warnings from all executed stages.
-6. If an output target is supplied, `Service` publishes complete input data
-   through `Publisher` and attaches publication metadata.
+`runtime/scf.py` declares `scf_single_point`. Each stage is a plain function
+with declared input and output types. In the diagram, an arrow points from a
+stage to a stage that consumes its output record.
 
-Python compute defaults to no publication. CLI and MCP adapters choose automatic
-directory publication by default. HTTP computes without an output target and
-builds ZIP response bytes separately from the same result.
-
-## Understand the built-in workflow
-
-`runtime/scf.py` declares the `scf_single_point` graph:
-
-```text
-Load -> Analyze -> Advise
-Load -> Kmesh
-Load + Advice -> Select
-Load + Advice + Select + Kmesh -> Generate
-Analysis + Advice + Kmesh + Select + Generate -> DFT Input Data
-```
-
-`recommend` selects analysis, advice, k-points, and pseudopotential selection.
-`generate` adds generated files and complete input data. They are presets within
-a task, not separate service operations.
-
-Stages are ordinary functions. Their outputs are keyed by types in a
-request-local dictionary; scientific records are plain dictionaries described by
-domain-owned `TypedDict` shapes. These types and named tuple aliases key the
-record map. The load stage supplies a pymatgen `Structure`. The result contains
-only selected records; warning collection can inspect intermediate outputs.
-
-Keep scientific decisions in their owning stages:
-
-- **Analyze** reports structure facts and estimated electronic character.
-- **Advise** recommends parameters with reasons and provenance.
-- **Kmesh** resolves an explicit grid, spacing, or model recommendation.
-- **Select** chooses concrete pseudopotentials satisfying the requirements.
-- **Generate** translates completed choices into target-code syntax.
-- **DFT Input Data** combines the records and immutable byte snapshots of
-  structures, generated files, and selected assets needed for publication.
-
-## Repository structure
+- `load_structure` — the normalized source as a pymatgen `Structure`.
+- `analyze` — structure facts and estimated electronic character.
+- `resolve_k_points` — the k-point grid, from operator hints or a model.
+- `advise` — provenance-backed calculation parameters.
+- `select_pseudopotentials` — one pseudopotential per element.
+- `generate_inputs` — target-code input files.
+- `assemble_dft_input_data` — complete trusted input data for publication.
 
 ```mermaid
 flowchart TD
-    core["src/goldilocks_core"]
-    core --> boundary["calculation.py · request.py · result.py<br/>operator contracts and records"]
-    core --> runtime["runtime/<br/>graph executor · dispatcher · service · models"]
-    core --> science["analysis.py · advice/ · kmesh/ · selection.py<br/>scientific decisions"]
-    core --> output["generation/ · input_data.py · publication.py<br/>rendered files and publication"]
-    core --> sources["io/<br/>structure sources and inspection"]
-    core --> assets["assets/ · ml/ · pseudo/<br/>asset store and registries"]
-    core --> shared["contracts/ · types.py · provenance.py<br/>shared shapes and vocabulary"]
-    core --> transports["cli/ · server/<br/>CLI, HTTP, and MCP adapters"]
-    web["web/<br/>Workbench browser app"] --> transports
-    tests["tests/ — unit · integration · physics · server"] -. exercises .-> core
+    load["load_structure<br/>Structure"] --> analyze["analyze<br/>StructureAnalysisRecord"]
+    load --> kpoints["resolve_k_points<br/>KPointSelection"]
+    load --> select["select_pseudopotentials<br/>SelectionRecord"]
+    analyze --> advise["advise<br/>ParameterAdvice"]
+    advise --> select
+    load --> generate["generate_inputs<br/>GeneratedFiles"]
+    advise --> generate
+    kpoints --> generate
+    select --> generate
+    analyze --> assemble["assemble_dft_input_data<br/>DftInputData"]
+    advise --> assemble
+    kpoints --> assemble
+    select --> assemble
+    generate --> assemble
 ```
 
-The module table below states each area's responsibility. Paths below are
-relative to `src/goldilocks_core/` unless stated otherwise.
+- `recommend` returns the analysis, advice, k-point, and selection records.
+- `generate` additionally runs `generate_inputs` and `assemble_dft_input_data`
+  and returns all six records.
+- Explicit selection can request any subset of `selectable_outputs`; the graph
+  runs only the stages those records need.
+
+Stage outputs are typed values in a request-local dictionary; scientific
+records are plain dictionaries described by domain-owned `TypedDict` shapes.
+Warning collection inspects intermediate outputs after execution.
+
+## Modules
+
+Paths are relative to `src/goldilocks_core/` unless stated otherwise.
 
 | Area                | Files and responsibility                                                                                                                                                                                                               |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
