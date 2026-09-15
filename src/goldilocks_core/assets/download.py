@@ -5,6 +5,7 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -50,7 +51,12 @@ def download(file: AssetFile, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     parsed = urlparse(file.url)
     if parsed.scheme == "file":
-        with Path(parsed.path).open("rb") as source, destination.open("xb") as target:
+        # url2pathname converts the URL path to a host path, stripping the
+        # leading slash before a Windows drive letter and unquoting escapes.
+        with (
+            Path(url2pathname(parsed.path)).open("rb") as source,
+            destination.open("xb") as target,
+        ):
             shutil.copyfileobj(source, target, length=_CHUNK_SIZE)
     else:
         with _session().get(
