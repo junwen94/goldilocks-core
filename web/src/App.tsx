@@ -42,7 +42,7 @@ function Workbench() {
   useEffect(() => {
     document
       .querySelector<HTMLMetaElement>('meta[name="theme-color"]')
-      ?.setAttribute("content", theme === "light" ? "#f0eee8" : "#10171b");
+      ?.setAttribute("content", theme === "light" ? "#ffffff" : "#242424");
   }, [theme]);
   const [workspaceView, setWorkspaceView] =
     useState<WorkspaceView>("structure");
