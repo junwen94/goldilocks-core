@@ -123,7 +123,7 @@ describe("Goldilocks Workbench", () => {
     expect(optionValues(table)).toEqual(["", pbe.id]);
   });
 
-  it("exposes all four workspace cards at once", async () => {
+  it("exposes all three workspace columns at once", async () => {
     renderApp(new CoreStub(Promise.resolve(capabilities)));
 
     expect(
@@ -134,9 +134,6 @@ describe("Goldilocks Workbench", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("region", { name: "Generated input files" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("region", { name: "Scientific facts" }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("separator")).not.toBeInTheDocument();
   });
@@ -253,7 +250,7 @@ describe("Goldilocks Workbench", () => {
     const { container } = renderApp(core, saveArchive);
 
     await openStructure(user, container);
-    await screen.findByText("K Sampling");
+    await screen.findByRole("button", { name: "Download (.zip)" });
     await user.click(within(calculationSetup()).getByText("Magnetic"));
     await user.selectOptions(screen.getByLabelText("spin polarized"), "true");
 
@@ -316,7 +313,7 @@ describe("Goldilocks Workbench", () => {
     const { container } = renderApp(core, vi.fn());
 
     await openStructure(user, container);
-    await screen.findByText("K Sampling");
+    await screen.findByRole("button", { name: "Download (.zip)" });
 
     await user.click(within(calculationSetup()).getByText("Magnetic"));
     await user.selectOptions(screen.getByLabelText("spin polarized"), "true");
@@ -326,13 +323,12 @@ describe("Goldilocks Workbench", () => {
     ).toHaveTextContent(
       "Settings changed — recomputing the recommendation automatically.",
     );
-    expect(screen.getByText("K Sampling")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Download (.zip)" }),
     ).toBeDisabled();
   });
 
-  it("computes a recommendation and renders tri-state scientific records alongside the structure", async () => {
+  it("computes a recommendation and merges resolved records into their advisor groups", async () => {
     const user = userEvent.setup();
     const core = new CoreStub(Promise.resolve(capabilities));
     core.inspectionResults = [Promise.resolve(inspection)];
@@ -340,12 +336,11 @@ describe("Goldilocks Workbench", () => {
     const { container } = renderApp(core);
 
     await openStructure(user, container);
+    // Every card is always mounted (one always-visible dashboard) --
+    // wait for the auto-computed content to actually land, rather than
+    // for a region to appear.
+    await screen.findByRole("button", { name: "Download (.zip)" });
 
-    // The region itself is always mounted now (one always-visible
-    // dashboard) -- wait for the auto-computed content to actually land
-    // in it, rather than for the region to appear.
-    const records = screen.getByRole("region", { name: "Scientific facts" });
-    await within(records).findByText("K Sampling");
     // Computing a recommendation doesn't navigate away from the
     // structure card.
     expect(
@@ -356,10 +351,17 @@ describe("Goldilocks Workbench", () => {
       structure_name: "Si.cif",
       task: "scf_single_point",
     });
-    expect(within(records).getByText("Cutoffs")).toBeInTheDocument();
-    expect(
-      screen.getByText(/will appear here automatically/),
-    ).toBeInTheDocument();
+
+    // The k_sampling/cutoffs/magnetic records (all advisor-tier) merge
+    // into their own settings-group accordion item rather than a
+    // separate global list -- expanding "K sampling" shows the actual
+    // resolved value alongside its override controls.
+    const calculation = calculationSetup();
+    await user.click(within(calculation).getByText("K sampling"));
+    // 0.15 (the resolved k_distance) uniquely identifies this record's
+    // own value merged into its group -- "Heuristic default" alone
+    // would be ambiguous, all three fixture records share that source.
+    expect(within(calculation).getByText("0.15")).toBeInTheDocument();
   });
 
   it("announces structured scientific warnings returned with a recommendation", async () => {

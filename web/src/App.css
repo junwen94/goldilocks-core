@@ -16,26 +16,25 @@
   border-radius: 6px;
 }
 
-/* Four equally-sized cards, one screen, no page scroll -- each card
- * scrolls its own body internally as a safety net (settings/records are
- * grouped into collapsed accordions precisely so that scroll is rarely
- * needed in the common case). */
+/* Three columns, mirroring goldilocks-core's own analysis -> advisors
+ * -> generation pipeline, one screen, no page scroll -- each column
+ * scrolls its own body internally as a safety net. */
 .workbench-grid {
   display: grid;
   grid-template-columns: 1fr;
-  grid-template-rows: repeat(4, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, 1fr));
   gap: 1rem;
   height: calc(100dvh - var(--app-header-height));
-  max-width: 90rem;
+  max-width: 100rem;
   margin-inline: auto;
   padding: 1rem;
   box-sizing: border-box;
 }
 
-@media (min-width: 64rem) {
+@media (min-width: 72rem) {
   .workbench-grid {
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: 1fr 1fr;
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: 1fr;
   }
 }
 
@@ -67,7 +66,7 @@
 }
 
 /* Every --card-accent below is checked at >=4.5:1 against white --
- * axe caught #e35437/#0f9488 (the original, brighter picks) failing at
+ * axe caught #e35437/#0f9488 (earlier, brighter picks) failing at
  * ~3.75:1 on the kicker-number text; these are darkened just enough to
  * clear AA while staying visually in the same red-orange/teal family. */
 .card-structure {
@@ -82,14 +81,11 @@
   --card-accent: #1e5df8;
 }
 
-.card-records {
-  --card-accent: #0f766e;
-}
-
 .structure-stage {
   position: relative;
-  flex: 1;
-  min-height: 0;
+  height: 20rem;
+  min-height: 20rem;
+  flex: 0 0 auto;
   overflow: hidden;
   background: var(--mantine-color-body);
 }
@@ -104,6 +100,7 @@
   }
 
   .structure-stage {
+    height: 16rem;
     min-height: 16rem;
   }
 }

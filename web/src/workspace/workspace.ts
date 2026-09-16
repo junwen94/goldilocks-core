@@ -54,6 +54,7 @@ export type WorkspaceAction =
   | { readonly type: "source.open"; readonly input: StructureInput }
   | {
       readonly type: "draft.patch";
+      readonly code?: string;
       readonly task?: CalcTask;
       readonly hpc?: string | null;
       /** Shallow-merged into the current overrides. A value of
@@ -229,6 +230,7 @@ export function createWorkspace(
     draftRevision += 1;
     const draft: CalculationDraft = {
       ...currentDraft,
+      ...("code" in action ? { code: action.code } : {}),
       ...("task" in action ? { task: action.task } : {}),
       ...("hpc" in action ? { hpc: action.hpc } : {}),
       overrides:

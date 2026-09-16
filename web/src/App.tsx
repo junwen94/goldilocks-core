@@ -8,7 +8,6 @@ import {
 
 import { CalculationCard } from "./cards/CalculationCard";
 import { GeneratedInputsCard } from "./cards/GeneratedInputsCard";
-import { ScientificRecordsCard } from "./cards/ScientificRecordsCard";
 import { StructureCard } from "./cards/StructureCard";
 import { AppHeader } from "./layout/AppHeader";
 import { FailureBanner } from "./status/FailureBanner";
@@ -74,7 +73,6 @@ function Workbench() {
         <StructureCard />
         <CalculationCard />
         <GeneratedInputsCard />
-        <ScientificRecordsCard />
       </main>
     </>
   );

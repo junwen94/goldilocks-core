@@ -1,6 +1,15 @@
-import { Group, Loader, Paper, Stack, Text, Title } from "@mantine/core";
+import {
+  Divider,
+  Group,
+  Loader,
+  Paper,
+  Stack,
+  Text,
+  Title,
+} from "@mantine/core";
 import { Atom } from "lucide-react";
 
+import { AnalysisSection } from "../analysis/AnalysisSection";
 import { StructureSourceControls } from "../controls/StructureSourceControls";
 import { StructureViewport } from "../viewer/StructureViewport";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
@@ -44,6 +53,12 @@ export function StructureCard() {
             <StructureViewport inspection={snapshot.inspection} />
           )}
         </div>
+        {snapshot.inspection === null ? null : (
+          <>
+            <Divider my="md" />
+            <AnalysisSection />
+          </>
+        )}
       </div>
     </Paper>
   );

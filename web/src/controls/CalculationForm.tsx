@@ -1,25 +1,28 @@
-import { useState } from "react";
 import {
   Accordion,
+  Badge,
   Checkbox,
   Fieldset,
+  Group,
   NativeSelect,
   NumberInput,
+  Paper,
   SimpleGrid,
   Stack,
   Text,
-  Textarea,
-  TextInput,
 } from "@mantine/core";
 
 import type {
   CalcTask,
-  Fact,
+  ExplainResult,
   PseudopotentialTable,
+  ResolvedField,
   Setting,
   StructureInspection,
 } from "../api/coreClient";
+import { ScientificRecord } from "../review/ScientificRecord";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
+import { OverrideControl } from "./OverrideControl";
 
 /** Groups whose overrides only make sense for a subset of tasks.
  * `capabilities.py`'s own `Setting.tasks` field is always `null` today
@@ -30,10 +33,16 @@ const GROUP_TASK_RELEVANCE: Readonly<Record<string, readonly CalcTask[]>> = {
   relax: ["relax", "vc-relax"],
 };
 
+const STATUS_COLORS: Readonly<Record<ResolvedField["status"], string>> = {
+  resolved: "green",
+  unavailable: "yellow",
+  blocked: "red",
+};
+
 export function CalculationForm() {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
-  const { draft, capabilities, inspection } = snapshot;
+  const { draft, capabilities, inspection, reviewed } = snapshot;
   if (draft === null || capabilities === null || inspection === null) {
     return null;
   }
@@ -59,6 +68,21 @@ export function CalculationForm() {
 
       <SimpleGrid cols={{ base: 1, xs: 2 }}>
         <NativeSelect
+          label="Code"
+          disabled={inspecting}
+          value={draft.code}
+          data={capabilities.codes.map((code) => ({
+            value: code.id,
+            label: code.name,
+          }))}
+          onChange={(event) => {
+            void workspace.dispatch({
+              type: "draft.patch",
+              code: event.currentTarget.value,
+            });
+          }}
+        />
+        <NativeSelect
           label="Task"
           disabled={inspecting}
           value={draft.task}
@@ -73,25 +97,26 @@ export function CalculationForm() {
             });
           }}
         />
-        <NativeSelect
-          label="HPC profile"
-          disabled={inspecting}
-          value={draft.hpc ?? ""}
-          data={[
-            { value: "", label: "Automatic" },
-            ...capabilities.hpc_profiles.map((profile) => ({
-              value: profile.id,
-              label: profile.name,
-            })),
-          ]}
-          onChange={(event) => {
-            void workspace.dispatch({
-              type: "draft.patch",
-              hpc: event.currentTarget.value || null,
-            });
-          }}
-        />
       </SimpleGrid>
+
+      <NativeSelect
+        label="HPC profile"
+        disabled={inspecting}
+        value={draft.hpc ?? ""}
+        data={[
+          { value: "", label: "Automatic" },
+          ...capabilities.hpc_profiles.map((profile) => ({
+            value: profile.id,
+            label: profile.name,
+          })),
+        ]}
+        onChange={(event) => {
+          void workspace.dispatch({
+            type: "draft.patch",
+            hpc: event.currentTarget.value || null,
+          });
+        }}
+      />
 
       <SimpleGrid cols={{ base: 1, xs: 2 }}>
         <NativeSelect
@@ -129,16 +154,11 @@ export function CalculationForm() {
       </SimpleGrid>
 
       <Accordion multiple transitionDuration={0}>
-        <FactsAccordionItem
-          facts={capabilities.facts}
-          overrides={overrides}
-          disabled={inspecting}
-          onChange={patchOverrides}
-        />
         <SettingsGroupItems
           settings={capabilities.settings}
           task={draft.task}
           overrides={overrides}
+          reviewed={reviewed}
           disabled={inspecting}
           onChange={patchOverrides}
         />
@@ -207,61 +227,31 @@ function PseudoTableControl({
   );
 }
 
-function FactsAccordionItem({
-  facts,
-  overrides,
-  disabled,
-  onChange,
-}: {
-  readonly facts: readonly Fact[];
-  readonly overrides: Readonly<Record<string, unknown>>;
-  readonly disabled: boolean;
-  readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
-}) {
-  if (facts.length === 0) return null;
-  return (
-    <Accordion.Item value="structure-facts">
-      <Accordion.Control>Structure facts</Accordion.Control>
-      <Accordion.Panel>
-        <Stack gap="sm">
-          {facts.map((fact) => (
-            <OverrideControl
-              key={fact.key}
-              meta={{
-                key: fact.key,
-                type: fact.type,
-                enum: fact.values ?? undefined,
-                unit: null,
-                description: fact.description,
-              }}
-              value={overrides[fact.key]}
-              disabled={disabled}
-              onChange={(value) => {
-                onChange({ [fact.key]: value });
-              }}
-            />
-          ))}
-        </Stack>
-      </Accordion.Panel>
-    </Accordion.Item>
-  );
-}
-
 function humanizeGroup(group: string): string {
   const spaced = group.replace(/_/g, " ");
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/** A settings group's own record key doesn't always equal the group
+ * name verbatim (`pseudo_table_id` the group vs `pseudo_table` the
+ * record, see recordGroups.ts) -- this is the one alias the advisors
+ * accordion needs to look its own resolved value up. */
+function recordKeyForGroup(group: string): string {
+  return group === "pseudo_table_id" ? "pseudo_table" : group;
 }
 
 function SettingsGroupItems({
   settings,
   task,
   overrides,
+  reviewed,
   disabled,
   onChange,
 }: {
   readonly settings: readonly Setting[];
   readonly task: CalcTask;
   readonly overrides: Readonly<Record<string, unknown>>;
+  readonly reviewed: ExplainResult | null;
   readonly disabled: boolean;
   readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
 }) {
@@ -286,167 +276,58 @@ function SettingsGroupItems({
 
   return (
     <>
-      {[...groups.entries()].map(([group, groupSettings]) => (
-        <Accordion.Item key={group} value={group}>
-          <Accordion.Control>{humanizeGroup(group)}</Accordion.Control>
-          <Accordion.Panel>
-            <Stack gap="sm">
-              {groupSettings.map((setting) =>
-                setting.key === "k_grid" ? (
-                  <KGridControl
-                    key={setting.key}
-                    value={overrides.k_grid}
-                    disabled={disabled}
-                    onChange={(value) => {
-                      onChange({ k_grid: value });
-                    }}
+      {[...groups.entries()].map(([group, groupSettings]) => {
+        const record = reviewed?.records[recordKeyForGroup(group)];
+        return (
+          <Accordion.Item key={group} value={group}>
+            <Accordion.Control>
+              <Group gap="xs" wrap="nowrap">
+                {record === undefined ? null : (
+                  <Badge
+                    size="xs"
+                    circle
+                    color={STATUS_COLORS[record.status]}
+                    aria-hidden="true"
                   />
-                ) : (
-                  <OverrideControl
-                    key={setting.key}
-                    meta={setting}
-                    value={overrides[setting.key]}
-                    disabled={disabled}
-                    onChange={(value) => {
-                      onChange({ [setting.key]: value });
-                    }}
-                  />
-                ),
-              )}
-            </Stack>
-          </Accordion.Panel>
-        </Accordion.Item>
-      ))}
+                )}
+                <span>{humanizeGroup(group)}</span>
+              </Group>
+            </Accordion.Control>
+            <Accordion.Panel>
+              <Stack gap="sm">
+                {record === undefined ? null : (
+                  <Paper withBorder p="xs" bg="var(--mantine-color-default)">
+                    <ScientificRecord field={record} />
+                  </Paper>
+                )}
+                {groupSettings.map((setting) =>
+                  setting.key === "k_grid" ? (
+                    <KGridControl
+                      key={setting.key}
+                      value={overrides.k_grid}
+                      disabled={disabled}
+                      onChange={(value) => {
+                        onChange({ k_grid: value });
+                      }}
+                    />
+                  ) : (
+                    <OverrideControl
+                      key={setting.key}
+                      meta={setting}
+                      value={overrides[setting.key]}
+                      disabled={disabled}
+                      onChange={(value) => {
+                        onChange({ [setting.key]: value });
+                      }}
+                    />
+                  ),
+                )}
+              </Stack>
+            </Accordion.Panel>
+          </Accordion.Item>
+        );
+      })}
     </>
-  );
-}
-
-interface OverrideFieldMeta {
-  readonly key: string;
-  readonly type: string;
-  readonly enum?: readonly string[] | undefined;
-  readonly unit?: string | null;
-  readonly default?: unknown;
-  readonly description: string;
-}
-
-function fieldLabel(meta: OverrideFieldMeta): string {
-  const humanized = meta.key.replace(/_/g, " ");
-  return meta.unit ? `${humanized} · ${meta.unit}` : humanized;
-}
-
-/** `unknown`-safe stringification -- most override values are
- * primitives, but array/object-shaped ones (`k_grid`, `u_by_element`)
- * would otherwise stringify to the useless `"[object Object]"`. */
-function stringifyValue(value: unknown): string {
-  return typeof value === "object" && value !== null
-    ? JSON.stringify(value)
-    : String(value);
-}
-
-function automaticPlaceholder(meta: OverrideFieldMeta): string {
-  return meta.default === undefined
-    ? "Automatic"
-    : `Automatic (${stringifyValue(meta.default)})`;
-}
-
-function OverrideControl({
-  meta,
-  value,
-  disabled,
-  onChange,
-}: {
-  readonly meta: OverrideFieldMeta;
-  readonly value: unknown;
-  readonly disabled: boolean;
-  readonly onChange: (value: unknown) => void;
-}) {
-  const pinned = value !== undefined;
-  const label = fieldLabel(meta);
-
-  if (meta.type === "boolean") {
-    return (
-      <NativeSelect
-        label={label}
-        description={meta.description}
-        disabled={disabled}
-        value={pinned ? stringifyValue(value) : ""}
-        data={[
-          { value: "", label: automaticPlaceholder(meta) },
-          { value: "true", label: "On" },
-          { value: "false", label: "Off" },
-        ]}
-        onChange={(event) => {
-          const raw = event.currentTarget.value;
-          onChange(raw === "" ? undefined : raw === "true");
-        }}
-      />
-    );
-  }
-
-  if (meta.enum && meta.enum.length > 0) {
-    return (
-      <NativeSelect
-        label={label}
-        description={meta.description}
-        disabled={disabled}
-        value={pinned ? stringifyValue(value) : ""}
-        data={[
-          { value: "", label: automaticPlaceholder(meta) },
-          ...meta.enum.map((option) => ({ value: option, label: option })),
-        ]}
-        onChange={(event) => {
-          const raw = event.currentTarget.value;
-          onChange(raw === "" ? undefined : raw);
-        }}
-      />
-    );
-  }
-
-  if (meta.type === "integer" || meta.type === "number") {
-    return (
-      <NumberInput
-        label={label}
-        description={meta.description}
-        disabled={disabled}
-        placeholder={automaticPlaceholder(meta)}
-        value={pinned ? (value as number) : ""}
-        onChange={(raw) => {
-          if (raw === "") {
-            onChange(undefined);
-            return;
-          }
-          const parsed = Number(raw);
-          if (Number.isFinite(parsed)) onChange(parsed);
-        }}
-      />
-    );
-  }
-
-  if (meta.type === "string") {
-    return (
-      <TextInput
-        label={label}
-        description={meta.description}
-        disabled={disabled}
-        placeholder={automaticPlaceholder(meta)}
-        value={pinned ? stringifyValue(value) : ""}
-        onChange={(event) => {
-          const raw = event.currentTarget.value;
-          onChange(raw === "" ? undefined : raw);
-        }}
-      />
-    );
-  }
-
-  return (
-    <JsonOverrideControl
-      label={label}
-      description={meta.description}
-      disabled={disabled}
-      value={value}
-      onChange={onChange}
-    />
   );
 }
 
@@ -496,68 +377,5 @@ function KGridControl({
         ))}
       </SimpleGrid>
     </Fieldset>
-  );
-}
-
-function JsonOverrideControl({
-  label,
-  description,
-  disabled,
-  value,
-  onChange,
-}: {
-  readonly label: string;
-  readonly description: string;
-  readonly disabled: boolean;
-  readonly value: unknown;
-  readonly onChange: (value: unknown) => void;
-}) {
-  const [lastValue, setLastValue] = useState(value);
-  const [text, setText] = useState(
-    value === undefined ? "" : JSON.stringify(value),
-  );
-  const [error, setError] = useState<string | null>(null);
-  // Resync the editable text when `value` changes for a reason other than
-  // this control's own onChange (e.g. cleared elsewhere, structure
-  // reopened) -- adjusting state during render, not in an effect, per
-  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes.
-  if (value !== lastValue) {
-    setLastValue(value);
-    setText(value === undefined ? "" : JSON.stringify(value));
-    setError(null);
-  }
-
-  return (
-    <Stack gap={4}>
-      <Textarea
-        label={label}
-        description={`${description} (JSON)`}
-        disabled={disabled}
-        placeholder="Automatic"
-        autosize
-        minRows={1}
-        value={text}
-        onChange={(event) => {
-          const raw = event.currentTarget.value;
-          setText(raw);
-          if (raw.trim() === "") {
-            setError(null);
-            onChange(undefined);
-            return;
-          }
-          try {
-            onChange(JSON.parse(raw) as unknown);
-            setError(null);
-          } catch {
-            setError("Not valid JSON");
-          }
-        }}
-      />
-      {error === null ? null : (
-        <Text c="red" size="xs">
-          {error}
-        </Text>
-      )}
-    </Stack>
   );
 }
