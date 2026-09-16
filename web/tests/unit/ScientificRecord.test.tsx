@@ -89,16 +89,32 @@ describe("GeneratedInputReview", () => {
       wrapper: MantineProvider,
     });
 
-    // Files list alphabetically (goldilocks.json, scf.in,
-    // pseudo/Si.upf) -- the manifest itself is the default active tab.
+    // Files are ordered by their manifest role -- the rendered QE input
+    // first, then the pseudopotential -- each collapsed by default
+    // behind an accordion row rather than a tab.
     await waitFor(() => {
-      expect(screen.getByRole("tab", { name: "scf.in" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /scf\.in/ }),
+      ).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("tab", { name: "scf.in" }));
+    await user.click(screen.getByRole("button", { name: /scf\.in/ }));
 
     expect(
       screen.getByRole("region", { name: "Generated input scf.in" }),
     ).toHaveTextContent("&CONTROL");
     expect(screen.getByText("cccccccccc")).toBeInTheDocument();
+  });
+
+  it("shows a pseudopotential's entries instead of its raw file content", async () => {
+    const user = userEvent.setup();
+    const archive = buildArchive();
+    render(<GeneratedInputReview archive={archive} />, {
+      wrapper: MantineProvider,
+    });
+
+    await user.click(await screen.findByRole("button", { name: /Si\.upf/ }));
+
+    expect(screen.getByText("SHA-256")).toBeInTheDocument();
+    expect(screen.queryByText("UPF content")).not.toBeInTheDocument();
   });
 });

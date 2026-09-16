@@ -99,7 +99,10 @@ async function openStructure(
     name: "Choose a CIF or POSCAR structure",
   });
   await user.upload(structureInputElement(container), structureFile());
-  await screen.findByLabelText("Functional");
+  // Functional/pseudopotential table now live collapsed inside the
+  // advisors accordion, so they're not a reliable "form is ready"
+  // signal any more -- the always-visible Task selector is.
+  await screen.findByLabelText("Task");
 }
 
 describe("Goldilocks Workbench", () => {
@@ -115,10 +118,19 @@ describe("Goldilocks Workbench", () => {
     const { container } = renderApp(core);
 
     await openStructure(user, container);
-    const table = screen.getByLabelText("Pseudopotential table");
+    await user.click(
+      screen.getByRole("button", { name: "Pseudopotential table" }),
+    );
+    const table = screen.getByRole("combobox", {
+      name: "Pseudopotential table",
+    });
     expect(optionValues(table)).toEqual(["", pbesol.id, pbe.id]);
 
-    await user.selectOptions(screen.getByLabelText("Functional"), "PBE");
+    await user.click(screen.getByRole("button", { name: "Functional" }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Functional" }),
+      "PBE",
+    );
 
     expect(optionValues(table)).toEqual(["", pbe.id]);
   });
@@ -409,7 +421,12 @@ describe("Goldilocks Workbench", () => {
         structure_format: "cif",
       },
     ]);
-    const tableSelect = screen.getByLabelText("Pseudopotential table");
+    await user.click(
+      screen.getByRole("button", { name: "Pseudopotential table" }),
+    );
+    const tableSelect = screen.getByRole("combobox", {
+      name: "Pseudopotential table",
+    });
     expect(optionValues(tableSelect)).toEqual([
       "",
       ...capabilities.pseudopotential_tables.map(

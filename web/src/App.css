@@ -83,11 +83,12 @@
 
 .structure-stage {
   position: relative;
-  height: 20rem;
-  min-height: 20rem;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-height: 22rem;
   overflow: hidden;
   background: var(--mantine-color-body);
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-md);
 }
 
 @media (max-width: 47.5rem) {
@@ -100,6 +101,7 @@
   }
 
   .structure-stage {
+    flex: 0 0 auto;
     height: 16rem;
     min-height: 16rem;
   }

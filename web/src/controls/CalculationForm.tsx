@@ -51,8 +51,6 @@ export function CalculationForm() {
 
   const elements = uniqueElements(inspection);
   const overrides = draft.overrides;
-  const functionalOverride =
-    typeof overrides.functional === "string" ? overrides.functional : undefined;
 
   function patchOverrides(patch: Readonly<Record<string, unknown>>): void {
     void workspace.dispatch({ type: "draft.patch", overrides: patch });
@@ -118,47 +116,14 @@ export function CalculationForm() {
         }}
       />
 
-      <SimpleGrid cols={{ base: 1, xs: 2 }}>
-        <NativeSelect
-          label="Functional"
-          disabled={inspecting}
-          value={functionalOverride ?? ""}
-          data={[
-            { value: "", label: "Automatic" },
-            ...uniqueFunctionals(capabilities.pseudopotential_tables).map(
-              (functional) => ({ value: functional, label: functional }),
-            ),
-          ]}
-          onChange={(event) => {
-            const raw = event.currentTarget.value;
-            // A pinned table pinned under the old functional may no
-            // longer be a valid choice (and won't even appear in the
-            // now-refiltered dropdown) -- clear it rather than silently
-            // keep submitting a now-invisible override, matching how a
-            // pseudopotential-table pin has always been invalidated by
-            // changing the functional it was chosen under.
-            patchOverrides({
-              functional: raw === "" ? undefined : raw,
-              pseudo_table_id: undefined,
-            });
-          }}
-        />
-        <PseudoTableControl
-          tables={capabilities.pseudopotential_tables}
-          elements={elements}
-          functionalOverride={functionalOverride}
-          pinned={overrides.pseudo_table_id}
-          disabled={inspecting}
-          onChange={patchOverrides}
-        />
-      </SimpleGrid>
-
       <Accordion multiple transitionDuration={0}>
         <SettingsGroupItems
           settings={capabilities.settings}
           task={draft.task}
           overrides={overrides}
           reviewed={reviewed}
+          elements={elements}
+          pseudopotentialTables={capabilities.pseudopotential_tables}
           disabled={inspecting}
           onChange={patchOverrides}
         />
@@ -227,7 +192,57 @@ function PseudoTableControl({
   );
 }
 
+function FunctionalControl({
+  tables,
+  value,
+  disabled,
+  onChange,
+}: {
+  readonly tables: readonly PseudopotentialTable[];
+  readonly value: string | undefined;
+  readonly disabled: boolean;
+  readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
+}) {
+  return (
+    <NativeSelect
+      label="Functional"
+      disabled={disabled}
+      value={value ?? ""}
+      data={[
+        { value: "", label: "Automatic" },
+        ...uniqueFunctionals(tables).map((functional) => ({
+          value: functional,
+          label: functional,
+        })),
+      ]}
+      onChange={(event) => {
+        const raw = event.currentTarget.value;
+        // A pinned table pinned under the old functional may no
+        // longer be a valid choice (and won't even appear in the
+        // now-refiltered dropdown) -- clear it rather than silently
+        // keep submitting a now-invisible override, matching how a
+        // pseudopotential-table pin has always been invalidated by
+        // changing the functional it was chosen under.
+        onChange({
+          functional: raw === "" ? undefined : raw,
+          pseudo_table_id: undefined,
+        });
+      }}
+    />
+  );
+}
+
+/** `pseudo_table_id` is the settings group's internal name; the
+ * accordion header shows the same human label as the control it
+ * contains instead of a literal, ID-suffixed rendering of the group
+ * name. */
+const GROUP_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  pseudo_table_id: "Pseudopotential table",
+};
+
 function humanizeGroup(group: string): string {
+  const override = GROUP_DISPLAY_NAMES[group];
+  if (override !== undefined) return override;
   const spaced = group.replace(/_/g, " ");
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
@@ -245,6 +260,8 @@ function SettingsGroupItems({
   task,
   overrides,
   reviewed,
+  elements,
+  pseudopotentialTables,
   disabled,
   onChange,
 }: {
@@ -252,16 +269,13 @@ function SettingsGroupItems({
   readonly task: CalcTask;
   readonly overrides: Readonly<Record<string, unknown>>;
   readonly reviewed: ExplainResult | null;
+  readonly elements: readonly string[];
+  readonly pseudopotentialTables: readonly PseudopotentialTable[];
   readonly disabled: boolean;
   readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
 }) {
   const groups = new Map<string, Setting[]>();
   for (const setting of settings) {
-    // functional/pseudo_table_id are rendered above, next to the task
-    // selector, since they're the two most commonly tuned system knobs.
-    if (setting.key === "functional" || setting.key === "pseudo_table_id") {
-      continue;
-    }
     const relevantTasks = GROUP_TASK_RELEVANCE[setting.group];
     if (relevantTasks !== undefined && !relevantTasks.includes(task)) {
       continue;
@@ -273,6 +287,9 @@ function SettingsGroupItems({
       bucket.push(setting);
     }
   }
+
+  const functionalOverride =
+    typeof overrides.functional === "string" ? overrides.functional : undefined;
 
   return (
     <>
@@ -300,33 +317,90 @@ function SettingsGroupItems({
                     <ScientificRecord field={record} />
                   </Paper>
                 )}
-                {groupSettings.map((setting) =>
-                  setting.key === "k_grid" ? (
-                    <KGridControl
-                      key={setting.key}
-                      value={overrides.k_grid}
-                      disabled={disabled}
-                      onChange={(value) => {
-                        onChange({ k_grid: value });
-                      }}
-                    />
-                  ) : (
-                    <OverrideControl
-                      key={setting.key}
-                      meta={setting}
-                      value={overrides[setting.key]}
-                      disabled={disabled}
-                      onChange={(value) => {
-                        onChange({ [setting.key]: value });
-                      }}
-                    />
-                  ),
-                )}
+                <GroupBody
+                  group={group}
+                  groupSettings={groupSettings}
+                  elements={elements}
+                  pseudopotentialTables={pseudopotentialTables}
+                  functionalOverride={functionalOverride}
+                  overrides={overrides}
+                  disabled={disabled}
+                  onChange={onChange}
+                />
               </Stack>
             </Accordion.Panel>
           </Accordion.Item>
         );
       })}
+    </>
+  );
+}
+
+function GroupBody({
+  group,
+  groupSettings,
+  elements,
+  pseudopotentialTables,
+  functionalOverride,
+  overrides,
+  disabled,
+  onChange,
+}: {
+  readonly group: string;
+  readonly groupSettings: readonly Setting[];
+  readonly elements: readonly string[];
+  readonly pseudopotentialTables: readonly PseudopotentialTable[];
+  readonly functionalOverride: string | undefined;
+  readonly overrides: Readonly<Record<string, unknown>>;
+  readonly disabled: boolean;
+  readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
+}) {
+  if (group === "functional") {
+    return (
+      <FunctionalControl
+        tables={pseudopotentialTables}
+        value={functionalOverride}
+        disabled={disabled}
+        onChange={onChange}
+      />
+    );
+  }
+  if (group === "pseudo_table_id") {
+    return (
+      <PseudoTableControl
+        tables={pseudopotentialTables}
+        elements={elements}
+        functionalOverride={functionalOverride}
+        pinned={overrides.pseudo_table_id}
+        disabled={disabled}
+        onChange={onChange}
+      />
+    );
+  }
+  return (
+    <>
+      {groupSettings.map((setting) =>
+        setting.key === "k_grid" ? (
+          <KGridControl
+            key={setting.key}
+            value={overrides.k_grid}
+            disabled={disabled}
+            onChange={(value) => {
+              onChange({ k_grid: value });
+            }}
+          />
+        ) : (
+          <OverrideControl
+            key={setting.key}
+            meta={setting}
+            value={overrides[setting.key]}
+            disabled={disabled}
+            onChange={(value) => {
+              onChange({ [setting.key]: value });
+            }}
+          />
+        ),
+      )}
     </>
   );
 }

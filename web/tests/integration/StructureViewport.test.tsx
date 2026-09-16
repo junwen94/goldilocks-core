@@ -161,11 +161,11 @@ describe("StructureViewport", () => {
     expect(screen.getByRole("note")).toHaveTextContent(/approximation/);
     await user.click(
       screen.getByRole("button", {
-        name: "Inspect canonical sites and occupancies",
+        name: "Inspect lattice, sites and occupancies",
       }),
     );
     const details = screen.getByRole("dialog", {
-      name: "Canonical sites and occupancies",
+      name: "Lattice, sites and occupancies",
     });
     const mixedSite = within(details).getByRole("region", { name: "Site 1" });
     expect(mixedSite).toHaveTextContent("0.123456789, 0, 0");
@@ -221,7 +221,7 @@ describe("StructureViewport", () => {
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", {
-        name: "Inspect canonical sites and occupancies",
+        name: "Inspect lattice, sites and occupancies",
       }),
     ).toBeVisible();
   });
