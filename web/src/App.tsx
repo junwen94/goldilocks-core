@@ -11,6 +11,7 @@ import {
 } from "@mantine/core";
 
 import { GuidedControls } from "./controls/GuidedControls";
+import { AppHeader } from "./layout/AppHeader";
 import { ReviewPanel } from "./review/ReviewPanel";
 import { FailureBanner } from "./status/FailureBanner";
 import { OperationStatus } from "./status/OperationStatus";
@@ -55,6 +56,7 @@ function Workbench() {
 
   return (
     <>
+      <AppHeader theme={theme} onToggleTheme={toggleTheme} />
       <OperationStatus
         operation={snapshot.operation}
         hasFailure={snapshot.failure !== null}
@@ -81,8 +83,6 @@ function Workbench() {
         controls={
           snapshot.capabilities === null ? null : (
             <GuidedControls
-              theme={theme}
-              onToggleTheme={toggleTheme}
               onShowStructure={() => {
                 setWorkspaceView("structure");
               }}

@@ -1,6 +1,24 @@
+:root {
+  --app-header-height: 3.5rem;
+}
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  height: var(--app-header-height);
+  border-bottom: 1px solid var(--mantine-color-default-border);
+  background: color-mix(in srgb, var(--mantine-color-body) 80%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.app-header img {
+  border-radius: 6px;
+}
+
 .workbench-grid {
   display: grid;
-  min-height: 100dvh;
+  min-height: calc(100dvh - var(--app-header-height));
   grid-template-columns:
     minmax(22rem, var(--controls-width, 34%))
     0.75rem minmax(32rem, 1fr);
@@ -13,9 +31,9 @@
 
 .structure-stage {
   position: sticky;
-  top: 0;
+  top: var(--app-header-height);
   min-width: 0;
-  height: 100dvh;
+  height: calc(100dvh - var(--app-header-height));
   min-height: 34rem;
   overflow: hidden;
   background: var(--mantine-color-body);
@@ -30,8 +48,8 @@
 
 .pane-resizer {
   position: sticky;
-  top: 0;
-  height: 100dvh;
+  top: var(--app-header-height);
+  height: calc(100dvh - var(--app-header-height));
   min-height: 34rem;
   border-inline: 1px solid var(--mantine-color-default-border);
   background: var(--mantine-color-body);
