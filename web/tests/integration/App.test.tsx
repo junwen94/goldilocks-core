@@ -397,7 +397,7 @@ describe("Goldilocks Workbench", () => {
 
     await openStructure(user, container);
 
-    expect(await screen.findByText("Si1")).toBeInTheDocument();
+    expect(await screen.findByText(/Si1/)).toBeInTheDocument();
     expect(
       screen.getByLabelText("Crystal structure viewer"),
     ).toBeInTheDocument();

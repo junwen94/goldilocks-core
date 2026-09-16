@@ -55,6 +55,8 @@
 }
 
 .workbench-card .card-body {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -64,8 +66,12 @@
   color: var(--card-accent);
 }
 
+/* Every --card-accent below is checked at >=4.5:1 against white --
+ * axe caught #e35437/#0f9488 (the original, brighter picks) failing at
+ * ~3.75:1 on the kicker-number text; these are darkened just enough to
+ * clear AA while staying visually in the same red-orange/teal family. */
 .card-structure {
-  --card-accent: #e35437;
+  --card-accent: #c2410c;
 }
 
 .card-calculation {
@@ -77,7 +83,7 @@
 }
 
 .card-records {
-  --card-accent: #0f9488;
+  --card-accent: #0f766e;
 }
 
 .structure-stage {
