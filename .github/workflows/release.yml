@@ -7,8 +7,16 @@ on:
   push:
     tags: ['v*']
   schedule:
-    - cron: '0 3 * * *'
+    # Avoid minute 0 because GitHub can delay or drop scheduled workflows at
+    # high-load times around the top of the hour.
+    - cron: '17 3 * * *'
   workflow_dispatch:
+    inputs:
+      publish_nightly:
+        description: 'Publish nightly tags instead of a sha-only image'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -144,9 +152,9 @@ jobs:
         with:
           images: ghcr.io/stfc/goldilocks-workbench
           tags: |
-            type=raw,value=nightly,enable=${{ github.event_name == 'schedule' }}
-            type=raw,value=nightly-{{date 'YYYY-MM-DD'}},enable=${{ github.event_name == 'schedule' }}
-            type=sha,prefix=sha-,enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=nightly,enable=${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_nightly == 'true') }}
+            type=raw,value=nightly-{{date 'YYYY-MM-DD'}},enable=${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_nightly == 'true') }}
+            type=sha,prefix=sha-,enable=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish_nightly != 'true' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
@@ -161,10 +169,32 @@ jobs:
 
       - name: Push merged multi-arch image
         working-directory: /tmp/digests
-        run: >-
-          docker buildx imagetools create
-          $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$TAGS")
-          $(printf 'ghcr.io/stfc/goldilocks-workbench@sha256:%s ' *)
+        shell: bash
+        run: |
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$TAGS")
+          shopt -s nullglob
+          digests=(*)
+
+          if (( ${#tags[@]} == 0 )); then
+            echo "No image tags were generated" >&2
+            exit 1
+          fi
+
+          if (( ${#digests[@]} == 0 )); then
+            echo "No image digests were downloaded" >&2
+            exit 1
+          fi
+
+          args=()
+          for tag in "${tags[@]}"; do
+            args+=("-t" "$tag")
+          done
+
+          for digest in "${digests[@]}"; do
+            args+=("ghcr.io/stfc/goldilocks-workbench@sha256:${digest}")
+          done
+
+          docker buildx imagetools create "${args[@]}"
         env:
           TAGS: ${{ steps.meta.outputs.json }}
 
