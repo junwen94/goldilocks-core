@@ -120,19 +120,22 @@ describe("Goldilocks Workbench", () => {
     expect(optionValues(table)).toEqual(["", pbe.id]);
   });
 
-  it("exposes a resizable two-panel structure workflow", async () => {
+  it("exposes all four workspace cards at once", async () => {
     renderApp(new CoreStub(Promise.resolve(capabilities)));
 
     expect(
-      await screen.findByRole("region", { name: "Calculation setup" }),
+      await screen.findByRole("region", { name: "Structure workspace" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("region", { name: "Structure workspace" }),
+      screen.getByRole("region", { name: "Calculation setup" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("region", { name: "Recommendation results" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getAllByRole("separator")).toHaveLength(1);
+      screen.getByRole("region", { name: "Generated input files" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Scientific facts" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("separator")).not.toBeInTheDocument();
   });
 
   it("uses light mode by default and persists an explicit dark mode", async () => {
@@ -195,20 +198,6 @@ describe("Goldilocks Workbench", () => {
       screen.getByRole("button", { name: "Switch to light mode" }),
     );
     expect(screen.getByLabelText("Crystal structure viewer")).toBe(viewport);
-  });
-
-  it("resizes the calculation panel from the keyboard", async () => {
-    const user = userEvent.setup();
-    renderApp(new CoreStub(Promise.resolve(capabilities)));
-    const controls = await screen.findByRole("separator", {
-      name: "Resize calculation setup",
-    });
-    const initial = controls.getAttribute("aria-valuenow");
-    controls.focus();
-    await user.keyboard("{ArrowRight}");
-    expect(controls.getAttribute("aria-valuenow")).not.toBe(initial);
-    await user.keyboard("{ArrowLeft}");
-    expect(controls).toHaveAttribute("aria-valuenow", initial);
   });
 
   it("opens only the latest file when an earlier read resolves last", async () => {
@@ -345,7 +334,7 @@ describe("Goldilocks Workbench", () => {
     ).toBeDisabled();
   });
 
-  it("computes a recommendation and renders tri-state scientific records", async () => {
+  it("computes a recommendation and renders tri-state scientific records alongside the structure", async () => {
     const user = userEvent.setup();
     const core = new CoreStub(Promise.resolve(capabilities));
     core.inspectionResults = [Promise.resolve(inspection)];
@@ -357,35 +346,24 @@ describe("Goldilocks Workbench", () => {
       await screen.findByRole("button", { name: "Generate recommendation" }),
     );
 
-    const recommendation = await screen.findByRole("region", {
-      name: "Recommendation results",
+    const records = await screen.findByRole("region", {
+      name: "Scientific facts",
     });
-    expect(recommendation).toBeInTheDocument();
+    expect(records).toBeInTheDocument();
+    // Everything is one always-visible dashboard now -- computing a
+    // recommendation doesn't navigate away from the structure card.
     expect(
-      screen.queryByRole("region", { name: "Structure workspace" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("region", { name: "Structure workspace" }),
+    ).toBeInTheDocument();
     expect(core.explainCalls[0]).toMatchObject({
       structure_content: "data_Si",
       structure_name: "Si.cif",
       task: "scf_single_point",
     });
-    expect(screen.getByText("K Sampling")).toBeInTheDocument();
-    expect(screen.getByText("Cutoffs")).toBeInTheDocument();
+    expect(within(records).getByText("K Sampling")).toBeInTheDocument();
+    expect(within(records).getByText("Cutoffs")).toBeInTheDocument();
     expect(
       screen.getByText(/Generate input files to preview them here/),
-    ).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Back to structure" }));
-    expect(
-      screen.getByRole("region", { name: "Structure workspace" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("region", { name: "Recommendation results" }),
-    ).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Recommendation" }));
-    expect(
-      screen.getByRole("region", { name: "Recommendation results" }),
     ).toBeInTheDocument();
   });
 

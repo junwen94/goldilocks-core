@@ -32,11 +32,7 @@ const GROUP_TASK_RELEVANCE: Readonly<Record<string, readonly CalcTask[]>> = {
   relax: ["relax", "vc-relax"],
 };
 
-export function CalculationForm({
-  onShowRecommendation,
-}: {
-  readonly onShowRecommendation: () => void;
-}) {
+export function CalculationForm() {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
   const { draft, capabilities, inspection } = snapshot;
@@ -66,7 +62,6 @@ export function CalculationForm({
       component="form"
       onSubmit={(event) => {
         event.preventDefault();
-        onShowRecommendation();
         void workspace.dispatch({ type: "review.compute" });
       }}
     >

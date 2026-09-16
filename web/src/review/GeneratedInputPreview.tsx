@@ -1,6 +1,8 @@
 import { Code, Group, Paper, Text } from "@mantine/core";
 import { type KeyboardEvent, type PointerEvent, useRef, useState } from "react";
 
+import "./GeneratedInputPreview.css";
+
 const DEFAULT_INPUT_HEIGHT = 352;
 const MIN_INPUT_HEIGHT = 160;
 const KEYBOARD_RESIZE_STEP = 32;

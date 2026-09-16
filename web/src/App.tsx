@@ -1,27 +1,21 @@
-import { useLayoutEffect, useEffect, useState } from "react";
-import { ArrowRight, Atom } from "lucide-react";
+import { useEffect } from "react";
 import {
-  Button,
   MantineProvider,
-  Loader,
-  Stack,
-  Title,
+  VisuallyHidden,
   useComputedColorScheme,
   useMantineColorScheme,
 } from "@mantine/core";
 
-import { GuidedControls } from "./controls/GuidedControls";
+import { CalculationCard } from "./cards/CalculationCard";
+import { GeneratedInputsCard } from "./cards/GeneratedInputsCard";
+import { ScientificRecordsCard } from "./cards/ScientificRecordsCard";
+import { StructureCard } from "./cards/StructureCard";
 import { AppHeader } from "./layout/AppHeader";
-import { ReviewPanel } from "./review/ReviewPanel";
 import { FailureBanner } from "./status/FailureBanner";
 import { OperationStatus } from "./status/OperationStatus";
 import { colorSchemeManager, workbenchTheme } from "./theme";
-import { StructureViewport } from "./viewer/StructureViewport";
-import { WorkspaceLayout } from "./workspace/WorkspaceLayout";
 import { useWorkspace, useWorkspaceSnapshot } from "./workspace/useWorkspace";
 import "./App.css";
-
-type WorkspaceView = "structure" | "recommendation";
 
 export function App() {
   return (
@@ -45,14 +39,6 @@ function Workbench() {
       .querySelector<HTMLMetaElement>('meta[name="theme-color"]')
       ?.setAttribute("content", theme === "light" ? "#ffffff" : "#242424");
   }, [theme]);
-  const [workspaceView, setWorkspaceView] =
-    useState<WorkspaceView>("structure");
-
-  useLayoutEffect(() => {
-    if (workspaceView !== "recommendation") return;
-    document.documentElement.scrollTop = 0;
-    document.body.scrollTop = 0;
-  }, [workspaceView]);
 
   return (
     <>
@@ -79,90 +65,15 @@ function Workbench() {
         />
       )}
 
-      <WorkspaceLayout
-        controls={
-          snapshot.capabilities === null ? null : (
-            <GuidedControls
-              onShowStructure={() => {
-                setWorkspaceView("structure");
-              }}
-              onShowRecommendation={() => {
-                setWorkspaceView("recommendation");
-              }}
-            />
-          )
-        }
-      >
-        {workspaceView === "recommendation" ? (
-          <ReviewPanel
-            onShowStructure={() => {
-              setWorkspaceView("structure");
-            }}
-          />
-        ) : (
-          <section
-            id="structure-panel"
-            className="structure-stage"
-            aria-label="Structure workspace"
-          >
-            {snapshot.inspection === null ? (
-              <EmptyStage
-                loading={
-                  snapshot.capabilities === null ||
-                  snapshot.operation === "inspect"
-                }
-                label={
-                  snapshot.capabilities === null
-                    ? "Loading Workbench"
-                    : undefined
-                }
-              />
-            ) : (
-              <StructureViewport inspection={snapshot.inspection} />
-            )}
-            {snapshot.reviewed === null ? null : (
-              <Button
-                className="stage-navigation"
-                rightSection={<ArrowRight aria-hidden="true" size={15} />}
-                type="button"
-                onClick={() => {
-                  setWorkspaceView("recommendation");
-                }}
-              >
-                Recommendation
-              </Button>
-            )}
-          </section>
-        )}
-      </WorkspaceLayout>
+      <main className="workbench-grid" aria-labelledby="workbench-title">
+        <VisuallyHidden>
+          <h1 id="workbench-title">Goldilocks SCF setup</h1>
+        </VisuallyHidden>
+        <StructureCard />
+        <CalculationCard />
+        <GeneratedInputsCard />
+        <ScientificRecordsCard />
+      </main>
     </>
-  );
-}
-
-function EmptyStage({
-  loading,
-  label = loading ? "Reading structure" : "No structure selected",
-}: {
-  readonly loading: boolean;
-  readonly label?: string | undefined;
-}) {
-  return (
-    <Stack
-      align="center"
-      justify="center"
-      h="100%"
-      p="xl"
-      gap="xl"
-      role={loading ? "status" : undefined}
-    >
-      {loading ? (
-        <Loader size="xl" aria-hidden="true" />
-      ) : (
-        <Atom size={128} strokeWidth={1} aria-hidden="true" />
-      )}
-      <Title order={2} ta="center">
-        {label}
-      </Title>
-    </Stack>
   );
 }
