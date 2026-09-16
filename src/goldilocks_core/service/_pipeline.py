@@ -77,13 +77,14 @@ def check(
     """The ``advise()``/``generate()`` boundary -- see ``checks.py``.
 
     ``purpose`` (v2 epic 9, #9): the "``occupations='fixed'`` needs an
-    integer ``tot_magnetization``" rule applies to every purpose that
-    runs its own scf loop (``checks.py``'s own ``_SCF_LIKE_PURPOSES``) --
-    an nscf step reads a prior scf step's already-converged
-    density/spin and does not re-derive this constraint. Every existing
-    caller is an scf step and keeps the previous default unchanged;
-    ``service/_dos.py``'s nscf pass is the first caller to pass
-    ``purpose="nscf"``.
+    integer ``tot_magnetization``" rule (and its non-spin-polarized
+    sibling, "needs an even electron count", #70) applies to every
+    purpose that runs its own scf loop (``checks.py``'s own
+    ``_SCF_LIKE_PURPOSES``) -- an nscf step reads a prior scf step's
+    already-converged density/spin and does not re-derive this
+    constraint. Every existing caller is an scf step and keeps the
+    previous default unchanged; ``service/_dos.py``'s nscf pass is the
+    first caller to pass ``purpose="nscf"``.
 
     ``relax`` (v2 epic 10, #10): only ever passed by ``service/_relax.py``,
     which does not have a plain ``Advice`` field to fold it into --
@@ -103,6 +104,7 @@ def check(
         *advice.field_states(),
         occupations=advice.step.kpoints.occupations,
         magnetic=advice.system.magnetic,
+        electron_count=advice.system.electron_count,
         relax=relax,
         geometry=advice.analysis.geometry,
         job=advice.step.resources.job,

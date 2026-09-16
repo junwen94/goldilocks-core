@@ -55,9 +55,10 @@ class Advice:
     step: StepAdvice
 
     def field_states(self) -> tuple[FieldState[object], ...]:
-        """Every ``FieldState`` except ``occupations``/``magnetic``,
-        which ``checks.check_all`` folds in itself -- see its own
-        docstring on why a caller must not repeat them here."""
+        """Every ``FieldState`` except ``occupations``/``magnetic``/
+        ``electron_count``, which ``checks.check_all`` folds in itself
+        -- see its own docstring on why a caller must not repeat them
+        here."""
         return (
             self.analysis.field_states()
             + self.system.field_states()
