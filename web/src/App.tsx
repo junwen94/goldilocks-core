@@ -14,6 +14,7 @@ import { AppHeader } from "./layout/AppHeader";
 import { FailureBanner } from "./status/FailureBanner";
 import { OperationStatus } from "./status/OperationStatus";
 import { colorSchemeManager, workbenchTheme } from "./theme";
+import { useAutoCompute } from "./workspace/useAutoCompute";
 import { useWorkspace, useWorkspaceSnapshot } from "./workspace/useWorkspace";
 import "./App.css";
 
@@ -39,6 +40,7 @@ function Workbench() {
       .querySelector<HTMLMetaElement>('meta[name="theme-color"]')
       ?.setAttribute("content", theme === "light" ? "#ffffff" : "#242424");
   }, [theme]);
+  useAutoCompute(workspace, snapshot);
 
   return (
     <>

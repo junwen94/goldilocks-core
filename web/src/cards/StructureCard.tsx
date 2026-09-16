@@ -16,30 +16,34 @@ export function StructureCard() {
       aria-label="Structure workspace"
       withBorder
       p="md"
+      className="workbench-card card-structure"
     >
-      <Group component="header" mb="md" wrap="nowrap">
-        <Text c="dimmed">01</Text>
+      <Group component="header" className="card-header" mb="md" wrap="nowrap">
+        <Text className="card-kicker">01</Text>
         <Title order={2}>Structure</Title>
       </Group>
-      <StructureSourceControls
-        source={snapshot.structureInput}
-        inspection={snapshot.inspection}
-        inspecting={snapshot.operation === "inspect"}
-        onOpen={(input) => workspace.dispatch({ type: "source.open", input })}
-      />
-      <div className="structure-stage">
-        {snapshot.inspection === null ? (
-          <EmptyStage
-            loading={
-              snapshot.capabilities === null || snapshot.operation === "inspect"
-            }
-            label={
-              snapshot.capabilities === null ? "Loading Workbench" : undefined
-            }
-          />
-        ) : (
-          <StructureViewport inspection={snapshot.inspection} />
-        )}
+      <div className="card-body">
+        <StructureSourceControls
+          source={snapshot.structureInput}
+          inspection={snapshot.inspection}
+          inspecting={snapshot.operation === "inspect"}
+          onOpen={(input) => workspace.dispatch({ type: "source.open", input })}
+        />
+        <div className="structure-stage">
+          {snapshot.inspection === null ? (
+            <EmptyStage
+              loading={
+                snapshot.capabilities === null ||
+                snapshot.operation === "inspect"
+              }
+              label={
+                snapshot.capabilities === null ? "Loading Workbench" : undefined
+              }
+            />
+          ) : (
+            <StructureViewport inspection={snapshot.inspection} />
+          )}
+        </div>
       </div>
     </Paper>
   );

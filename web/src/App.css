@@ -16,35 +16,88 @@
   border-radius: 6px;
 }
 
+/* Four equally-sized cards, one screen, no page scroll -- each card
+ * scrolls its own body internally as a safety net (settings/records are
+ * grouped into collapsed accordions precisely so that scroll is rarely
+ * needed in the common case). */
 .workbench-grid {
   display: grid;
   grid-template-columns: 1fr;
+  grid-template-rows: repeat(4, minmax(0, 1fr));
   gap: 1rem;
+  height: calc(100dvh - var(--app-header-height));
   max-width: 90rem;
   margin-inline: auto;
   padding: 1rem;
-  align-items: start;
+  box-sizing: border-box;
 }
 
 @media (min-width: 64rem) {
   .workbench-grid {
     grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
   }
+}
+
+.workbench-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-top-width: 4px;
+  border-top-style: solid;
+  border-top-color: var(--card-accent);
+}
+
+.workbench-card .card-header {
+  flex: 0 0 auto;
+}
+
+.workbench-card .card-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.workbench-card .card-kicker {
+  color: var(--card-accent);
+}
+
+.card-structure {
+  --card-accent: #e35437;
+}
+
+.card-calculation {
+  --card-accent: #b02090;
+}
+
+.card-inputs {
+  --card-accent: #1e5df8;
+}
+
+.card-records {
+  --card-accent: #0f9488;
 }
 
 .structure-stage {
   position: relative;
-  min-width: 0;
-  height: 24rem;
-  min-height: 24rem;
-  margin-top: 1rem;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
   background: var(--mantine-color-body);
 }
 
 @media (max-width: 47.5rem) {
+  .workbench-grid {
+    height: auto;
+  }
+
+  .workbench-card {
+    min-height: 24rem;
+  }
+
   .structure-stage {
-    height: 20rem;
-    min-height: 20rem;
+    min-height: 16rem;
   }
 }

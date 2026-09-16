@@ -1,7 +1,6 @@
 import { useState } from "react";
 import {
   Accordion,
-  Button,
   Checkbox,
   Fieldset,
   NativeSelect,
@@ -12,7 +11,6 @@ import {
   Textarea,
   TextInput,
 } from "@mantine/core";
-import { ArrowRight } from "lucide-react";
 
 import type {
   CalcTask,
@@ -41,12 +39,6 @@ export function CalculationForm() {
   }
 
   const inspecting = snapshot.operation === "inspect";
-  const busy = snapshot.operation !== null;
-  let submitLabel =
-    snapshot.reviewed === null
-      ? "Generate recommendation"
-      : "Update recommendation";
-  if (snapshot.operation === "explain") submitLabel = "Computing";
 
   const elements = uniqueElements(inspection);
   const overrides = draft.overrides;
@@ -58,13 +50,7 @@ export function CalculationForm() {
   }
 
   return (
-    <Stack
-      component="form"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void workspace.dispatch({ type: "review.compute" });
-      }}
-    >
+    <Stack>
       {inspecting ? (
         <Text c="red" size="sm" role="status">
           Calculation settings are disabled while the new structure loads.
@@ -142,29 +128,21 @@ export function CalculationForm() {
         />
       </SimpleGrid>
 
-      <FactsSection
-        facts={capabilities.facts}
-        overrides={overrides}
-        disabled={inspecting}
-        onChange={patchOverrides}
-      />
-
-      <SettingsGroups
-        settings={capabilities.settings}
-        task={draft.task}
-        overrides={overrides}
-        disabled={inspecting}
-        onChange={patchOverrides}
-      />
-
-      <Button
-        type="submit"
-        fullWidth
-        rightSection={<ArrowRight aria-hidden="true" size={14} />}
-        disabled={busy}
-      >
-        {submitLabel}
-      </Button>
+      <Accordion multiple transitionDuration={0}>
+        <FactsAccordionItem
+          facts={capabilities.facts}
+          overrides={overrides}
+          disabled={inspecting}
+          onChange={patchOverrides}
+        />
+        <SettingsGroupItems
+          settings={capabilities.settings}
+          task={draft.task}
+          overrides={overrides}
+          disabled={inspecting}
+          onChange={patchOverrides}
+        />
+      </Accordion>
     </Stack>
   );
 }
@@ -229,7 +207,7 @@ function PseudoTableControl({
   );
 }
 
-function FactsSection({
+function FactsAccordionItem({
   facts,
   overrides,
   disabled,
@@ -242,27 +220,30 @@ function FactsSection({
 }) {
   if (facts.length === 0) return null;
   return (
-    <Fieldset legend="Structure facts">
-      <Stack gap="sm">
-        {facts.map((fact) => (
-          <OverrideControl
-            key={fact.key}
-            meta={{
-              key: fact.key,
-              type: fact.type,
-              enum: fact.values ?? undefined,
-              unit: null,
-              description: fact.description,
-            }}
-            value={overrides[fact.key]}
-            disabled={disabled}
-            onChange={(value) => {
-              onChange({ [fact.key]: value });
-            }}
-          />
-        ))}
-      </Stack>
-    </Fieldset>
+    <Accordion.Item value="structure-facts">
+      <Accordion.Control>Structure facts</Accordion.Control>
+      <Accordion.Panel>
+        <Stack gap="sm">
+          {facts.map((fact) => (
+            <OverrideControl
+              key={fact.key}
+              meta={{
+                key: fact.key,
+                type: fact.type,
+                enum: fact.values ?? undefined,
+                unit: null,
+                description: fact.description,
+              }}
+              value={overrides[fact.key]}
+              disabled={disabled}
+              onChange={(value) => {
+                onChange({ [fact.key]: value });
+              }}
+            />
+          ))}
+        </Stack>
+      </Accordion.Panel>
+    </Accordion.Item>
   );
 }
 
@@ -271,7 +252,7 @@ function humanizeGroup(group: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
-function SettingsGroups({
+function SettingsGroupItems({
   settings,
   task,
   overrides,
@@ -302,10 +283,9 @@ function SettingsGroups({
       bucket.push(setting);
     }
   }
-  if (groups.size === 0) return null;
 
   return (
-    <Accordion multiple transitionDuration={0}>
+    <>
       {[...groups.entries()].map(([group, groupSettings]) => (
         <Accordion.Item key={group} value={group}>
           <Accordion.Control>{humanizeGroup(group)}</Accordion.Control>
@@ -337,7 +317,7 @@ function SettingsGroups({
           </Accordion.Panel>
         </Accordion.Item>
       ))}
-    </Accordion>
+    </>
   );
 }
 

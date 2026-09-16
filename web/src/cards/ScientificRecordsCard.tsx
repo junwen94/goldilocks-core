@@ -15,28 +15,31 @@ export function ScientificRecordsCard() {
       aria-busy={snapshot.operation === "explain"}
       withBorder
       p="md"
+      className="workbench-card card-records"
     >
-      <Group component="header" mb="md" wrap="nowrap">
-        <Text c="dimmed">04</Text>
+      <Group component="header" className="card-header" mb="md" wrap="nowrap">
+        <Text className="card-kicker">04</Text>
         <Title order={2}>Scientific facts</Title>
       </Group>
-      {reviewed === null ? (
-        <Stack
-          align="center"
-          justify="center"
-          mih={160}
-          role={snapshot.operation === "explain" ? "status" : undefined}
-        >
-          {snapshot.operation === "explain" && <Loader size="sm" />}
-          <Text fw={600}>
-            {snapshot.operation === "explain"
-              ? "Computing recommendation"
-              : "No recommendation yet"}
-          </Text>
-        </Stack>
-      ) : (
-        <RecordReview records={reviewed.records} />
-      )}
+      <div className="card-body">
+        {reviewed === null ? (
+          <Stack
+            align="center"
+            justify="center"
+            mih={160}
+            role={snapshot.operation === "explain" ? "status" : undefined}
+          >
+            {snapshot.operation === "explain" && <Loader size="sm" />}
+            <Text fw={600}>
+              {snapshot.operation === "explain"
+                ? "Computing recommendation"
+                : "No recommendation yet"}
+            </Text>
+          </Stack>
+        ) : (
+          <RecordReview records={reviewed.records} />
+        )}
+      </div>
     </Paper>
   );
 }

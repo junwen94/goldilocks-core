@@ -60,10 +60,12 @@ class CoreStub implements CoreClient {
 
   explain(request: ComputeRequest): Promise<ExplainResult> {
     this.explainCalls.push(request);
-    return (
-      this.explainResults.shift() ??
-      Promise.reject(new Error("explain not configured"))
-    );
+    // Unlike inspection/archive, a recommendation is now computed
+    // automatically (see useAutoCompute) as soon as a structure loads
+    // and after every later edit -- most tests don't care about its
+    // content, so an unconfigured queue falls back to a real success
+    // instead of forcing every structure-uploading test to populate it.
+    return this.explainResults.shift() ?? Promise.resolve(explainResult);
   }
 
   run(): Promise<RunResult> {
@@ -250,21 +252,20 @@ describe("Goldilocks Workbench", () => {
     const { container } = renderApp(core, saveArchive);
 
     await openStructure(user, container);
-    await user.click(
-      await screen.findByRole("button", { name: "Generate recommendation" }),
-    );
     await screen.findByText("K Sampling");
     await user.click(within(calculationSetup()).getByText("Magnetic"));
     await user.selectOptions(screen.getByLabelText("spin polarized"), "true");
 
-    await user.click(
-      screen.getByRole("button", { name: "Update recommendation" }),
+    // No manual "update" action -- the edit above is picked up and
+    // recomputed automatically (see useAutoCompute), after its debounce.
+    await waitFor(
+      () => {
+        expect(
+          screen.queryByRole("status", { name: "Recommendation notice" }),
+        ).not.toBeInTheDocument();
+      },
+      { timeout: 2000 },
     );
-    await waitFor(() => {
-      expect(
-        screen.queryByRole("status", { name: "Recommendation notice" }),
-      ).not.toBeInTheDocument();
-    });
     await user.click(
       screen.getByRole("button", { name: "Generate input files (.zip)" }),
     );
@@ -275,7 +276,7 @@ describe("Goldilocks Workbench", () => {
     expect(
       screen.getByRole("status", { name: "Archive status" }),
     ).toHaveTextContent(`${archive.filename} is ready`);
-    expect(core.explainCalls[1]?.overrides).toMatchObject({
+    expect(core.explainCalls.at(-1)?.overrides).toMatchObject({
       spin_polarized: true,
     });
     expect(core.archiveCalls[0]?.overrides).toMatchObject({
@@ -287,7 +288,6 @@ describe("Goldilocks Workbench", () => {
     const user = userEvent.setup();
     const core = new CoreStub(Promise.resolve(capabilities));
     core.inspectionResults = [Promise.resolve(inspection)];
-    core.explainResults = [Promise.resolve(explainResult)];
     const { container } = renderApp(core);
 
     await openStructure(user, container);
@@ -297,27 +297,26 @@ describe("Goldilocks Workbench", () => {
     expect(degauss).toBeEnabled();
     fireEvent.change(degauss, { target: { value: "0.02" } });
 
-    await user.click(
-      screen.getByRole("button", { name: "Generate recommendation" }),
+    // No manual "generate" action -- the edits above are picked up and
+    // computed automatically (see useAutoCompute), after its debounce.
+    await waitFor(
+      () => {
+        expect(core.explainCalls.at(-1)?.overrides).toMatchObject({
+          smearing_type: "cold",
+          degauss: 0.02,
+        });
+      },
+      { timeout: 2000 },
     );
-
-    expect(core.explainCalls[0]?.overrides).toMatchObject({
-      smearing_type: "cold",
-      degauss: 0.02,
-    });
   });
 
   it("keeps the old review visible and disables input generation after an edit", async () => {
     const user = userEvent.setup();
     const core = new CoreStub(Promise.resolve(capabilities));
     core.inspectionResults = [Promise.resolve(inspection)];
-    core.explainResults = [Promise.resolve(explainResult)];
     const { container } = renderApp(core, vi.fn());
 
     await openStructure(user, container);
-    await user.click(
-      await screen.findByRole("button", { name: "Generate recommendation" }),
-    );
     await screen.findByText("K Sampling");
 
     await user.click(within(calculationSetup()).getByText("Magnetic"));
@@ -326,7 +325,7 @@ describe("Goldilocks Workbench", () => {
     expect(
       screen.getByRole("status", { name: "Recommendation notice" }),
     ).toHaveTextContent(
-      "Your settings changed. Update the recommendation before generating input files.",
+      "Settings changed — recomputing the recommendation automatically.",
     );
     expect(screen.getByText("K Sampling")).toBeInTheDocument();
     expect(
@@ -342,16 +341,14 @@ describe("Goldilocks Workbench", () => {
     const { container } = renderApp(core);
 
     await openStructure(user, container);
-    await user.click(
-      await screen.findByRole("button", { name: "Generate recommendation" }),
-    );
 
-    const records = await screen.findByRole("region", {
-      name: "Scientific facts",
-    });
-    expect(records).toBeInTheDocument();
-    // Everything is one always-visible dashboard now -- computing a
-    // recommendation doesn't navigate away from the structure card.
+    // The region itself is always mounted now (one always-visible
+    // dashboard) -- wait for the auto-computed content to actually land
+    // in it, rather than for the region to appear.
+    const records = screen.getByRole("region", { name: "Scientific facts" });
+    await within(records).findByText("K Sampling");
+    // Computing a recommendation doesn't navigate away from the
+    // structure card.
     expect(
       screen.getByRole("region", { name: "Structure workspace" }),
     ).toBeInTheDocument();
@@ -360,7 +357,6 @@ describe("Goldilocks Workbench", () => {
       structure_name: "Si.cif",
       task: "scf_single_point",
     });
-    expect(within(records).getByText("K Sampling")).toBeInTheDocument();
     expect(within(records).getByText("Cutoffs")).toBeInTheDocument();
     expect(
       screen.getByText(/Generate input files to preview them here/),
@@ -387,9 +383,6 @@ describe("Goldilocks Workbench", () => {
     const { container } = renderApp(core);
 
     await openStructure(user, container);
-    await user.click(
-      await screen.findByRole("button", { name: "Generate recommendation" }),
-    );
 
     expect(
       await screen.findByRole("status", { name: "Warnings" }),

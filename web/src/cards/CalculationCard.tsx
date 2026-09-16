@@ -12,16 +12,19 @@ export function CalculationCard() {
       aria-label="Calculation setup"
       withBorder
       p="md"
+      className="workbench-card card-calculation"
     >
-      <Group component="header" mb="md" wrap="nowrap">
-        <Text c="dimmed">02</Text>
+      <Group component="header" className="card-header" mb="md" wrap="nowrap">
+        <Text className="card-kicker">02</Text>
         <Title order={2}>Calculation</Title>
       </Group>
-      {snapshot.inspection === null ? (
-        <Text c="dimmed">Load a structure to configure a calculation.</Text>
-      ) : (
-        <CalculationForm />
-      )}
+      <div className="card-body">
+        {snapshot.inspection === null ? (
+          <Text c="dimmed">Load a structure to configure a calculation.</Text>
+        ) : (
+          <CalculationForm />
+        )}
+      </div>
     </Paper>
   );
 }
