@@ -22,7 +22,8 @@ export function GeneratedInputReview({
       <Stack component="section" gap="xs" miw={0}>
         <Title order={3}>Generated inputs</Title>
         <Text c="dimmed">
-          Generate input files to preview them here before saving.
+          The generated files will appear here automatically once a
+          recommendation is ready.
         </Text>
       </Stack>
     );

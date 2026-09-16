@@ -69,7 +69,7 @@ export function GeneratedInputsCard() {
                   void workspace.dispatch({ type: "review.download" })
                 }
               >
-                Generate input files (.zip)
+                Download (.zip)
               </Button>
               {snapshot.lastDownload === null || snapshot.outOfDate ? null : (
                 <Text

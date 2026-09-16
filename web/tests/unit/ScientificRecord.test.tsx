@@ -78,7 +78,7 @@ describe("GeneratedInputReview", () => {
     });
 
     expect(
-      screen.getByText(/Generate input files to preview them here/),
+      screen.getByText(/will appear here automatically/),
     ).toBeInTheDocument();
   });
 

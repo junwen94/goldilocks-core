@@ -74,10 +74,11 @@ class CoreStub implements CoreClient {
 
   runArchive(request: ComputeRequest): Promise<ArchiveDownload> {
     this.archiveCalls.push(request);
-    return (
-      this.archiveResults.shift() ??
-      Promise.reject(new Error("archive not configured"))
-    );
+    // Like explain() above: the generated-input preview now refreshes
+    // itself automatically (see useAutoCompute) as soon as a
+    // recommendation is ready, so most tests never opted into this and
+    // shouldn't have to.
+    return this.archiveResults.shift() ?? Promise.resolve(buildArchive());
   }
 }
 
@@ -266,9 +267,7 @@ describe("Goldilocks Workbench", () => {
       },
       { timeout: 2000 },
     );
-    await user.click(
-      screen.getByRole("button", { name: "Generate input files (.zip)" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Download (.zip)" }));
 
     await waitFor(() => {
       expect(saveArchive).toHaveBeenCalledWith(archive);
@@ -329,7 +328,7 @@ describe("Goldilocks Workbench", () => {
     );
     expect(screen.getByText("K Sampling")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Generate input files (.zip)" }),
+      screen.getByRole("button", { name: "Download (.zip)" }),
     ).toBeDisabled();
   });
 
@@ -359,7 +358,7 @@ describe("Goldilocks Workbench", () => {
     });
     expect(within(records).getByText("Cutoffs")).toBeInTheDocument();
     expect(
-      screen.getByText(/Generate input files to preview them here/),
+      screen.getByText(/will appear here automatically/),
     ).toBeInTheDocument();
   });
 
