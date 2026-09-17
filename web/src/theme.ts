@@ -1,4 +1,5 @@
 import {
+  Accordion,
   ActionIcon,
   Button,
   Checkbox,
@@ -61,6 +62,17 @@ export const workbenchTheme = createTheme({
     Checkbox: Checkbox.extend({
       defaultProps: { size: "xs" },
       styles: { body: { minHeight: 44, alignItems: "center" } },
+    }),
+    // Default control padding (spacing-sm) reads as cramped for a 15-row
+    // settings list like the advisors' Functional/Cutoffs/Hubbard/etc.
+    // group -- bump it up for more breathing room between rows.
+    Accordion: Accordion.extend({
+      styles: {
+        control: {
+          paddingTop: "var(--mantine-spacing-lg)",
+          paddingBottom: "var(--mantine-spacing-lg)",
+        },
+      },
     }),
   },
 });

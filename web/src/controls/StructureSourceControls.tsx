@@ -5,7 +5,6 @@ import {
   Group,
   Loader,
   Paper,
-  Stack,
   Text,
 } from "@mantine/core";
 import { Upload } from "lucide-react";
@@ -118,21 +117,26 @@ export function StructureSourceControls({
   return (
     <>
       {/* Once a structure is loaded the viewer needs most of this card's
-       * height, so the dropzone collapses from the spacious first-run
-       * empty state into a single compact status row (same drop target,
-       * same controls) instead of staying full-size forever. */}
+       * height, so the dropzone collapses from a compact first-run empty
+       * state into a single compact status row (same drop target, same
+       * controls) instead of staying full-size forever. Kept to two lines
+       * even in the empty state -- the drop target still covers the whole
+       * Paper, so it doesn't need to be tall to stay easy to hit. */}
       {source === null ? (
-        <Paper withBorder p="md" {...dropzoneProps}>
-          <Stack align="center" gap="xs">
-            <Upload aria-hidden="true" size={18} />
-            <Text fw={600} truncate w="100%" ta="center">
+        <Paper withBorder p="xs" {...dropzoneProps}>
+          <Group justify="center" gap="xs" wrap="wrap">
+            <Upload aria-hidden="true" size={16} />
+            <Text fw={600} size="sm">
               Drop a structure
             </Text>
-            <Text id="structure-source-help" c="dimmed" size="sm" ta="center">
-              {sourceHelp}
+            <Text size="sm" c="dimmed">
+              or
             </Text>
             {fileButton}
-          </Stack>
+          </Group>
+          <Text id="structure-source-help" c="dimmed" size="xs" ta="center" mt={2}>
+            {sourceHelp}
+          </Text>
         </Paper>
       ) : (
         <Paper withBorder p="xs" {...dropzoneProps}>

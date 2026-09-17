@@ -1,4 +1,4 @@
-import { Accordion, Badge, Group, Stack, Text, Title } from "@mantine/core";
+import { Accordion, Badge, Group, Stack, Text } from "@mantine/core";
 
 import type { ResolvedField } from "../api/coreClient";
 import { OverrideControl } from "../controls/OverrideControl";
@@ -17,8 +17,10 @@ const STATUS_COLORS: Readonly<Record<ResolvedField["status"], string>> = {
  * each overridable) plus any other resolved record that isn't tied to a
  * settings group (composition/geometry/symmetry/... -- see
  * recordGroups.ts for exactly how that split is derived). Advisor
- * records live in the Calculation card instead, next to the override
- * control they belong to. */
+ * records live in the Goldilocks advisors card instead, next to the
+ * override control they belong to. Rendered inside AnalysisCard, which
+ * supplies the "Goldilocks analysis" heading -- this component is just
+ * the body. */
 export function AnalysisSection() {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
@@ -37,7 +39,6 @@ export function AnalysisSection() {
 
   return (
     <Stack gap="sm">
-      <Title order={3}>Goldilocks analysis</Title>
       {capabilities.facts.length === 0 ? null : (
         <Stack gap="sm">
           {capabilities.facts.map((fact) => {

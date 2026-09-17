@@ -9,6 +9,7 @@ mutants/
 .mutmut-cache/
 build/
 dist/
+dist-lib/
 wheels/
 *.egg-info
 

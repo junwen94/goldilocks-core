@@ -24,13 +24,13 @@
   background: rgba(255, 255, 255, 0.12);
 }
 
-/* Three columns, mirroring goldilocks-core's own analysis -> advisors
- * -> generation pipeline, one screen, no page scroll -- each column
- * scrolls its own body internally as a safety net. */
+/* Four columns -- structure -> analysis -> advisors -> generation,
+ * one screen, no page scroll -- each column scrolls its own body
+ * internally as a safety net. */
 .workbench-grid {
   display: grid;
   grid-template-columns: 1fr;
-  grid-template-rows: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(4, minmax(0, 1fr));
   gap: 1rem;
   height: calc(100dvh - var(--app-header-height));
   max-width: 100rem;
@@ -41,7 +41,7 @@
 
 @media (min-width: 72rem) {
   .workbench-grid {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     grid-template-rows: 1fr;
   }
 }
@@ -79,6 +79,10 @@
  * clear AA while staying visually in the same red-orange/teal family. */
 .card-structure {
   --card-accent: #c2410c;
+}
+
+.card-analysis {
+  --card-accent: #115e59;
 }
 
 .card-calculation {

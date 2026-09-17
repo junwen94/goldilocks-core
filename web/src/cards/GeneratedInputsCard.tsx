@@ -30,8 +30,8 @@ export function GeneratedInputsCard() {
       className="workbench-card card-inputs"
     >
       <Group component="header" className="card-header" mb="md" wrap="nowrap">
-        <Text className="card-kicker">03</Text>
-        <Title order={2}>Generation of input files</Title>
+        <Text className="card-kicker">04</Text>
+        <Title order={2}>Goldilocks bundles</Title>
       </Group>
       <div className="card-body">
         {reviewed === null ? (
