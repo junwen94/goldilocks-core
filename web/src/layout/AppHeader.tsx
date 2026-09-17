@@ -1,4 +1,4 @@
-import { ActionIcon, Badge, Group, Stack, Text } from "@mantine/core";
+import { ActionIcon, Group, Stack, Text } from "@mantine/core";
 import { Moon, Sun } from "lucide-react";
 
 import type { Theme } from "../theme";
@@ -42,18 +42,6 @@ export function AppHeader({
             Towards Greener Computation
           </Text>
         </Stack>
-        <Badge
-          variant="outline"
-          size="sm"
-          radius="sm"
-          style={{
-            color: "#ffffff",
-            borderColor: "rgba(255, 255, 255, 0.4)",
-            backgroundColor: "rgba(255, 255, 255, 0.15)",
-          }}
-        >
-          Workbench
-        </Badge>
       </Group>
       <ActionIcon
         variant="subtle"
