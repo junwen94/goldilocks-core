@@ -71,9 +71,9 @@ class SystemAdvice:
     hubbard: FieldState[HubbardUDecision]
 
     def field_states(self) -> tuple[FieldState[object], ...]:
-        """Everything except ``magnetic`` -- ``checks.check_all`` folds
-        that in itself; see its own docstring on why a caller must not
-        repeat it here."""
+        """Everything except ``magnetic``/``electron_count`` --
+        ``checks.check_all`` folds both in itself; see its own
+        docstring on why a caller must not repeat them here."""
         return (
             self.functional,
             self.pseudo.table,
@@ -81,7 +81,6 @@ class SystemAdvice:
             self.pseudo.relativistic,
             self.symmetry_eff,
             self.cutoffs,
-            self.electron_count,
             self.vdw,
             self.boundary,
             self.hubbard,

@@ -93,10 +93,9 @@ test("prepares and downloads a real Core calculation", async ({ page }) => {
   const download = await downloadStarted;
   expect(download.suggestedFilename()).toMatch(/\.zip$/);
 
-  // scf.in is not the default active tab (tabs sort by file path, and
-  // CITATIONS.md/goldilocks.json/pseudo/Si.upf all sort before it) --
-  // only the active tab's panel renders a GeneratedInputPreview.
-  await page.getByRole("tab", { name: "scf.in" }).click();
+  // scf.in is the default active tab (review order: .in, submit.sh,
+  // README.md, .json, then everything else) -- only the active tab's
+  // panel renders a GeneratedInputPreview.
   const generatedInput = page.getByLabel("Generated input scf.in");
   await expect(generatedInput).toBeInViewport();
 

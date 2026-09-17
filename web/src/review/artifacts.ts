@@ -34,6 +34,22 @@ export interface ArchiveContents {
   readonly files: readonly ArchiveFile[];
 }
 
+/** Review order, most-relevant-to-inspect first: the code input(s) a
+ * reviewer actually reads, then the submission script, then the
+ * human-facing summary, then the machine manifest, then everything
+ * else (citations, pseudopotential files) -- not `bundle.py`'s own
+ * alphabetical `sorted(files.items())`, which only exists there for
+ * deterministic archive contents, not review ergonomics. */
+function displayPriority(path: string): number {
+  const name = path.split("/").at(-1) ?? path;
+  if (path.endsWith(".in")) return 0;
+  if (name === "submit.sh") return 1;
+  if (name === "README.md") return 2;
+  if (path.endsWith(".json")) return 3;
+  if (path.endsWith(".md")) return 4;
+  return 5;
+}
+
 /** Unzips a downloaded archive client-side to recover per-file text and
  * `goldilocks.json`'s manifest -- purely a presentation concern (the
  * API client only ever hands back the raw zip bytes it was given). */
@@ -51,7 +67,10 @@ export async function unzipArchive(
     }
     files.push({ path, content });
   }
-  files.sort((a, b) => a.path.localeCompare(b.path));
+  files.sort((a, b) => {
+    const priority = displayPriority(a.path) - displayPriority(b.path);
+    return priority !== 0 ? priority : a.path.localeCompare(b.path);
+  });
   return { manifest, files };
 }
 

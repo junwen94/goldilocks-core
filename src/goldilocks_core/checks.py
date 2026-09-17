@@ -26,14 +26,29 @@ is now where that decision belongs.
 
 2. A named cross-parameter rule -- ``occupations='fixed'`` together with
    a spin-polarized system requires an *integer* ``tot_magnetization``
-   (QE's own requirement once occupation numbers are no longer
-   automatically split by smearing). This is scoped to the ``scf``
-   step only: an ``nscf`` step reads the charge/spin density a prior
-   ``scf`` step already converged and does not re-derive this
-   constraint (goldilocks-core-design.md:3417, "per-step constraint").
+   *that shares parity with the electron count* (nelup=(nelec+tot)/2,
+   neldw=(nelec-tot)/2, #70: both need to be whole numbers, which an
+   integer ``tot_magnetization`` alone does not guarantee -- QE's own
+   requirement once occupation numbers are no longer automatically
+   split by smearing). This is scoped to the ``scf`` step only: an
+   ``nscf`` step reads the charge/spin density a prior ``scf`` step
+   already converged and does not re-derive this constraint
+   (goldilocks-core-design.md:3417, "per-step constraint").
    ``advisors/occupations.py`` already flags this combination with an
    informational warning when it produces ``fixed``, but only *this*
    module owns the actual numeric check and the decision to block.
+
+3. Its sibling rule, found empirically 2026-09-16 against real QE 7.3
+   source (``PW/src/iweights.f90``'s ``iweights_only``): ``occupations
+   ='fixed'`` together with a *non*-spin-polarized system requires an
+   *even* ``electron_count`` -- with ``nspin=1`` (``degspin=2``), fixed
+   occupations fill ``NINT(nelec)/degspin`` doubly-occupied bands, which
+   can only reconstruct an even ``nelec`` exactly. An odd ``nelec`` here
+   silently truncates to the nearest even count (QE only ever prints an
+   ``infomsg`` -- "the system is metallic, specify occupations" --
+   never an error), converging on a wrong total charge with nothing
+   obviously wrong in the output. Same ``_SCF_LIKE_PURPOSES`` scoping as
+   rule 2, same reasoning.
 
 **Everything else in the design doc's "constraint check table"**
 (memory overflow, disordered-structure generation blocking, the
@@ -49,6 +64,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.occupations import OccupationsDecision
@@ -61,6 +77,12 @@ _MISSING_TOT_MAGNETIZATION = (
     "occupations='fixed' with a spin-polarized system requires an explicit "
     "integer tot_magnetization, but none was set."
 )
+_EVEN_ELECTRON_COUNT_TOLERANCE = 1e-6
+"""Matches QE's own ``eps8``-scale tolerance (``PW/src/setup.f90``'s odd
+-electron check) for treating a heuristically-summed ``nelec`` as an
+integer despite floating-point noise, without also treating a
+genuinely fractional ``nelec`` (e.g. a disordered/partial-occupancy
+structure) as spuriously even."""
 _SCF_LIKE_PURPOSES = frozenset({"scf", "relax", "vc-relax"})
 """``purpose``s that run their own electronic-structure scf loop and so
 still need the fixed-occupations/integer-moment rule below -- unlike
@@ -97,6 +119,7 @@ def check_all(
     *field_states: FieldState[object],
     occupations: FieldState[OccupationsDecision] | None = None,
     magnetic: FieldState[MagneticConfigFacts] | None = None,
+    electron_count: FieldState[ElectronCountDecision] | None = None,
     relax: FieldState[RelaxOptions | VcRelaxOptions] | None = None,
     geometry: FieldState[GeometryFacts] | None = None,
     job: FieldState[JobDecision] | None = None,
@@ -108,20 +131,28 @@ def check_all(
     ``field_states`` is every ``FieldState`` a caller has assembled so
     far (from any advisor) -- any that are ``Blocked`` land in
     ``report.blocking`` via ``collect_blocked``. ``occupations``/
-    ``magnetic``/``relax``/``geometry``/``job``/``parallel``/``purpose``
-    additionally opt into the named cross-parameter rules this module
-    implements; passing them here also folds them into the generic
-    ``Blocked`` scan, so a caller does not need to repeat them in
-    ``field_states`` as well.
+    ``magnetic``/``electron_count``/``relax``/``geometry``/``job``/
+    ``parallel``/``purpose`` additionally opt into the named
+    cross-parameter rules this module implements; passing them here
+    also folds them into the generic ``Blocked`` scan, so a caller does
+    not need to repeat them in ``field_states`` as well.
     """
     optional = tuple(
         s
-        for s in (occupations, magnetic, relax, geometry, job, parallel)
+        for s in (occupations, magnetic, electron_count, relax, geometry, job, parallel)
         if s is not None
     )
     blocking = list(collect_blocked(*field_states, *optional))
 
-    reason = _fixed_occupations_needs_integer_moment(occupations, magnetic, purpose)
+    reason = _fixed_occupations_needs_integer_moment(
+        occupations, magnetic, electron_count, purpose
+    )
+    if reason is not None:
+        blocking.append(reason)
+
+    reason = _fixed_occupations_needs_even_electron_count(
+        occupations, magnetic, electron_count, purpose
+    )
     if reason is not None:
         blocking.append(reason)
 
@@ -143,6 +174,7 @@ def check_all(
 def _fixed_occupations_needs_integer_moment(
     occupations: FieldState[OccupationsDecision] | None,
     magnetic: FieldState[MagneticConfigFacts] | None,
+    electron_count: FieldState[ElectronCountDecision] | None,
     purpose: str,
 ) -> str | None:
     if purpose not in _SCF_LIKE_PURPOSES or occupations is None or magnetic is None:
@@ -158,6 +190,51 @@ def _fixed_occupations_needs_integer_moment(
         return (
             "occupations='fixed' with a spin-polarized system requires an "
             f"integer tot_magnetization; got {tot!r}."
+        )
+    if electron_count is not None and electron_count.ok:
+        # nelup = (nelec + tot) / 2, neldw = (nelec - tot) / 2 (#70): both
+        # need to be integers, which needs tot_magnetization and nelec to
+        # share parity -- an integer tot_magnetization alone is not
+        # sufficient (e.g. nelec=3, tot=2 gives nelup=2.5/neldw=0.5).
+        nelup = (electron_count.value.nelec + tot) / 2
+        if abs(round(nelup) - nelup) > _EVEN_ELECTRON_COUNT_TOLERANCE:
+            return (
+                "occupations='fixed' requires tot_magnetization to share "
+                "parity with the electron count, so nelup/neldw are both "
+                f"integers; got tot_magnetization={tot!r}, "
+                f"nelec={electron_count.value.nelec!r}."
+            )
+    return None
+
+
+def _fixed_occupations_needs_even_electron_count(
+    occupations: FieldState[OccupationsDecision] | None,
+    magnetic: FieldState[MagneticConfigFacts] | None,
+    electron_count: FieldState[ElectronCountDecision] | None,
+    purpose: str,
+) -> str | None:
+    """Sibling of ``_fixed_occupations_needs_integer_moment`` above, for
+    the non-spin-polarized side: found empirically 2026-09-16, verified
+    against real QE 7.3 source (``PW/src/iweights.f90``) -- see this
+    module's own docstring, rule 3."""
+    if (
+        purpose not in _SCF_LIKE_PURPOSES
+        or occupations is None
+        or magnetic is None
+        or electron_count is None
+    ):
+        return None
+    if not (occupations.ok and magnetic.ok and electron_count.ok):
+        return None  # already surfaced via collect_blocked, or genuinely unknown
+    if occupations.value.occupations != "fixed" or magnetic.value.spin_polarized:
+        return None
+    nelec = electron_count.value.nelec
+    if abs(round(nelec / 2) - nelec / 2) > _EVEN_ELECTRON_COUNT_TOLERANCE:
+        return (
+            "occupations='fixed' with a non-spin-polarized system requires "
+            f"an even electron count; got nelec={nelec!r}, which likely means "
+            "an unpaired electron -- set spin_polarized=true, or "
+            "occupations=smearing/tetrahedra_opt if this is genuinely metallic."
         )
     return None
 
