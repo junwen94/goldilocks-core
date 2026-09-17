@@ -53,7 +53,7 @@ export function StructureCard() {
             <StructureViewport inspection={snapshot.inspection} />
           )}
         </div>
-        {snapshot.inspection === null ? null : (
+        {snapshot.capabilities === null ? null : (
           <>
             <Divider my="md" />
             <AnalysisSection />

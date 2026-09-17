@@ -43,13 +43,14 @@ export function CalculationForm() {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
   const { draft, capabilities, inspection, reviewed } = snapshot;
-  if (draft === null || capabilities === null || inspection === null) {
+  if (draft === null || capabilities === null) {
     return null;
   }
 
   const inspecting = snapshot.operation === "inspect";
+  const disabled = inspecting || inspection === null;
 
-  const elements = uniqueElements(inspection);
+  const elements = inspection === null ? [] : uniqueElements(inspection);
   const overrides = draft.overrides;
 
   function patchOverrides(patch: Readonly<Record<string, unknown>>): void {
@@ -63,11 +64,17 @@ export function CalculationForm() {
           Calculation settings are disabled while the new structure loads.
         </Text>
       ) : null}
+      {inspection === null ? (
+        <Text c="dimmed" size="sm">
+          Showing default settings — load a structure to configure a
+          calculation.
+        </Text>
+      ) : null}
 
       <SimpleGrid cols={{ base: 1, xs: 2 }}>
         <NativeSelect
           label="Code"
-          disabled={inspecting}
+          disabled={disabled}
           value={draft.code}
           data={capabilities.codes.map((code) => ({
             value: code.id,
@@ -82,7 +89,7 @@ export function CalculationForm() {
         />
         <NativeSelect
           label="Task"
-          disabled={inspecting}
+          disabled={disabled}
           value={draft.task}
           data={capabilities.tasks.map((task) => ({
             value: task.id,
@@ -99,7 +106,7 @@ export function CalculationForm() {
 
       <NativeSelect
         label="HPC profile"
-        disabled={inspecting}
+        disabled={disabled}
         value={draft.hpc ?? ""}
         data={[
           { value: "", label: "Automatic" },
@@ -124,7 +131,7 @@ export function CalculationForm() {
           reviewed={reviewed}
           elements={elements}
           pseudopotentialTables={capabilities.pseudopotential_tables}
-          disabled={inspecting}
+          disabled={disabled}
           onChange={patchOverrides}
         />
       </Accordion>

@@ -187,7 +187,10 @@ export function createWorkspace(
     const promise = core.capabilities().then(
       (capabilities) => {
         if (startup?.owner === owner) startup = null;
-        completeOperation(owner, { capabilities });
+        completeOperation(owner, {
+          capabilities,
+          draft: defaultDraft(capabilities),
+        });
       },
       (error: unknown) => {
         if (startup?.owner === owner) startup = null;
