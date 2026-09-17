@@ -100,27 +100,11 @@ def _check_python(body: str, label: str) -> None:
                     )
 
 
-_RETIRED_COMMANDS_PENDING_DOCS_REWRITE = frozenset({"compute", "capabilities"})
-"""v1 commands (`compute`->`run`, `capabilities` dropped in favour of
-`settings`/other v2 commands) that docs/README examples still show.
-Their v1 example lines also lean on flags with no v2 equivalent yet
-(`--preset`, `--model*`, `--pseudo-root`) since ml integration is
-deliberately last (v2 epic 11, #11) -- rewriting these examples now
-would mean rewriting them again once epic 11 lands real `--set`-able
-model options, so the docs rewrite is deferred to v2 epic 9 (#9)'s
-"update stale docs" cutover pass instead of touched per-epic."""
-
-
 def _check_bash(body: str, label: str) -> None:
     commands, flags = _cli_vocabulary()
     for line in body.splitlines():
         for match in _GOLDILOCKS_CALL.finditer(line):
             command = match.group(1)
-            if command in _RETIRED_COMMANDS_PENDING_DOCS_REWRITE:
-                pytest.xfail(
-                    f"{label} uses retired command 'goldilocks {command}'; "
-                    "docs rewrite deferred to v2 epic 9 (#9)"
-                )
             assert command in commands, (
                 f"{label} shows unknown command 'goldilocks {command}'"
             )
