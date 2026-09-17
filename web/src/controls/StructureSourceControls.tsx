@@ -2,9 +2,9 @@ import { type DragEvent, useRef, useState } from "react";
 import {
   Button,
   FileButton,
+  Group,
   Loader,
   Paper,
-  SimpleGrid,
   Stack,
   Text,
 } from "@mantine/core";
@@ -72,65 +72,88 @@ export function StructureSourceControls({
     sourceHelp = `${String(inspection.structure.site_count)} sites · parsed`;
   }
 
+  const dropzoneProps = {
+    onDragEnter: (event: DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      setDragging(true);
+    },
+    onDragOver: (event: DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+    },
+    onDragLeave: () => {
+      setDragging(false);
+    },
+    onDrop: fileDropped,
+    "aria-busy": inspecting,
+    bg: dragging
+      ? "var(--mantine-primary-color-light)"
+      : "var(--mantine-color-body)",
+  };
+
+  const fileButton = (
+    <FileButton
+      resetRef={resetFileInput}
+      onChange={fileSelected}
+      disabled={inspecting}
+    >
+      {(fileButtonProps) => (
+        <Button
+          {...fileButtonProps}
+          variant="subtle"
+          type="button"
+          aria-describedby="structure-source-help"
+          aria-label={
+            source === null
+              ? "Choose a CIF or POSCAR structure"
+              : "Replace structure file"
+          }
+          disabled={inspecting}
+        >
+          {source === null ? "Browse files" : "Replace file"}
+        </Button>
+      )}
+    </FileButton>
+  );
+
   return (
     <>
-      <Paper
-        withBorder
-        p="md"
-        bg={
-          dragging
-            ? "var(--mantine-primary-color-light)"
-            : "var(--mantine-color-body)"
-        }
-        onDragEnter={(event) => {
-          event.preventDefault();
-          setDragging(true);
-        }}
-        onDragOver={(event) => {
-          event.preventDefault();
-        }}
-        onDragLeave={() => {
-          setDragging(false);
-        }}
-        onDrop={fileDropped}
-        aria-busy={inspecting}
-      >
-        <Stack align="center" gap="xs">
-          {inspecting ? (
-            <Loader size="sm" aria-hidden="true" />
-          ) : (
+      {/* Once a structure is loaded the viewer needs most of this card's
+       * height, so the dropzone collapses from the spacious first-run
+       * empty state into a single compact status row (same drop target,
+       * same controls) instead of staying full-size forever. */}
+      {source === null ? (
+        <Paper withBorder p="md" {...dropzoneProps}>
+          <Stack align="center" gap="xs">
             <Upload aria-hidden="true" size={18} />
-          )}
-          <Text fw={600} truncate w="100%" ta="center">
-            {source?.structure_name ?? "Drop a structure"}
-          </Text>
-          <Text id="structure-source-help" c="dimmed" size="sm" ta="center">
-            {sourceHelp}
-          </Text>
-          <FileButton
-            resetRef={resetFileInput}
-            onChange={fileSelected}
-            disabled={inspecting}
-          >
-            {(fileButtonProps) => (
-              <Button
-                {...fileButtonProps}
-                variant="subtle"
-                type="button"
-                aria-describedby="structure-source-help"
-                aria-label={
-                  source === null
-                    ? "Choose a CIF or POSCAR structure"
-                    : "Replace structure file"
-                }
-                disabled={inspecting}
-              >
-                {source === null ? "Browse files" : "Replace file"}
-              </Button>
-            )}
-          </FileButton>
-        </Stack>
-      </Paper>
+            <Text fw={600} truncate w="100%" ta="center">
+              Drop a structure
+            </Text>
+            <Text id="structure-source-help" c="dimmed" size="sm" ta="center">
+              {sourceHelp}
+            </Text>
+            {fileButton}
+          </Stack>
+        </Paper>
+      ) : (
+        <Paper withBorder p="xs" {...dropzoneProps}>
+          <Group justify="space-between" wrap="nowrap" gap="xs">
+            <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+              {inspecting ? (
+                <Loader size="xs" aria-hidden="true" />
+              ) : (
+                <Upload aria-hidden="true" size={16} />
+              )}
+              <Text fw={600} truncate>
+                {source.structure_name}
+              </Text>
+              <Text id="structure-source-help" c="dimmed" size="sm" truncate>
+                {sourceHelp}
+              </Text>
+            </Group>
+            {fileButton}
+          </Group>
+        </Paper>
+      )}
       {readError === null ? null : (
         <Text c="red" size="sm" role="alert">
           {readError}
@@ -156,47 +179,18 @@ function StructureSummary({
       ),
     ),
   ];
+  const periodicity = structure.periodicity.every(Boolean) ? "3D" : "Partial";
   return (
-    <SimpleGrid
-      component="dl"
-      cols={2}
-      mt="md"
-      mb={0}
+    <Text
+      size="sm"
+      c="dimmed"
+      mt="xs"
+      truncate
       aria-label="Inspected structure summary"
     >
-      <div>
-        <Text component="dt" c="dimmed" size="sm">
-          Formula
-        </Text>
-        <Text component="dd" m={0}>
-          {structure.formula}
-        </Text>
-      </div>
-      <div>
-        <Text component="dt" c="dimmed" size="sm">
-          Elements
-        </Text>
-        <Text component="dd" m={0}>
-          {elements.join(" · ")}
-        </Text>
-      </div>
-      <div>
-        <Text component="dt" c="dimmed" size="sm">
-          Cell volume
-        </Text>
-        <Text component="dd" m={0}>
-          {structure.lattice.volume_angstrom3.toFixed(1)} Å³
-        </Text>
-      </div>
-      <div>
-        <Text component="dt" c="dimmed" size="sm">
-          Periodicity
-        </Text>
-        <Text component="dd" m={0}>
-          {structure.periodicity.every(Boolean) ? "3D" : "Partial"}
-        </Text>
-      </div>
-    </SimpleGrid>
+      {structure.formula} · {elements.join(" ")} ·{" "}
+      {structure.lattice.volume_angstrom3.toFixed(1)} Å³ · {periodicity}
+    </Text>
   );
 }
 

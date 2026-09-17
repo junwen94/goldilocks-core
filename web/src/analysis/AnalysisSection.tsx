@@ -1,0 +1,91 @@
+import { Accordion, Badge, Group, Stack, Text, Title } from "@mantine/core";
+
+import type { ResolvedField } from "../api/coreClient";
+import { OverrideControl } from "../controls/OverrideControl";
+import { RecordAccordionItem } from "../review/RecordAccordionItem";
+import { isAdvisorRecordKey } from "../workspace/recordGroups";
+import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
+
+const STATUS_COLORS: Readonly<Record<ResolvedField["status"], string>> = {
+  resolved: "green",
+  unavailable: "yellow",
+  blocked: "red",
+};
+
+/** goldilocks-core's own analysis tier only ever needs the structure --
+ * `capabilities.facts` (is_metal/is_magnetic/needs_soc/needs_correlation,
+ * each overridable) plus any other resolved record that isn't tied to a
+ * settings group (composition/geometry/symmetry/... -- see
+ * recordGroups.ts for exactly how that split is derived). Advisor
+ * records live in the Calculation card instead, next to the override
+ * control they belong to. */
+export function AnalysisSection() {
+  const workspace = useWorkspace();
+  const snapshot = useWorkspaceSnapshot();
+  const { capabilities, draft, inspection, reviewed } = snapshot;
+  if (capabilities === null || draft === null || inspection === null) {
+    return null;
+  }
+
+  const disabled = snapshot.operation === "inspect";
+  const overrides = draft.overrides;
+  const factKeys = new Set(capabilities.facts.map((fact) => fact.key));
+
+  const analysisOnlyRecords = Object.entries(reviewed?.records ?? {}).filter(
+    ([key]) => !factKeys.has(key) && !isAdvisorRecordKey(key, capabilities),
+  );
+
+  return (
+    <Stack gap="sm">
+      <Title order={3}>Goldilocks analysis</Title>
+      {capabilities.facts.length === 0 ? null : (
+        <Stack gap="sm">
+          {capabilities.facts.map((fact) => {
+            const record = reviewed?.records[fact.key];
+            return (
+              <div key={fact.key}>
+                {record === undefined ? null : (
+                  <Group gap="xs" mb={4}>
+                    <Badge
+                      size="xs"
+                      circle
+                      color={STATUS_COLORS[record.status]}
+                      aria-hidden="true"
+                    />
+                    <Text size="xs" c="dimmed">
+                      {record.status}
+                    </Text>
+                  </Group>
+                )}
+                <OverrideControl
+                  meta={{
+                    key: fact.key,
+                    type: fact.type,
+                    enum: fact.values ?? undefined,
+                    unit: null,
+                    description: fact.description,
+                  }}
+                  value={overrides[fact.key]}
+                  disabled={disabled}
+                  onChange={(value) => {
+                    void workspace.dispatch({
+                      type: "draft.patch",
+                      overrides: { [fact.key]: value },
+                    });
+                  }}
+                />
+              </div>
+            );
+          })}
+        </Stack>
+      )}
+      {analysisOnlyRecords.length === 0 ? null : (
+        <Accordion multiple transitionDuration={0}>
+          {analysisOnlyRecords.map(([key, field]) => (
+            <RecordAccordionItem key={key} name={key} field={field} />
+          ))}
+        </Accordion>
+      )}
+    </Stack>
+  );
+}

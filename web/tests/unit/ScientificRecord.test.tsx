@@ -1,5 +1,6 @@
 import { MantineProvider } from "@mantine/core";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import type { ResolvedField } from "../../src/api/coreClient";
@@ -77,26 +78,43 @@ describe("GeneratedInputReview", () => {
     });
 
     expect(
-      screen.getByText(/Generate input files to preview them here/),
+      screen.getByText(/will appear here automatically/),
     ).toBeInTheDocument();
   });
 
   it("unzips a real archive and previews each file with its manifest digest", async () => {
+    const user = userEvent.setup();
     const archive = buildArchive();
     render(<GeneratedInputReview archive={archive} />, {
       wrapper: MantineProvider,
     });
 
-    // Review order (artifacts.ts's displayPriority): scf.in,
-    // goldilocks.json, pseudo/Si.upf -- scf.in is the default active tab,
-    // so its panel renders without switching tabs first.
+    // Files are ordered by their manifest role -- the rendered QE input
+    // first, then the pseudopotential -- each collapsed by default
+    // behind an accordion row rather than a tab.
     await waitFor(() => {
-      expect(screen.getByRole("tab", { name: "scf.in" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /scf\.in/ }),
+      ).toBeInTheDocument();
     });
+    await user.click(screen.getByRole("button", { name: /scf\.in/ }));
 
     expect(
       screen.getByRole("region", { name: "Generated input scf.in" }),
     ).toHaveTextContent("&CONTROL");
     expect(screen.getByText("cccccccccc")).toBeInTheDocument();
+  });
+
+  it("shows a pseudopotential's entries instead of its raw file content", async () => {
+    const user = userEvent.setup();
+    const archive = buildArchive();
+    render(<GeneratedInputReview archive={archive} />, {
+      wrapper: MantineProvider,
+    });
+
+    await user.click(await screen.findByRole("button", { name: /Si\.upf/ }));
+
+    expect(screen.getByText("SHA-256")).toBeInTheDocument();
+    expect(screen.queryByText("UPF content")).not.toBeInTheDocument();
   });
 });

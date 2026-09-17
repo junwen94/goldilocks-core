@@ -54,6 +54,7 @@ export type WorkspaceAction =
   | { readonly type: "source.open"; readonly input: StructureInput }
   | {
       readonly type: "draft.patch";
+      readonly code?: string;
       readonly task?: CalcTask;
       readonly hpc?: string | null;
       /** Shallow-merged into the current overrides. A value of
@@ -62,6 +63,9 @@ export type WorkspaceAction =
       readonly overrides?: Readonly<Record<string, unknown>>;
     }
   | { readonly type: "review.compute" }
+  /** Fetches a fresh archive for live preview without saving it anywhere
+   * -- the auto-preview effect calls this, not a user action. */
+  | { readonly type: "review.refreshArchive" }
   | { readonly type: "review.download" }
   | { readonly type: "failure.retry" }
   | { readonly type: "failure.dismiss" }
@@ -226,6 +230,7 @@ export function createWorkspace(
     draftRevision += 1;
     const draft: CalculationDraft = {
       ...currentDraft,
+      ...("code" in action ? { code: action.code } : {}),
       ...("task" in action ? { task: action.task } : {}),
       ...("hpc" in action ? { hpc: action.hpc } : {}),
       overrides:
@@ -265,7 +270,12 @@ export function createWorkspace(
     }
   }
 
-  async function downloadReviewed(): Promise<void> {
+  /** Fetches and stores a fresh archive, but never saves it -- shared by
+   * the explicit download action (when nothing's cached yet) and the
+   * auto-preview effect that keeps `lastDownload` current so
+   * `GeneratedInputReview` always shows a live preview with no separate
+   * "generate" step. */
+  async function refreshArchive(): Promise<ArchiveDownload | null> {
     const snapshot = store.getState();
     if (
       snapshot.structureInput === null ||
@@ -274,17 +284,30 @@ export function createWorkspace(
       snapshot.outOfDate ||
       snapshot.operation !== null
     ) {
-      return;
+      return null;
     }
+    const revision = draftRevision;
     const request = toComputeRequest(snapshot.structureInput, snapshot.draft);
     const owner = beginOperation("download");
     try {
       const archive = await core.runArchive(request);
-      completeOperation(owner, { lastDownload: archive });
-      saveArchive(archive);
+      const staleByNow = revision !== draftRevision;
+      completeOperation(owner, {
+        lastDownload: archive,
+        outOfDate: staleByNow,
+      });
+      return staleByNow ? null : archive;
     } catch (error) {
       failOperation(owner, error);
+      return null;
     }
+  }
+
+  async function downloadReviewed(): Promise<void> {
+    const snapshot = store.getState();
+    if (snapshot.outOfDate) return;
+    const archive = snapshot.lastDownload ?? (await refreshArchive());
+    if (archive !== null) saveArchive(archive);
   }
 
   async function retryFailure(): Promise<void> {
@@ -339,6 +362,9 @@ export function createWorkspace(
         return;
       case "review.compute":
         await computeReview();
+        return;
+      case "review.refreshArchive":
+        await refreshArchive();
         return;
       case "review.download":
         await downloadReviewed();

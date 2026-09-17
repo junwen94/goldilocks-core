@@ -1,87 +1,108 @@
-.workbench-grid {
-  display: grid;
-  min-height: 100dvh;
-  grid-template-columns:
-    minmax(22rem, var(--controls-width, 34%))
-    0.75rem minmax(32rem, 1fr);
-  align-items: start;
+:root {
+  --app-header-height: 3.5rem;
 }
 
-.workbench-grid--loading {
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  height: var(--app-header-height);
+  border-bottom: 1px solid var(--mantine-color-default-border);
+  background: color-mix(in srgb, var(--mantine-color-body) 80%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.app-header img {
+  border-radius: 6px;
+}
+
+/* Three columns, mirroring goldilocks-core's own analysis -> advisors
+ * -> generation pipeline, one screen, no page scroll -- each column
+ * scrolls its own body internally as a safety net. */
+.workbench-grid {
+  display: grid;
   grid-template-columns: 1fr;
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  height: calc(100dvh - var(--app-header-height));
+  max-width: 100rem;
+  margin-inline: auto;
+  padding: 1rem;
+  box-sizing: border-box;
+}
+
+@media (min-width: 72rem) {
+  .workbench-grid {
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: 1fr;
+  }
+}
+
+.workbench-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-top-width: 4px;
+  border-top-style: solid;
+  border-top-color: var(--card-accent);
+}
+
+.workbench-card .card-header {
+  flex: 0 0 auto;
+}
+
+.workbench-card .card-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.workbench-card .card-kicker {
+  color: var(--card-accent);
+}
+
+/* Every --card-accent below is checked at >=4.5:1 against white --
+ * axe caught #e35437/#0f9488 (earlier, brighter picks) failing at
+ * ~3.75:1 on the kicker-number text; these are darkened just enough to
+ * clear AA while staying visually in the same red-orange/teal family. */
+.card-structure {
+  --card-accent: #c2410c;
+}
+
+.card-calculation {
+  --card-accent: #b02090;
+}
+
+.card-inputs {
+  --card-accent: #1e5df8;
 }
 
 .structure-stage {
-  position: sticky;
-  top: 0;
-  min-width: 0;
-  height: 100dvh;
-  min-height: 34rem;
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 22rem;
   overflow: hidden;
   background: var(--mantine-color-body);
-}
-
-.stage-navigation {
-  position: absolute;
-  z-index: 7;
-  top: 1rem;
-  right: 1rem;
-}
-
-.pane-resizer {
-  position: sticky;
-  top: 0;
-  height: 100dvh;
-  min-height: 34rem;
-  border-inline: 1px solid var(--mantine-color-default-border);
-  background: var(--mantine-color-body);
-  cursor: col-resize;
-  touch-action: none;
-}
-
-.pane-resizer::after {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 3px;
-  height: 3.5rem;
-  background: var(--mantine-color-dimmed);
-  content: "";
-  transform: translate(-50%, -50%);
-}
-
-.pane-resizer:hover::after,
-.pane-resizer:focus-visible::after {
-  background: var(--mantine-primary-color-filled);
-}
-
-@media (max-width: 57rem) {
-  .workbench-grid {
-    display: flex;
-    min-height: 0;
-    flex-direction: column;
-  }
-
-  .pane-resizer {
-    display: none;
-  }
-
-  #calculation-panel,
-  .structure-stage,
-  #recommendation-panel {
-    width: 100%;
-  }
-
-  .structure-stage {
-    position: relative;
-    height: 38rem;
-    min-height: 38rem;
-  }
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-md);
 }
 
 @media (max-width: 47.5rem) {
+  .workbench-grid {
+    height: auto;
+  }
+
+  .workbench-card {
+    min-height: 24rem;
+  }
+
   .structure-stage {
-    height: 31rem;
-    min-height: 31rem;
+    flex: 0 0 auto;
+    height: 16rem;
+    min-height: 16rem;
   }
 }

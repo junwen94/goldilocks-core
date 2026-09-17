@@ -1,27 +1,28 @@
-import { useState } from "react";
 import {
   Accordion,
-  Button,
+  Badge,
   Checkbox,
   Fieldset,
+  Group,
   NativeSelect,
   NumberInput,
+  Paper,
   SimpleGrid,
   Stack,
   Text,
-  Textarea,
-  TextInput,
 } from "@mantine/core";
-import { ArrowRight } from "lucide-react";
 
 import type {
   CalcTask,
-  Fact,
+  ExplainResult,
   PseudopotentialTable,
+  ResolvedField,
   Setting,
   StructureInspection,
 } from "../api/coreClient";
+import { ScientificRecord } from "../review/ScientificRecord";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
+import { OverrideControl } from "./OverrideControl";
 
 /** Groups whose overrides only make sense for a subset of tasks.
  * `capabilities.py`'s own `Setting.tasks` field is always `null` today
@@ -32,44 +33,31 @@ const GROUP_TASK_RELEVANCE: Readonly<Record<string, readonly CalcTask[]>> = {
   relax: ["relax", "vc-relax"],
 };
 
-export function CalculationForm({
-  onShowRecommendation,
-}: {
-  readonly onShowRecommendation: () => void;
-}) {
+const STATUS_COLORS: Readonly<Record<ResolvedField["status"], string>> = {
+  resolved: "green",
+  unavailable: "yellow",
+  blocked: "red",
+};
+
+export function CalculationForm() {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
-  const { draft, capabilities, inspection } = snapshot;
+  const { draft, capabilities, inspection, reviewed } = snapshot;
   if (draft === null || capabilities === null || inspection === null) {
     return null;
   }
 
   const inspecting = snapshot.operation === "inspect";
-  const busy = snapshot.operation !== null;
-  let submitLabel =
-    snapshot.reviewed === null
-      ? "Generate recommendation"
-      : "Update recommendation";
-  if (snapshot.operation === "explain") submitLabel = "Computing";
 
   const elements = uniqueElements(inspection);
   const overrides = draft.overrides;
-  const functionalOverride =
-    typeof overrides.functional === "string" ? overrides.functional : undefined;
 
   function patchOverrides(patch: Readonly<Record<string, unknown>>): void {
     void workspace.dispatch({ type: "draft.patch", overrides: patch });
   }
 
   return (
-    <Stack
-      component="form"
-      onSubmit={(event) => {
-        event.preventDefault();
-        onShowRecommendation();
-        void workspace.dispatch({ type: "review.compute" });
-      }}
-    >
+    <Stack>
       {inspecting ? (
         <Text c="red" size="sm" role="status">
           Calculation settings are disabled while the new structure loads.
@@ -77,6 +65,21 @@ export function CalculationForm({
       ) : null}
 
       <SimpleGrid cols={{ base: 1, xs: 2 }}>
+        <NativeSelect
+          label="Code"
+          disabled={inspecting}
+          value={draft.code}
+          data={capabilities.codes.map((code) => ({
+            value: code.id,
+            label: code.name,
+          }))}
+          onChange={(event) => {
+            void workspace.dispatch({
+              type: "draft.patch",
+              code: event.currentTarget.value,
+            });
+          }}
+        />
         <NativeSelect
           label="Task"
           disabled={inspecting}
@@ -92,84 +95,39 @@ export function CalculationForm({
             });
           }}
         />
-        <NativeSelect
-          label="HPC profile"
-          disabled={inspecting}
-          value={draft.hpc ?? ""}
-          data={[
-            { value: "", label: "Automatic" },
-            ...capabilities.hpc_profiles.map((profile) => ({
-              value: profile.id,
-              label: profile.name,
-            })),
-          ]}
-          onChange={(event) => {
-            void workspace.dispatch({
-              type: "draft.patch",
-              hpc: event.currentTarget.value || null,
-            });
-          }}
-        />
       </SimpleGrid>
 
-      <SimpleGrid cols={{ base: 1, xs: 2 }}>
-        <NativeSelect
-          label="Functional"
-          disabled={inspecting}
-          value={functionalOverride ?? ""}
-          data={[
-            { value: "", label: "Automatic" },
-            ...uniqueFunctionals(capabilities.pseudopotential_tables).map(
-              (functional) => ({ value: functional, label: functional }),
-            ),
-          ]}
-          onChange={(event) => {
-            const raw = event.currentTarget.value;
-            // A pinned table pinned under the old functional may no
-            // longer be a valid choice (and won't even appear in the
-            // now-refiltered dropdown) -- clear it rather than silently
-            // keep submitting a now-invisible override, matching how a
-            // pseudopotential-table pin has always been invalidated by
-            // changing the functional it was chosen under.
-            patchOverrides({
-              functional: raw === "" ? undefined : raw,
-              pseudo_table_id: undefined,
-            });
-          }}
-        />
-        <PseudoTableControl
-          tables={capabilities.pseudopotential_tables}
+      <NativeSelect
+        label="HPC profile"
+        disabled={inspecting}
+        value={draft.hpc ?? ""}
+        data={[
+          { value: "", label: "Automatic" },
+          ...capabilities.hpc_profiles.map((profile) => ({
+            value: profile.id,
+            label: profile.name,
+          })),
+        ]}
+        onChange={(event) => {
+          void workspace.dispatch({
+            type: "draft.patch",
+            hpc: event.currentTarget.value || null,
+          });
+        }}
+      />
+
+      <Accordion multiple transitionDuration={0}>
+        <SettingsGroupItems
+          settings={capabilities.settings}
+          task={draft.task}
+          overrides={overrides}
+          reviewed={reviewed}
           elements={elements}
-          functionalOverride={functionalOverride}
-          pinned={overrides.pseudo_table_id}
+          pseudopotentialTables={capabilities.pseudopotential_tables}
           disabled={inspecting}
           onChange={patchOverrides}
         />
-      </SimpleGrid>
-
-      <FactsSection
-        facts={capabilities.facts}
-        overrides={overrides}
-        disabled={inspecting}
-        onChange={patchOverrides}
-      />
-
-      <SettingsGroups
-        settings={capabilities.settings}
-        task={draft.task}
-        overrides={overrides}
-        disabled={inspecting}
-        onChange={patchOverrides}
-      />
-
-      <Button
-        type="submit"
-        fullWidth
-        rightSection={<ArrowRight aria-hidden="true" size={14} />}
-        disabled={busy}
-      >
-        {submitLabel}
-      </Button>
+      </Accordion>
     </Stack>
   );
 }
@@ -234,68 +192,90 @@ function PseudoTableControl({
   );
 }
 
-function FactsSection({
-  facts,
-  overrides,
+function FunctionalControl({
+  tables,
+  value,
   disabled,
   onChange,
 }: {
-  readonly facts: readonly Fact[];
-  readonly overrides: Readonly<Record<string, unknown>>;
+  readonly tables: readonly PseudopotentialTable[];
+  readonly value: string | undefined;
   readonly disabled: boolean;
   readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
 }) {
-  if (facts.length === 0) return null;
   return (
-    <Fieldset legend="Structure facts">
-      <Stack gap="sm">
-        {facts.map((fact) => (
-          <OverrideControl
-            key={fact.key}
-            meta={{
-              key: fact.key,
-              type: fact.type,
-              enum: fact.values ?? undefined,
-              unit: null,
-              description: fact.description,
-            }}
-            value={overrides[fact.key]}
-            disabled={disabled}
-            onChange={(value) => {
-              onChange({ [fact.key]: value });
-            }}
-          />
-        ))}
-      </Stack>
-    </Fieldset>
+    <NativeSelect
+      label="Functional"
+      disabled={disabled}
+      value={value ?? ""}
+      data={[
+        { value: "", label: "Automatic" },
+        ...uniqueFunctionals(tables).map((functional) => ({
+          value: functional,
+          label: functional,
+        })),
+      ]}
+      onChange={(event) => {
+        const raw = event.currentTarget.value;
+        // A pinned table pinned under the old functional may no
+        // longer be a valid choice (and won't even appear in the
+        // now-refiltered dropdown) -- clear it rather than silently
+        // keep submitting a now-invisible override, matching how a
+        // pseudopotential-table pin has always been invalidated by
+        // changing the functional it was chosen under.
+        onChange({
+          functional: raw === "" ? undefined : raw,
+          pseudo_table_id: undefined,
+        });
+      }}
+    />
   );
 }
 
+/** `pseudo_table_id` is the settings group's internal name; the
+ * accordion header shows the same human label as the control it
+ * contains instead of a literal, ID-suffixed rendering of the group
+ * name. */
+const GROUP_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  pseudo_table_id: "Pseudopotential table",
+};
+
 function humanizeGroup(group: string): string {
+  const override = GROUP_DISPLAY_NAMES[group];
+  if (override !== undefined) return override;
   const spaced = group.replace(/_/g, " ");
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
-function SettingsGroups({
+/** A settings group's own record key doesn't always equal the group
+ * name verbatim (`pseudo_table_id` the group vs `pseudo_table` the
+ * record, see recordGroups.ts) -- this is the one alias the advisors
+ * accordion needs to look its own resolved value up. */
+function recordKeyForGroup(group: string): string {
+  return group === "pseudo_table_id" ? "pseudo_table" : group;
+}
+
+function SettingsGroupItems({
   settings,
   task,
   overrides,
+  reviewed,
+  elements,
+  pseudopotentialTables,
   disabled,
   onChange,
 }: {
   readonly settings: readonly Setting[];
   readonly task: CalcTask;
   readonly overrides: Readonly<Record<string, unknown>>;
+  readonly reviewed: ExplainResult | null;
+  readonly elements: readonly string[];
+  readonly pseudopotentialTables: readonly PseudopotentialTable[];
   readonly disabled: boolean;
   readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
 }) {
   const groups = new Map<string, Setting[]>();
   for (const setting of settings) {
-    // functional/pseudo_table_id are rendered above, next to the task
-    // selector, since they're the two most commonly tuned system knobs.
-    if (setting.key === "functional" || setting.key === "pseudo_table_id") {
-      continue;
-    }
     const relevantTasks = GROUP_TASK_RELEVANCE[setting.group];
     if (relevantTasks !== undefined && !relevantTasks.includes(task)) {
       continue;
@@ -307,171 +287,121 @@ function SettingsGroups({
       bucket.push(setting);
     }
   }
-  if (groups.size === 0) return null;
+
+  const functionalOverride =
+    typeof overrides.functional === "string" ? overrides.functional : undefined;
 
   return (
-    <Accordion multiple transitionDuration={0}>
-      {[...groups.entries()].map(([group, groupSettings]) => (
-        <Accordion.Item key={group} value={group}>
-          <Accordion.Control>{humanizeGroup(group)}</Accordion.Control>
-          <Accordion.Panel>
-            <Stack gap="sm">
-              {groupSettings.map((setting) =>
-                setting.key === "k_grid" ? (
-                  <KGridControl
-                    key={setting.key}
-                    value={overrides.k_grid}
-                    disabled={disabled}
-                    onChange={(value) => {
-                      onChange({ k_grid: value });
-                    }}
+    <>
+      {[...groups.entries()].map(([group, groupSettings]) => {
+        const record = reviewed?.records[recordKeyForGroup(group)];
+        return (
+          <Accordion.Item key={group} value={group}>
+            <Accordion.Control>
+              <Group gap="xs" wrap="nowrap">
+                {record === undefined ? null : (
+                  <Badge
+                    size="xs"
+                    circle
+                    color={STATUS_COLORS[record.status]}
+                    aria-hidden="true"
                   />
-                ) : (
-                  <OverrideControl
-                    key={setting.key}
-                    meta={setting}
-                    value={overrides[setting.key]}
-                    disabled={disabled}
-                    onChange={(value) => {
-                      onChange({ [setting.key]: value });
-                    }}
-                  />
-                ),
-              )}
-            </Stack>
-          </Accordion.Panel>
-        </Accordion.Item>
-      ))}
-    </Accordion>
+                )}
+                <span>{humanizeGroup(group)}</span>
+              </Group>
+            </Accordion.Control>
+            <Accordion.Panel>
+              <Stack gap="sm">
+                {record === undefined ? null : (
+                  <Paper withBorder p="xs" bg="var(--mantine-color-default)">
+                    <ScientificRecord field={record} />
+                  </Paper>
+                )}
+                <GroupBody
+                  group={group}
+                  groupSettings={groupSettings}
+                  elements={elements}
+                  pseudopotentialTables={pseudopotentialTables}
+                  functionalOverride={functionalOverride}
+                  overrides={overrides}
+                  disabled={disabled}
+                  onChange={onChange}
+                />
+              </Stack>
+            </Accordion.Panel>
+          </Accordion.Item>
+        );
+      })}
+    </>
   );
 }
 
-interface OverrideFieldMeta {
-  readonly key: string;
-  readonly type: string;
-  readonly enum?: readonly string[] | undefined;
-  readonly unit?: string | null;
-  readonly default?: unknown;
-  readonly description: string;
-}
-
-function fieldLabel(meta: OverrideFieldMeta): string {
-  const humanized = meta.key.replace(/_/g, " ");
-  return meta.unit ? `${humanized} · ${meta.unit}` : humanized;
-}
-
-/** `unknown`-safe stringification -- most override values are
- * primitives, but array/object-shaped ones (`k_grid`, `u_by_element`)
- * would otherwise stringify to the useless `"[object Object]"`. */
-function stringifyValue(value: unknown): string {
-  return typeof value === "object" && value !== null
-    ? JSON.stringify(value)
-    : String(value);
-}
-
-function automaticPlaceholder(meta: OverrideFieldMeta): string {
-  return meta.default === undefined
-    ? "Automatic"
-    : `Automatic (${stringifyValue(meta.default)})`;
-}
-
-function OverrideControl({
-  meta,
-  value,
+function GroupBody({
+  group,
+  groupSettings,
+  elements,
+  pseudopotentialTables,
+  functionalOverride,
+  overrides,
   disabled,
   onChange,
 }: {
-  readonly meta: OverrideFieldMeta;
-  readonly value: unknown;
+  readonly group: string;
+  readonly groupSettings: readonly Setting[];
+  readonly elements: readonly string[];
+  readonly pseudopotentialTables: readonly PseudopotentialTable[];
+  readonly functionalOverride: string | undefined;
+  readonly overrides: Readonly<Record<string, unknown>>;
   readonly disabled: boolean;
-  readonly onChange: (value: unknown) => void;
+  readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
 }) {
-  const pinned = value !== undefined;
-  const label = fieldLabel(meta);
-
-  if (meta.type === "boolean") {
+  if (group === "functional") {
     return (
-      <NativeSelect
-        label={label}
-        description={meta.description}
+      <FunctionalControl
+        tables={pseudopotentialTables}
+        value={functionalOverride}
         disabled={disabled}
-        value={pinned ? stringifyValue(value) : ""}
-        data={[
-          { value: "", label: automaticPlaceholder(meta) },
-          { value: "true", label: "On" },
-          { value: "false", label: "Off" },
-        ]}
-        onChange={(event) => {
-          const raw = event.currentTarget.value;
-          onChange(raw === "" ? undefined : raw === "true");
-        }}
+        onChange={onChange}
       />
     );
   }
-
-  if (meta.enum && meta.enum.length > 0) {
+  if (group === "pseudo_table_id") {
     return (
-      <NativeSelect
-        label={label}
-        description={meta.description}
+      <PseudoTableControl
+        tables={pseudopotentialTables}
+        elements={elements}
+        functionalOverride={functionalOverride}
+        pinned={overrides.pseudo_table_id}
         disabled={disabled}
-        value={pinned ? stringifyValue(value) : ""}
-        data={[
-          { value: "", label: automaticPlaceholder(meta) },
-          ...meta.enum.map((option) => ({ value: option, label: option })),
-        ]}
-        onChange={(event) => {
-          const raw = event.currentTarget.value;
-          onChange(raw === "" ? undefined : raw);
-        }}
+        onChange={onChange}
       />
     );
   }
-
-  if (meta.type === "integer" || meta.type === "number") {
-    return (
-      <NumberInput
-        label={label}
-        description={meta.description}
-        disabled={disabled}
-        placeholder={automaticPlaceholder(meta)}
-        value={pinned ? (value as number) : ""}
-        onChange={(raw) => {
-          if (raw === "") {
-            onChange(undefined);
-            return;
-          }
-          const parsed = Number(raw);
-          if (Number.isFinite(parsed)) onChange(parsed);
-        }}
-      />
-    );
-  }
-
-  if (meta.type === "string") {
-    return (
-      <TextInput
-        label={label}
-        description={meta.description}
-        disabled={disabled}
-        placeholder={automaticPlaceholder(meta)}
-        value={pinned ? stringifyValue(value) : ""}
-        onChange={(event) => {
-          const raw = event.currentTarget.value;
-          onChange(raw === "" ? undefined : raw);
-        }}
-      />
-    );
-  }
-
   return (
-    <JsonOverrideControl
-      label={label}
-      description={meta.description}
-      disabled={disabled}
-      value={value}
-      onChange={onChange}
-    />
+    <>
+      {groupSettings.map((setting) =>
+        setting.key === "k_grid" ? (
+          <KGridControl
+            key={setting.key}
+            value={overrides.k_grid}
+            disabled={disabled}
+            onChange={(value) => {
+              onChange({ k_grid: value });
+            }}
+          />
+        ) : (
+          <OverrideControl
+            key={setting.key}
+            meta={setting}
+            value={overrides[setting.key]}
+            disabled={disabled}
+            onChange={(value) => {
+              onChange({ [setting.key]: value });
+            }}
+          />
+        ),
+      )}
+    </>
   );
 }
 
@@ -521,68 +451,5 @@ function KGridControl({
         ))}
       </SimpleGrid>
     </Fieldset>
-  );
-}
-
-function JsonOverrideControl({
-  label,
-  description,
-  disabled,
-  value,
-  onChange,
-}: {
-  readonly label: string;
-  readonly description: string;
-  readonly disabled: boolean;
-  readonly value: unknown;
-  readonly onChange: (value: unknown) => void;
-}) {
-  const [lastValue, setLastValue] = useState(value);
-  const [text, setText] = useState(
-    value === undefined ? "" : JSON.stringify(value),
-  );
-  const [error, setError] = useState<string | null>(null);
-  // Resync the editable text when `value` changes for a reason other than
-  // this control's own onChange (e.g. cleared elsewhere, structure
-  // reopened) -- adjusting state during render, not in an effect, per
-  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes.
-  if (value !== lastValue) {
-    setLastValue(value);
-    setText(value === undefined ? "" : JSON.stringify(value));
-    setError(null);
-  }
-
-  return (
-    <Stack gap={4}>
-      <Textarea
-        label={label}
-        description={`${description} (JSON)`}
-        disabled={disabled}
-        placeholder="Automatic"
-        autosize
-        minRows={1}
-        value={text}
-        onChange={(event) => {
-          const raw = event.currentTarget.value;
-          setText(raw);
-          if (raw.trim() === "") {
-            setError(null);
-            onChange(undefined);
-            return;
-          }
-          try {
-            onChange(JSON.parse(raw) as unknown);
-            setError(null);
-          } catch {
-            setError("Not valid JSON");
-          }
-        }}
-      />
-      {error === null ? null : (
-        <Text c="red" size="xs">
-          {error}
-        </Text>
-      )}
-    </Stack>
   );
 }
