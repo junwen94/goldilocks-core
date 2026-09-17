@@ -1,5 +1,7 @@
 :root {
-  --app-header-height: 3.5rem;
+  /* Tall enough for the two-line brand lockup (name + slogan); also
+   * matches the marketing site's own nav height (8-goldilocks-web). */
+  --app-header-height: 4.75rem;
 }
 
 .app-header {
@@ -12,8 +14,8 @@
 }
 
 .app-header img {
-  width: 2rem;
-  height: 2rem;
+  width: 2.5rem;
+  height: 2.5rem;
   border-radius: 8px;
 }
 
