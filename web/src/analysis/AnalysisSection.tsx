@@ -23,11 +23,11 @@ export function AnalysisSection() {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
   const { capabilities, draft, inspection, reviewed } = snapshot;
-  if (capabilities === null || draft === null || inspection === null) {
+  if (capabilities === null || draft === null) {
     return null;
   }
 
-  const disabled = snapshot.operation === "inspect";
+  const disabled = snapshot.operation === "inspect" || inspection === null;
   const overrides = draft.overrides;
   const factKeys = new Set(capabilities.facts.map((fact) => fact.key));
 

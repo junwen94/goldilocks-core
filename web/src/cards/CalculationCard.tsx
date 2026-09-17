@@ -19,7 +19,7 @@ export function CalculationCard() {
         <Title order={2}>Calculation</Title>
       </Group>
       <div className="card-body">
-        {snapshot.inspection === null ? (
+        {snapshot.capabilities === null ? (
           <Text c="dimmed">Load a structure to configure a calculation.</Text>
         ) : (
           <CalculationForm />

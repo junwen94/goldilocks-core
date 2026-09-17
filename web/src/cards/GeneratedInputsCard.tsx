@@ -47,6 +47,11 @@ export function GeneratedInputsCard() {
                 ? "Computing recommendation"
                 : "No recommendation yet"}
             </Text>
+            {snapshot.operation === "explain" ? null : (
+              <Text c="dimmed" size="sm">
+                Load a structure to generate input files.
+              </Text>
+            )}
           </Stack>
         ) : (
           <Stack gap="lg">

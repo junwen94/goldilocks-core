@@ -147,7 +147,11 @@ describe("Goldilocks Workbench", () => {
     expect(
       screen.getByRole("region", { name: "Generated input files" }),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("separator")).not.toBeInTheDocument();
+    // The Calculation and Analysis groups render with defaults from
+    // Capabilities alone, before any structure is loaded, so the page
+    // isn't empty while waiting for one -- the separator ahead of the
+    // Analysis section is one of those always-present pieces.
+    expect(await screen.findByRole("separator")).toBeInTheDocument();
   });
 
   it("uses light mode by default and persists an explicit dark mode", async () => {
