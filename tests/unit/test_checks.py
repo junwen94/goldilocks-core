@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pymatgen.core import Lattice, Structure
 
+from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.occupations import OccupationsDecision
@@ -125,6 +126,121 @@ def test_blocked_occupations_surfaces_once_via_the_generic_scan() -> None:
     report = check_all(occupations=Blocked(by="functional undecided"), purpose="scf")
 
     assert report.blocking == ("functional undecided",)
+
+
+def _electron_count(nelec: float):
+    return Resolved(ElectronCountDecision(nelec), Provenance(source="heuristic"))
+
+
+def test_fixed_occupations_non_spin_polarized_odd_electron_count_blocks() -> None:
+    """#70: a single boron atom (nelec=3) forced non-metal -- real repro
+    that produced a silently-wrong-electron-count scf.in before this
+    check existed."""
+    report = check_all(
+        occupations=_FIXED,
+        magnetic=_magnetic(False, None),
+        electron_count=_electron_count(3.0),
+        purpose="scf",
+    )
+
+    assert not report.ok
+    assert "even electron count" in report.blocking[0]
+    assert "3.0" in report.blocking[0]
+
+
+def test_fixed_occupations_non_spin_polarized_even_electron_count_is_ok() -> None:
+    report = check_all(
+        occupations=_FIXED,
+        magnetic=_magnetic(False, None),
+        electron_count=_electron_count(4.0),
+        purpose="scf",
+    )
+
+    assert report.ok
+
+
+def test_smearing_occupations_never_triggers_the_electron_count_check() -> None:
+    report = check_all(
+        occupations=_SMEARING,
+        magnetic=_magnetic(False, None),
+        electron_count=_electron_count(3.0),
+        purpose="scf",
+    )
+
+    assert report.ok
+
+
+def test_spin_polarized_system_never_triggers_the_electron_count_check() -> None:
+    """An odd-electron, spin-polarized system is the sibling
+    integer-moment check's territory instead."""
+    report = check_all(
+        occupations=_FIXED,
+        magnetic=_magnetic(True, 1.0),
+        electron_count=_electron_count(3.0),
+        purpose="scf",
+    )
+
+    assert report.ok
+
+
+def test_the_electron_count_check_is_scoped_to_the_scf_step_only() -> None:
+    report = check_all(
+        occupations=_FIXED,
+        magnetic=_magnetic(False, None),
+        electron_count=_electron_count(3.0),
+        purpose="nscf",
+    )
+
+    assert report.ok
+
+
+def test_the_electron_count_check_also_applies_to_relax_and_vc_relax() -> None:
+    for purpose in ("relax", "vc-relax"):
+        report = check_all(
+            occupations=_FIXED,
+            magnetic=_magnetic(False, None),
+            electron_count=_electron_count(3.0),
+            purpose=purpose,
+        )
+
+        assert not report.ok, purpose
+        assert "even electron count" in report.blocking[0]
+
+
+def test_moment_and_electron_count_must_share_parity() -> None:
+    """#70's second finding: an integer tot_magnetization alone is not
+    enough -- nelup=(nelec+tot)/2 and neldw=(nelec-tot)/2 both need to
+    be integers, which needs matching parity (nelec=3, tot=2 gives
+    nelup=2.5/neldw=0.5)."""
+    report = check_all(
+        occupations=_FIXED,
+        magnetic=_magnetic(True, 2.0),
+        electron_count=_electron_count(3.0),
+        purpose="scf",
+    )
+
+    assert not report.ok
+    assert "share parity" in report.blocking[0]
+
+
+def test_moment_and_electron_count_with_matching_parity_is_ok() -> None:
+    report = check_all(
+        occupations=_FIXED,
+        magnetic=_magnetic(True, 1.0),
+        electron_count=_electron_count(3.0),
+        purpose="scf",
+    )
+
+    assert report.ok
+
+
+def test_moment_parity_check_is_unaffected_when_electron_count_is_missing() -> None:
+    """Existing callers that don't pass electron_count (pre-#70) keep
+    exactly their previous behaviour: integer tot_magnetization alone
+    is accepted."""
+    report = check_all(occupations=_FIXED, magnetic=_magnetic(True, 2.0), purpose="scf")
+
+    assert report.ok
 
 
 def _relax(ion_dynamics: str = "bfgs"):
