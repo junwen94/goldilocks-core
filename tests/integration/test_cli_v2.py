@@ -75,6 +75,50 @@ def test_inspect_missing_structure_is_an_operator_error_not_a_traceback() -> Non
     assert "not found" in completed.stderr
 
 
+def test_magnetic_orderings_lists_the_fm_identity_by_default() -> None:
+    """No enumlib on the test machine (and Fe_bcc has none to find even
+    with it) -- #87's listing degrades to just the plain ferromagnetic
+    candidate, same as ``run``'s own AFM path does."""
+    iron = structure("Fe_bcc.cif")
+
+    completed = _run_cli("magnetic-orderings", str(iron))
+
+    assert completed.returncode == 0, completed.stderr
+    assert "fm" in completed.stdout
+    assert "afm" not in completed.stdout
+
+
+def test_magnetic_orderings_json_reports_every_candidate() -> None:
+    iron = structure("Fe_bcc.cif")
+
+    completed = _run_cli("magnetic-orderings", str(iron), "--json")
+
+    assert completed.returncode == 0, completed.stderr
+    document = json.loads(completed.stdout)
+    assert document["ranked"] is False
+    assert document["candidates"][0]["label"] == "fm"
+    assert document["candidates"][0]["formula"] == "Fe"
+    assert document["candidates"][0]["energy_per_atom_ev"] is None
+
+
+def test_magnetic_orderings_rank_degrades_without_a_configured_checkpoint(
+    monkeypatch,
+) -> None:
+    """``--rank-with-mmace`` without ``GOLDILOCKS_MACE_BACKBONE`` configured
+    (the real state of this test machine, and of CI) reports the
+    candidates unranked with a warning, not a failure."""
+    monkeypatch.delenv("GOLDILOCKS_MACE_BACKBONE", raising=False)
+    iron = structure("Fe_bcc.cif")
+
+    completed = _run_cli("magnetic-orderings", str(iron), "--rank-with-mmace", "--json")
+
+    assert completed.returncode == 0, completed.stderr
+    document = json.loads(completed.stdout)
+    assert document["ranked"] is False
+    assert len(document["warnings"]) == 1
+    assert document["warnings"][0]["code"] == "magnetic.ordering_ranking_unavailable"
+
+
 def test_settings_json_matches_the_capabilities_contract() -> None:
     completed = _run_cli("settings", "--json")
 

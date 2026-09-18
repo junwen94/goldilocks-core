@@ -44,6 +44,7 @@ from goldilocks_core.cli import (
     _capabilities,
     _explain,
     _inspect,
+    _magnetic_orderings,
     _models,
     _run,
     _serve,
@@ -61,6 +62,7 @@ _COMMANDS = {
     "assets": _assets,
     "examples": _assets,
     "serve": _serve,
+    "magnetic-orderings": _magnetic_orderings,
 }
 
 
@@ -77,6 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     _models.add_subparser(subparsers)
     _assets.add_subparser(subparsers)
     _serve.add_subparser(subparsers)
+    _magnetic_orderings.add_subparser(subparsers)
     return parser
 
 
