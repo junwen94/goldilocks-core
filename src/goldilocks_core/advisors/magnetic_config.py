@@ -290,7 +290,7 @@ def magnetic_config(
 
     spin_polarized, source, warnings = _resolve_spin_polarized(is_magnetic, human, llm)
 
-    magnetic_elements = _magnetic_elements(structure) if spin_polarized else ()
+    magnetic_elements = magnetic_elements_in(structure) if spin_polarized else ()
 
     relabeled_structure = structure
     if spin_polarized and human.magnetic_ordering == "afm":
@@ -396,7 +396,13 @@ def _resolve_spin_polarized(
     )
 
 
-def _magnetic_elements(structure: Structure) -> tuple[str, ...]:
+def magnetic_elements_in(structure: Structure) -> tuple[str, ...]:
+    """Every transition-metal/lanthanide/actinide symbol present, sorted.
+
+    Public (not ``_``-prefixed) because #87's ``enumerate_magnetic_orderings``
+    needs the same set a caller outside this module's own
+    ``magnetic_config()`` flow -- listing candidates before ``spin_polarized``
+    has even been resolved for that caller's own purposes."""
     facts = composition(structure).value
     candidates = {*facts.transition_metals, *facts.lanthanides, *facts.actinides}
     return tuple(sorted(candidates))
@@ -424,34 +430,35 @@ def _afm_unavailable(reason: str) -> Warning:
     )
 
 
-def _attempt_afm_relabeling(
+def _afm_candidates_or_reason(
     structure: Structure, magnetic_elements: tuple[str, ...]
-) -> tuple[Structure, tuple[Warning, ...]]:
-    """Try to find one genuine, compensated two-sublattice antiferromagnetic
-    ordering via pymatgen's own ``MagneticStructureEnumerator`` (itself
-    backed by ``MagOrderingTransformation``'s symmetry-aware enumeration) --
-    degrading to the FM identity pass-through, with a named reason, on any
-    failure. The failure modes here are numerous and not fully enumerable
-    up front (missing external executables, enumlib subprocess errors,
-    pymatgen-internal symmetry-analysis failures on an awkward structure) --
-    consistent with this module's own "never let external-library failure
-    modes become a raise" policy, the broad ``except Exception`` below is
-    deliberate, not a caught-in-passing accident."""
+) -> tuple[tuple[Structure, ...], str | None]:
+    """Return every antiferromagnetic-origin candidate pymatgen's own
+    ``MagneticStructureEnumerator`` (itself backed by
+    ``MagOrderingTransformation``'s symmetry-aware enumeration) finds for
+    ``structure``, or an empty tuple plus the reason it could not try.
+
+    Shared by ``_attempt_afm_relabeling`` (picks the smallest candidate, a
+    deterministic starting point) and ``enumerate_magnetic_orderings``
+    (lists every candidate, for a caller -- e.g. an mMACE-based energy
+    ranking, #87 -- that wants to compare more than one). The failure modes
+    here are numerous and not fully enumerable up front (missing external
+    executables, enumlib subprocess errors, pymatgen-internal
+    symmetry-analysis failures on an awkward structure) -- consistent with
+    this module's own "never let external-library failure modes become a
+    raise" policy, the broad ``except Exception`` below is deliberate, not
+    a caught-in-passing accident."""
     if len(structure) > _MAX_SITES_FOR_AFM_ENUMERATION:
-        return structure, (
-            _afm_unavailable(
-                f"structure has {len(structure)} sites, over the "
-                f"{_MAX_SITES_FOR_AFM_ENUMERATION}-site ceiling this "
-                "heuristic enumerates within"
-            ),
+        return (), (
+            f"structure has {len(structure)} sites, over the "
+            f"{_MAX_SITES_FOR_AFM_ENUMERATION}-site ceiling this "
+            "heuristic enumerates within"
         )
     if shutil.which("enum.x") is None and shutil.which("multienum.x") is None:
-        return structure, (
-            _afm_unavailable(
-                "antiferromagnetic ordering needs the enumlib executables "
-                "(enum.x/multienum.x plus makeStr.py) on PATH and none "
-                "were found"
-            ),
+        return (), (
+            "antiferromagnetic ordering needs the enumlib executables "
+            "(enum.x/multienum.x plus makeStr.py) on PATH and none "
+            "were found"
         )
 
     try:
@@ -463,9 +470,9 @@ def _attempt_afm_relabeling(
             max_orderings=16,
         )
     except Exception as error:  # noqa: BLE001 -- see docstring
-        return structure, (_afm_unavailable(f"AFM enumeration failed ({error})"),)
+        return (), f"AFM enumeration failed ({error})"
 
-    candidates = [
+    candidates = tuple(
         candidate
         for candidate, origin in zip(
             enumerator.ordered_structures,
@@ -473,11 +480,45 @@ def _attempt_afm_relabeling(
             strict=True,
         )
         if origin == "afm"
-    ]
+    )
     if not candidates:
-        return structure, (
-            _afm_unavailable("no compensated antiferromagnetic ordering was found"),
-        )
+        return (), "no compensated antiferromagnetic ordering was found"
+    return candidates, None
+
+
+def enumerate_magnetic_orderings(
+    structure: Structure, magnetic_elements: tuple[str, ...]
+) -> tuple[tuple[str, Structure], ...]:
+    """List every magnetic-ordering candidate this heuristic tier can
+    produce for ``structure``: the plain ferromagnetic identity (label
+    ``"fm"``), plus every antiferromagnetic candidate
+    ``_afm_candidates_or_reason`` finds, labeled ``"afm-<n>"`` in
+    enumeration order and already relabeled by spin (``_label_by_spin``) so
+    a caller can use any entry directly as a ``relabeled_structure``.
+
+    Unlike ``_attempt_afm_relabeling``, this never picks a winner -- it is
+    the listing half of #87's "enumerate, then optionally rank with mMACE,
+    then generate" split. Returns just the ``"fm"`` entry, with no
+    antiferromagnetic candidates, whenever AFM enumeration is unavailable
+    (oversized structure, missing enumlib, enumeration failure, or no
+    compensated ordering found); this function never raises for those
+    cases, matching this module's existing degrade-not-raise policy."""
+    candidates: list[tuple[str, Structure]] = [("fm", structure)]
+    afm_candidates, _reason = _afm_candidates_or_reason(structure, magnetic_elements)
+    for index, candidate in enumerate(afm_candidates, start=1):
+        candidates.append((f"afm-{index}", _label_by_spin(candidate)))
+    return tuple(candidates)
+
+
+def _attempt_afm_relabeling(
+    structure: Structure, magnetic_elements: tuple[str, ...]
+) -> tuple[Structure, tuple[Warning, ...]]:
+    """Try to find one genuine, compensated two-sublattice antiferromagnetic
+    ordering, degrading to the FM identity pass-through, with a named
+    reason, whenever ``_afm_candidates_or_reason`` cannot produce one."""
+    candidates, reason = _afm_candidates_or_reason(structure, magnetic_elements)
+    if reason is not None:
+        return structure, (_afm_unavailable(reason),)
 
     winner = min(candidates, key=lambda candidate: candidate.num_sites)
     relabeled = _label_by_spin(winner)

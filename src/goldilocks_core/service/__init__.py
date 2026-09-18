@@ -38,6 +38,10 @@ module into one file. Split by pipeline phase instead, matching
   single-step phases above twice rather than a fourth phase of its own
 - ``_relax.py`` -- ``relax``/``vc-relax`` task path (epic 10), reusing
   the single-step phases above once (single-step tasks, unlike ``dos``)
+- ``_magnetic_orderings.py`` -- ``list_magnetic_orderings`` (#87),
+  deliberately outside the ``advise()``/``generate()`` pipeline above: a
+  listing capability a caller consults *before* deciding which magnetic
+  ordering to generate input files for, not a phase of one calculation
 
 This ``__init__.py`` only re-exports; per ``check_complexity.py``'s own
 logic, a package's pure-export ``__init__.py`` is exempt from the
@@ -61,6 +65,11 @@ from goldilocks_core.service._dos import (
     to_bundle_input_dos,
 )
 from goldilocks_core.service._generate import AdviceIncomplete, generate
+from goldilocks_core.service._magnetic_orderings import (
+    MagneticOrderingCandidate,
+    MagneticOrderingsReport,
+    list_magnetic_orderings,
+)
 from goldilocks_core.service._pipeline import advise, check
 from goldilocks_core.service._pseudo import PseudoAdvice
 from goldilocks_core.service._relax import (
@@ -87,6 +96,8 @@ __all__ = [
     "DosAdvice",
     "ElectronicStepAdvice",
     "KpointsOverrides",
+    "MagneticOrderingCandidate",
+    "MagneticOrderingsReport",
     "PseudoAdvice",
     "RelaxAdvice",
     "RelaxOverrides",
@@ -106,6 +117,7 @@ __all__ = [
     "generate",
     "generate_dos",
     "generate_relax",
+    "list_magnetic_orderings",
     "render_submission",
     "render_submission_dos",
     "render_submission_relax",
