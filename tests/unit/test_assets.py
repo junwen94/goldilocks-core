@@ -335,7 +335,7 @@ def test_download_fails_after_exhausted_retries(tmp_path: Path) -> None:
         thread.join(timeout=5)
         server.server_close()
 
-    assert served["count"] == 4
+    assert served["count"] == 12
 
 
 def test_references_resolves_bare_registry_table_id() -> None:
