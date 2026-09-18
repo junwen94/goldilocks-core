@@ -21,7 +21,6 @@ dependencies = [
     # the namelists.py translation layer" insertion point).
     "ase>=3.28",
     "dscribe>=2.1",
-    "joblib==1.5.3",
     "matminer>=0.10.1",
     "numpy>=2.4.4",
     "pandas>=2.0",
