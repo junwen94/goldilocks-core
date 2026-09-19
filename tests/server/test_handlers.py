@@ -34,16 +34,18 @@ class TestMagneticOrderings:
         result = _handlers.magnetic_orderings(document)
 
         assert result["ranked"] is False
-        assert result["candidates"] == [
-            {
-                "label": "fm",
-                "formula": "Si",
-                "natoms": 8,
-                "energy_per_atom_ev": None,
-                "status": None,
-                "is_recommended": False,
-            }
-        ]
+        [candidate] = result["candidates"]
+        assert candidate["label"] == "fm"
+        assert candidate["formula"] == "Si"
+        assert candidate["natoms"] == 8
+        assert candidate["energy_per_atom_ev"] is None
+        assert candidate["status"] is None
+        assert candidate["is_recommended"] is False
+        # The fm candidate is exactly the caller's own structure -- no
+        # overrides needed, /run's usual pipeline already handles it.
+        assert candidate["structure_format"] == "cif"
+        assert candidate["overrides"] == {}
+        assert "data_Si" in candidate["structure_content"]
         assert result["warnings"] == []
 
     def test_rank_with_mmace_degrades_with_a_warning_when_unconfigured(

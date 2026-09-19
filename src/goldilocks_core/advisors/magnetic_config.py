@@ -598,6 +598,17 @@ def _invalid_labels(override: dict[str, float], structure: Structure) -> str | N
     )
 
 
+def starting_magnetization_for(
+    structure: Structure, z_valences: dict[str, float] | None = None
+) -> dict[str, float]:
+    """Public wrapper around ``_starting_magnetization_by_label`` -- #87's
+    listing tier needs the same per-label, sign-aware fractions this module
+    computes internally, to hand a listed AFM candidate's bundle-generation
+    ``overrides`` back to a caller without duplicating the aiida-derived
+    heuristic outside this module."""
+    return _starting_magnetization_by_label(structure, z_valences)
+
+
 def _starting_magnetization_by_label(
     structure: Structure, z_valences: dict[str, float] | None
 ) -> dict[str, float]:

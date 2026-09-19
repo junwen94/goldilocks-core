@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import shutil
 
-from pymatgen.core import Lattice, Structure
+from pymatgen.core import Lattice, Species, Structure
 
 from goldilocks_core.advisors import magnetic_config as magnetic_config_module
 from goldilocks_core.advisors.magnetic_ordering_ml import (
@@ -15,6 +15,16 @@ from goldilocks_core.service._magnetic_orderings import list_magnetic_orderings
 
 _ROCK_SALT_FEO = Structure(
     Lattice.cubic(4.3), ["Fe", "O"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
+)
+
+# Mimics real `MagneticStructureEnumerator` output: two Fe sites carrying
+# opposite `Species.spin`, the sign information `_label_by_spin` splits into
+# distinct QE labels (Fe1/Fe2) and `_bundle_inputs` must preserve through a
+# CIF round-trip (see test_afm_overrides_preserve_sublattice_sign below).
+_SPIN_SPLIT_AFM_FEO = Structure(
+    Lattice.cubic(4.3),
+    [Species("Fe", spin=5.0), Species("Fe", spin=-5.0), "O", "O"],
+    [[0.0, 0.0, 0.0], [0.5, 0.5, 0.0], [0.5, 0.0, 0.0], [0.0, 0.5, 0.0]],
 )
 
 
@@ -75,6 +85,39 @@ def test_ranked_listing_marks_the_lowest_energy_candidate_as_recommended(
     assert by_label["fm"].is_recommended is False
     assert by_label["afm-1"].energy_per_atom_ev == -1.0
     assert by_label["afm-1"].is_recommended is True
+
+
+def test_afm_overrides_preserve_sublattice_sign(monkeypatch) -> None:
+    """Regression for the CIF-round-trip trap `_bundle_inputs` documents:
+    naively handing a candidate's structure_content back to `/run` with no
+    overrides would silently resolve a ferromagnetic starting_magnetization
+    (CIF drops `Species.spin`) despite the species labels still looking
+    AFM-split. The override must carry both signs, keyed by whatever labels
+    the structure_content will actually reload as."""
+
+    class _SpinSplitAfmCandidate:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.ordered_structures = [_SPIN_SPLIT_AFM_FEO.copy()]
+            self.ordered_structure_origins = ["afm"]
+
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/enum.x")
+    monkeypatch.setattr(
+        magnetic_config_module, "MagneticStructureEnumerator", _SpinSplitAfmCandidate
+    )
+
+    report = list_magnetic_orderings(_ROCK_SALT_FEO)
+
+    fm = next(candidate for candidate in report.candidates if candidate.label == "fm")
+    assert fm.overrides == {}
+
+    afm = next(
+        candidate for candidate in report.candidates if candidate.label == "afm-1"
+    )
+    assert afm.overrides["spin_polarized"] is True
+    fractions = afm.overrides["starting_magnetization"]
+    reloaded = Structure.from_str(afm.structure_content, fmt="cif")
+    assert set(fractions) == {site.label for site in reloaded}
+    assert {value > 0 for value in fractions.values()} == {True, False}
 
 
 def test_ranking_unavailable_falls_back_to_unranked_with_a_warning(monkeypatch) -> None:
