@@ -20,22 +20,27 @@ dependencies = [
     # installed ase 3.28, 2026-09-14; goldilocks-core-design.md:4220's "only use ASE at
     # the namelists.py translation layer" insertion point).
     "ase>=3.28",
-    "dscribe>=2.1",
-    "matminer>=0.10.1",
     "numpy>=2.4.4",
     "pandas>=2.0",
     "pymatgen>=2026.3.23",
     "requests>=2.32",
-    "scikit-learn==1.7.2",
-    "sklearn-quantile==0.1.1",
-    # The default k-points model (QRF + CGCNN metallicity) is a core capability,
-    # so its ML stack ships in the base install (decision: stfc/goldilocks-core#32).
-    # torch-geometric requires torch. The base install resolves torch from the
-    # CPU-only PyTorch index so the workbench image doesn't ship ~3.5G of unused
-    # CUDA/nvidia libraries. GPU hosts pull the CUDA wheel via an index override
-    # (see [tool.uv] below), not the default resolution.
-    "torch>=2.13.0",
-    "torch-geometric>=2.5",
+    # The default k-points/metallicity models (QRF + CGCNN) are a core
+    # capability, so their ML stack ships in the base install (decision:
+    # stfc/goldilocks-core#32) -- via goldilocks-ml[models] itself (v2 #11)
+    # rather than duplicating dscribe/matminer/scikit-learn/sklearn-quantile/
+    # torch/torch-geometric as separate pins here, which would drift the two
+    # packages apart the same way this exact torch pin already had to be
+    # unwound once (see goldilocks-ml's own models-extra comment: torch
+    # pinned to exactly 2.10.0, both the lowest release patched against
+    # CVE-2026-24747/GHSA-63cw-57p8-fm3p and the highest the magnetism
+    # extra's sphericart-torch==1.0.9 tolerates -- goldilocks-core's own
+    # prior `torch>=2.13.0` pin predated that finding and would have
+    # conflicted with it outright). torch-geometric requires torch; the
+    # base install resolves torch from the CPU-only PyTorch index so the
+    # workbench image doesn't ship ~3.5G of unused CUDA/nvidia libraries.
+    # GPU hosts pull the CUDA wheel via an index override (see [tool.uv]
+    # below), not the default resolution.
+    "goldilocks-ml[models]==0.1.0",
     # v2: contracts/ is pydantic BaseModel end to end (validation, serialization,
     # OpenAPI/capabilities schema generation) -- promoted from the http/mcp
     # extras to a core dependency (goldilocks-core-design.md S12, already decided).
@@ -45,6 +50,21 @@ dependencies = [
 [project.optional-dependencies]
 http = ["fastapi", "uvicorn"]
 mcp = ["mcp"]
+# is_magnetic classification and mMACE-based magnetic-ordering ranking
+# (v2 #11, #87), additive on top of goldilocks-ml's own `models` extra
+# (already in the base install above). NOT WIRED YET (2026-09-19): the
+# published goldilocks-ml==0.1.0 on PyPI predates both its own
+# `magnetism` extra and the sphericart-torch/torch==2.10.0 fix (PR #84,
+# merged to goldilocks-ml's git history but not yet released) -- `uv
+# lock` confirms this release has no extra named `magnetism` at all.
+# Needs a new goldilocks-ml release before this can be a real dependency
+# rather than a TODO; also needs the mace-torch fork (no PyPI release --
+# goldilocks-ml's own deposits/magnetism/is_magnetic/mace_mlp/
+# VENDORING_TODO.md) and a manually-configured GOLDILOCKS_MACE_BACKBONE
+# checkpoint (advisors/magnetic_ordering_ml.py), neither of which `pip
+# install goldilocks-core[magnetism]` alone could ever make installable
+# end-to-end even once the release exists.
+# magnetism = ["goldilocks-ml[magnetism]"]
 
 [project.scripts]
 goldilocks = "goldilocks_core.cli.core:main"

@@ -253,7 +253,12 @@ class TestExplain:
 
         assert response.status_code == 200
         records = response.json()["records"]
-        assert records["occupations"]["value"]["occupations"] == "smearing"
+        # v2 epic 11 (#11): the real, installed CGCNN classifier now
+        # resolves Si confidently non-metal (source=ml), so the scf
+        # step's own occupations correctly follows the non-metal branch
+        # -- unlike nscf_occupations below, which dos's own advisor
+        # always pins to tetrahedra_opt regardless of metallicity.
+        assert records["occupations"]["value"]["occupations"] == "fixed"
         assert records["nscf_occupations"]["value"]["occupations"] == ("tetrahedra_opt")
         assert records["dos"]["value"]["delta_e"] == 0.01
 

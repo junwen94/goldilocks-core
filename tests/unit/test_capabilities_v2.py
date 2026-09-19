@@ -90,10 +90,17 @@ class TestTopLevelShape:
         anywhere in this tree would blow up json.dumps."""
         json.dumps(capabilities())
 
-    def test_models_is_honestly_empty(self) -> None:
-        """No ml integration exists yet (epic 11) -- must stay empty, not
-        fabricated, per this module's own docstring."""
-        assert capabilities()["models"] == []
+    def test_models_lists_every_registered_model(self) -> None:
+        """v2 epic 11 (#11): models[] reflects ml/registry.toml, not
+        fabricated -- registered, not necessarily installed (approaches
+        below is the honest "is it actually usable right now" signal)."""
+        ids = {model["id"] for model in capabilities()["models"]}
+        assert ids == {
+            "models/qrf-kpoints",
+            "models/metallicity-cgcnn",
+            "models/is-metal-classifier",
+            "models/is-magnetic-classifier",
+        }
 
     def test_warnings_catalogue_is_populated_from_every_advisor(self) -> None:
         caps = capabilities()
@@ -232,7 +239,17 @@ class TestFacts:
 
         assert set(facts["is_metal"]["values"]) == {"metal", "non_metal"}
         assert facts["is_metal"]["ml_target"] == "is_metal"
-        assert facts["is_metal"]["approaches"] == ["human", "heuristic"]
+
+    def test_is_metal_approaches_gains_ml_once_its_model_is_installed(
+        self, real_assets
+    ) -> None:
+        """v2 epic 11 (#11): approaches is the honest "is it actually
+        usable right now" signal, checked per asset -- real_assets is
+        this test suite's own existing "is the default profile actually
+        installed on this machine" gate."""
+        facts = {f["key"]: f for f in capabilities()["facts"]}
+
+        assert facts["is_metal"]["approaches"] == ["human", "ml", "heuristic"]
 
     def test_all_facts_are_overridable(self) -> None:
         for fact in capabilities()["facts"]:
