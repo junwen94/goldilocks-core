@@ -1,6 +1,7 @@
 import { Group, Loader, Paper, Stack, Text, Title } from "@mantine/core";
 import { Atom } from "lucide-react";
 
+import { CalculationContextControls } from "../controls/CalculationForm";
 import { StructureSourceControls } from "../controls/StructureSourceControls";
 import { StructureViewport } from "../viewer/StructureViewport";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
@@ -20,7 +21,7 @@ export function StructureCard({ kicker }: { readonly kicker: string }) {
     >
       <Group component="header" className="card-header" mb="md" wrap="nowrap">
         <Text className="card-kicker">{kicker}</Text>
-        <Title order={2}>Structure</Title>
+        <Title order={2}>Structure Setup</Title>
       </Group>
       <div className="card-body">
         <StructureSourceControls
@@ -29,6 +30,7 @@ export function StructureCard({ kicker }: { readonly kicker: string }) {
           inspecting={snapshot.operation === "inspect"}
           onOpen={(input) => workspace.dispatch({ type: "source.open", input })}
         />
+        <CalculationContextControls />
         <div className="structure-stage">
           {snapshot.inspection === null ? (
             <EmptyStage

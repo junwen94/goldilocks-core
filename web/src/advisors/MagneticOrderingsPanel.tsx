@@ -9,7 +9,7 @@ import {
   Text,
   VisuallyHidden,
 } from "@mantine/core";
-import { Download, Sparkles } from "lucide-react";
+import { Download } from "lucide-react";
 
 import { WarningsPanel } from "../review/WarningsPanel";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
@@ -66,20 +66,26 @@ export function MagneticOrderingsPanel() {
 
   return (
     <Stack gap="sm">
-      <Group justify="flex-end">
-        <Button
-          size="xs"
-          variant="light"
-          leftSection={<Sparkles aria-hidden="true" size={14} />}
-          loading={magneticOrderingsOperation === "rank"}
-          disabled={busy || candidates.length === 0}
-          onClick={() =>
-            void workspace.dispatch({ type: "magneticOrderings.rank" })
-          }
-        >
-          Rank with mMACE
-        </Button>
-      </Group>
+      <Stack gap={4}>
+        <Group justify="flex-end">
+          <Button
+            size="xs"
+            variant="light"
+            miw={160}
+            loading={magneticOrderingsOperation === "rank"}
+            disabled={busy || candidates.length === 0}
+            onClick={() =>
+              void workspace.dispatch({ type: "magneticOrderings.rank" })
+            }
+          >
+            Run mMACE
+          </Button>
+        </Group>
+        <Text size="xs" c="dimmed">
+          Relaxes each candidate ordering with mMACE (a magnetic MLIP model) and
+          ranks them by energy per atom.
+        </Text>
+      </Stack>
       {snapshot.magneticOrderingsError === null ? null : (
         <Text c="red" size="sm" role="alert">
           {snapshot.magneticOrderingsError}
@@ -94,59 +100,67 @@ export function MagneticOrderingsPanel() {
         </Text>
       ) : (
         <>
-          <Table layout="fixed" verticalSpacing={4}>
-            <Table.Caption>
-              {magneticOrderings?.ranked
-                ? "Ranked by mMACE-relaxed energy per atom"
-                : "Not yet ranked"}
-            </Table.Caption>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th style={{ width: "2.5rem" }}>
-                  <VisuallyHidden>Select for download</VisuallyHidden>
-                </Table.Th>
-                <Table.Th>Ordering</Table.Th>
-                <Table.Th>Atoms</Table.Th>
-                <Table.Th>E/atom (eV)</Table.Th>
-                <Table.Th>Status</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {candidates.map((candidate) => (
-                <Table.Tr key={candidate.label}>
-                  <Table.Td>
-                    <Checkbox
-                      aria-label={`Select ${candidate.label} for download`}
-                      checked={selected.has(candidate.label)}
-                      onChange={(event) => {
-                        toggleSelected(
-                          candidate.label,
-                          event.currentTarget.checked,
-                        );
-                      }}
-                    />
-                  </Table.Td>
-                  <Table.Td>
-                    <Group gap={4} wrap="nowrap">
-                      <Text size="sm">{candidate.label}</Text>
-                      {candidate.is_recommended ? (
-                        <Badge size="xs" color="teal">
-                          Recommended
-                        </Badge>
-                      ) : null}
-                    </Group>
-                  </Table.Td>
-                  <Table.Td>{candidate.natoms}</Table.Td>
-                  <Table.Td>
-                    {candidate.energy_per_atom_ev === null
-                      ? "—"
-                      : candidate.energy_per_atom_ev.toFixed(4)}
-                  </Table.Td>
-                  <Table.Td>{candidate.status ?? "—"}</Table.Td>
+          {/* `layout="fixed"` used to force these 5 columns into
+           * whatever width the card happened to have, however narrow --
+           * "Ordering"/"Atoms" ran into each other and "afm-1" wrapped
+           * mid-word. Natural column widths plus a scroll container let
+           * every column keep its own readable width and the table
+           * scroll horizontally instead, on any card width. */}
+          <Table.ScrollContainer minWidth={420}>
+            <Table verticalSpacing={4}>
+              <Table.Caption>
+                {magneticOrderings?.ranked
+                  ? "Ranked by mMACE-relaxed energy per atom"
+                  : "Not yet ranked"}
+              </Table.Caption>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th style={{ width: "2.5rem" }}>
+                    <VisuallyHidden>Select for download</VisuallyHidden>
+                  </Table.Th>
+                  <Table.Th>Ordering</Table.Th>
+                  <Table.Th>Atoms</Table.Th>
+                  <Table.Th>E/atom (eV)</Table.Th>
+                  <Table.Th>Status</Table.Th>
                 </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
+              </Table.Thead>
+              <Table.Tbody>
+                {candidates.map((candidate) => (
+                  <Table.Tr key={candidate.label}>
+                    <Table.Td>
+                      <Checkbox
+                        aria-label={`Select ${candidate.label} for download`}
+                        checked={selected.has(candidate.label)}
+                        onChange={(event) => {
+                          toggleSelected(
+                            candidate.label,
+                            event.currentTarget.checked,
+                          );
+                        }}
+                      />
+                    </Table.Td>
+                    <Table.Td>
+                      <Group gap={4} wrap="nowrap">
+                        <Text size="sm">{candidate.label}</Text>
+                        {candidate.is_recommended ? (
+                          <Badge size="xs" color="teal">
+                            Recommended
+                          </Badge>
+                        ) : null}
+                      </Group>
+                    </Table.Td>
+                    <Table.Td>{candidate.natoms}</Table.Td>
+                    <Table.Td>
+                      {candidate.energy_per_atom_ev === null
+                        ? "—"
+                        : candidate.energy_per_atom_ev.toFixed(4)}
+                    </Table.Td>
+                    <Table.Td>{candidate.status ?? "—"}</Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </Table.ScrollContainer>
           <Group justify="flex-end">
             <Button
               size="xs"
