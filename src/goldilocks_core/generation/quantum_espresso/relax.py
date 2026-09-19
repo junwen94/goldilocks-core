@@ -9,7 +9,7 @@ purpose-agnostic card/namelist helper with ``scf.py`` (un-privatized
 there for this reuse: ``control_keywords``/``system_keywords``/
 ``electrons_keywords``/``atomic_species``/``cell_parameters``/
 ``atomic_positions``/``k_points``/``validated_pseudo_by_element``/
-``hubbard_card``) --
+``hubbard_lines``) --
 the &CONTROL/&SYSTEM/&ELECTRONS namelists and every card are identical
 between an scf step and a relax step; only &IONS/&CELL (this module's
 own ``ions_keywords``/``cell_keywords``) and the ``&CONTROL``
@@ -57,7 +57,6 @@ from pymatgen.core import Structure
 from pymatgen.core.graphs import StructureGraph
 from pymatgen.io.ase import AseAtomsAdaptor
 
-from goldilocks_core.advisors.hubbard_u import expand_hubbard_label
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.generation.errors import GenerationError
@@ -68,7 +67,7 @@ from goldilocks_core.generation.quantum_espresso.scf import (
     cell_parameters,
     control_keywords,
     electrons_keywords,
-    hubbard_card,
+    hubbard_lines,
     k_points,
     system_keywords,
     validated_pseudo_by_element,
@@ -136,14 +135,6 @@ def write_qe_relax(
             raise GenerationError(
                 f"PwSettings.{name} is required to generate {purpose}.in"
             )
-    if system.hubbard.plan == "self_consistent_calibration_needed":
-        raise GenerationError(
-            "a Hubbard +U correction needs self-consistent calibration "
-            "(plan='self_consistent_calibration_needed'), but rendering an "
-            "hp.x calibration input is not implemented by this writer yet -- "
-            "see advisors/hubbard_u.py's own CalibrationRequest"
-        )
-
     elements = sorted({site.specie.symbol for site in structure})
     pseudo_by_element = validated_pseudo_by_element(elements, system)
     species_labels = sorted({site.label for site in structure})
@@ -165,9 +156,7 @@ def write_qe_relax(
     lines.append(cell_parameters(structure))
     lines.append(atomic_positions(structure, _fixed_site_indices(structure, relax)))
     lines.append(k_points(step))
-    if system.hubbard.plan == "table":
-        u_by_label = expand_hubbard_label(system.hubbard.u_by_element, structure)
-        lines.append(hubbard_card(u_by_label, label_to_element))
+    lines.extend(hubbard_lines(system, structure, label_to_element))
     content = "\n".join(lines)
 
     args = ["-npool", str(step.parallel.npool)]

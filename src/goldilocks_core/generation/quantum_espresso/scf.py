@@ -161,14 +161,6 @@ def write_qe_scf(
             raise GenerationError(
                 f"PwSettings.{name} is required to generate {purpose}.in"
             )
-    if system.hubbard.plan == "self_consistent_calibration_needed":
-        raise GenerationError(
-            "a Hubbard +U correction needs self-consistent calibration "
-            "(plan='self_consistent_calibration_needed'), but rendering an "
-            "hp.x calibration input is not implemented by this writer yet -- "
-            "see advisors/hubbard_u.py's own CalibrationRequest"
-        )
-
     elements = sorted({site.specie.symbol for site in structure})
     pseudo_by_element = validated_pseudo_by_element(elements, system)
     species_labels = sorted({site.label for site in structure})
@@ -187,9 +179,7 @@ def write_qe_scf(
     lines.append(cell_parameters(structure))
     lines.append(atomic_positions(structure))
     lines.append(k_points(step))
-    if system.hubbard.plan == "table":
-        u_by_label = expand_hubbard_label(system.hubbard.u_by_element, structure)
-        lines.append(hubbard_card(u_by_label, label_to_element))
+    lines.extend(hubbard_lines(system, structure, label_to_element))
     content = "\n".join(lines)
 
     args = ["-npool", str(step.parallel.npool)]
@@ -443,6 +433,27 @@ def hubbard_card(u_by_label: dict[str, float], label_to_element: dict[str, str])
         manifold = manifold_for(label_to_element[label])
         lines.append(f"  U  {label}-{manifold}  {_format_float(u_by_label[label])}")
     return "\n".join(lines) + "\n"
+
+
+def hubbard_lines(
+    system: SystemSettings, structure, label_to_element: dict[str, str]
+) -> list[str]:
+    """Every line ``system.hubbard`` contributes to the card list, shared
+    by ``write_qe_scf``/``write_qe_relax`` so neither writer's own branch
+    count carries this a second time. Raises for
+    ``plan="self_consistent_calibration_needed"`` (see ``hubbard_card``'s
+    own docstring for why); returns ``[]`` for ``plan="not_needed"``."""
+    if system.hubbard.plan == "self_consistent_calibration_needed":
+        raise GenerationError(
+            "a Hubbard +U correction needs self-consistent calibration "
+            "(plan='self_consistent_calibration_needed'), but rendering an "
+            "hp.x calibration input is not implemented by this writer yet -- "
+            "see advisors/hubbard_u.py's own CalibrationRequest"
+        )
+    if system.hubbard.plan != "table":
+        return []
+    u_by_label = expand_hubbard_label(system.hubbard.u_by_element, structure)
+    return [hubbard_card(u_by_label, label_to_element)]
 
 
 def k_points(step: PwSettings) -> str:
