@@ -238,7 +238,7 @@ def _heuristic(structure: Structure, *, source: str) -> FieldState[HubbardUDecis
         if value is not None:
             u_by_element[symbol] = value
             continue
-        manifold = _manifold_for(symbol)
+        manifold = manifold_for(symbol)
         calibration_requests.append(
             CalibrationRequest(element=symbol, manifold=manifold)
         )
@@ -269,7 +269,12 @@ def _correlated_elements(facts: CompositionFacts) -> tuple[str, ...]:
     )
 
 
-def _manifold_for(symbol: str) -> str:
+def manifold_for(symbol: str) -> str:
+    """Public (v2 #88): ``generation/quantum_espresso/scf.py``'s
+    ``hubbard_card`` needs the same manifold string this module already
+    computes internally, to render QE >= 7.1's ``U  <label>-<manifold>
+    <value>`` HUBBARD card line -- see that function's own docstring for
+    why that line is species-label-keyed, not atom-index-keyed."""
     element = Element(symbol)
     manifold = _MANIFOLD_BY_BLOCK_AND_ROW.get((element.block, element.row))
     return manifold or f"{element.row}{element.block}"
@@ -285,11 +290,23 @@ def expand_hubbard_label(
     (goldilocks-qe-pw-parameter-audit.md P0 finding #1). Split species default
     to their canonical element's U value unless the caller already overrode
     them individually in ``u_by_element``.
+
+    Keyed **only** by ``relabeled_structure``'s real labels -- #88 found
+    (live, against a real structure loaded through ``/run``) that
+    seeding the result from a verbatim copy of ``u_by_element`` leaves a
+    stray canonical-element key behind whenever that bare symbol is not
+    itself a real label, which every CIF/POSCAR-loaded structure's own
+    labels (pymatgen numbers them, e.g. ``V0``/``Cl1``, never a bare
+    symbol) never are -- `hubbard_card`'s label lookup then ``KeyError``s
+    on that stray key. Every unit test here previously built structures
+    with bare, unnumbered labels (no CIF round-trip), which coincidentally
+    made the canonical symbol a real label and hid this.
     """
     labels = {site.label for site in relabeled_structure}
-    expanded = dict(u_by_element)
+    expanded: dict[str, float] = {}
     for label in labels:
-        if label in expanded:
+        if label in u_by_element:
+            expanded[label] = u_by_element[label]
             continue
         canonical = _canonical_element(label)
         if canonical in u_by_element:
