@@ -37,17 +37,6 @@ export function AnalysisSection() {
             const record = reviewed?.records[fact.key];
             return (
               <div key={fact.key}>
-                {record === undefined || record.status === "resolved" ? null : (
-                  <Text
-                    size="xs"
-                    c={record.status === "blocked" ? "red" : "dimmed"}
-                    mb={4}
-                  >
-                    {record.status === "blocked"
-                      ? `Blocked — ${record.blocked_by ?? "an upstream field failed"}`
-                      : `Unavailable — ${record.reason ?? "no reason given"}`}
-                  </Text>
-                )}
                 <OverrideControl
                   meta={{
                     key: fact.key,
@@ -71,6 +60,17 @@ export function AnalysisSection() {
                     });
                   }}
                 />
+                {record === undefined || record.status === "resolved" ? null : (
+                  <Text
+                    size="xs"
+                    c={record.status === "blocked" ? "red" : "dimmed"}
+                    mt={4}
+                  >
+                    {record.status === "blocked"
+                      ? `Blocked — ${record.blocked_by ?? "an upstream field failed"}`
+                      : `Unavailable — ${record.reason ?? "no reason given"}`}
+                  </Text>
+                )}
               </div>
             );
           })}
