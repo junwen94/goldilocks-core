@@ -326,7 +326,14 @@ _SETTING_META: dict[str, _SettingExtra] = {
     "k_grid": {
         "description": (
             "Explicit Monkhorst-Pack mesh dimensions (nk1, nk2, nk3); wins "
-            "over k_distance if both set."
+            "outright over k_index/k_distance if more than one is set."
+        ),
+    },
+    "k_index": {
+        "ml_target": "k_index",
+        "description": (
+            "A specific 1-based rung on this structure's own k-mesh ladder "
+            "(rung 1 is Gamma-only); wins over k_distance if both are set."
         ),
     },
     "k_distance": {

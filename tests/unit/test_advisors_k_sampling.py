@@ -8,7 +8,7 @@ from goldilocks_core.advisors.k_sampling import (
     k_sampling,
 )
 from goldilocks_core.analysis.is_metal import is_metal
-from goldilocks_core.kmesh import k_distance_to_mesh
+from goldilocks_core.kmesh import build_gamma_kmesh_entries, k_distance_to_mesh
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
@@ -111,3 +111,62 @@ def test_llm_k_distance_is_honored_when_no_human_override_exists() -> None:
 
     assert state.value.k_distance == 0.2
     assert state.source == "llm"
+
+
+def test_human_k_index_resolves_to_that_rung_s_own_mesh() -> None:
+    entries = build_gamma_kmesh_entries(_IRON)
+
+    state = k_sampling(is_metal(_IRON), _IRON, human=KSamplingHumanInput(k_index=3))
+
+    assert state.ok
+    assert state.value.mesh == entries[2].mesh
+    assert state.value.k_distance is None
+    assert state.source == "human"
+
+
+def test_human_k_index_with_a_shift() -> None:
+    state = k_sampling(
+        is_metal(_IRON),
+        _IRON,
+        human=KSamplingHumanInput(k_index=3, shift=(1, 1, 1)),
+    )
+
+    assert state.value.shift == (1, 1, 1)
+
+
+def test_human_k_index_beyond_the_ladder_is_blocked() -> None:
+    entries = build_gamma_kmesh_entries(_IRON)
+
+    state = k_sampling(
+        is_metal(_IRON),
+        _IRON,
+        human=KSamplingHumanInput(k_index=len(entries) + 1000),
+    )
+
+    assert not state.ok
+    assert state.status == "blocked"
+    assert "exceeds this structure's own ladder length" in state.root_cause()
+
+
+def test_human_k_grid_wins_over_k_index_and_k_distance_together() -> None:
+    state = k_sampling(
+        is_metal(_IRON),
+        _IRON,
+        human=KSamplingHumanInput(k_grid=(4, 4, 4), k_index=3, k_distance=0.2),
+    )
+
+    assert state.value.mesh == (4, 4, 4)
+    assert any("k_grid wins" in warning.message for warning in state.value.warnings)
+
+
+def test_human_k_index_wins_over_k_distance_when_no_grid_is_set() -> None:
+    entries = build_gamma_kmesh_entries(_IRON)
+
+    state = k_sampling(
+        is_metal(_IRON),
+        _IRON,
+        human=KSamplingHumanInput(k_index=3, k_distance=0.2),
+    )
+
+    assert state.value.mesh == entries[2].mesh
+    assert any("k_index wins" in warning.message for warning in state.value.warnings)

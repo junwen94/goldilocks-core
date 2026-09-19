@@ -69,7 +69,11 @@ from pymatgen.core import Structure
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.analysis.is_metal import Metallicity
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
-from goldilocks_core.kmesh import k_distance_to_mesh
+from goldilocks_core.kmesh import (
+    MIN_K_DISTANCE,
+    build_gamma_kmesh_entries,
+    k_distance_to_mesh,
+)
 from goldilocks_core.resolution import (
     Blocked,
     FieldState,
@@ -94,12 +98,22 @@ GRID_AND_DISTANCE_WARNING = Warning(
     level="info",
     category="k_sampling",
     message=(
-        "both k_grid and k_distance were given; k_grid wins outright and "
-        "k_distance is ignored."
+        "more than one k-sampling convention was given; k_grid wins "
+        "outright and the others are ignored."
     ),
 )
 
-WARNING_CATALOGUE = (GRID_AND_DISTANCE_WARNING,)
+INDEX_AND_DISTANCE_WARNING = Warning(
+    code="k_sampling.index_and_distance_conflict",
+    level="info",
+    category="k_sampling",
+    message=(
+        "both k_index and k_distance were given; k_index wins outright "
+        "and k_distance is ignored."
+    ),
+)
+
+WARNING_CATALOGUE = (GRID_AND_DISTANCE_WARNING, INDEX_AND_DISTANCE_WARNING)
 """Every warning code this module can emit -- ``capabilities.py``'s
 ``warnings[]`` catalogue aggregates one of these tuples per advisor."""
 
@@ -118,6 +132,12 @@ class KSamplingHumanInput(HumanInput):
     -layer audit): a 0 or negative entry used to be accepted, resolved,
     and written verbatim into the K_POINTS card, silently telling QE to
     sample zero or a negative number of points along that axis."""
+    k_index: _PositiveInt | None = None
+    """A specific 1-based rung on this structure's own k-mesh ladder
+    (``kmesh.build_gamma_kmesh_entries`` -- rung 1 is the Gamma-only
+    mesh), for a human who thinks in ladder position rather than a raw
+    target spacing. A third, equally explicit convention alongside
+    ``k_grid``/``k_distance``, not a variant of either."""
     k_distance: float | None = Field(default=None, gt=0)
     shift: tuple[_ZeroOrOne, _ZeroOrOne, _ZeroOrOne] | None = None
     """QE's own K_POINTS automatic card requires each shift component to
@@ -140,11 +160,27 @@ def k_sampling(
     llm = llm or KSamplingLlmInput()
 
     if human.k_grid is not None:
-        warnings = (GRID_AND_DISTANCE_WARNING,) if human.k_distance is not None else ()
+        warnings = (
+            (GRID_AND_DISTANCE_WARNING,)
+            if human.k_index is not None or human.k_distance is not None
+            else ()
+        )
         decision = KSamplingDecision(
             mesh=human.k_grid,
             shift=human.shift or _GAMMA_SHIFT,
             k_distance=None,
+            warnings=warnings,
+        )
+        return Resolved(decision, Provenance(source="human"))
+    if human.k_index is not None:
+        resolved = _from_k_index(structure, human.k_index, human.shift)
+        if isinstance(resolved, str):
+            return Blocked(by=resolved)
+        warnings = (INDEX_AND_DISTANCE_WARNING,) if human.k_distance is not None else ()
+        decision = KSamplingDecision(
+            mesh=resolved.mesh,
+            shift=resolved.shift,
+            k_distance=resolved.k_distance,
             warnings=warnings,
         )
         return Resolved(decision, Provenance(source="human"))
@@ -183,4 +219,27 @@ def _from_k_distance(
         mesh=k_distance_to_mesh(structure, k_distance),
         shift=shift or _GAMMA_SHIFT,
         k_distance=k_distance,
+    )
+
+
+def _from_k_index(
+    structure: Structure, k_index: int, shift: tuple[int, int, int] | None
+) -> KSamplingDecision | str:
+    """Resolve an explicit 1-based ladder rung to its concrete mesh via
+    ``kmesh.build_gamma_kmesh_entries``, or return why not (a rung
+    beyond this structure's own ladder length -- the ladder terminates
+    at ``MIN_K_DISTANCE``, so how many rungs exist is structure
+    -dependent, not a fixed ceiling a human could know in advance).
+    ``k_distance`` on the returned decision is ``None``, the same as
+    ``k_grid``'s: the mesh was picked by rung, not by a target spacing,
+    so there is no single distance value to report."""
+    entries = build_gamma_kmesh_entries(structure)
+    if k_index > len(entries):
+        return (
+            f"k_index={k_index} exceeds this structure's own ladder length "
+            f"({len(entries)} rungs down to the {MIN_K_DISTANCE} A^-1 floor)"
+        )
+    entry = entries[k_index - 1]
+    return KSamplingDecision(
+        mesh=entry.mesh, shift=shift or _GAMMA_SHIFT, k_distance=None
     )
