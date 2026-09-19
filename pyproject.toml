@@ -52,19 +52,21 @@ http = ["fastapi", "uvicorn"]
 mcp = ["mcp"]
 # is_magnetic classification and mMACE-based magnetic-ordering ranking
 # (v2 #11, #87), additive on top of goldilocks-ml's own `models` extra
-# (already in the base install above). NOT WIRED YET (2026-09-19): the
-# published goldilocks-ml==0.1.0 on PyPI predates both its own
-# `magnetism` extra and the sphericart-torch/torch==2.10.0 fix (PR #84,
-# merged to goldilocks-ml's git history but not yet released) -- `uv
-# lock` confirms this release has no extra named `magnetism` at all.
-# Needs a new goldilocks-ml release before this can be a real dependency
-# rather than a TODO; also needs the mace-torch fork (no PyPI release --
-# goldilocks-ml's own deposits/magnetism/is_magnetic/mace_mlp/
-# VENDORING_TODO.md) and a manually-configured GOLDILOCKS_MACE_BACKBONE
-# checkpoint (advisors/magnetic_ordering_ml.py), neither of which `pip
-# install goldilocks-core[magnetism]` alone could ever make installable
-# end-to-end even once the release exists.
-# magnetism = ["goldilocks-ml[magnetism]"]
+# (already in the base install above). NOT WIRED YET (2026-09-19,
+# revised 2026-09-19): goldilocks-ml has decided against ever shipping a
+# `magnetism` extra at all -- it never actually installed `mace` (a
+# research collaborator's fork with no PyPI release, and PyPI's own
+# upload validation rejects a direct git dependency in a published
+# package's metadata regardless -- goldilocks-ml's own
+# deposits/magnetism/is_magnetic/mace_mlp/VENDORING_TODO.md has the
+# full story), so it silently installed everything except the one
+# dependency that mattered. There is therefore no extra for this repo
+# to depend on here either; is_magnetic needs the same manual `mace`
+# install goldilocks-ml's own README documents ("Use the is_magnetic
+# classifier"), plus a manually-configured GOLDILOCKS_MACE_BACKBONE
+# checkpoint (advisors/magnetic_ordering_ml.py) -- neither of which any
+# `pip install goldilocks-core[...]` extra could ever make installable
+# end-to-end.
 
 [project.scripts]
 goldilocks = "goldilocks_core.cli.core:main"
