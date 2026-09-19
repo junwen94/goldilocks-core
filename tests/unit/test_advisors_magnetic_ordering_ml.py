@@ -58,7 +58,7 @@ def test_rank_orderings_checks_the_checkpoint_before_anything_else(monkeypatch) 
         rank_orderings([("fm", _IRON)])
 
 
-def test_rank_orderings_names_the_magnetism_extra_when_goldilocks_ml_is_missing(
+def test_rank_orderings_names_goldilocks_ml_when_it_is_missing(
     monkeypatch, tmp_path
 ) -> None:
     if importlib.util.find_spec("goldilocks_ml") is not None:
@@ -67,7 +67,7 @@ def test_rank_orderings_names_the_magnetism_extra_when_goldilocks_ml_is_missing(
     checkpoint.write_bytes(b"stub")
     monkeypatch.setenv(CHECKPOINT_ENV, str(checkpoint))
 
-    with pytest.raises(MagneticOrderingMlUnavailable, match="magnetism extra"):
+    with pytest.raises(MagneticOrderingMlUnavailable, match="goldilocks-ml"):
         rank_orderings([("fm", _IRON)])
 
 
@@ -77,7 +77,7 @@ def test_rank_orderings_names_the_magnetism_extra_when_goldilocks_ml_is_missing(
     or importlib.util.find_spec("mace") is None,
     reason=(
         "needs a real mMACE backbone checkpoint (GOLDILOCKS_MACE_BACKBONE) and "
-        "goldilocks-ml[models,magnetism] plus the mace-torch fork installed"
+        "goldilocks-ml[models] plus mace/e3nn/sphericart/ase manually installed"
     ),
 )
 def test_rank_orderings_ranks_antiferromagnetic_nio_below_ferromagnetic() -> None:

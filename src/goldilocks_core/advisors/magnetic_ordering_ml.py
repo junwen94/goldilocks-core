@@ -16,11 +16,13 @@ Verified against a real published checkpoint (2026-09-19): for NiO, this
 correctly ranks antiferromagnetic candidates below the ferromagnetic guess,
 matching NiO's real, well-established antiferromagnetic ground state.
 
-Needs goldilocks-ml's ``magnetism`` extra (``mace``, ``e3nn``,
-``sphericart``, ``ase``) and an mMACE backbone checkpoint, configured via
+Needs ``mace``, ``e3nn``, ``sphericart`` and ``ase`` (manual installs --
+goldilocks-ml has no extra for these; see its own README's "Use the
+is_magnetic classifier") and an mMACE backbone checkpoint, configured via
 ``GOLDILOCKS_MACE_BACKBONE`` rather than an ``AssetStore``-managed
 download: the ``mace-torch`` fork this depends on has no PyPI release
-either (see goldilocks-ml's own
+either, and PyPI's own upload validation rejects a direct git dependency
+regardless (see goldilocks-ml's own
 ``deposits/magnetism/is_magnetic/mace_mlp/VENDORING_TODO.md``), so
 automating only the checkpoint's distribution would not make this feature
 installable end-to-end on its own. Neither is required at import time of
@@ -120,9 +122,10 @@ def rank_orderings(
     smaller -- cell than another candidate), so candidates are compared by
     energy *per atom*, never by total energy.
 
-    Raises :class:`MagneticOrderingMlUnavailable` if the ``magnetism``
-    extra or the checkpoint is not available -- always before relaxing any
-    candidate, never partway through the list.
+    Raises :class:`MagneticOrderingMlUnavailable` if ``goldilocks-ml`` (with
+    ``mace``/``e3nn``/``sphericart``/``ase`` manually installed) or the
+    checkpoint is not available -- always before relaxing any candidate,
+    never partway through the list.
     """
     if not candidates:
         raise ValueError("rank_orderings needs at least one candidate")
@@ -135,7 +138,8 @@ def rank_orderings(
         )
     except ImportError as error:
         raise MagneticOrderingMlUnavailable(
-            "goldilocks-ml with the magnetism extra is required for "
+            "goldilocks-ml, with mace/e3nn/sphericart/ase manually installed "
+            "(goldilocks-ml has no extra for these), is required for "
             f"energy-based magnetic ordering selection: {error}"
         ) from error
 
