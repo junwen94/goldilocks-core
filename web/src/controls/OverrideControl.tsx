@@ -147,7 +147,7 @@ function BooleanOverrideControl({
   onChange,
 }: {
   readonly label: string;
-  readonly description: string;
+  readonly description: ReactNode;
   readonly disabled: boolean;
   readonly clearButton: ReactNode;
   readonly value: unknown;
@@ -186,7 +186,7 @@ function EnumOverrideControl({
   onChange,
 }: {
   readonly label: string;
-  readonly description: string;
+  readonly description: ReactNode;
   readonly disabled: boolean;
   readonly clearButton: ReactNode;
   readonly options: readonly string[];

@@ -6,7 +6,7 @@ import type { Source } from "./coreClient";
  * react-refresh/only-export-components. */
 export const SOURCE_NAMES: Record<Source, string> = {
   human: "Your override",
-  ml: "Model prediction",
+  ml: "Goldilocks-ML prediction",
   llm: "LLM suggestion",
   heuristic: "Heuristic default",
 };

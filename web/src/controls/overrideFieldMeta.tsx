@@ -1,5 +1,7 @@
+import type { ReactNode } from "react";
+
 import type { Source } from "../api/coreClient";
-import { SOURCE_NAMES } from "../api/sourceNames";
+import { SourceLabel } from "../api/SourceLabel";
 
 export interface OverrideFieldMeta {
   readonly key: string;
@@ -38,8 +40,18 @@ export function describeSource(
   description: string,
   pinned: boolean,
   source: Source | null | undefined,
-): string {
-  if (pinned) return `${description} · ${SOURCE_NAMES.human}`;
-  if (source) return `${description} · ${SOURCE_NAMES[source]}`;
+): ReactNode {
+  if (pinned)
+    return (
+      <>
+        {description} · <SourceLabel source="human" />
+      </>
+    );
+  if (source)
+    return (
+      <>
+        {description} · <SourceLabel source={source} />
+      </>
+    );
   return description;
 }

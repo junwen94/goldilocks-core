@@ -67,7 +67,7 @@ export function MagneticOrderingsPanel() {
   return (
     <Stack gap="sm">
       <Stack gap={4}>
-        <Group justify="flex-end">
+        <Group justify="flex-start">
           <Button
             size="xs"
             variant="light"
