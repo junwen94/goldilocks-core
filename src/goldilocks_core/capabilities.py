@@ -81,13 +81,14 @@ own import-surface ceiling.
 model ``ml/registry.toml`` registers (``ml.models.registered_models``),
 whether or not it is actually installed; ``approaches`` (design point
 (1)-b) is the honest "is ml actually usable right now" signal, checked
-per asset via ``AssetStore`` -- a fact's ``ml_target`` only gains
-``"ml"`` once that specific asset resolves. Only ``is_metal``/
-``is_magnetic`` are wired this way so far (``ml.models.ML_CLASSIFIER_ROLES``);
-``k_index``'s own ``ml_target`` is a real, published goldilocks-ml model
-too, just not registered/wired yet -- it stays ``["human",
-"heuristic"]`` honestly rather than claiming support that would raise
-on every real call.
+per asset via ``AssetStore`` -- a fact/setting's ``ml_target`` only gains
+``"ml"`` once that specific asset resolves. ``is_metal``/``is_magnetic``
+(``ml.models.ML_CLASSIFIER_ROLES``) and ``k_distance`` (QRF95, checked
+separately -- see ``_ml_model_installed``) are wired this way; ``k_index``'s
+own ``ml_target`` names a real, published goldilocks-ml *ladder-rung*
+model that is a distinct thing from QRF95 and is not registered/wired
+yet (#90) -- it stays ``["human", "heuristic"]`` honestly rather than
+claiming support that would raise on every real call.
 """
 
 from __future__ import annotations
@@ -141,22 +142,40 @@ def _approaches(ml_target: str | None) -> list[str]:
     ``["human"] + (["ml"] if that target has an installed model) +
     ["heuristic"]``. v2 epic 11 (#11): ``is_metal``/``is_magnetic`` are
     registered, real, ``goldilocks_ml.inference``-loadable classifiers
-    (``ml.models.ML_CLASSIFIER_ROLES``) -- ``"ml"`` appears for either
-    the moment its asset is actually installed, not merely declared.
-    Every other ``ml_target`` (e.g. ``k_index``: a real model exists in
-    goldilocks-ml but is not registered/wired here yet) still has no
-    installed-model check to pass, so it keeps resolving to
-    ``["human", "heuristic"]`` honestly rather than claiming ml support
-    that would raise ``MlModelUnavailable`` on every real call."""
+    (``ml.models.ML_CLASSIFIER_ROLES``), and ``k_distance`` is QRF95
+    (#92) -- ``"ml"`` appears for any of these the moment its asset is
+    actually installed, not merely declared. ``k_index``'s ``ml_target``
+    names a different, not-yet-registered/wired ladder-rung model (#90),
+    so it still has no installed-model check to pass and keeps resolving
+    to ``["human", "heuristic"]`` honestly rather than claiming ml
+    support that would raise ``MlModelUnavailable`` on every real call."""
     if ml_target is not None and _ml_model_installed(ml_target):
         return ["human", "ml", "heuristic"]
     return ["human", "heuristic"]
 
 
 def _ml_model_installed(ml_target: str) -> bool:
+    """``k_distance`` is checked separately from ``ML_CLASSIFIER_ROLES``
+    (#92): QRF95 predates that table and keeps its own ``QrfKpointsConfig``
+    asset shape (``ml.models.load_default_qrf_config`` -- see that
+    module's docstring for why), not a ``[defaults.k_distance]`` section
+    that table could look up generically."""
     from goldilocks_core.assets.store import AssetCorrupt, AssetNotInstalled, AssetStore
-    from goldilocks_core.ml.models import ML_CLASSIFIER_ROLES, load_ml_classifier
+    from goldilocks_core.ml.models import (
+        ML_CLASSIFIER_ROLES,
+        load_default_qrf_config,
+        load_ml_classifier,
+    )
 
+    if ml_target == "k_distance":
+        asset = load_default_qrf_config().model_asset
+        if asset is None:
+            return False
+        try:
+            AssetStore().resolve_spec(asset)
+        except (AssetNotInstalled, AssetCorrupt):
+            return False
+        return True
     if ml_target not in ML_CLASSIFIER_ROLES:
         return False
     try:
@@ -338,7 +357,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "k_distance": {
         "unit": "1/Angstrom",
-        "ml_target": "k_index",
+        "ml_target": "k_distance",
         "description": (
             "Target k-point spacing; heuristic default is 0.15 for metals, "
             "0.30 otherwise."

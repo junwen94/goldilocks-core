@@ -11,7 +11,7 @@ interval_confidence = 0.90
 [defaults.kpoints.asset]
 id = "models/qrf-kpoints"
 version = "QRF95"
-preparation_revision = "2"
+preparation_revision = "3"
 
 [[defaults.kpoints.asset.files]]
 role = "model"
@@ -19,6 +19,37 @@ path = "QRF95.pkl"
 url = "https://data-collections.psdi.ac.uk/api/records/q3bye-wep37/files/QRF95.pkl/content"
 checksum = "sha256:2647b976a57637cc34e4874f3b0ff3436a7c032761b774fdd9e56e69fddaffcc"
 size = 185695399
+
+# QRF95's own record.json (v2 epic 11, #11 follow-up, #92): the same
+# record already carried a real, goldilocks_ml.inference-shaped
+# model.json all along -- just never registered as one of this asset's
+# files, so `ml.predict`'s `load_model()` had nothing to read and
+# `k_sampling()`'s ml tier stayed permanently stubbed. Its own
+# requires_artifacts pins is_metal.ckpt/atom_init.json from ptc95-vbq12,
+# duplicated below (small files, same trick already used for
+# defaults.is_metal's atom_init.json) so `load_model()` finds them beside
+# this model.json rather than needing a separate GOLDILOCKS_ARTIFACTS
+# cache goldilocks-core has no other reason to configure.
+[[defaults.kpoints.asset.files]]
+role = "model_record"
+path = "model.json"
+url = "https://data-collections.psdi.ac.uk/api/records/q3bye-wep37/files/model.json/content"
+checksum = "sha256:0c703cdb2e765ec0f7ca5a19ea5b821c4218a99906f849632e9f91dbf419c6a0"
+size = 10218
+
+[[defaults.kpoints.asset.files]]
+role = "metallicity_checkpoint"
+path = "is_metal.ckpt"
+url = "https://data-collections.psdi.ac.uk/api/records/ptc95-vbq12/files/is_metal.ckpt/content"
+checksum = "sha256:964d818de8a155e3219d1bff9f7fca12137a003c5c71ff6b4f1d68d472d4c9d1"
+size = 2009979
+
+[[defaults.kpoints.asset.files]]
+role = "metallicity_atom_init"
+path = "atom_init.json"
+url = "https://data-collections.psdi.ac.uk/api/records/ptc95-vbq12/files/atom_init.json/content"
+checksum = "sha256:cb90bd2257dbf8cfc4e6b2b6d4348d4616e8e9680f1339b1461137032e0f1894"
+size = 28392
 
 [[defaults.kpoints.asset.files]]
 role = "licence"

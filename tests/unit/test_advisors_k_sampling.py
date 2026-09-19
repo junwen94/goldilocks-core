@@ -113,6 +113,43 @@ def test_llm_k_distance_is_honored_when_no_human_override_exists() -> None:
     assert state.source == "llm"
 
 
+def test_ml_k_distance_used_when_qrf95_is_installed_and_no_override(
+    real_assets,
+) -> None:
+    """v2 epic 11 (#11) follow-up, #92: QRF95's own PSDI record always
+    carried a real model.json, it just was never registered as one of
+    ``[defaults.kpoints]``'s asset files -- this exercises the actual,
+    installed model, not a monkeypatched stand-in."""
+    state = k_sampling(is_metal(_IRON), _IRON)
+
+    assert state.ok
+    assert state.source == "ml"
+    assert state.value.k_distance is not None
+    assert state.value.mesh == k_distance_to_mesh(_IRON, state.value.k_distance)
+    assert state.value.shift == (0, 0, 0)
+
+
+def test_ml_k_distance_respects_a_human_shift(real_assets) -> None:
+    """Regression for the same class of bug as #34 (see the pure
+    -heuristic-path regression above): the ml branch used to hardcode
+    ``shift=None`` regardless of what the human asked for."""
+    state = k_sampling(
+        is_metal(_IRON), _IRON, human=KSamplingHumanInput(shift=(1, 1, 1))
+    )
+
+    assert state.source == "ml"
+    assert state.value.shift == (1, 1, 1)
+
+
+def test_human_k_distance_wins_over_ml(real_assets) -> None:
+    state = k_sampling(
+        is_metal(_IRON), _IRON, human=KSamplingHumanInput(k_distance=0.25)
+    )
+
+    assert state.source == "human"
+    assert state.value.k_distance == 0.25
+
+
 def test_human_k_index_resolves_to_that_rung_s_own_mesh() -> None:
     entries = build_gamma_kmesh_entries(_IRON)
 

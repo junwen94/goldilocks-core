@@ -13,20 +13,33 @@ are pure ML, with any model/feature failure propagating as a raw
 exception straight out of ``resolve_kpoints`` (e.g.
 ``ml/qrf/inference.py`` raises bare ``ValueError``s on malformed
 quantiles, with nothing catching them between there and the caller).
-This module's job is only to guarantee a working, zero-ML-dependency
-path exists -- the actual ML tier (goldilocks-data's ladder plus a
-k_index/k_distance model) is v2 epic 11, and is stubbed here the same
-way every other advisor in this codebase stubs its ml tier.
+This module's job is to guarantee a working, zero-ML-dependency path
+always exists underneath whatever the ml tier does.
 
-``occupations`` is accepted as an explicit input -- not because this
-heuristic tier uses it (it does not; both branches below are a flat
+The ml tier itself (v2 epic 11, #11; #92) calls QRF95 -- registered in
+``ml/registry.toml``'s ``[defaults.kpoints]`` since before this epic,
+but never actually loaded until now: its own PSDI record always carried
+a real ``goldilocks_ml.inference``-shaped ``model.json``, it just was
+not one of this asset's registered files. ``ml.predict.predict_k_distance``
+degrades to ``None`` (falling through to heuristic) the same way
+``is_metal``/``is_magnetic`` do for a missing asset or import -- see
+that module's docstring. A *ladder-rung* k_index model also exists in
+goldilocks-ml but is not yet published/wired (#90); that is a distinct
+model from QRF95, not another name for it, despite ``capabilities.py``
+having (incorrectly) pointed ``k_distance``'s ``ml_target`` at
+``"k_index"`` until this same change fixed it.
+
+``occupations`` is accepted as an explicit input -- not because either
+the heuristic or the now-wired QRF95 ml tier uses it (neither does;
+QRF95's own feature contract is composition/structure/SOAP/lattice/
+metallicity, with no smearing term, and the heuristic below is a flat
 k_distance regardless of smearing width) -- but because the point of
 this epic's per-step ordering is to make sigma an *explicit* input to
 k_sampling rather than an implicit shared condition (the goldilocks
 dataset itself was generated at fixed ``cold``/0.01 Ry smearing while
 only ``k_index`` was scanned, so pretending the two are decoupled would
-be dishonest). Once epic 11 wires in a real k_distance/k_index model,
-that model's own contract is expected to actually consume this.
+be dishonest). A future k_index ladder-rung model's own contract (#90)
+may turn out to actually consume this; QRF95 does not.
 
 Reuses ``legacy_kmesh/resolve.py``'s human-hint-wins-over-model
 precedence pattern (explicit grid beats an explicit distance, both beat
@@ -189,10 +202,11 @@ def k_sampling(
             _from_k_distance(structure, human.k_distance, human.shift),
             Provenance(source="human"),
         )
-    ml_value: float | None = None  # no ml model wired yet; stubbed until epic 11
+    ml_value = _ml_k_distance(structure)
     if ml_value is not None:
         return Resolved(
-            _from_k_distance(structure, ml_value, None), Provenance(source="ml")
+            _from_k_distance(structure, ml_value, human.shift),
+            Provenance(source="ml"),
         )
     if llm.k_distance is not None:
         return Resolved(
@@ -210,6 +224,21 @@ def k_sampling(
         _from_k_distance(structure, _METAL_K_DISTANCE, human.shift),
         Provenance(source="heuristic"),
     )
+
+
+def _ml_k_distance(structure: Structure) -> float | None:
+    """QRF95's own raw k-distance (v2 epic 11, #11; #92), or ``None`` if
+    its model asset is not installed or goldilocks-ml is not importable
+    -- never a reason to fail ``k_sampling()`` itself, the same
+    degrade-to-heuristic policy ``analysis/is_metal.py``'s
+    ``_ml_is_metal`` already follows for a missing external dependency."""
+    from goldilocks_core.ml.predict import MlModelUnavailable, predict_k_distance
+
+    try:
+        prediction = predict_k_distance(structure)
+    except MlModelUnavailable:
+        return None
+    return float(prediction.value)
 
 
 def _from_k_distance(
