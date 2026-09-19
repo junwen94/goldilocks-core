@@ -24,7 +24,7 @@ just unranked, with a warning naming why.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from goldilocks_core.advisors.magnetic_config import (
     enumerate_magnetic_orderings,
@@ -57,6 +57,32 @@ class MagneticOrderingsReport:
     candidates: tuple[MagneticOrderingCandidate, ...]
     ranked: bool
     warnings: tuple[Warning, ...] = ()
+
+
+def candidate_to_json(candidate: MagneticOrderingCandidate) -> dict[str, Any]:
+    """The JSON-safe projection of one candidate -- shared by
+    ``cli/_magnetic_orderings.py`` and ``server/_handlers.py`` so both
+    transports report the same shape. Never includes the full
+    ``Structure`` (too heavy, and not what a listing needs); a caller
+    wanting the actual structure for a chosen candidate re-derives it from
+    ``enumerate_magnetic_orderings`` by label, the same way ``generate()``
+    would eventually consume it (#87, layer 3's generation half)."""
+    return {
+        "label": candidate.label,
+        "formula": candidate.structure.composition.reduced_formula,
+        "natoms": candidate.natoms,
+        "energy_per_atom_ev": candidate.energy_per_atom_ev,
+        "status": candidate.status,
+        "is_recommended": candidate.is_recommended,
+    }
+
+
+def report_to_json(report: MagneticOrderingsReport) -> dict[str, Any]:
+    return {
+        "ranked": report.ranked,
+        "candidates": [candidate_to_json(candidate) for candidate in report.candidates],
+        "warnings": [warning.model_dump() for warning in report.warnings],
+    }
 
 
 def _unranked(

@@ -34,6 +34,7 @@ from goldilocks_core.server import _handlers
 from goldilocks_core.server.documents import (
     ComputeRequestDocument,
     InlineStructureDocument,
+    MagneticOrderingsRequestDocument,
     RunRequestDocument,
 )
 
@@ -84,6 +85,10 @@ def create_app(*, static_root: str | Path | None = None) -> Any:
     @app.post("/explain")
     def explain(body: ComputeRequestDocument) -> Any:
         return _handlers.explain(body)
+
+    @app.post("/magnetic-orderings")
+    def magnetic_orderings(body: MagneticOrderingsRequestDocument) -> Any:
+        return _handlers.magnetic_orderings(body)
 
     @app.post("/run")
     def run(body: RunRequestDocument) -> Response:

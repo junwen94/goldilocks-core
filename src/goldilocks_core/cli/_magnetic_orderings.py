@@ -17,7 +17,7 @@ import argparse
 import json
 
 from goldilocks_core.cli._common import resolve_structure
-from goldilocks_core.service import list_magnetic_orderings
+from goldilocks_core.service import list_magnetic_orderings, report_to_json
 
 
 def add_subparser(subparsers: argparse._SubParsersAction) -> None:
@@ -37,33 +37,12 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument("--json", action="store_true", help="Print JSON output.")
 
 
-def _candidate_json(candidate: object) -> dict[str, object]:
-    return {
-        "label": candidate.label,
-        "formula": candidate.structure.composition.reduced_formula,
-        "natoms": candidate.natoms,
-        "energy_per_atom_ev": candidate.energy_per_atom_ev,
-        "status": candidate.status,
-        "is_recommended": candidate.is_recommended,
-    }
-
-
 def run(args: argparse.Namespace) -> None:
     structure = resolve_structure(args.structure)
     report = list_magnetic_orderings(structure, rank_with_mmace=args.rank_with_mmace)
 
     if args.json:
-        print(
-            json.dumps(
-                {
-                    "ranked": report.ranked,
-                    "candidates": [_candidate_json(c) for c in report.candidates],
-                    "warnings": [warning.model_dump() for warning in report.warnings],
-                },
-                indent=2,
-                sort_keys=True,
-            )
-        )
+        print(json.dumps(report_to_json(report), indent=2, sort_keys=True))
         return
 
     header = (

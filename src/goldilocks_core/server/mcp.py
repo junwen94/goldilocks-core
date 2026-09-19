@@ -32,6 +32,7 @@ from goldilocks_core.server import _handlers
 from goldilocks_core.server.documents import (
     ComputeRequestDocument,
     InlineStructureDocument,
+    MagneticOrderingsRequestDocument,
 )
 
 try:
@@ -93,6 +94,23 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
     @server.tool(description="Normalize and inspect an inline structure.")
     async def inspect_structure(document: InlineStructureDocument) -> dict[str, Any]:
         return await _call(_handlers.inspect, document)
+
+    @server.tool(
+        description=(
+            "List candidate magnetic orderings for a structure (plain "
+            "ferromagnetic, plus every compensated antiferromagnetic candidate "
+            "enumlib finds). rank_with_mmace=True additionally relaxes each "
+            "candidate on the mMACE potential energy surface and marks the "
+            "lowest energy-per-atom one as recommended; degrades to an "
+            "unranked listing, with a warning, if that is not configured on "
+            "the server. Lists candidates only -- does not generate any "
+            "input file."
+        )
+    )
+    async def magnetic_orderings(
+        document: MagneticOrderingsRequestDocument,
+    ) -> dict[str, Any]:
+        return await _call(_handlers.magnetic_orderings, document)
 
     @server.tool(
         description=(

@@ -69,6 +69,7 @@ from goldilocks_core.service._magnetic_orderings import (
     MagneticOrderingCandidate,
     MagneticOrderingsReport,
     list_magnetic_orderings,
+    report_to_json,
 )
 from goldilocks_core.service._pipeline import advise, check
 from goldilocks_core.service._pseudo import PseudoAdvice
@@ -121,6 +122,7 @@ __all__ = [
     "render_submission",
     "render_submission_dos",
     "render_submission_relax",
+    "report_to_json",
     "to_bundle_input",
     "to_bundle_input_dos",
     "to_bundle_input_relax",

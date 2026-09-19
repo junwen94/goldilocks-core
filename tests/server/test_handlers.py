@@ -11,6 +11,7 @@ from goldilocks_core.server import _handlers
 from goldilocks_core.server.documents import (
     ComputeRequestDocument,
     InlineStructureDocument,
+    MagneticOrderingsRequestDocument,
 )
 from goldilocks_core.service import AdviceIncomplete
 
@@ -24,6 +25,40 @@ class TestInspect:
         inspection = _handlers.inspect(document)
 
         assert inspection["structure"]["reduced_formula"] == "Si"
+
+
+class TestMagneticOrderings:
+    def test_lists_the_fm_candidate_unranked_by_default(self, silicon_cif) -> None:
+        document = MagneticOrderingsRequestDocument(structure_content=silicon_cif)
+
+        result = _handlers.magnetic_orderings(document)
+
+        assert result["ranked"] is False
+        assert result["candidates"] == [
+            {
+                "label": "fm",
+                "formula": "Si",
+                "natoms": 8,
+                "energy_per_atom_ev": None,
+                "status": None,
+                "is_recommended": False,
+            }
+        ]
+        assert result["warnings"] == []
+
+    def test_rank_with_mmace_degrades_with_a_warning_when_unconfigured(
+        self, silicon_cif, monkeypatch
+    ) -> None:
+        monkeypatch.delenv("GOLDILOCKS_MACE_BACKBONE", raising=False)
+        document = MagneticOrderingsRequestDocument(
+            structure_content=silicon_cif, rank_with_mmace=True
+        )
+
+        result = _handlers.magnetic_orderings(document)
+
+        assert result["ranked"] is False
+        assert len(result["warnings"]) == 1
+        assert result["warnings"][0]["code"] == "magnetic.ordering_ranking_unavailable"
 
 
 class TestExplain:
