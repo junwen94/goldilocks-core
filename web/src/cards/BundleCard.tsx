@@ -14,7 +14,7 @@ import { GeneratedInputReview } from "../review/GeneratedInputReview";
 import { WarningsPanel } from "../review/WarningsPanel";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
 
-export function BundleCard() {
+export function BundleCard({ kicker }: { readonly kicker: string }) {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
   const reviewed = snapshot.reviewed;
@@ -30,7 +30,7 @@ export function BundleCard() {
       className="workbench-card card-bundle"
     >
       <Group component="header" className="card-header" mb="md" wrap="nowrap">
-        <Text className="card-kicker">04</Text>
+        <Text className="card-kicker">{kicker}</Text>
         <Title order={2}>Bundle</Title>
       </Group>
       <div className="card-body">

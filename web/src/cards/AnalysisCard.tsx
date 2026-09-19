@@ -3,7 +3,7 @@ import { Group, Paper, Text, Title } from "@mantine/core";
 import { AnalysisSection } from "../analysis/AnalysisSection";
 import { useWorkspaceSnapshot } from "../workspace/useWorkspace";
 
-export function AnalysisCard() {
+export function AnalysisCard({ kicker }: { readonly kicker: string }) {
   const snapshot = useWorkspaceSnapshot();
   return (
     <Paper
@@ -15,7 +15,7 @@ export function AnalysisCard() {
       className="workbench-card card-analysis"
     >
       <Group component="header" className="card-header" mb="md" wrap="nowrap">
-        <Text className="card-kicker">02</Text>
+        <Text className="card-kicker">{kicker}</Text>
         <Title order={2}>Analysis</Title>
       </Group>
       <div className="card-body">

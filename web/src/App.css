@@ -24,13 +24,16 @@
   background: rgba(255, 255, 255, 0.12);
 }
 
-/* Four columns, mirroring goldilocks-core's own structure -> analysis ->
- * advisors -> bundle pipeline, one screen, no page scroll -- each column
- * scrolls its own body internally as a safety net. */
+/* Four columns (five once Magnetic Orderings pops in -- App.tsx sets
+ * --workbench-columns), mirroring goldilocks-core's own structure ->
+ * analysis -> advisors -> [magnetic orderings] -> bundle pipeline, one
+ * screen, no page scroll -- each column scrolls its own body internally
+ * as a safety net. */
 .workbench-grid {
+  --workbench-columns: 4;
   display: grid;
   grid-template-columns: 1fr;
-  grid-template-rows: repeat(4, minmax(0, 1fr));
+  grid-template-rows: repeat(var(--workbench-columns), minmax(0, 1fr));
   gap: 1rem;
   height: calc(100dvh - var(--app-header-height));
   max-width: 120rem;
@@ -41,7 +44,7 @@
 
 @media (min-width: 84rem) {
   .workbench-grid {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(var(--workbench-columns), 1fr);
     grid-template-rows: 1fr;
   }
 }
@@ -87,6 +90,10 @@
 
 .card-advisors {
   --card-accent: #b02090;
+}
+
+.card-magnetic-orderings {
+  --card-accent: #0f766e;
 }
 
 .card-bundle {

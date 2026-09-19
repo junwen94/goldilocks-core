@@ -165,11 +165,47 @@ describe("Goldilocks Workbench", () => {
       screen.getByRole("region", { name: "Goldilocks advisors" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Bundle" })).toBeInTheDocument();
-    // The Advisors column renders with defaults from Capabilities alone,
-    // before any structure is loaded, so the page isn't empty while
-    // waiting for one -- the separator ahead of the magnetic-ordering
-    // candidates section is one of those always-present pieces.
-    expect(await screen.findByRole("separator")).toBeInTheDocument();
+    // Magnetic Orderings only pops in once a structure is classified
+    // magnetic (see "shows Magnetic Orderings..." below) -- absent here,
+    // it must not silently count as a fifth always-present column.
+    expect(
+      screen.queryByRole("region", { name: "Magnetic orderings" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows Magnetic Orderings between Advisors and Bundle once the structure is classified magnetic", async () => {
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [
+      Promise.resolve({
+        records: {
+          ...explainResult.records,
+          is_magnetic: {
+            status: "resolved",
+            value: "magnetic",
+            source: "heuristic",
+          },
+        },
+        warnings: [],
+      }),
+    ];
+    const { container } = renderApp(core);
+
+    await openStructure(userEvent.setup(), container);
+
+    const magnetic = await screen.findByRole("region", {
+      name: "Magnetic orderings",
+    });
+    const regions = screen
+      .getAllByRole("region")
+      .map((region) => region.getAttribute("aria-label"));
+    expect(regions.indexOf("Goldilocks advisors")).toBeLessThan(
+      regions.indexOf("Magnetic orderings"),
+    );
+    expect(regions.indexOf("Magnetic orderings")).toBeLessThan(
+      regions.indexOf("Bundle"),
+    );
+    expect(magnetic).toBeInTheDocument();
   });
 
   it("uses light mode by default and persists an explicit dark mode", async () => {

@@ -7,7 +7,6 @@ import {
   Stack,
   Table,
   Text,
-  Title,
   VisuallyHidden,
 } from "@mantine/core";
 import { Download, Sparkles } from "lucide-react";
@@ -18,7 +17,9 @@ import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
  * candidates enumerate_magnetic_orderings finds) for the currently
  * inspected structure, with an opt-in "Rank with mMACE" pass and a
  * multi-select bundle download -- see workspace.ts's
- * `magneticOrderings.*` actions for the request/response plumbing. */
+ * `magneticOrderings.*` actions for the request/response plumbing.
+ * Rendered inside `MagneticOrderingsCard`, which owns the heading --
+ * this component starts directly with its content. */
 export function MagneticOrderingsPanel() {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
@@ -64,8 +65,7 @@ export function MagneticOrderingsPanel() {
 
   return (
     <Stack gap="sm">
-      <Group justify="space-between" wrap="nowrap">
-        <Title order={3}>Magnetic ordering candidates</Title>
+      <Group justify="flex-end">
         <Button
           size="xs"
           variant="light"

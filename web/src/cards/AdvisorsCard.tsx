@@ -1,10 +1,9 @@
-import { Divider, Group, Paper, Text, Title } from "@mantine/core";
+import { Group, Paper, Text, Title } from "@mantine/core";
 
-import { MagneticOrderingsPanel } from "../advisors/MagneticOrderingsPanel";
 import { CalculationForm } from "../controls/CalculationForm";
 import { useWorkspaceSnapshot } from "../workspace/useWorkspace";
 
-export function AdvisorsCard() {
+export function AdvisorsCard({ kicker }: { readonly kicker: string }) {
   const snapshot = useWorkspaceSnapshot();
   return (
     <Paper
@@ -16,18 +15,14 @@ export function AdvisorsCard() {
       className="workbench-card card-advisors"
     >
       <Group component="header" className="card-header" mb="md" wrap="nowrap">
-        <Text className="card-kicker">03</Text>
+        <Text className="card-kicker">{kicker}</Text>
         <Title order={2}>Advisors</Title>
       </Group>
       <div className="card-body">
         {snapshot.capabilities === null ? (
           <Text c="dimmed">Load a structure to configure a calculation.</Text>
         ) : (
-          <>
-            <CalculationForm />
-            <Divider my="md" />
-            <MagneticOrderingsPanel />
-          </>
+          <CalculationForm />
         )}
       </div>
     </Paper>

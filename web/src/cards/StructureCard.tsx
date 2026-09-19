@@ -5,7 +5,7 @@ import { StructureSourceControls } from "../controls/StructureSourceControls";
 import { StructureViewport } from "../viewer/StructureViewport";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
 
-export function StructureCard() {
+export function StructureCard({ kicker }: { readonly kicker: string }) {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
 
@@ -19,7 +19,7 @@ export function StructureCard() {
       className="workbench-card card-structure"
     >
       <Group component="header" className="card-header" mb="md" wrap="nowrap">
-        <Text className="card-kicker">01</Text>
+        <Text className="card-kicker">{kicker}</Text>
         <Title order={2}>Structure</Title>
       </Group>
       <div className="card-body">
