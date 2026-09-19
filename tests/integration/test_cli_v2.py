@@ -115,8 +115,13 @@ def test_magnetic_orderings_rank_degrades_without_a_configured_checkpoint(
     assert completed.returncode == 0, completed.stderr
     document = json.loads(completed.stdout)
     assert document["ranked"] is False
-    assert len(document["warnings"]) == 1
-    assert document["warnings"][0]["code"] == "magnetic.ordering_ranking_unavailable"
+    # Not an exact warnings count: this subprocess inherits the real
+    # machine's PATH, so whether AFM enumeration also warns
+    # (magnetic.afm_ordering_unavailable) depends on whether enum.x
+    # happens to be installed here -- only ranking degradation is this
+    # test's own concern.
+    codes = {warning["code"] for warning in document["warnings"]}
+    assert "magnetic.ordering_ranking_unavailable" in codes
 
 
 def test_settings_json_matches_the_capabilities_contract() -> None:

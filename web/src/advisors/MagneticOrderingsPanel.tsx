@@ -11,6 +11,7 @@ import {
 } from "@mantine/core";
 import { Download, Sparkles } from "lucide-react";
 
+import { WarningsPanel } from "../review/WarningsPanel";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
 
 /** #87 layer 4: lists candidate magnetic orderings (FM plus any AFM
@@ -84,6 +85,7 @@ export function MagneticOrderingsPanel() {
           {snapshot.magneticOrderingsError}
         </Text>
       )}
+      <WarningsPanel warnings={magneticOrderings?.warnings ?? []} />
       {candidates.length === 0 ? (
         <Text c="dimmed" size="sm">
           {magneticOrderingsOperation === "list"

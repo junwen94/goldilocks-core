@@ -33,14 +33,21 @@ def test_default_listing_is_unranked_and_never_touches_mmace(monkeypatch) -> Non
         raise AssertionError("rank_orderings must not be called unless requested")
 
     monkeypatch.setattr(magnetic_orderings_module, "rank_orderings", fail)
+    # Deterministic regardless of this machine's real PATH (#87): forces
+    # AFM enumeration itself unavailable, so the resulting warning is
+    # pinned rather than depending on whether enum.x happens to be
+    # installed here.
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
 
     report = list_magnetic_orderings(_ROCK_SALT_FEO)
 
     assert report.ranked is False
-    assert report.warnings == ()
     assert [candidate.label for candidate in report.candidates] == ["fm"]
     assert report.candidates[0].energy_per_atom_ev is None
     assert report.candidates[0].is_recommended is False
+    [warning] = report.warnings
+    assert warning.code == "magnetic.afm_ordering_unavailable"
+    assert "enumlib" in warning.message
 
 
 def test_ranked_listing_marks_the_lowest_energy_candidate_as_recommended(
@@ -128,11 +135,22 @@ def test_ranking_unavailable_falls_back_to_unranked_with_a_warning(monkeypatch) 
     monkeypatch.setattr(
         magnetic_orderings_module, "rank_orderings", fake_rank_orderings
     )
+    # Deterministic regardless of this machine's real PATH (#87) -- see
+    # test_default_listing_is_unranked_and_never_touches_mmace above.
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
 
     report = list_magnetic_orderings(_ROCK_SALT_FEO, rank_with_mmace=True)
 
     assert report.ranked is False
     assert [candidate.label for candidate in report.candidates] == ["fm"]
-    assert len(report.warnings) == 1
-    assert report.warnings[0].code == "magnetic.ordering_ranking_unavailable"
-    assert "GOLDILOCKS_MACE_BACKBONE" in report.warnings[0].message
+    codes = {warning.code for warning in report.warnings}
+    assert codes == {
+        "magnetic.afm_ordering_unavailable",
+        "magnetic.ordering_ranking_unavailable",
+    }
+    ranking_warning = next(
+        warning
+        for warning in report.warnings
+        if warning.code == "magnetic.ordering_ranking_unavailable"
+    )
+    assert "GOLDILOCKS_MACE_BACKBONE" in ranking_warning.message

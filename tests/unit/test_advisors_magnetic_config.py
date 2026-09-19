@@ -408,11 +408,12 @@ def test_enumerate_magnetic_orderings_is_just_fm_when_enumlib_is_missing(
     does: no enumlib means no antiferromagnetic candidates, not an error."""
     monkeypatch.setattr(shutil, "which", lambda _name: None)
 
-    candidates = enumerate_magnetic_orderings(
+    candidates, reason = enumerate_magnetic_orderings(
         _ROCK_SALT_FEO, magnetic_elements_in(_ROCK_SALT_FEO)
     )
 
     assert candidates == (("fm", _ROCK_SALT_FEO),)
+    assert reason is not None and "enumlib" in reason
 
 
 def test_enumerate_magnetic_orderings_never_picks_a_winner(monkeypatch) -> None:
@@ -432,12 +433,13 @@ def test_enumerate_magnetic_orderings_never_picks_a_winner(monkeypatch) -> None:
         magnetic_config_module, "MagneticStructureEnumerator", _TwoAfmCandidates
     )
 
-    candidates = enumerate_magnetic_orderings(
+    candidates, reason = enumerate_magnetic_orderings(
         _ROCK_SALT_FEO, magnetic_elements_in(_ROCK_SALT_FEO)
     )
 
     labels = [label for label, _structure in candidates]
     assert labels == ["fm", "afm-1", "afm-2"]
+    assert reason is None
 
 
 @pytest.mark.skipif(
@@ -445,10 +447,11 @@ def test_enumerate_magnetic_orderings_never_picks_a_winner(monkeypatch) -> None:
     reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
 )
 def test_enumerate_magnetic_orderings_finds_the_same_split_relabeling_does() -> None:
-    candidates = enumerate_magnetic_orderings(
+    candidates, reason = enumerate_magnetic_orderings(
         _ROCK_SALT_FEO, magnetic_elements_in(_ROCK_SALT_FEO)
     )
 
+    assert reason is None
     assert candidates[0][0] == "fm"
     assert candidates[0][1] == _ROCK_SALT_FEO
     afm_candidates = candidates[1:]

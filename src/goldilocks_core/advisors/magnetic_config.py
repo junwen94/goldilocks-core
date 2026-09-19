@@ -421,7 +421,12 @@ def _fraction_for(symbol: str, z_valences: dict[str, float] | None) -> float:
     return target / z_valences[symbol]
 
 
-def _afm_unavailable(reason: str) -> Warning:
+def afm_unavailable_warning(reason: str) -> Warning:
+    """Public (v2 #87): ``service._magnetic_orderings.list_magnetic_orderings``
+    needs the same warning shape ``_attempt_afm_relabeling`` already uses
+    below, to explain *why* a listing came back FM-only rather than
+    silently looking like every structure has no compensated AFM
+    ordering at all."""
     return Warning(
         code="magnetic.afm_ordering_unavailable",
         level="warning",
@@ -488,7 +493,7 @@ def _afm_candidates_or_reason(
 
 def enumerate_magnetic_orderings(
     structure: Structure, magnetic_elements: tuple[str, ...]
-) -> tuple[tuple[str, Structure], ...]:
+) -> tuple[tuple[tuple[str, Structure], ...], str | None]:
     """List every magnetic-ordering candidate this heuristic tier can
     produce for ``structure``: the plain ferromagnetic identity (label
     ``"fm"``), plus every antiferromagnetic candidate
@@ -502,12 +507,19 @@ def enumerate_magnetic_orderings(
     antiferromagnetic candidates, whenever AFM enumeration is unavailable
     (oversized structure, missing enumlib, enumeration failure, or no
     compensated ordering found); this function never raises for those
-    cases, matching this module's existing degrade-not-raise policy."""
+    cases, matching this module's existing degrade-not-raise policy.
+
+    The second return value is ``_afm_candidates_or_reason``'s own reason
+    whenever no AFM candidate was found, ``None`` otherwise -- surfaced
+    so a caller (#87's ``list_magnetic_orderings``) can tell a real "no
+    compensated ordering exists" result apart from "AFM enumeration
+    silently could not run here" (e.g. missing enumlib), which otherwise
+    look identical from the candidate list alone."""
     candidates: list[tuple[str, Structure]] = [("fm", structure)]
-    afm_candidates, _reason = _afm_candidates_or_reason(structure, magnetic_elements)
+    afm_candidates, reason = _afm_candidates_or_reason(structure, magnetic_elements)
     for index, candidate in enumerate(afm_candidates, start=1):
         candidates.append((f"afm-{index}", _label_by_spin(candidate)))
-    return tuple(candidates)
+    return tuple(candidates), reason
 
 
 def _attempt_afm_relabeling(
@@ -518,7 +530,7 @@ def _attempt_afm_relabeling(
     reason, whenever ``_afm_candidates_or_reason`` cannot produce one."""
     candidates, reason = _afm_candidates_or_reason(structure, magnetic_elements)
     if reason is not None:
-        return structure, (_afm_unavailable(reason),)
+        return structure, (afm_unavailable_warning(reason),)
 
     winner = min(candidates, key=lambda candidate: candidate.num_sites)
     relabeled = _label_by_spin(winner)

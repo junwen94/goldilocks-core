@@ -32,6 +32,7 @@ from typing import Any
 from pymatgen.core import Structure
 
 from goldilocks_core.advisors.magnetic_config import (
+    afm_unavailable_warning,
     enumerate_magnetic_orderings,
     magnetic_elements_in,
     starting_magnetization_for,
@@ -171,13 +172,25 @@ def list_magnetic_orderings(
     extra or its checkpoint is not configured, the candidates are still
     returned (unranked), with a warning naming why -- ranking is an
     enhancement to this listing, never a precondition for it.
+
+    Also warns (rather than silently listing "fm" alone, indistinguishable
+    from "this structure genuinely has no AFM candidates") whenever
+    ``structure`` actually has a magnetic element but AFM enumeration
+    itself could not run or find one -- the common real case being
+    enumlib (``enum.x``/``multienum.x``) not installed.
     """
-    candidates = enumerate_magnetic_orderings(
-        structure, magnetic_elements_in(structure)
+    magnetic_elements = magnetic_elements_in(structure)
+    candidates, afm_reason = enumerate_magnetic_orderings(structure, magnetic_elements)
+    warnings = (
+        (afm_unavailable_warning(afm_reason),)
+        if afm_reason is not None and magnetic_elements
+        else ()
     )
 
     if not rank_with_mmace:
-        return MagneticOrderingsReport(candidates=_unranked(candidates), ranked=False)
+        return MagneticOrderingsReport(
+            candidates=_unranked(candidates), ranked=False, warnings=warnings
+        )
 
     try:
         ranked = rank_orderings(candidates, device=device)
@@ -186,6 +199,7 @@ def list_magnetic_orderings(
             candidates=_unranked(candidates),
             ranked=False,
             warnings=(
+                *warnings,
                 Warning(
                     code="magnetic.ordering_ranking_unavailable",
                     level="warning",
@@ -211,4 +225,6 @@ def list_magnetic_orderings(
                 overrides=overrides,
             )
         )
-    return MagneticOrderingsReport(candidates=tuple(candidates_out), ranked=True)
+    return MagneticOrderingsReport(
+        candidates=tuple(candidates_out), ranked=True, warnings=warnings
+    )
