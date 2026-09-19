@@ -90,10 +90,17 @@ class TestTopLevelShape:
         anywhere in this tree would blow up json.dumps."""
         json.dumps(capabilities())
 
-    def test_models_is_honestly_empty(self) -> None:
-        """No ml integration exists yet (epic 11) -- must stay empty, not
-        fabricated, per this module's own docstring."""
-        assert capabilities()["models"] == []
+    def test_models_lists_every_registered_model(self) -> None:
+        """v2 epic 11 (#11): models[] reflects ml/registry.toml, not
+        fabricated -- registered, not necessarily installed (approaches
+        below is the honest "is it actually usable right now" signal)."""
+        ids = {model["id"] for model in capabilities()["models"]}
+        assert ids == {
+            "models/qrf-kpoints",
+            "models/metallicity-cgcnn",
+            "models/is-metal-classifier",
+            "models/is-magnetic-classifier",
+        }
 
     def test_warnings_catalogue_is_populated_from_every_advisor(self) -> None:
         caps = capabilities()
@@ -200,17 +207,29 @@ class TestSettingsCompleteness:
     def test_k_distance_declares_its_ml_target(self) -> None:
         settings = {s["key"]: s for s in capabilities()["settings"]}
 
-        assert settings["k_distance"]["ml_target"] == "k_index"
+        assert settings["k_distance"]["ml_target"] == "k_distance"
 
     def test_approaches_never_includes_ml_since_no_model_is_installed(self) -> None:
         """Design point (1)-b: ml_target is a static declaration,
-        approaches is runtime-computed -- k_distance declares an
-        ml_target but must not claim "ml" is usable when epic 11
-        hasn't wired any model in yet."""
+        approaches is runtime-computed -- k_index declares an ml_target
+        (a real, published goldilocks-ml ladder-rung model, #90) but
+        must not claim "ml" is usable while that model stays
+        registered-but-not-wired."""
         settings = {s["key"]: s for s in capabilities()["settings"]}
 
-        assert settings["k_distance"]["approaches"] == ["human", "heuristic"]
+        assert settings["k_index"]["approaches"] == ["human", "heuristic"]
         assert settings["functional"]["approaches"] == ["human", "heuristic"]
+
+    def test_k_distance_approaches_gains_ml_once_qrf95_is_installed(
+        self, real_assets
+    ) -> None:
+        """v2 epic 11 follow-up (#92): QRF95 predates ML_CLASSIFIER_ROLES
+        and is checked by its own branch in capabilities._ml_model_installed
+        -- this exercises that branch is honestly wired end to end, not
+        just is_metal/is_magnetic's shared table."""
+        settings = {s["key"]: s for s in capabilities()["settings"]}
+
+        assert settings["k_distance"]["approaches"] == ["human", "ml", "heuristic"]
 
     def test_units_are_present_where_physically_meaningful(self) -> None:
         settings = {s["key"]: s for s in capabilities()["settings"]}
@@ -232,7 +251,17 @@ class TestFacts:
 
         assert set(facts["is_metal"]["values"]) == {"metal", "non_metal"}
         assert facts["is_metal"]["ml_target"] == "is_metal"
-        assert facts["is_metal"]["approaches"] == ["human", "heuristic"]
+
+    def test_is_metal_approaches_gains_ml_once_its_model_is_installed(
+        self, real_assets
+    ) -> None:
+        """v2 epic 11 (#11): approaches is the honest "is it actually
+        usable right now" signal, checked per asset -- real_assets is
+        this test suite's own existing "is the default profile actually
+        installed on this machine" gate."""
+        facts = {f["key"]: f for f in capabilities()["facts"]}
+
+        assert facts["is_metal"]["approaches"] == ["human", "ml", "heuristic"]
 
     def test_all_facts_are_overridable(self) -> None:
         for fact in capabilities()["facts"]:

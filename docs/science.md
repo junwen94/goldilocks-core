@@ -79,18 +79,23 @@ for selection rules, installation, and custom files.
 
 ## Check magnetism and spin-orbit coupling
 
-Spin polarization allows different spin populations. Goldilocks enables it by
+Spin polarization allows different spin populations, decided by `is_magnetic`
+(`human > ml > heuristic`, see [CLI reference](cli.md#scientific-controls)).
+Once its ML asset is installed and `mace`/`e3nn`/`sphericart` are on hand (a
+manual install -- see the CLI reference), a published mMACE-embedding
+classifier answers directly; the heuristic tier otherwise enables it by
 default for lanthanides or actinides whenever present, and for transition
-metals only when a guessed oxidation state implies an open d-shell (a d-electron
-count other than 0 or 10 -- a closed or empty d-shell has no unpaired d
-electrons to align). Oxidation states are guessed from composition alone
-(pymatgen's `Composition.oxi_state_guesses`); if that guess is empty, ambiguous,
-or chemically implausible, `is_magnetic` can't be resolved, and Goldilocks
-defaults to non-magnetic with a warning rather than guessing either way. This
-is still an element/oxidation-state heuristic, not a prediction of magnetic
-order. The generated input does not assign starting magnetic moments or
-magnetic sublattices; review and complete the magnetic setup for your
-calculation. Override the heuristic with `spin_polarized`.
+metals only when a guessed oxidation state implies an open d-shell (a
+d-electron count other than 0 or 10 -- a closed or empty d-shell has no
+unpaired d electrons to align). Oxidation states are guessed from composition
+alone (pymatgen's `Composition.oxi_state_guesses`); if that guess is empty,
+ambiguous, or chemically implausible, the heuristic can't resolve
+`is_magnetic` either, and Goldilocks defaults to non-magnetic with a warning
+rather than guessing either way. Neither tier predicts magnetic *order* (see
+`magnetic_ordering` below for that). The generated input does not assign
+starting magnetic moments or magnetic sublattices; review and complete the
+magnetic setup for your calculation. Override either tier with
+`spin_polarized`.
 
 Spin-orbit coupling (SOC) couples electron spin to orbital motion. Goldilocks
 flags elements at or above Rb (Z=37) whose valence character is p, d, or f for
@@ -111,6 +116,14 @@ This needs the external `enumlib` executables (`enum.x` or `multienum.x`,
 plus `makeStr.py`) on `PATH`; without them, above a site-count ceiling, or if
 no compensated ordering exists for your structure, it degrades to the
 ferromagnetic default with a warning rather than failing.
+
+`uv run goldilocks magnetic-orderings` lists every candidate this same
+enumeration finds -- the ferromagnetic guess plus any compensated
+antiferromagnetic ones -- for you to inspect or generate inputs from
+directly, optionally ranked by relaxing each on a frozen mMACE potential
+energy surface (`--rank-with-mmace`) rather than picking the ferromagnetic
+guess by default. See [Magnetic orderings](cli.md#magnetic-orderings) for
+the command and its setup requirements.
 
 ## Check dispersion and dimensionality
 

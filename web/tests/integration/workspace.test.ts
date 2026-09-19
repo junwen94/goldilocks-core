@@ -6,6 +6,8 @@ import type {
   ComputeRequest,
   CoreClient,
   ExplainResult,
+  MagneticOrderingsRequest,
+  MagneticOrderingsResult,
   RunResult,
   StructureInput,
   StructureInspection,
@@ -32,6 +34,8 @@ class CoreStub implements CoreClient {
   explainCalls: ComputeRequest[] = [];
   archiveResults: Promise<ArchiveDownload>[] = [];
   archiveCalls: ComputeRequest[] = [];
+  magneticOrderingsResults: Promise<MagneticOrderingsResult>[] = [];
+  magneticOrderingsCalls: MagneticOrderingsRequest[] = [];
 
   capabilities(): Promise<Capabilities> {
     this.capabilitiesCalls += 1;
@@ -63,6 +67,16 @@ class CoreStub implements CoreClient {
     return (
       this.archiveResults.shift() ??
       Promise.reject(new Error("archive not configured"))
+    );
+  }
+
+  magneticOrderings(
+    request: MagneticOrderingsRequest,
+  ): Promise<MagneticOrderingsResult> {
+    this.magneticOrderingsCalls.push(request);
+    return (
+      this.magneticOrderingsResults.shift() ??
+      Promise.reject(new Error("magnetic orderings not configured"))
     );
   }
 }

@@ -52,7 +52,7 @@ def is_metal(
         return Resolved(
             "metal" if human.is_metal else "non_metal", Provenance(source="human")
         )
-    ml_value: bool | None = None  # no ml model wired yet; stubbed until epic 11
+    ml_value = _ml_is_metal(structure)
     if ml_value is not None:
         return Resolved("metal" if ml_value else "non_metal", Provenance(source="ml"))
     if llm.is_metal is not None:
@@ -60,6 +60,21 @@ def is_metal(
             "metal" if llm.is_metal else "non_metal", Provenance(source="llm")
         )
     return _heuristic(structure)
+
+
+def _ml_is_metal(structure: Structure) -> bool | None:
+    """The published CGCNN classifier (v2 epic 11, #11), or ``None`` if
+    its model asset is not installed or goldilocks-ml is not importable
+    -- never a reason to fail ``is_metal()`` itself, the same
+    degrade-to-heuristic policy every ML-backed advisor in this codebase
+    already follows for a missing external dependency."""
+    from goldilocks_core.ml.predict import MlModelUnavailable, predict
+
+    try:
+        prediction = predict("is_metal", structure)
+    except MlModelUnavailable:
+        return None
+    return bool(prediction.value)
 
 
 def _heuristic(structure: Structure) -> FieldState[Metallicity]:

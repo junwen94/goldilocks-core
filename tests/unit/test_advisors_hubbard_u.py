@@ -200,7 +200,10 @@ class TestExpandHubbardLabel:
 
         expanded = expand_hubbard_label({"Fe": 5.3}, relabeled)
 
-        assert expanded == {"Fe": 5.3, "Fe1": 5.3, "Fe2": 5.3}
+        # Not {"Fe": ..., "Fe1": ..., "Fe2": ...} -- "Fe" (bare) is not
+        # one of this structure's own labels, so it must not survive
+        # into a HUBBARD-card-bound result (#88).
+        assert expanded == {"Fe1": 5.3, "Fe2": 5.3}
 
     def test_does_not_override_an_already_individually_specified_split_species(
         self,
@@ -214,7 +217,7 @@ class TestExpandHubbardLabel:
 
         expanded = expand_hubbard_label({"Fe": 5.3, "Fe1": 6.0}, relabeled)
 
-        assert expanded == {"Fe": 5.3, "Fe1": 6.0, "Fe2": 5.3}
+        assert expanded == {"Fe1": 6.0, "Fe2": 5.3}
 
     def test_identity_structure_with_no_split_species_is_unchanged(self) -> None:
         plain = _structure("Fe", "O")
@@ -222,3 +225,30 @@ class TestExpandHubbardLabel:
         expanded = expand_hubbard_label({"Fe": 5.3}, plain)
 
         assert expanded == {"Fe": 5.3}
+
+    def test_numbered_labels_from_a_real_loaded_structure_never_keep_the_bare_symbol(
+        self,
+    ) -> None:
+        """Regression (#88): a structure loaded through ``/run`` (CIF or
+        POSCAR) never has a bare-symbol label like this module's other
+        tests use -- pymatgen numbers every site (``V0``, ``Cl1``,
+        ``Cl2``), even with no AFM splitting at all. Caught live: the
+        old implementation kept a stray ``"V"`` key that isn't a real
+        ``ATOMIC_SPECIES`` label, and ``hubbard_card`` ``KeyError``'d
+        looking it up."""
+        loaded = Structure.from_str(
+            Structure(
+                Lattice.cubic(4.0),
+                ["V", "Cl", "Cl"],
+                [[0, 0, 0], [0.5, 0.5, 0], [0, 0.5, 0.5]],
+            ).to(fmt="cif"),
+            fmt="cif",
+        )
+
+        expanded = expand_hubbard_label({"V": 3.25}, loaded)
+
+        assert "V" not in expanded
+        assert set(expanded) == {
+            site.label for site in loaded if site.specie.symbol == "V"
+        }
+        assert set(expanded.values()) == {3.25}

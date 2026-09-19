@@ -8,7 +8,8 @@ for that job. This module is that writer, sharing every
 purpose-agnostic card/namelist helper with ``scf.py`` (un-privatized
 there for this reuse: ``control_keywords``/``system_keywords``/
 ``electrons_keywords``/``atomic_species``/``cell_parameters``/
-``atomic_positions``/``k_points``/``validated_pseudo_by_element``) --
+``atomic_positions``/``k_points``/``validated_pseudo_by_element``/
+``hubbard_lines``) --
 the &CONTROL/&SYSTEM/&ELECTRONS namelists and every card are identical
 between an scf step and a relax step; only &IONS/&CELL (this module's
 own ``ions_keywords``/``cell_keywords``) and the ``&CONTROL``
@@ -66,6 +67,7 @@ from goldilocks_core.generation.quantum_espresso.scf import (
     cell_parameters,
     control_keywords,
     electrons_keywords,
+    hubbard_lines,
     k_points,
     system_keywords,
     validated_pseudo_by_element,
@@ -133,14 +135,6 @@ def write_qe_relax(
             raise GenerationError(
                 f"PwSettings.{name} is required to generate {purpose}.in"
             )
-    if system.hubbard.plan != "not_needed":
-        raise GenerationError(
-            "a Hubbard +U correction was resolved "
-            f"(plan={system.hubbard.plan!r}), but rendering the HUBBARD card "
-            "is not implemented by this writer yet -- see advisors/hubbard_u.py's "
-            "own note on the atom-index-keyed QE >= 7.1 card format"
-        )
-
     elements = sorted({site.specie.symbol for site in structure})
     pseudo_by_element = validated_pseudo_by_element(elements, system)
     species_labels = sorted({site.label for site in structure})
@@ -162,6 +156,7 @@ def write_qe_relax(
     lines.append(cell_parameters(structure))
     lines.append(atomic_positions(structure, _fixed_site_indices(structure, relax)))
     lines.append(k_points(step))
+    lines.extend(hubbard_lines(system, structure, label_to_element))
     content = "\n".join(lines)
 
     args = ["-npool", str(step.parallel.npool)]

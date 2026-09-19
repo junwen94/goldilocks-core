@@ -4,16 +4,18 @@ Goldilocks recommends settings for density functional theory (DFT) calculations
 and generates Quantum ESPRESSO input files (SCF, DOS, relaxation, and
 variable-cell relaxation) from a crystal structure.
 
-## Try it
+## Installation
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then
-clone the repository:
+Not published to PyPI yet -- clone the repository. Install
+[uv](https://docs.astral.sh/uv/getting-started/installation/) first:
 
 ```bash
 git clone https://github.com/stfc/goldilocks-core.git
 cd goldilocks-core
 uv sync
 ```
+
+## Try it
 
 ### Start the Workbench
 

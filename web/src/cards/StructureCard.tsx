@@ -1,20 +1,12 @@
-import {
-  Divider,
-  Group,
-  Loader,
-  Paper,
-  Stack,
-  Text,
-  Title,
-} from "@mantine/core";
+import { Group, Loader, Paper, Stack, Text, Title } from "@mantine/core";
 import { Atom } from "lucide-react";
 
-import { AnalysisSection } from "../analysis/AnalysisSection";
+import { CalculationContextControls } from "../controls/CalculationForm";
 import { StructureSourceControls } from "../controls/StructureSourceControls";
 import { StructureViewport } from "../viewer/StructureViewport";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
 
-export function StructureCard() {
+export function StructureCard({ kicker }: { readonly kicker: string }) {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
 
@@ -28,8 +20,8 @@ export function StructureCard() {
       className="workbench-card card-structure"
     >
       <Group component="header" className="card-header" mb="md" wrap="nowrap">
-        <Text className="card-kicker">01</Text>
-        <Title order={2}>Structure</Title>
+        <Text className="card-kicker">{kicker}</Text>
+        <Title order={2}>Structure Setup</Title>
       </Group>
       <div className="card-body">
         <StructureSourceControls
@@ -38,6 +30,7 @@ export function StructureCard() {
           inspecting={snapshot.operation === "inspect"}
           onOpen={(input) => workspace.dispatch({ type: "source.open", input })}
         />
+        <CalculationContextControls />
         <div className="structure-stage">
           {snapshot.inspection === null ? (
             <EmptyStage
@@ -53,12 +46,6 @@ export function StructureCard() {
             <StructureViewport inspection={snapshot.inspection} />
           )}
         </div>
-        {snapshot.capabilities === null ? null : (
-          <>
-            <Divider my="md" />
-            <AnalysisSection />
-          </>
-        )}
       </div>
     </Paper>
   );

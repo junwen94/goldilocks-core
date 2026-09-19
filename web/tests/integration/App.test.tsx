@@ -15,6 +15,8 @@ import type {
   ComputeRequest,
   CoreClient,
   ExplainResult,
+  MagneticOrderingsRequest,
+  MagneticOrderingsResult,
   PseudopotentialTable,
   RunResult,
   StructureInput,
@@ -43,6 +45,8 @@ class CoreStub implements CoreClient {
   inspectedInputs: StructureInput[] = [];
   explainCalls: ComputeRequest[] = [];
   archiveCalls: ComputeRequest[] = [];
+  magneticOrderingsResults: Promise<MagneticOrderingsResult>[] = [];
+  magneticOrderingsCalls: MagneticOrderingsRequest[] = [];
 
   constructor(readonly capabilitiesResult: Promise<Capabilities>) {}
 
@@ -79,6 +83,19 @@ class CoreStub implements CoreClient {
     // recommendation is ready, so most tests never opted into this and
     // shouldn't have to.
     return this.archiveResults.shift() ?? Promise.resolve(buildArchive());
+  }
+
+  magneticOrderings(
+    request: MagneticOrderingsRequest,
+  ): Promise<MagneticOrderingsResult> {
+    this.magneticOrderingsCalls.push(request);
+    // Like explain()/runArchive() above: MagneticOrderingsPanel fetches
+    // this automatically as soon as a structure loads, so most tests
+    // never opted into this and shouldn't have to.
+    return (
+      this.magneticOrderingsResults.shift() ??
+      Promise.resolve({ ranked: false, candidates: [], warnings: [] })
+    );
   }
 }
 
@@ -135,23 +152,60 @@ describe("Goldilocks Workbench", () => {
     expect(optionValues(table)).toEqual(["", pbe.id]);
   });
 
-  it("exposes all three workspace columns at once", async () => {
+  it("exposes all four workspace columns at once", async () => {
     renderApp(new CoreStub(Promise.resolve(capabilities)));
 
     expect(
       await screen.findByRole("region", { name: "Structure workspace" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("region", { name: "Calculation setup" }),
+      screen.getByRole("region", { name: "Goldilocks analysis" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("region", { name: "Generated input files" }),
+      screen.getByRole("region", { name: "Goldilocks advisors" }),
     ).toBeInTheDocument();
-    // The Calculation and Analysis groups render with defaults from
-    // Capabilities alone, before any structure is loaded, so the page
-    // isn't empty while waiting for one -- the separator ahead of the
-    // Analysis section is one of those always-present pieces.
-    expect(await screen.findByRole("separator")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Bundle" })).toBeInTheDocument();
+    // Magnetic Orderings only pops in once a structure is classified
+    // magnetic (see "shows Magnetic Orderings..." below) -- absent here,
+    // it must not silently count as a fifth always-present column.
+    expect(
+      screen.queryByRole("region", { name: "Magnetic orderings" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows Magnetic Orderings between Advisors and Bundle once the structure is classified magnetic", async () => {
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [
+      Promise.resolve({
+        records: {
+          ...explainResult.records,
+          is_magnetic: {
+            status: "resolved",
+            value: "magnetic",
+            source: "heuristic",
+          },
+        },
+        warnings: [],
+      }),
+    ];
+    const { container } = renderApp(core);
+
+    await openStructure(userEvent.setup(), container);
+
+    const magnetic = await screen.findByRole("region", {
+      name: "Magnetic orderings",
+    });
+    const regions = screen
+      .getAllByRole("region")
+      .map((region) => region.getAttribute("aria-label"));
+    expect(regions.indexOf("Goldilocks advisors")).toBeLessThan(
+      regions.indexOf("Magnetic orderings"),
+    );
+    expect(regions.indexOf("Magnetic orderings")).toBeLessThan(
+      regions.indexOf("Bundle"),
+    );
+    expect(magnetic).toBeInTheDocument();
   });
 
   it("uses light mode by default and persists an explicit dark mode", async () => {
@@ -267,7 +321,7 @@ describe("Goldilocks Workbench", () => {
 
     await openStructure(user, container);
     await screen.findByRole("button", { name: "Download (.zip)" });
-    await user.click(within(calculationSetup()).getByText("Magnetic"));
+    await user.click(within(advisorsPanel()).getByText("Magnetic"));
     await user.selectOptions(screen.getByLabelText("spin polarized"), "true");
 
     // No manual "update" action -- the edit above is picked up and
@@ -303,7 +357,7 @@ describe("Goldilocks Workbench", () => {
     const { container } = renderApp(core);
 
     await openStructure(user, container);
-    await user.click(within(calculationSetup()).getByText("Occupations"));
+    await user.click(within(advisorsPanel()).getByText("Occupations"));
     await user.selectOptions(screen.getByLabelText("smearing type"), "cold");
     const degauss = screen.getByLabelText("degauss · Ry");
     expect(degauss).toBeEnabled();
@@ -331,7 +385,7 @@ describe("Goldilocks Workbench", () => {
     await openStructure(user, container);
     await screen.findByRole("button", { name: "Download (.zip)" });
 
-    await user.click(within(calculationSetup()).getByText("Magnetic"));
+    await user.click(within(advisorsPanel()).getByText("Magnetic"));
     await user.selectOptions(screen.getByLabelText("spin polarized"), "true");
 
     expect(
@@ -372,7 +426,7 @@ describe("Goldilocks Workbench", () => {
     // into their own settings-group accordion item rather than a
     // separate global list -- expanding "K sampling" shows the actual
     // resolved value alongside its override controls.
-    const calculation = calculationSetup();
+    const calculation = advisorsPanel();
     await user.click(within(calculation).getByText("K sampling"));
     // 0.15 (the resolved k_distance) uniquely identifies this record's
     // own value merged into its group -- "Heuristic default" alone
@@ -511,6 +565,6 @@ function optionValues(select: HTMLElement): string[] {
  * are independently derived from real, unrelated vocabularies (an
  * override group vs. an advisor's record key). Scoping to this region
  * disambiguates in tests the same way a sighted user would from layout. */
-function calculationSetup(): HTMLElement {
-  return screen.getByRole("region", { name: "Calculation setup" });
+function advisorsPanel(): HTMLElement {
+  return screen.getByRole("region", { name: "Goldilocks advisors" });
 }

@@ -21,7 +21,7 @@ DOC_FILES = sorted(
     ]
 )
 _FENCE = re.compile(r"^```(\w+)\n(.*?)^```$", re.DOTALL | re.MULTILINE)
-_GOLDILOCKS_CALL = re.compile(r"(?:uv run )?goldilocks (\w+)")
+_GOLDILOCKS_CALL = re.compile(r"(?:uv run )?goldilocks ([\w-]+)")
 _FLAG = re.compile(r"(--[\w-]+)")
 _DOC_LINK = re.compile(r"\]\((?!https?://)([^)#]+(?:\.md)?)(?:#[^)]*)?\)")
 

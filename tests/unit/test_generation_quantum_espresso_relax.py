@@ -34,7 +34,13 @@ _JOB = JobDecision(
 _UNSET = object()
 
 
-def _system(structure, pseudo_metadata_factory, *, functional: str = "PBEsol"):
+def _system(
+    structure,
+    pseudo_metadata_factory,
+    *,
+    functional: str = "PBEsol",
+    hubbard: HubbardUDecision | None = None,
+):
     elements = sorted({site.specie.symbol for site in structure})
     return SystemSettings(
         functional=functional,
@@ -55,7 +61,7 @@ def _system(structure, pseudo_metadata_factory, *, functional: str = "PBEsol"):
             angle2=None,
         ),
         vdw=VdwFacts(use_vdw=False, method=None),
-        hubbard=HubbardUDecision(plan="not_needed", u_by_element={}),
+        hubbard=hubbard or HubbardUDecision(plan="not_needed", u_by_element={}),
         boundary=BoundaryFacts(assume_isolated="none"),
     )
 
@@ -306,4 +312,39 @@ def test_fix_bottom_layers_on_a_bulk_structure_raises(
     step = _step(relax=RelaxOptions(fix_bottom_layers=1))
 
     with pytest.raises(GenerationError, match="2D bonded component"):
+        write_qe_relax(system, step, _JOB, _CTX, "relax")
+
+
+def test_hubbard_table_plan_renders_the_qe_hubbard_card(
+    silicon_structure, pseudo_metadata_factory
+) -> None:
+    """Same HUBBARD-card rendering as write_qe_scf (#88), reused rather
+    than reimplemented -- see scf.py's hubbard_card docstring for why
+    this is species-label-keyed, not atom-index-keyed."""
+    system = _system(
+        silicon_structure,
+        pseudo_metadata_factory,
+        hubbard=HubbardUDecision(plan="table", u_by_element={"Si": 3.0}),
+    )
+    step = _step(relax=RelaxOptions())
+
+    content = write_qe_relax(system, step, _JOB, _CTX, "relax")[0].files["relax.in"]
+
+    assert "HUBBARD (ortho-atomic)" in content
+    assert "U  Si-3p  3" in content
+
+
+def test_hubbard_calibration_needed_plan_still_raises_generation_error(
+    silicon_structure, pseudo_metadata_factory
+) -> None:
+    system = _system(
+        silicon_structure,
+        pseudo_metadata_factory,
+        hubbard=HubbardUDecision(
+            plan="self_consistent_calibration_needed", u_by_element={}
+        ),
+    )
+    step = _step(relax=RelaxOptions())
+
+    with pytest.raises(GenerationError, match="calibration"):
         write_qe_relax(system, step, _JOB, _CTX, "relax")

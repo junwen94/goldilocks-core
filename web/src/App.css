@@ -24,25 +24,43 @@
   background: rgba(255, 255, 255, 0.12);
 }
 
-/* Three columns, mirroring goldilocks-core's own analysis -> advisors
- * -> generation pipeline, one screen, no page scroll -- each column
- * scrolls its own body internally as a safety net. */
+/* Four columns (five once Magnetic Orderings pops in -- App.tsx sets
+ * --workbench-columns), mirroring goldilocks-core's own structure ->
+ * analysis -> advisors -> [magnetic orderings] -> bundle pipeline, one
+ * screen, no vertical page scroll -- each column scrolls its own body
+ * internally as a safety net. Every column has a floor (min-width, set
+ * per class below): --workbench-card-min for Magnetic Orderings/Bundle
+ * (their table/file-review content needs real room), the smaller
+ * --workbench-narrow-card-min for Structure/Analysis/Advisors.
+ * Analysis/Advisors used to be plain 1fr with no floor at all on the
+ * theory that ellipsis/truncation would keep them presentable -- in
+ * practice a fact's own explanatory sentence ("Whether the structure is
+ * metallic, from composition alone...") isn't a single truncatable
+ * line, it's body text, and it turned into an unreadable column of
+ * wrapped words once Structure/Bundle's floors left it almost no room.
+ * overflow-x lets the grid scroll horizontally once these floors don't
+ * all fit, rather than shrinking any column below its floor to force
+ * everything in. */
 .workbench-grid {
+  --workbench-columns: 4;
+  --workbench-card-min: 30rem;
+  --workbench-narrow-card-min: 20rem;
   display: grid;
   grid-template-columns: 1fr;
-  grid-template-rows: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(var(--workbench-columns), minmax(0, 1fr));
   gap: 1rem;
   height: calc(100dvh - var(--app-header-height));
-  max-width: 100rem;
+  max-width: 120rem;
   margin-inline: auto;
   padding: 1rem;
   box-sizing: border-box;
 }
 
-@media (min-width: 72rem) {
+@media (min-width: 84rem) {
   .workbench-grid {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(var(--workbench-columns), 1fr);
     grid-template-rows: 1fr;
+    overflow-x: auto;
   }
 }
 
@@ -64,6 +82,11 @@
 .workbench-card .card-body {
   display: flex;
   flex-direction: column;
+  /* Most cards render a single child, where this is a no-op -- Structure
+   * is the one with several stacked direct children (file controls,
+   * code/task/hpc, the viewer), which used to butt up against each
+   * other with no space between them. */
+  gap: 0.75rem;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -71,6 +94,23 @@
 
 .workbench-card .card-kicker {
   color: var(--card-accent);
+  /* A two-digit number has no natural break point of its own -- without
+   * this, a tight column (e.g. the 5-column layout once Magnetic
+   * Orderings pops in) can squeeze this flex item narrower than "04"
+   * itself, and the browser wraps it into "0"/"4" on separate lines. */
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.workbench-card .card-header h2 {
+  /* "Magnetic Orderings" is this app's only two-word card title --
+   * the same tight-column squeeze above wraps it onto two lines at the
+   * word space. Ellipsis (rather than a mid-title line break) if a
+   * column is ever too narrow to fit it. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Every --card-accent below is checked at >=4.5:1 against white --
@@ -79,20 +119,42 @@
  * clear AA while staying visually in the same red-orange/teal family. */
 .card-structure {
   --card-accent: #c2410c;
+  min-width: var(--workbench-narrow-card-min);
 }
 
-.card-calculation {
+.card-analysis {
+  --card-accent: #15803d;
+  min-width: var(--workbench-narrow-card-min);
+}
+
+.card-advisors {
   --card-accent: #b02090;
+  min-width: var(--workbench-narrow-card-min);
 }
 
-.card-inputs {
+.card-magnetic-orderings {
+  --card-accent: #0f766e;
+  /* Overrides .workbench-card's min-width: 0 (same specificity, later
+   * in the cascade) -- wide enough for the candidates table's 5 columns
+   * (checkbox, Ordering, Atoms, E/atom (eV), Status) at their natural
+   * width, so Table.ScrollContainer's own horizontal scroll is a
+   * narrow-viewport fallback rather than the normal desktop experience. */
+  min-width: var(--workbench-card-min);
+}
+
+.card-bundle {
   --card-accent: #1e5df8;
+  min-width: var(--workbench-card-min);
 }
 
 .structure-stage {
   position: relative;
   flex: 1 1 auto;
-  min-height: 22rem;
+  /* Structure's card-body now also holds the code/task/hpc selects
+   * above this -- at the old 22rem floor, that pushed the "Inspect
+   * lattice, sites and occupancies" button below the fold, forcing a
+   * scroll inside the card just to reach it. */
+  min-height: 16rem;
   overflow: hidden;
   background: var(--mantine-color-body);
   border: 1px solid var(--mantine-color-default-border);
