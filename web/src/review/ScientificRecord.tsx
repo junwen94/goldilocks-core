@@ -2,14 +2,8 @@ import type { ReactNode } from "react";
 import { Badge, Paper, Stack, Table, Text } from "@mantine/core";
 
 import type { ResolvedField, Source } from "../api/coreClient";
+import { SOURCE_NAMES } from "../api/sourceNames";
 import { isAdvisorWarning } from "./warnings";
-
-const SOURCE_NAMES: Record<Source, string> = {
-  human: "Your override",
-  ml: "Model prediction",
-  llm: "LLM suggestion",
-  heuristic: "Heuristic default",
-};
 
 /** Renders one `ResolvedField` generically -- v2's `records()` docstring
  * is explicit that there is no codified schema for a record's `value`

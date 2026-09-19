@@ -1,3 +1,6 @@
+import type { Source } from "../api/coreClient";
+import { SOURCE_NAMES } from "../api/sourceNames";
+
 export interface OverrideFieldMeta {
   readonly key: string;
   readonly type: string;
@@ -25,4 +28,18 @@ export function automaticPlaceholder(meta: OverrideFieldMeta): string {
   return meta.default === undefined
     ? "Automatic"
     : `Automatic (${stringifyValue(meta.default)})`;
+}
+
+/** A boolean/enum `OverrideControl`'s own description names whichever
+ * tier actually produced the value the select shows -- "Your override"
+ * once pinned, else whatever tier resolved it (heuristic/ml/llm),
+ * else the field's own description alone when nothing has resolved yet. */
+export function describeSource(
+  description: string,
+  pinned: boolean,
+  source: Source | null | undefined,
+): string {
+  if (pinned) return `${description} · ${SOURCE_NAMES.human}`;
+  if (source) return `${description} · ${SOURCE_NAMES[source]}`;
+  return description;
 }

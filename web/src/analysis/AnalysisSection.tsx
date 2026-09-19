@@ -1,8 +1,7 @@
-import { Accordion, Paper, Stack } from "@mantine/core";
+import { Accordion, Stack, Text } from "@mantine/core";
 
 import { OverrideControl } from "../controls/OverrideControl";
 import { RecordAccordionItem } from "../review/RecordAccordionItem";
-import { ScientificRecord } from "../review/ScientificRecord";
 import { isAdvisorRecordKey } from "../workspace/recordGroups";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
 
@@ -38,15 +37,16 @@ export function AnalysisSection() {
             const record = reviewed?.records[fact.key];
             return (
               <div key={fact.key}>
-                {record === undefined ? null : (
-                  <Paper
-                    withBorder
-                    p="xs"
+                {record === undefined || record.status === "resolved" ? null : (
+                  <Text
+                    size="xs"
+                    c={record.status === "blocked" ? "red" : "dimmed"}
                     mb={4}
-                    bg="var(--mantine-color-default)"
                   >
-                    <ScientificRecord field={record} />
-                  </Paper>
+                    {record.status === "blocked"
+                      ? `Blocked — ${record.blocked_by ?? "an upstream field failed"}`
+                      : `Unavailable — ${record.reason ?? "no reason given"}`}
+                  </Text>
                 )}
                 <OverrideControl
                   meta={{
@@ -57,6 +57,12 @@ export function AnalysisSection() {
                     description: fact.description,
                   }}
                   value={overrides[fact.key]}
+                  resolvedValue={
+                    record?.status === "resolved" ? record.value : undefined
+                  }
+                  source={
+                    record?.status === "resolved" ? record.source : undefined
+                  }
                   disabled={disabled}
                   onChange={(value) => {
                     void workspace.dispatch({

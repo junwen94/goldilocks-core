@@ -1,5 +1,7 @@
+import type { ReactNode } from "react";
 import { useState } from "react";
 import {
+  CloseButton,
   NativeSelect,
   NumberInput,
   Stack,
@@ -8,8 +10,10 @@ import {
   TextInput,
 } from "@mantine/core";
 
+import type { Source } from "../api/coreClient";
 import {
   automaticPlaceholder,
+  describeSource,
   fieldLabel,
   type OverrideFieldMeta,
   stringifyValue,
@@ -18,56 +22,71 @@ import {
 /** One human/heuristic override control, generic over the field's
  * declared `type` -- shared by the advisors accordion (settings) and
  * the analysis section (facts), since both are the same
- * human > ml > llm > heuristic override shape underneath. */
+ * human > ml > llm > heuristic override shape underneath.
+ *
+ * `resolvedValue`/`source` (boolean/enum fields only): the select shows
+ * *this exact* value pre-selected -- and its own description names the
+ * tier that produced it -- rather than a separate "Automatic" list entry
+ * that revealed nothing about what automatic actually resolved to. A
+ * human override still wins once set (`pinned`); `CloseButton` is the
+ * only way back to automatic now that the select's own option list holds
+ * nothing but genuine values. */
 export function OverrideControl({
   meta,
   value,
+  resolvedValue,
+  source,
   disabled,
   onChange,
 }: {
   readonly meta: OverrideFieldMeta;
   readonly value: unknown;
+  readonly resolvedValue?: unknown;
+  readonly source?: Source | null | undefined;
   readonly disabled: boolean;
   readonly onChange: (value: unknown) => void;
 }) {
   const pinned = value !== undefined;
   const label = fieldLabel(meta);
+  const description = describeSource(meta.description, pinned, source);
+  const effective = pinned ? value : resolvedValue;
+  const clearButton = pinned ? (
+    <CloseButton
+      aria-label={`Reset ${label} to automatic`}
+      size="sm"
+      disabled={disabled}
+      onMouseDown={(event) => {
+        event.preventDefault();
+      }}
+      onClick={() => {
+        onChange(undefined);
+      }}
+    />
+  ) : undefined;
 
   if (meta.type === "boolean") {
     return (
-      <NativeSelect
+      <BooleanOverrideControl
         label={label}
-        description={meta.description}
+        description={description}
         disabled={disabled}
-        value={pinned ? stringifyValue(value) : ""}
-        data={[
-          { value: "", label: automaticPlaceholder(meta) },
-          { value: "true", label: "On" },
-          { value: "false", label: "Off" },
-        ]}
-        onChange={(event) => {
-          const raw = event.currentTarget.value;
-          onChange(raw === "" ? undefined : raw === "true");
-        }}
+        clearButton={clearButton}
+        value={effective}
+        onChange={onChange}
       />
     );
   }
 
   if (meta.enum && meta.enum.length > 0) {
     return (
-      <NativeSelect
+      <EnumOverrideControl
         label={label}
-        description={meta.description}
+        description={description}
         disabled={disabled}
-        value={pinned ? stringifyValue(value) : ""}
-        data={[
-          { value: "", label: automaticPlaceholder(meta) },
-          ...meta.enum.map((option) => ({ value: option, label: option })),
-        ]}
-        onChange={(event) => {
-          const raw = event.currentTarget.value;
-          onChange(raw === "" ? undefined : raw);
-        }}
+        clearButton={clearButton}
+        options={meta.enum}
+        value={effective}
+        onChange={onChange}
       />
     );
   }
@@ -115,6 +134,84 @@ export function OverrideControl({
       disabled={disabled}
       value={value}
       onChange={onChange}
+    />
+  );
+}
+
+function BooleanOverrideControl({
+  label,
+  description,
+  disabled,
+  clearButton,
+  value,
+  onChange,
+}: {
+  readonly label: string;
+  readonly description: string;
+  readonly disabled: boolean;
+  readonly clearButton: ReactNode;
+  readonly value: unknown;
+  readonly onChange: (value: unknown) => void;
+}) {
+  const effectiveString =
+    typeof value === "boolean" ? stringifyValue(value) : "";
+  return (
+    <NativeSelect
+      label={label}
+      description={description}
+      disabled={disabled}
+      rightSection={clearButton}
+      value={effectiveString}
+      data={[
+        ...(effectiveString === ""
+          ? [{ value: "", label: "—", disabled: true }]
+          : []),
+        { value: "true", label: "On" },
+        { value: "false", label: "Off" },
+      ]}
+      onChange={(event) => {
+        onChange(event.currentTarget.value === "true");
+      }}
+    />
+  );
+}
+
+function EnumOverrideControl({
+  label,
+  description,
+  disabled,
+  clearButton,
+  options,
+  value,
+  onChange,
+}: {
+  readonly label: string;
+  readonly description: string;
+  readonly disabled: boolean;
+  readonly clearButton: ReactNode;
+  readonly options: readonly string[];
+  readonly value: unknown;
+  readonly onChange: (value: unknown) => void;
+}) {
+  const effectiveString = typeof value === "string" ? value : "";
+  const needsPlaceholder =
+    effectiveString === "" || !options.includes(effectiveString);
+  return (
+    <NativeSelect
+      label={label}
+      description={description}
+      disabled={disabled}
+      rightSection={clearButton}
+      value={effectiveString}
+      data={[
+        ...(needsPlaceholder
+          ? [{ value: "", label: "—", disabled: true }]
+          : []),
+        ...options.map((option) => ({ value: option, label: option })),
+      ]}
+      onChange={(event) => {
+        onChange(event.currentTarget.value);
+      }}
     />
   );
 }
