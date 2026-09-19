@@ -6,8 +6,9 @@ import {
   useMantineColorScheme,
 } from "@mantine/core";
 
-import { CalculationCard } from "./cards/CalculationCard";
-import { GeneratedInputsCard } from "./cards/GeneratedInputsCard";
+import { AdvisorsCard } from "./cards/AdvisorsCard";
+import { AnalysisCard } from "./cards/AnalysisCard";
+import { BundleCard } from "./cards/BundleCard";
 import { StructureCard } from "./cards/StructureCard";
 import { AppHeader } from "./layout/AppHeader";
 import { FailureBanner } from "./status/FailureBanner";
@@ -71,8 +72,9 @@ function Workbench() {
           <h1 id="workbench-title">Goldilocks SCF setup</h1>
         </VisuallyHidden>
         <StructureCard />
-        <CalculationCard />
-        <GeneratedInputsCard />
+        <AnalysisCard />
+        <AdvisorsCard />
+        <BundleCard />
       </main>
     </>
   );

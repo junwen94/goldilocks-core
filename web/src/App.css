@@ -24,24 +24,24 @@
   background: rgba(255, 255, 255, 0.12);
 }
 
-/* Three columns, mirroring goldilocks-core's own analysis -> advisors
- * -> generation pipeline, one screen, no page scroll -- each column
+/* Four columns, mirroring goldilocks-core's own structure -> analysis ->
+ * advisors -> bundle pipeline, one screen, no page scroll -- each column
  * scrolls its own body internally as a safety net. */
 .workbench-grid {
   display: grid;
   grid-template-columns: 1fr;
-  grid-template-rows: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(4, minmax(0, 1fr));
   gap: 1rem;
   height: calc(100dvh - var(--app-header-height));
-  max-width: 100rem;
+  max-width: 120rem;
   margin-inline: auto;
   padding: 1rem;
   box-sizing: border-box;
 }
 
-@media (min-width: 72rem) {
+@media (min-width: 84rem) {
   .workbench-grid {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     grid-template-rows: 1fr;
   }
 }
@@ -81,11 +81,15 @@
   --card-accent: #c2410c;
 }
 
-.card-calculation {
+.card-analysis {
+  --card-accent: #15803d;
+}
+
+.card-advisors {
   --card-accent: #b02090;
 }
 
-.card-inputs {
+.card-bundle {
   --card-accent: #1e5df8;
 }
 
