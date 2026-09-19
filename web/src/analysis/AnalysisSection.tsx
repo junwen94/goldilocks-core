@@ -1,16 +1,10 @@
-import { Accordion, Badge, Group, Stack, Text } from "@mantine/core";
+import { Accordion, Paper, Stack } from "@mantine/core";
 
-import type { ResolvedField } from "../api/coreClient";
 import { OverrideControl } from "../controls/OverrideControl";
 import { RecordAccordionItem } from "../review/RecordAccordionItem";
+import { ScientificRecord } from "../review/ScientificRecord";
 import { isAdvisorRecordKey } from "../workspace/recordGroups";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
-
-const STATUS_COLORS: Readonly<Record<ResolvedField["status"], string>> = {
-  resolved: "green",
-  unavailable: "yellow",
-  blocked: "red",
-};
 
 /** goldilocks-core's own analysis tier only ever needs the structure --
  * `capabilities.facts` (is_metal/is_magnetic/needs_soc/needs_correlation,
@@ -45,17 +39,14 @@ export function AnalysisSection() {
             return (
               <div key={fact.key}>
                 {record === undefined ? null : (
-                  <Group gap="xs" mb={4}>
-                    <Badge
-                      size="xs"
-                      circle
-                      color={STATUS_COLORS[record.status]}
-                      aria-hidden="true"
-                    />
-                    <Text size="xs" c="dimmed">
-                      {record.status}
-                    </Text>
-                  </Group>
+                  <Paper
+                    withBorder
+                    p="xs"
+                    mb={4}
+                    bg="var(--mantine-color-default)"
+                  >
+                    <ScientificRecord field={record} />
+                  </Paper>
                 )}
                 <OverrideControl
                   meta={{
