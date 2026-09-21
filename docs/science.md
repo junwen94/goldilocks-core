@@ -81,8 +81,9 @@ for selection rules, installation, and custom files.
 
 Spin polarization allows different spin populations, decided by `is_magnetic`
 (`human > ml > heuristic`, see [CLI reference](cli.md#scientific-controls)).
-Once its ML asset is installed and `mace`/`e3nn`/`sphericart` are on hand (a
-manual install -- see the CLI reference), a published mMACE-embedding
+Once its ML asset is installed, `mace`/`e3nn`/`sphericart` are on hand (a
+manual install -- see the CLI reference), and `GOLDILOCKS_MACE_BACKBONE`
+points at a downloaded mMACE checkpoint, a published mMACE-embedding
 classifier answers directly; the heuristic tier otherwise enables it by
 default for lanthanides or actinides whenever present, and for transition
 metals only when a guessed oxidation state implies an open d-shell (a

@@ -112,10 +112,17 @@ extra of this project or of goldilocks-ml -- see [goldilocks-ml's own
 README](https://github.com/stfc/goldilocks-ml#use-the-is_magnetic-classifier)
 for the manual install (the `mace` fork it needs has no PyPI release, and
 PyPI's own upload validation rejects a package that declares a direct git
-dependency regardless, so this can never become an automatic extra). There
-is still no flag to point `run`/`explain` at a custom model file of your
-own. `uv run goldilocks models --json` reports every model, installed or
-not, so it also confirms whether one you expect to be usable actually is.
+dependency regardless, so this can never become an automatic extra). It
+also needs the same `GOLDILOCKS_MACE_BACKBONE` checkpoint the [magnetic
+orderings](#magnetic-orderings) `--rank-with-mmace` flag uses below --
+confirmed empirically (2026-09-21): the published record declares no
+automatic download for its mMACE backbone, so `is_magnetic` reuses
+whichever checkpoint that variable already points at rather than fetching
+a second copy. Missing it degrades to the heuristic tier, never a
+failure. There is still no flag to point `run`/`explain` at a custom
+model file of your own. `uv run goldilocks models --json` reports every
+model, installed or not, so it also confirms whether one you expect to
+be usable actually is.
 
 ## Magnetic orderings
 
