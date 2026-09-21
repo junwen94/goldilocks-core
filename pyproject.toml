@@ -42,7 +42,7 @@ dependencies = [
     # the CPU-only PyTorch index so the workbench image doesn't ship ~3.5G
     # of unused CUDA/nvidia libraries. GPU hosts pull the CUDA wheel via an
     # index override (see [tool.uv] below), not the default resolution.
-    "goldilocks-ml==0.2.0",
+    "goldilocks-ml==0.2.1",
     # v2: contracts/ is pydantic BaseModel end to end (validation, serialization,
     # OpenAPI/capabilities schema generation) -- promoted from the http/mcp
     # extras to a core dependency (goldilocks-core-design.md S12, already decided).

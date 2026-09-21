@@ -921,7 +921,7 @@ dev = [
 requires-dist = [
     { name = "ase", specifier = ">=3.28" },
     { name = "fastapi", marker = "extra == 'http'" },
-    { name = "goldilocks-ml", specifier = "==0.2.0" },
+    { name = "goldilocks-ml", specifier = "==0.2.1" },
     { name = "mcp", marker = "extra == 'mcp'" },
     { name = "numpy", specifier = ">=2.4.4" },
     { name = "pandas", specifier = ">=2.0" },
@@ -946,7 +946,7 @@ dev = [
 
 [[package]]
 name = "goldilocks-ml"
-version = "0.2.0"
+version = "0.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "data-collections-api" },
@@ -959,9 +959,9 @@ dependencies = [
     { name = "torch" },
     { name = "torch-geometric" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4e/25/9eb3cef2767039a4cd4307985cfcaa3cbae0e7cf2d8ae0935b114c132722/goldilocks_ml-0.2.0.tar.gz", hash = "sha256:600050172cd7b806c18e59b552bbade518bd48cddd2133667baa908cfe46e01d", size = 442454, upload-time = "2026-09-21T14:29:01.755Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ea/9a/be3bc34a14f8dc40bc7d8836fc5911757cbd0f2e5d9c4d7e147b90fe514c/goldilocks_ml-0.2.1.tar.gz", hash = "sha256:eaa03d5fecb45be28d4b37deb52189a8475c85a2521c671d94378ca0192c889f", size = 1731726, upload-time = "2026-09-21T16:43:25.84Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/68/b9/55def5501512b19e26bbfde9f921cf4b17a0d27af029046534a29bb6a0ef/goldilocks_ml-0.2.0-py3-none-any.whl", hash = "sha256:fb23cabbbf5f69aa533611d4e089abaca0584b841f5268105f0f034833e1844f", size = 133871, upload-time = "2026-09-21T14:29:00.37Z" },
+    { url = "https://files.pythonhosted.org/packages/92/b1/7da2e6b9ca1ba29f2f4cf232ef719c7e0adaf9102311853dc17a0e0e72f4/goldilocks_ml-0.2.1-py3-none-any.whl", hash = "sha256:22fb90f6a068b25a84e4f975af387c2fd6bffefeee697148738e7ff967f7addd", size = 134035, upload-time = "2026-09-21T16:43:24.727Z" },
 ]
 
 [[package]]
