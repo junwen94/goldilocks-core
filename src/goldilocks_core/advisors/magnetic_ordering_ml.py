@@ -148,6 +148,7 @@ def rank_orderings(
     try:
         from goldilocks_ml.models.magnetism._mace_backbone import safe_load
         from goldilocks_ml.models.magnetism.magnetic_moments.fm_fim_relax.relax import (
+            INVALID,
             domain_limits,
             relax,
         )
@@ -181,7 +182,23 @@ def rank_orderings(
             f"mMACE-based magnetic ordering ranking failed to run: {error}"
         ) from error
 
-    winner = min(results, key=lambda result: result.energy_per_atom_ev)
+    # A candidate relax() itself flagged INVALID has an energy that failed
+    # relax.py's own physicality checks (non-finite, |E/atom| past a sane
+    # bound, or a moment past the backbone's learned domain) -- confirmed
+    # empirically (2026-09-21): a diverged relaxation tends to land at an
+    # enormously negative energy (observed: -1.27e9 eV/atom on real Fe bcc
+    # candidates), which would otherwise always "win" a plain min() over
+    # physically reasonable candidates a few eV/atom apart. Never let an
+    # invalid number decide the winner, even though it is still reported
+    # (unfiltered) in ``candidates`` for the caller to see and discard.
+    reliable = [result for result in results if result.status != INVALID]
+    if not reliable:
+        raise MagneticOrderingMlUnavailable(
+            "every candidate's mMACE relaxation was flagged invalid "
+            "(non-finite or unphysical energy/moments); no reliable energy "
+            "comparison is possible"
+        )
+    winner = min(reliable, key=lambda result: result.energy_per_atom_ev)
     return OrderingMlResult(
         winner=winner, candidates=tuple(results), model_id=checkpoint.name
     )
