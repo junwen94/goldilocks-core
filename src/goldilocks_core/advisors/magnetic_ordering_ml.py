@@ -76,12 +76,19 @@ class OrderingMlResult:
 
 def checkpoint_path() -> Path:
     """Resolve the configured mMACE backbone checkpoint, or say why it
-    is not usable."""
+    is not usable.
+
+    Shared by two callers: this module's own :func:`rank_orderings`, and
+    ``ml.predict``'s ``is_magnetic`` classification (its published record
+    declares no automatic download for this checkpoint -- see that
+    module's docstring), so the same manually-configured file backs both
+    rather than being fetched twice."""
     raw = os.environ.get(CHECKPOINT_ENV)
     if not raw:
         raise MagneticOrderingMlUnavailable(
             f"set {CHECKPOINT_ENV} to the mMACE backbone checkpoint path to "
-            "enable energy-based magnetic ordering selection"
+            "enable mMACE-based magnetism predictions (ordering ranking or "
+            "is_magnetic classification)"
         )
     path = Path(raw)
     if not path.is_file():
@@ -124,8 +131,16 @@ def rank_orderings(
 
     Raises :class:`MagneticOrderingMlUnavailable` if ``goldilocks-ml`` (with
     ``mace``/``e3nn``/``sphericart``/``ase`` manually installed) or the
-    checkpoint is not available -- always before relaxing any candidate,
-    never partway through the list.
+    checkpoint is not available, always before relaxing any candidate --
+    and also if relaxing a candidate itself fails at runtime (confirmed
+    empirically, 2026-09-21: the pinned mace-torch fork commit
+    goldilocks-ml's own README documents does not implement the
+    ``use_collinear``/``constrain_magnitude`` keywords
+    ``fm_fim_relax.relax`` passes to ``MagneticSCFMACE``, an upstream
+    goldilocks-ml/mace-fork version mismatch, not a precondition this
+    function can check up front). Either way, the caller sees the same
+    "ranking unavailable, degrade to unranked" signal -- this is never a
+    reason to fail the caller's own request, precondition or not.
     """
     if not candidates:
         raise ValueError("rank_orderings needs at least one candidate")
@@ -143,23 +158,29 @@ def rank_orderings(
             f"energy-based magnetic ordering selection: {error}"
         ) from error
 
-    raw_model = safe_load(checkpoint, device)
-    limits = domain_limits(raw_model)
+    try:
+        raw_model = safe_load(checkpoint, device)
+        limits = domain_limits(raw_model)
 
-    results = []
-    for label, candidate in candidates:
-        initial_moments = _seed_moments(candidate, limits)
-        relaxed = relax(
-            candidate, initial_moments, checkpoint=checkpoint, device=device
-        )
-        results.append(
-            OrderingCandidate(
-                label=label,
-                structure=candidate,
-                energy_per_atom_ev=relaxed.energy_ev / len(candidate),
-                status=relaxed.status,
+        results = []
+        for label, candidate in candidates:
+            initial_moments = _seed_moments(candidate, limits)
+            relaxed = relax(
+                candidate, initial_moments, checkpoint=checkpoint, device=device
             )
-        )
+            results.append(
+                OrderingCandidate(
+                    label=label,
+                    structure=candidate,
+                    energy_per_atom_ev=relaxed.energy_ev / len(candidate),
+                    status=relaxed.status,
+                )
+            )
+    except Exception as error:
+        raise MagneticOrderingMlUnavailable(
+            f"mMACE-based magnetic ordering ranking failed to run: {error}"
+        ) from error
+
     winner = min(results, key=lambda result: result.energy_per_atom_ev)
     return OrderingMlResult(
         winner=winner, candidates=tuple(results), model_id=checkpoint.name

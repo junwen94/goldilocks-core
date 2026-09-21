@@ -16,6 +16,19 @@ mMACE, generalized to the two standalone classifiers registered in
 (``ml.models.load_default_qrf_config`` -- see that module's docstring for
 why); both functions share ``_load_and_predict`` below rather than each
 repeating the resolve/import/call/degrade sequence.
+
+``is_magnetic`` needs one more thing ``_load_and_predict`` alone can't
+supply: ``goldilocks_ml.inference.load_model`` requires its mMACE backbone
+checkpoint passed explicitly as an ``artifacts={"mace_backbone": path}``
+override -- confirmed empirically (2026-09-21) against the real published
+record (1g8rw-q8128): its ``model.json`` declares no ``requires_artifacts``
+entry for it, so there is no automatic PSDI download, and calling
+``load_model`` without the override fails outright with "needs artifact:
+mace_backbone". ``registry.toml``'s own comment on ``[defaults.is_magnetic]``
+already named the intended source for that path -- the same manually
+-configured ``GOLDILOCKS_MACE_BACKBONE`` checkpoint
+``advisors/magnetic_ordering_ml.py`` uses for ordering ranking, reused
+rather than downloaded a second time -- this just wires it in for real.
 """
 
 from __future__ import annotations
@@ -26,6 +39,8 @@ from goldilocks_core.assets.store import AssetCorrupt, AssetNotInstalled, AssetS
 from goldilocks_core.ml.models import load_default_qrf_config, load_ml_classifier
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from pymatgen.core import Structure
 
     from goldilocks_core.assets.records import AssetSpec
@@ -48,12 +63,14 @@ def predict(role: str, structure: Structure, *, store: AssetStore | None = None)
 
     Raises :class:`MlModelUnavailable` for every failure mode short of
     the prediction genuinely succeeding: the model asset not installed
-    or failing checksum verification, or the ``models``/``magnetism``
-    extra not installed.
+    or failing checksum verification, goldilocks-ml itself not
+    importable, or (``is_magnetic`` only) its mMACE backbone checkpoint
+    not configured.
     """
     store = store or AssetStore()
     config = load_ml_classifier(role)
-    return _load_and_predict(role, config.asset, structure, store)
+    artifacts = _extra_artifacts(role)
+    return _load_and_predict(role, config.asset, structure, store, artifacts=artifacts)
 
 
 def predict_k_distance(structure: Structure, *, store: AssetStore | None = None) -> Any:
@@ -68,8 +85,30 @@ def predict_k_distance(structure: Structure, *, store: AssetStore | None = None)
     return _load_and_predict("k_distance", config.model_asset, structure, store)
 
 
+def _extra_artifacts(role: str) -> dict[str, Path] | None:
+    """Artifacts a role's model needs beyond its own installed asset
+    directory, or ``None`` for a role that needs nothing extra."""
+    if role != "is_magnetic":
+        return None
+    from goldilocks_core.advisors.magnetic_ordering_ml import (
+        MagneticOrderingMlUnavailable,
+        checkpoint_path,
+    )
+
+    try:
+        checkpoint = checkpoint_path()
+    except MagneticOrderingMlUnavailable as error:
+        raise MlModelUnavailable(str(error)) from error
+    return {"mace_backbone": checkpoint}
+
+
 def _load_and_predict(
-    label: str, asset: AssetSpec, structure: Structure, store: AssetStore
+    label: str,
+    asset: AssetSpec,
+    structure: Structure,
+    store: AssetStore,
+    *,
+    artifacts: dict[str, Path] | None = None,
 ) -> Any:
     try:
         installed = store.resolve_spec(asset)
@@ -85,7 +124,7 @@ def _load_and_predict(
             f"goldilocks-ml is required to run the {label} model: {error}"
         ) from error
     try:
-        model = load_model(installed.root)
+        model = load_model(installed.root, artifacts=artifacts)
         return model.predict(structure)
     except Exception as error:
         raise MlModelUnavailable(f"the {label} model failed to run: {error}") from error

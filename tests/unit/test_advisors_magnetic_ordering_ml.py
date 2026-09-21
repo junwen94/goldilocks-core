@@ -80,6 +80,21 @@ def test_rank_orderings_names_goldilocks_ml_when_it_is_missing(
         "goldilocks-ml plus mace/e3nn/sphericart/ase manually installed"
     ),
 )
+@pytest.mark.xfail(
+    reason=(
+        "goldilocks-ml 0.2.0's fm_fim_relax.relax passes "
+        "use_collinear/constrain_magnitude to MagneticSCFMACE, but the exact "
+        "mace-torch fork commit its own README documents "
+        "(ac8ff4764122ced0d57198fe2f9ba170c9fcd16d) has neither keyword -- "
+        "confirmed empirically 2026-09-21 against the real backbone/fork; "
+        "reported upstream. rank_orderings() itself now degrades this to "
+        "MagneticOrderingMlUnavailable instead of crashing (see its own "
+        "docstring), so this test fails cleanly rather than with a raw "
+        "TypeError. Remove this xfail once goldilocks-ml fixes or repins."
+    ),
+    strict=True,
+    raises=Exception,
+)
 def test_rank_orderings_ranks_antiferromagnetic_nio_below_ferromagnetic() -> None:
     """A coarse sanity check against the real backbone, when it is present.
 
@@ -89,6 +104,10 @@ def test_rank_orderings_ranks_antiferromagnetic_nio_below_ferromagnetic() -> Non
     yet. Verified manually (2026-09-19): NiO's antiferromagnetic candidates
     rank below its ferromagnetic guess, matching NiO's real,
     well-established antiferromagnetic ground state.
+
+    That verification predates goldilocks-ml 0.2.0's ``relax.py`` (this
+    package was pre-release, uninstallable, at the time -- see the xfail
+    reason above for what changed and broke this since).
     """
     nio_fm = Structure.from_spacegroup(
         "Fm-3m", Lattice.cubic(4.17), ["Ni", "O"], [[0, 0, 0], [0.5, 0.5, 0.5]]
