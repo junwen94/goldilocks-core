@@ -77,7 +77,7 @@ def test_rank_orderings_names_goldilocks_ml_when_it_is_missing(
     or importlib.util.find_spec("mace") is None,
     reason=(
         "needs a real mMACE backbone checkpoint (GOLDILOCKS_MACE_BACKBONE) and "
-        "goldilocks-ml[models] plus mace/e3nn/sphericart/ase manually installed"
+        "goldilocks-ml plus mace/e3nn/sphericart/ase manually installed"
     ),
 )
 def test_rank_orderings_ranks_antiferromagnetic_nio_below_ferromagnetic() -> None:
