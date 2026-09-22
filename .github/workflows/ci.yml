@@ -33,11 +33,17 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
+          version: "0.12.3"
           enable-cache: true
 
       - name: Install frozen dependencies
         run: uv sync --group dev --all-extras
 
+      # Known gap: this clones and rebuilds enumlib from source on every CI run,
+      # with no retry around the network calls and no cache keyed on the pinned
+      # ref. Worth hardening the same way src/goldilocks_core/assets/download.py
+      # retries/backs off PSDI downloads, but that needs real CI validation this
+      # pass didn't do -- flagging for a future pass rather than guessing at it.
       - name: Build enumlib (external dependency for AFM species-splitting)
         run: |
           sudo apt-get update
@@ -69,6 +75,10 @@ jobs:
 
       - name: Mutation testing
         run: |
+          # --max-children 2: commit aabcefd lowered this from 4 to fix a mutmut
+          # internal PID-tracking race (KeyError in read_one_child_exit_status)
+          # that was crashing runs on 2-core ubuntu-latest runners. Do not raise
+          # this back up without confirming the race is actually fixed upstream.
           uv run mutmut run --max-children 2
           uv run mutmut export-cicd-stats
           uv run python scripts/check_mutation_score.py \
@@ -85,6 +95,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
+          version: "0.12.3"
           enable-cache: true
 
       - name: Install frozen HTTP dependencies
@@ -138,6 +149,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
+          version: "0.12.3"
           enable-cache: false
 
       - name: Build source and wheel distributions
