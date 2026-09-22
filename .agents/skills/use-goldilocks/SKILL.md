@@ -47,20 +47,17 @@ work; use top-level `compute()` for one call.
 ## Canonical entry points
 
 ```python
-from goldilocks_core import (
-    CalculationDraft,
-    ComputeRequest,
-    PathStructureSource,
-    PresetSelection,
-    Service,
-)
+from goldilocks_core.inputs.hpc import load_hpc_profile
+from goldilocks_core.inputs.structure import PathStructureSource, normalize_structure
+from goldilocks_core.service import advise, check, generate
 
-request = ComputeRequest(
-    CalculationDraft(PathStructureSource("structure.cif")),
-    PresetSelection("recommend"),
-)
-with Service() as core:
-    result = core.compute(request)
+structure = normalize_structure(PathStructureSource("structure.cif")).structure
+hpc = load_hpc_profile("scarf")
+
+advice = advise(structure, hpc=hpc)
+report = check(advice)
+if report.ok:
+    steps = generate(advice, report)
 ```
 
 ```bash
