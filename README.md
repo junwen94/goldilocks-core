@@ -39,7 +39,9 @@ uv run --extra http poe stage
 ```
 
 Then open **http://127.0.0.1:8000**. See the [Workbench guide](web/README.md)
-for Docker and development checks.
+for Docker and development checks, and [mMACE setup](docs/mmace-setup.md) to
+enable the ML-backed magnetism features (`is_magnetic`, magnetic-ordering
+ranking) -- both work without it, just at a lower accuracy tier.
 
 ### Generate inputs from the command line
 
@@ -67,6 +69,8 @@ the output and how to run it.
 - [Pseudopotentials](docs/pseudopotentials.md) — choose a table and understand
   automatic selection.
 - [CLI reference](docs/cli.md) — commands and options.
+- [mMACE setup](docs/mmace-setup.md) — enable the ML-backed magnetism
+  features.
 - [Scientific conventions](docs/conventions.md) — units and numerical
   definitions.
 - [Contributing](docs/architecture.md) — code layout and development checks.

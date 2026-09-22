@@ -109,8 +109,9 @@ a `human > ml > llm > heuristic` priority: `explain --json`'s
 installed (`uv run goldilocks assets install <id>` — see [Install and check
 assets](#install-and-check-assets)); `is_magnetic` additionally needs `mace`,
 `e3nn`, `sphericart`, and `ase`, none of which install via a `pip`/`uv`
-extra of this project or of goldilocks-ml -- see [goldilocks-ml's own
-README](https://github.com/stfc/goldilocks-ml#use-the-is_magnetic-classifier)
+extra of this project or of goldilocks-ml -- see [mMACE setup](mmace-setup.md)
+for a complete, copy-pasteable walkthrough (also covered in [goldilocks-ml's
+own README](https://github.com/stfc/goldilocks-ml#use-the-is_magnetic-classifier))
 for the manual install (the `mace` fork it needs has no PyPI release, and
 PyPI's own upload validation rejects a package that declares a direct git
 dependency regardless, so this can never become an automatic extra). It

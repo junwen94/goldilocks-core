@@ -55,6 +55,34 @@ Then open **http://127.0.0.1:8000**.
   **http://127.0.0.1:5173** explicitly (not `localhost`) to be sure you're
   reaching this project's Workbench.
 
+## Enable mMACE-based magnetism features
+
+Two Workbench features (the ML `is_magnetic` classification and the
+"Run mMACE" magnetic-ordering ranking button) need an extra, one-time manual
+setup beyond the steps above — `mace`, `e3nn`, `sphericart`, and a
+~80.5 MB mMACE checkpoint file, none of which install via `uv sync` or any
+package extra. See [mMACE setup](../docs/mmace-setup.md) for the full
+walkthrough. Once done, set the checkpoint path in the same shell before
+starting the backend:
+
+```bash
+export GOLDILOCKS_MACE_BACKBONE=~/.local/share/goldilocks/mmace/mace_matpes_pbe_baseline_run-3.model
+uv run --extra http poe workbench   # or: poe stage
+```
+
+Load a magnetic structure and check the **Analysis** column's "is magnetic"
+field: its caption switches from "Heuristic default" to
+**"Goldilocks-ML prediction"** once the `ml` tier is live. Without this setup
+both features still work, just at a lower tier (LLM/heuristic classification,
+unranked ordering list) — never a failure.
+
+**Known limitation:** the "Run mMACE" button itself does not currently work
+(fails with a signal/threading error — see
+[mMACE setup](../docs/mmace-setup.md#6-start-the-workbench-with-mmace-enabled)
+and [stfc/goldilocks-ml#95](https://github.com/stfc/goldilocks-ml/issues/95)).
+Use `goldilocks magnetic-orderings --rank-with-mmace` from the CLI instead
+until that's fixed upstream.
+
 ## Run in Docker
 
 Alternatively, build and run from the repository root:
