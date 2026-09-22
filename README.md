@@ -39,9 +39,40 @@ uv run --extra http poe stage
 ```
 
 Then open **http://127.0.0.1:8000**. See the [Workbench guide](web/README.md)
-for Docker and development checks, and [mMACE setup](docs/mmace-setup.md) to
-enable the ML-backed magnetism features (`is_magnetic`, magnetic-ordering
-ranking) -- both work without it, just at a lower accuracy tier.
+for Docker and development checks.
+
+#### With mMACE (ML-backed magnetism features)
+
+Without any extra setup, magnetism classification (`is_magnetic`) and
+magnetic-ordering ranking run at a heuristic/LLM tier. To get the real ML
+tier, install `mace`/`e3nn`/`sphericart` and a checkpoint file once, manually
+-- none of this can ever be a `pip`/`uv` extra (the `mace` fork it needs has
+no PyPI release):
+
+```bash
+uv pip install ase==3.28.0 e3nn==0.4.4 sphericart==1.0.9 sphericart-torch==1.0.9
+uv pip install "mace-torch @ git+https://github.com/CheukHinHoJerry/mace.git@19cdf6692c48e068a24e06cfe1ffc670e8aea3dd"
+mkdir -p ~/.local/share/goldilocks/mmace
+curl -L -o ~/.local/share/goldilocks/mmace/mace_matpes_pbe_baseline_run-3.model \
+  https://data-collections.psdi.ac.uk/api/records/1g8rw-q8128/files/mace_matpes_pbe_baseline_run-3.model/content
+export GOLDILOCKS_MACE_BACKBONE=~/.local/share/goldilocks/mmace/mace_matpes_pbe_baseline_run-3.model
+```
+
+Then start the Workbench as above **in the same shell** (the backend only
+picks up `GOLDILOCKS_MACE_BACKBONE` if it's set before launch). Load a
+magnetic structure (e.g.
+`src/goldilocks_core/examples/structures/Fe_bcc.cif`) and check the
+**Analysis** column's "is magnetic" field: its caption switches to
+**"Goldilocks-ML prediction"** once the `ml` tier is live.
+
+Two gotchas worth knowing up front: `uv sync` silently removes the two
+manually-installed packages again (they're not in `uv.lock`) -- re-run the
+`uv pip install` lines above after any `uv sync`; and the Workbench's own
+"Run mMACE" ranking button is currently broken
+([stfc/goldilocks-ml#95](https://github.com/stfc/goldilocks-ml/issues/95)) --
+use `uv run goldilocks magnetic-orderings --rank-with-mmace` from the CLI for
+ranking instead. Checksum verification and full troubleshooting:
+[mMACE setup](docs/mmace-setup.md).
 
 ### Generate inputs from the command line
 
