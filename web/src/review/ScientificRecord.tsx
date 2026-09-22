@@ -2,14 +2,8 @@ import type { ReactNode } from "react";
 import { Badge, Paper, Stack, Table, Text } from "@mantine/core";
 
 import type { ResolvedField, Source } from "../api/coreClient";
+import { SourceLabel } from "../api/SourceLabel";
 import { isAdvisorWarning } from "./warnings";
-
-const SOURCE_NAMES: Record<Source, string> = {
-  human: "Your override",
-  ml: "Model prediction",
-  llm: "LLM suggestion",
-  heuristic: "Heuristic default",
-};
 
 /** Renders one `ResolvedField` generically -- v2's `records()` docstring
  * is explicit that there is no codified schema for a record's `value`
@@ -36,7 +30,7 @@ export function ScientificRecord({ field }: { readonly field: ResolvedField }) {
   return (
     <Stack gap="xs">
       <Badge color="gray" variant="light" style={{ alignSelf: "flex-start" }}>
-        {SOURCE_NAMES[field.source ?? "heuristic"]}
+        <SourceLabel source={field.source ?? "heuristic"} />
       </Badge>
       <RecordValue value={field.value} />
       {field.field_sources === undefined ||
@@ -61,7 +55,9 @@ function FieldSources({
         {entries.map(([key, source]) => (
           <Table.Tr key={key}>
             <Table.Th scope="row">{humanizeKey(key)}</Table.Th>
-            <Table.Td>{SOURCE_NAMES[source]}</Table.Td>
+            <Table.Td>
+              <SourceLabel source={source} />
+            </Table.Td>
           </Table.Tr>
         ))}
       </Table.Tbody>

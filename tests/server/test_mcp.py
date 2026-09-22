@@ -41,7 +41,7 @@ class TestServerIdentity:
 
 
 class TestToolCatalogue:
-    def test_exposes_exactly_four_tools(self) -> None:
+    def test_exposes_exactly_five_tools(self) -> None:
         server = create_server()
 
         tools = asyncio.run(server.list_tools())
@@ -49,6 +49,7 @@ class TestToolCatalogue:
         assert {tool.name for tool in tools} == {
             "capabilities",
             "inspect_structure",
+            "magnetic_orderings",
             "explain",
             "run",
         }
@@ -84,6 +85,21 @@ class TestToolCalls:
 
         assert result.is_error is False
         assert result.structured_content["structure"]["reduced_formula"] == "Si"
+
+    def test_magnetic_orderings_tool_lists_the_fm_candidate_unranked(
+        self, silicon_cif: str
+    ) -> None:
+        server = create_server()
+
+        result = asyncio.run(
+            server.call_tool(
+                "magnetic_orderings", {"document": {"structure_content": silicon_cif}}
+            )
+        )
+
+        assert result.is_error is False
+        assert result.structured_content["ranked"] is False
+        assert result.structured_content["candidates"][0]["label"] == "fm"
 
     def test_run_tool_end_to_end(self, real_assets, silicon_cif: str) -> None:
         server = create_server()

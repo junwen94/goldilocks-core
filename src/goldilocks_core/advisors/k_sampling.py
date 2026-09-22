@@ -13,20 +13,33 @@ are pure ML, with any model/feature failure propagating as a raw
 exception straight out of ``resolve_kpoints`` (e.g.
 ``ml/qrf/inference.py`` raises bare ``ValueError``s on malformed
 quantiles, with nothing catching them between there and the caller).
-This module's job is only to guarantee a working, zero-ML-dependency
-path exists -- the actual ML tier (goldilocks-data's ladder plus a
-k_index/k_distance model) is v2 epic 11, and is stubbed here the same
-way every other advisor in this codebase stubs its ml tier.
+This module's job is to guarantee a working, zero-ML-dependency path
+always exists underneath whatever the ml tier does.
 
-``occupations`` is accepted as an explicit input -- not because this
-heuristic tier uses it (it does not; both branches below are a flat
+The ml tier itself (v2 epic 11, #11; #92) calls QRF95 -- registered in
+``ml/registry.toml``'s ``[defaults.kpoints]`` since before this epic,
+but never actually loaded until now: its own PSDI record always carried
+a real ``goldilocks_ml.inference``-shaped ``model.json``, it just was
+not one of this asset's registered files. ``ml.predict.predict_k_distance``
+degrades to ``None`` (falling through to heuristic) the same way
+``is_metal``/``is_magnetic`` do for a missing asset or import -- see
+that module's docstring. A *ladder-rung* k_index model also exists in
+goldilocks-ml but is not yet published/wired (#90); that is a distinct
+model from QRF95, not another name for it, despite ``capabilities.py``
+having (incorrectly) pointed ``k_distance``'s ``ml_target`` at
+``"k_index"`` until this same change fixed it.
+
+``occupations`` is accepted as an explicit input -- not because either
+the heuristic or the now-wired QRF95 ml tier uses it (neither does;
+QRF95's own feature contract is composition/structure/SOAP/lattice/
+metallicity, with no smearing term, and the heuristic below is a flat
 k_distance regardless of smearing width) -- but because the point of
 this epic's per-step ordering is to make sigma an *explicit* input to
 k_sampling rather than an implicit shared condition (the goldilocks
 dataset itself was generated at fixed ``cold``/0.01 Ry smearing while
 only ``k_index`` was scanned, so pretending the two are decoupled would
-be dishonest). Once epic 11 wires in a real k_distance/k_index model,
-that model's own contract is expected to actually consume this.
+be dishonest). A future k_index ladder-rung model's own contract (#90)
+may turn out to actually consume this; QRF95 does not.
 
 Reuses ``legacy_kmesh/resolve.py``'s human-hint-wins-over-model
 precedence pattern (explicit grid beats an explicit distance, both beat
@@ -69,7 +82,11 @@ from pymatgen.core import Structure
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.analysis.is_metal import Metallicity
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
-from goldilocks_core.kmesh import k_distance_to_mesh
+from goldilocks_core.kmesh import (
+    MIN_K_DISTANCE,
+    build_gamma_kmesh_entries,
+    k_distance_to_mesh,
+)
 from goldilocks_core.resolution import (
     Blocked,
     FieldState,
@@ -94,12 +111,22 @@ GRID_AND_DISTANCE_WARNING = Warning(
     level="info",
     category="k_sampling",
     message=(
-        "both k_grid and k_distance were given; k_grid wins outright and "
-        "k_distance is ignored."
+        "more than one k-sampling convention was given; k_grid wins "
+        "outright and the others are ignored."
     ),
 )
 
-WARNING_CATALOGUE = (GRID_AND_DISTANCE_WARNING,)
+INDEX_AND_DISTANCE_WARNING = Warning(
+    code="k_sampling.index_and_distance_conflict",
+    level="info",
+    category="k_sampling",
+    message=(
+        "both k_index and k_distance were given; k_index wins outright "
+        "and k_distance is ignored."
+    ),
+)
+
+WARNING_CATALOGUE = (GRID_AND_DISTANCE_WARNING, INDEX_AND_DISTANCE_WARNING)
 """Every warning code this module can emit -- ``capabilities.py``'s
 ``warnings[]`` catalogue aggregates one of these tuples per advisor."""
 
@@ -118,6 +145,12 @@ class KSamplingHumanInput(HumanInput):
     -layer audit): a 0 or negative entry used to be accepted, resolved,
     and written verbatim into the K_POINTS card, silently telling QE to
     sample zero or a negative number of points along that axis."""
+    k_index: _PositiveInt | None = None
+    """A specific 1-based rung on this structure's own k-mesh ladder
+    (``kmesh.build_gamma_kmesh_entries`` -- rung 1 is the Gamma-only
+    mesh), for a human who thinks in ladder position rather than a raw
+    target spacing. A third, equally explicit convention alongside
+    ``k_grid``/``k_distance``, not a variant of either."""
     k_distance: float | None = Field(default=None, gt=0)
     shift: tuple[_ZeroOrOne, _ZeroOrOne, _ZeroOrOne] | None = None
     """QE's own K_POINTS automatic card requires each shift component to
@@ -140,11 +173,27 @@ def k_sampling(
     llm = llm or KSamplingLlmInput()
 
     if human.k_grid is not None:
-        warnings = (GRID_AND_DISTANCE_WARNING,) if human.k_distance is not None else ()
+        warnings = (
+            (GRID_AND_DISTANCE_WARNING,)
+            if human.k_index is not None or human.k_distance is not None
+            else ()
+        )
         decision = KSamplingDecision(
             mesh=human.k_grid,
             shift=human.shift or _GAMMA_SHIFT,
             k_distance=None,
+            warnings=warnings,
+        )
+        return Resolved(decision, Provenance(source="human"))
+    if human.k_index is not None:
+        resolved = _from_k_index(structure, human.k_index, human.shift)
+        if isinstance(resolved, str):
+            return Blocked(by=resolved)
+        warnings = (INDEX_AND_DISTANCE_WARNING,) if human.k_distance is not None else ()
+        decision = KSamplingDecision(
+            mesh=resolved.mesh,
+            shift=resolved.shift,
+            k_distance=resolved.k_distance,
             warnings=warnings,
         )
         return Resolved(decision, Provenance(source="human"))
@@ -153,10 +202,11 @@ def k_sampling(
             _from_k_distance(structure, human.k_distance, human.shift),
             Provenance(source="human"),
         )
-    ml_value: float | None = None  # no ml model wired yet; stubbed until epic 11
+    ml_value = _ml_k_distance(structure)
     if ml_value is not None:
         return Resolved(
-            _from_k_distance(structure, ml_value, None), Provenance(source="ml")
+            _from_k_distance(structure, ml_value, human.shift),
+            Provenance(source="ml"),
         )
     if llm.k_distance is not None:
         return Resolved(
@@ -176,6 +226,21 @@ def k_sampling(
     )
 
 
+def _ml_k_distance(structure: Structure) -> float | None:
+    """QRF95's own raw k-distance (v2 epic 11, #11; #92), or ``None`` if
+    its model asset is not installed or goldilocks-ml is not importable
+    -- never a reason to fail ``k_sampling()`` itself, the same
+    degrade-to-heuristic policy ``analysis/is_metal.py``'s
+    ``_ml_is_metal`` already follows for a missing external dependency."""
+    from goldilocks_core.ml.predict import MlModelUnavailable, predict_k_distance
+
+    try:
+        prediction = predict_k_distance(structure)
+    except MlModelUnavailable:
+        return None
+    return float(prediction.value)
+
+
 def _from_k_distance(
     structure: Structure, k_distance: float, shift: tuple[int, int, int] | None
 ) -> KSamplingDecision:
@@ -183,4 +248,27 @@ def _from_k_distance(
         mesh=k_distance_to_mesh(structure, k_distance),
         shift=shift or _GAMMA_SHIFT,
         k_distance=k_distance,
+    )
+
+
+def _from_k_index(
+    structure: Structure, k_index: int, shift: tuple[int, int, int] | None
+) -> KSamplingDecision | str:
+    """Resolve an explicit 1-based ladder rung to its concrete mesh via
+    ``kmesh.build_gamma_kmesh_entries``, or return why not (a rung
+    beyond this structure's own ladder length -- the ladder terminates
+    at ``MIN_K_DISTANCE``, so how many rungs exist is structure
+    -dependent, not a fixed ceiling a human could know in advance).
+    ``k_distance`` on the returned decision is ``None``, the same as
+    ``k_grid``'s: the mesh was picked by rung, not by a target spacing,
+    so there is no single distance value to report."""
+    entries = build_gamma_kmesh_entries(structure)
+    if k_index > len(entries):
+        return (
+            f"k_index={k_index} exceeds this structure's own ladder length "
+            f"({len(entries)} rungs down to the {MIN_K_DISTANCE} A^-1 floor)"
+        )
+    entry = entries[k_index - 1]
+    return KSamplingDecision(
+        mesh=entry.mesh, shift=shift or _GAMMA_SHIFT, k_distance=None
     )

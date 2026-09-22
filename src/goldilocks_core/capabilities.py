@@ -77,10 +77,18 @@ aggregator, not this module -- imports all ten of them so this module
 itself only needs one import to get the full list without blowing its
 own import-surface ceiling.
 
-**`models[]` ships empty.** ml integration is deliberately last (v2 epic
-11, #11); until then no ``target`` has an installed model, so
-``approaches`` (design point (1)-b) never includes ``"ml"`` -- this is
-the expected, honest state, not a bug.
+**`models[]`/`approaches` (v2 epic 11, #11).** ``models[]`` lists every
+model ``ml/registry.toml`` registers (``ml.models.registered_models``),
+whether or not it is actually installed; ``approaches`` (design point
+(1)-b) is the honest "is ml actually usable right now" signal, checked
+per asset via ``AssetStore`` -- a fact/setting's ``ml_target`` only gains
+``"ml"`` once that specific asset resolves. ``is_metal``/``is_magnetic``
+(``ml.models.ML_CLASSIFIER_ROLES``) and ``k_distance`` (QRF95, checked
+separately -- see ``_ml_model_installed``) are wired this way; ``k_index``'s
+own ``ml_target`` names a real, published goldilocks-ml *ladder-rung*
+model that is a distinct thing from QRF95 and is not registered/wired
+yet (#90) -- it stays ``["human", "heuristic"]`` honestly rather than
+claiming support that would raise on every real call.
 """
 
 from __future__ import annotations
@@ -132,13 +140,49 @@ def _approaches(ml_target: str | None) -> list[str]:
     """Design point (1)-b: ``ml_target`` is a static declaration;
     ``approaches`` is what's *actually* usable right now, computed as
     ``["human"] + (["ml"] if that target has an installed model) +
-    ["heuristic"]``. No target has an installed model yet -- ml
-    integration is deliberately last (v2 epic 11, #11) -- so this
-    always resolves to ``["human", "heuristic"]`` today regardless of
-    ``ml_target``; the parameter is threaded through now so epic 11
-    only has to change this one function's body, not any caller."""
-    del ml_target  # unused until epic 11 wires a real installed-model check
+    ["heuristic"]``. v2 epic 11 (#11): ``is_metal``/``is_magnetic`` are
+    registered, real, ``goldilocks_ml.inference``-loadable classifiers
+    (``ml.models.ML_CLASSIFIER_ROLES``), and ``k_distance`` is QRF95
+    (#92) -- ``"ml"`` appears for any of these the moment its asset is
+    actually installed, not merely declared. ``k_index``'s ``ml_target``
+    names a different, not-yet-registered/wired ladder-rung model (#90),
+    so it still has no installed-model check to pass and keeps resolving
+    to ``["human", "heuristic"]`` honestly rather than claiming ml
+    support that would raise ``MlModelUnavailable`` on every real call."""
+    if ml_target is not None and _ml_model_installed(ml_target):
+        return ["human", "ml", "heuristic"]
     return ["human", "heuristic"]
+
+
+def _ml_model_installed(ml_target: str) -> bool:
+    """``k_distance`` is checked separately from ``ML_CLASSIFIER_ROLES``
+    (#92): QRF95 predates that table and keeps its own ``QrfKpointsConfig``
+    asset shape (``ml.models.load_default_qrf_config`` -- see that
+    module's docstring for why), not a ``[defaults.k_distance]`` section
+    that table could look up generically."""
+    from goldilocks_core.assets.store import AssetCorrupt, AssetNotInstalled, AssetStore
+    from goldilocks_core.ml.models import (
+        ML_CLASSIFIER_ROLES,
+        load_default_qrf_config,
+        load_ml_classifier,
+    )
+
+    if ml_target == "k_distance":
+        asset = load_default_qrf_config().model_asset
+        if asset is None:
+            return False
+        try:
+            AssetStore().resolve_spec(asset)
+        except (AssetNotInstalled, AssetCorrupt):
+            return False
+        return True
+    if ml_target not in ML_CLASSIFIER_ROLES:
+        return False
+    try:
+        AssetStore().resolve_spec(load_ml_classifier(ml_target).asset)
+    except (AssetNotInstalled, AssetCorrupt):
+        return False
+    return True
 
 
 class Setting(TypedDict, total=False):
@@ -301,12 +345,19 @@ _SETTING_META: dict[str, _SettingExtra] = {
     "k_grid": {
         "description": (
             "Explicit Monkhorst-Pack mesh dimensions (nk1, nk2, nk3); wins "
-            "over k_distance if both set."
+            "outright over k_index/k_distance if more than one is set."
+        ),
+    },
+    "k_index": {
+        "ml_target": "k_index",
+        "description": (
+            "A specific 1-based rung on this structure's own k-mesh ladder "
+            "(rung 1 is Gamma-only); wins over k_distance if both are set."
         ),
     },
     "k_distance": {
         "unit": "1/Angstrom",
-        "ml_target": "k_index",
+        "ml_target": "k_distance",
         "description": (
             "Target k-point spacing; heuristic default is 0.15 for metals, "
             "0.30 otherwise."
@@ -482,7 +533,7 @@ _FACTS: tuple[Fact, ...] = (
         type="enum",
         values=list(typing.get_args(Metallicity)),
         ml_target="is_metal",
-        approaches=_approaches("is_metal"),
+        approaches=[],  # computed fresh per call -- see _facts()
         overridable=True,
         description="Whether the structure is metallic, from composition alone.",
     ),
@@ -491,7 +542,7 @@ _FACTS: tuple[Fact, ...] = (
         type="enum",
         values=list(typing.get_args(Magnetism)),
         ml_target="is_magnetic",
-        approaches=_approaches("is_magnetic"),
+        approaches=[],  # computed fresh per call -- see _facts()
         overridable=True,
         description="Whether the structure is expected to be magnetic.",
     ),
@@ -500,7 +551,7 @@ _FACTS: tuple[Fact, ...] = (
         type="boolean",
         values=None,
         ml_target=None,
-        approaches=_approaches(None),
+        approaches=[],  # computed fresh per call -- see _facts()
         overridable=True,
         description=(
             "Whether spin-orbit coupling is likely relevant for this structure."
@@ -511,7 +562,7 @@ _FACTS: tuple[Fact, ...] = (
         type="boolean",
         values=None,
         ml_target=None,
-        approaches=_approaches(None),
+        approaches=[],  # computed fresh per call -- see _facts()
         overridable=True,
         description="Whether a Hubbard +U (or hybrid) correction is likely needed.",
     ),
@@ -721,7 +772,12 @@ def _settings() -> list[Setting]:
 
 
 def _facts() -> list[Fact]:
-    return list(_FACTS)
+    """``_FACTS``' own ``approaches`` entries are placeholders (``[]``)
+    -- recomputed fresh here, not frozen at import time, since
+    ``_approaches`` checks live installed-asset state (v2 epic 11, #11):
+    a model installed or removed after this module was first imported
+    must still be reflected on the next call."""
+    return [{**fact, "approaches": _approaches(fact["ml_target"])} for fact in _FACTS]
 
 
 def _pseudopotential_tables() -> list[dict[str, object]]:
@@ -817,6 +873,27 @@ def _warnings() -> list[dict[str, object]]:
     return [warning.model_dump() for warning in _ADVISOR_WARNING_CATALOGUE]
 
 
+def _models() -> list[dict[str, object]]:
+    """Every ML model registry.toml declares (v2 epic 11, #11) --
+    registered, not necessarily installed; a fact's own ``approaches``
+    (``_approaches`` above) is the honest "is ml actually usable right
+    now" signal, checked per asset. This listing is what registered
+    against which target, for a caller that wants to know which models
+    exist at all."""
+    from goldilocks_core.ml.models import registered_models
+
+    return [
+        {
+            "id": model.id,
+            "role": model.role,
+            "name": model.spec.name,
+            "version": model.spec.version,
+            "target": model.spec.target,
+        }
+        for model in registered_models()
+    ]
+
+
 def capabilities() -> Capabilities:
     """Everything the design doc's S4.2 shape lists. Cacheable in-process
     per that section's own note ("static... only `models` needs to query
@@ -833,7 +910,7 @@ def capabilities() -> Capabilities:
         "settings": _settings(),
         "pseudopotential_tables": _pseudopotential_tables(),
         "hpc_profiles": _hpc_profiles(),
-        "models": [],
+        "models": _models(),
         "warnings": _warnings(),
         "sources": list(SOURCES),
     }

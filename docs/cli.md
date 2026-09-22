@@ -39,8 +39,9 @@ Narrower slices are also available directly:
 - `uv run goldilocks settings --json` — every `--set`-able key, its type,
   default, and sources (49 keys today; the same objects as `capabilities`'s
   `settings[]`).
-- `uv run goldilocks models --json` — installed pluggable ML models (always
-  `[]` today; see [Scientific controls](#scientific-controls)).
+- `uv run goldilocks models --json` — every model `ml/registry.toml`
+  registers, whether or not it is actually installed (see [Scientific
+  controls](#scientific-controls)).
 - `uv run goldilocks assets status --json` — installed pseudopotential-table
   and model assets.
 
@@ -100,11 +101,51 @@ Quote `--set` values that contain brackets or braces (e.g. `--set
 values must be valid JSON. See [Pseudopotentials](pseudopotentials.md) for how
 tables are chosen, pinned, and checked for compatibility.
 
-Pluggable, local ML model selection through the CLI is not yet implemented in
-v2 (tracked as epic 11): `uv run goldilocks models` currently always reports
-no installed models, and there is no flag to point `run`/`explain` at a
-custom model file. Every setting above is produced by the built-in heuristic
-advisors.
+`is_metal`, `is_magnetic`, and `k_distance` (v2 epic 11) each resolve through
+a `human > ml > llm > heuristic` priority: `explain --json`'s
+`records[...].source` says which tier actually produced a value.
+`is_metal`/`k_distance` become ML-backed once their PSDI-hosted asset is
+installed (`uv run goldilocks assets install <id>` — see [Install and check
+assets](#install-and-check-assets)); `is_magnetic` additionally needs `mace`,
+`e3nn`, `sphericart`, and `ase`, none of which install via a `pip`/`uv`
+extra of this project or of goldilocks-ml -- see [goldilocks-ml's own
+README](https://github.com/stfc/goldilocks-ml#use-the-is_magnetic-classifier)
+for the manual install (the `mace` fork it needs has no PyPI release, and
+PyPI's own upload validation rejects a package that declares a direct git
+dependency regardless, so this can never become an automatic extra). It
+also needs the same `GOLDILOCKS_MACE_BACKBONE` checkpoint the [magnetic
+orderings](#magnetic-orderings) `--rank-with-mmace` flag uses below --
+confirmed empirically (2026-09-21): the published record declares no
+automatic download for its mMACE backbone, so `is_magnetic` reuses
+whichever checkpoint that variable already points at rather than fetching
+a second copy. Missing it degrades to the heuristic tier, never a
+failure. There is still no flag to point `run`/`explain` at a custom
+model file of your own. `uv run goldilocks models --json` reports every
+model, installed or not, so it also confirms whether one you expect to
+be usable actually is.
+
+## Magnetic orderings
+
+```bash
+uv run goldilocks magnetic-orderings structure.cif --json
+uv run goldilocks magnetic-orderings structure.cif --rank-with-mmace
+```
+
+Lists a ferromagnetic guess plus any compensated antiferromagnetic
+candidates `enumlib` finds (see [Check magnetism and spin-orbit
+coupling](science.md#check-magnetism-and-spin-orbit-coupling)) for a
+human or agent to choose among before generating any input file. Each
+listed candidate's `--json` output carries its own `structure_content`
+and `overrides` (a fresh CIF, plus a remapped `starting_magnetization`
+for AFM candidates), enough to hand straight to `goldilocks run`/`explain`
+without re-deriving anything.
+
+`--rank-with-mmace` relaxes every candidate's magnetic moments on a frozen
+mMACE potential energy surface and recommends the lowest energy-per-atom
+one -- needs both a `GOLDILOCKS_MACE_BACKBONE` environment variable
+pointing at a downloaded mMACE checkpoint file, and the same manual
+`mace`/`e3nn`/`sphericart`/`ase` install described above. Missing either
+degrades to an unranked listing with a warning, never a failure.
 
 ## Install and check assets
 
