@@ -34,15 +34,6 @@ def silicon_structure() -> Structure:
 
 
 @pytest.fixture
-def sodium_chloride_structure() -> Structure:
-    return Structure(
-        Lattice.cubic(5.64),
-        ["Na", "Cl"],
-        [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
-    )
-
-
-@pytest.fixture
 def pseudo_metadata_factory() -> Callable[..., PseudoMetadata]:
 
     def make_metadata(

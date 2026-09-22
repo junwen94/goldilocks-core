@@ -57,10 +57,6 @@ class PseudoImportError(ExpectedFailure, ValueError):
     category = "local"
 
 
-class AmbiguousCutoffMetadata(PseudoImportError):
-    pass
-
-
 def finite_positive_cutoff(value: object, label: str) -> float:
     if (
         isinstance(value, bool)
