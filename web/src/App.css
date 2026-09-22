@@ -147,6 +147,30 @@
   min-width: var(--workbench-card-min);
 }
 
+/* The light-mode --card-accent values above are tuned against white and
+ * fail AA against Mantine's dark body (#242424) -- axe caught the
+ * kicker-number text at 2.99:1 in dark mode. Lightened to the nearest
+ * same-hue Tailwind 400 shade, each checked at >=4.5:1 against #242424. */
+[data-mantine-color-scheme="dark"] .card-structure {
+  --card-accent: #fb923c;
+}
+
+[data-mantine-color-scheme="dark"] .card-analysis {
+  --card-accent: #4ade80;
+}
+
+[data-mantine-color-scheme="dark"] .card-advisors {
+  --card-accent: #e879f9;
+}
+
+[data-mantine-color-scheme="dark"] .card-magnetic-orderings {
+  --card-accent: #2dd4bf;
+}
+
+[data-mantine-color-scheme="dark"] .card-bundle {
+  --card-accent: #60a5fa;
+}
+
 .structure-stage {
   position: relative;
   flex: 1 1 auto;
