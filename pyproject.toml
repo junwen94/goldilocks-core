@@ -146,7 +146,7 @@ shell = "cd web && npm run check"
 dev = [
     "mkdocs>=1.6.1",
     "mkdocs-material>=9.6.0",
-    "mutmut>=3.7.0",
+    "mutmut>=3.8.0",
     "poethepoet>=0.35",
     "pre-commit>=4.5.1",
     "pytest>=9.0.3",
@@ -198,6 +198,16 @@ show_missing = true
 skip_covered = true
 
 [tool.mutmut]
+# process_isolation = "forkserver" (mutmut >=3.8.0) routes every mutant's
+# fork/reap through one dedicated forkserver child, instead of the default
+# ForkRunner's os.wait() in the main process -- which reaps *any* child, so an
+# untracked pid (e.g. a leftover from the stats/generation phase) causes a
+# bare `self._running.pop(pid)` KeyError (stfc/goldilocks-core#76). The
+# forkserver's own reap loop explicitly ignores unknown pids instead of
+# crashing. Lowering --max-children (ci.yml, #77) only reduced how often the
+# race was hit; it could not fix a race that isn't about mutmut's own worker
+# concurrency in the first place.
+process_isolation = "forkserver"
 # source_paths creates parent directories for nested files; also_copy does not.
 # Copy nested test inputs without web/node_modules or build outputs.
 source_paths = [
