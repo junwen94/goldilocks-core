@@ -75,6 +75,55 @@ def test_inspect_missing_structure_is_an_operator_error_not_a_traceback() -> Non
     assert "not found" in completed.stderr
 
 
+def test_magnetic_orderings_lists_the_fm_identity_by_default() -> None:
+    """The fm candidate is always listed first, regardless of whatever
+    else enumlib (if present on this machine's real PATH -- this
+    subprocess inherits it, unlike an in-process monkeypatch) finds for
+    bcc Fe -- #87's listing never picks a winner on its own."""
+    iron = structure("Fe_bcc.cif")
+
+    completed = _run_cli("magnetic-orderings", str(iron))
+
+    assert completed.returncode == 0, completed.stderr
+    assert "fm" in completed.stdout
+
+
+def test_magnetic_orderings_json_reports_every_candidate() -> None:
+    iron = structure("Fe_bcc.cif")
+
+    completed = _run_cli("magnetic-orderings", str(iron), "--json")
+
+    assert completed.returncode == 0, completed.stderr
+    document = json.loads(completed.stdout)
+    assert document["ranked"] is False
+    assert document["candidates"][0]["label"] == "fm"
+    assert document["candidates"][0]["formula"] == "Fe"
+    assert document["candidates"][0]["energy_per_atom_ev"] is None
+
+
+def test_magnetic_orderings_rank_degrades_without_a_configured_checkpoint(
+    monkeypatch,
+) -> None:
+    """``--rank-with-mmace`` without ``GOLDILOCKS_MACE_BACKBONE`` configured
+    (the real state of this test machine, and of CI) reports the
+    candidates unranked with a warning, not a failure."""
+    monkeypatch.delenv("GOLDILOCKS_MACE_BACKBONE", raising=False)
+    iron = structure("Fe_bcc.cif")
+
+    completed = _run_cli("magnetic-orderings", str(iron), "--rank-with-mmace", "--json")
+
+    assert completed.returncode == 0, completed.stderr
+    document = json.loads(completed.stdout)
+    assert document["ranked"] is False
+    # Not an exact warnings count: this subprocess inherits the real
+    # machine's PATH, so whether AFM enumeration also warns
+    # (magnetic.afm_ordering_unavailable) depends on whether enum.x
+    # happens to be installed here -- only ranking degradation is this
+    # test's own concern.
+    codes = {warning["code"] for warning in document["warnings"]}
+    assert "magnetic.ordering_ranking_unavailable" in codes
+
+
 def test_settings_json_matches_the_capabilities_contract() -> None:
     completed = _run_cli("settings", "--json")
 
@@ -118,11 +167,21 @@ def test_capabilities_human_output_summarizes_every_section() -> None:
         assert expected in completed.stdout
 
 
-def test_models_list_is_honest_about_having_none_yet() -> None:
-    completed = _run_cli("models", "list")
+def test_models_list_reports_every_registered_model() -> None:
+    """v2 epic 11 (#11): models[] lists what registry.toml declares
+    regardless of install status (an isolated, per-test asset root has
+    nothing installed) -- "is it actually usable" lives in a fact's own
+    ``approaches`` instead, not here."""
+    completed = _run_cli("models", "--json", "list")
 
     assert completed.returncode == 0, completed.stderr
-    assert "no ml models installed" in completed.stdout
+    ids = {model["id"] for model in json.loads(completed.stdout)}
+    assert ids == {
+        "models/qrf-kpoints",
+        "models/metallicity-cgcnn",
+        "models/is-metal-classifier",
+        "models/is-magnetic-classifier",
+    }
 
 
 def test_assets_status_prints_the_asset_root() -> None:
@@ -212,7 +271,11 @@ class TestRunAndExplainAgainstRealAssets:
 
         assert completed.returncode == 0, completed.stderr
         assert "functional: 'PBEsol' (source=heuristic)" in completed.stdout
-        assert "is_metal: unavailable:" in completed.stdout
+        # v2 epic 11 (#11): the real, installed CGCNN classifier resolves
+        # Si confidently (elemental Si gives composition-only heuristics
+        # nothing to exclude, so that tier alone would say unavailable --
+        # ml is strictly more capable here, not a fallback).
+        assert "is_metal: 'non_metal' (source=ml)" in completed.stdout
 
     def test_explain_json_carries_a_structured_top_level_warnings_array(
         self, real_assets: None
@@ -263,7 +326,12 @@ class TestRunAndExplainAgainstRealAssets:
 
         assert completed.returncode == 0, completed.stderr
         records = json.loads(completed.stdout)["records"]
-        assert records["occupations"]["value"]["occupations"] == "smearing"
+        # v2 epic 11 (#11): the real, installed CGCNN classifier now
+        # resolves Si confidently non-metal (source=ml), so the scf
+        # step's own occupations correctly follows the non-metal branch
+        # -- unlike nscf_occupations below, which dos's own advisor
+        # always pins to tetrahedra_opt regardless of metallicity.
+        assert records["occupations"]["value"]["occupations"] == "fixed"
         assert records["nscf_occupations"]["value"]["occupations"] == ("tetrahedra_opt")
         assert records["dos"]["value"]["delta_e"] == 0.01
 

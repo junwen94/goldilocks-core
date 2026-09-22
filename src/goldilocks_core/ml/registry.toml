@@ -11,7 +11,7 @@ interval_confidence = 0.90
 [defaults.kpoints.asset]
 id = "models/qrf-kpoints"
 version = "QRF95"
-preparation_revision = "2"
+preparation_revision = "3"
 
 [[defaults.kpoints.asset.files]]
 role = "model"
@@ -19,6 +19,37 @@ path = "QRF95.pkl"
 url = "https://data-collections.psdi.ac.uk/api/records/q3bye-wep37/files/QRF95.pkl/content"
 checksum = "sha256:2647b976a57637cc34e4874f3b0ff3436a7c032761b774fdd9e56e69fddaffcc"
 size = 185695399
+
+# QRF95's own record.json (v2 epic 11, #11 follow-up, #92): the same
+# record already carried a real, goldilocks_ml.inference-shaped
+# model.json all along -- just never registered as one of this asset's
+# files, so `ml.predict`'s `load_model()` had nothing to read and
+# `k_sampling()`'s ml tier stayed permanently stubbed. Its own
+# requires_artifacts pins is_metal.ckpt/atom_init.json from ptc95-vbq12,
+# duplicated below (small files, same trick already used for
+# defaults.is_metal's atom_init.json) so `load_model()` finds them beside
+# this model.json rather than needing a separate GOLDILOCKS_ARTIFACTS
+# cache goldilocks-core has no other reason to configure.
+[[defaults.kpoints.asset.files]]
+role = "model_record"
+path = "model.json"
+url = "https://data-collections.psdi.ac.uk/api/records/q3bye-wep37/files/model.json/content"
+checksum = "sha256:0c703cdb2e765ec0f7ca5a19ea5b821c4218a99906f849632e9f91dbf419c6a0"
+size = 10218
+
+[[defaults.kpoints.asset.files]]
+role = "metallicity_checkpoint"
+path = "is_metal.ckpt"
+url = "https://data-collections.psdi.ac.uk/api/records/ptc95-vbq12/files/is_metal.ckpt/content"
+checksum = "sha256:964d818de8a155e3219d1bff9f7fca12137a003c5c71ff6b4f1d68d472d4c9d1"
+size = 2009979
+
+[[defaults.kpoints.asset.files]]
+role = "metallicity_atom_init"
+path = "atom_init.json"
+url = "https://data-collections.psdi.ac.uk/api/records/ptc95-vbq12/files/atom_init.json/content"
+checksum = "sha256:cb90bd2257dbf8cfc4e6b2b6d4348d4616e8e9680f1339b1461137032e0f1894"
+size = 28392
 
 [[defaults.kpoints.asset.files]]
 role = "licence"
@@ -66,3 +97,102 @@ path = "MODEL_CARD.md"
 url = "https://data-collections.psdi.ac.uk/api/records/ptc95-vbq12/files/README.md/content"
 checksum = "sha256:ea40985fc112f2832ce3b23b8b70f0eafa5a4044f741c5faedf64c1d36527441"
 size = 3503
+
+# The standalone is_metal classifier (v2 epic 11, #11) -- a different PSDI
+# record from defaults.kpoints.metallicity above, on purpose: that one is
+# QRF's own *embedded feature extractor* dependency (a Lightning checkpoint,
+# no decision threshold of its own, never called standalone -- its own
+# model.json's requires_artifacts pins exactly this record_id/file).
+# ba06w-n6a68 is the complete, standalone release goldilocks-ml's own
+# README lists under "CGCNN metallicity classifier": a lean inference
+# weights file plus a real goldilocks_ml.inference-shaped model.json with
+# a decision threshold, loadable directly via
+# ``goldilocks_ml.inference.load_model``.
+[defaults.is_metal]
+name = "is-metal-goldilocks-CGCNN"
+version = "1"
+model_type = "cgcnn"
+target = "is_metal"
+feature_set = "crystal_graph.v1"
+licence = "CC-BY-4.0; see the pinned model card"
+citation = "Elena Patyukova et al., Automatic generation of input files with optimised k-point meshes for Quantum ESPRESSO self-consistent field single-point total energy calculations, Digital Discovery (2026), DOI 10.1039/D5DD00565E."
+
+[defaults.is_metal.asset]
+id = "models/is-metal-classifier"
+version = "1"
+preparation_revision = "1"
+
+[[defaults.is_metal.asset.files]]
+role = "model_record"
+path = "model.json"
+url = "https://data-collections.psdi.ac.uk/api/records/ba06w-n6a68/files/model.json/content"
+checksum = "sha256:9b845e4995dc6e6bc9c5d28f52efb00a7c537729f25cf20a9a371ff7ab90e6f6"
+size = 16686
+
+[[defaults.is_metal.asset.files]]
+role = "weights"
+path = "is_metal.pt"
+url = "https://data-collections.psdi.ac.uk/api/records/ba06w-n6a68/files/is_metal.pt/content"
+checksum = "sha256:12881ca00cbd3444cadd7757e0f0ffe362447fa37f32ff84c5f4661f3fcf8284"
+size = 501981
+
+[[defaults.is_metal.asset.files]]
+role = "atom_init"
+path = "atom_init.json"
+url = "https://data-collections.psdi.ac.uk/api/records/ba06w-n6a68/files/atom_init.json/content"
+checksum = "sha256:cb90bd2257dbf8cfc4e6b2b6d4348d4616e8e9680f1339b1461137032e0f1894"
+size = 28392
+
+[[defaults.is_metal.asset.files]]
+role = "licence"
+path = "MODEL_CARD.md"
+url = "https://data-collections.psdi.ac.uk/api/records/ba06w-n6a68/files/README.md/content"
+checksum = "sha256:d743949d1a0dd80824183e6ff4552de98b73f9ea32c3448763b048f69338068f"
+size = 6012
+
+# The standalone is_magnetic classifier (v2 epic 11, #11): a small MLP head
+# reading a 384-number mMACE embedding (goldilocks-ml's own
+# docs/training/models/magnetism/is_magnetic-mace_mlp.md). Deliberately
+# does not register the mMACE backbone file this record also bundles
+# (mace_matpes_pbe_baseline_run-3.model, ~84 MB) as an asset file here --
+# advisors/magnetic_ordering_ml.py already established that the backbone
+# stays a manually-configured GOLDILOCKS_MACE_BACKBONE path, not an
+# AssetStore download, because the mace-torch fork needed to deserialize
+# it has no PyPI release either; asset-managing just the checkpoint bytes
+# would not make this feature installable end-to-end on its own, and
+# registering the same 84 MB file twice under two different asset ids
+# would be pure duplication for anyone who does have it configured.
+[defaults.is_magnetic]
+name = "is-magnetic-goldilocks-mace-mlp"
+version = "1"
+model_type = "mlp"
+target = "is_magnetic"
+feature_set = "mace_probe.v1"
+licence = "CC-BY-4.0; see the pinned model card"
+citation = "Elena Patyukova et al., Automatic generation of input files with optimised k-point meshes for Quantum ESPRESSO self-consistent field single-point total energy calculations, Digital Discovery (2026), DOI 10.1039/D5DD00565E."
+
+[defaults.is_magnetic.asset]
+id = "models/is-magnetic-classifier"
+version = "1"
+preparation_revision = "1"
+
+[[defaults.is_magnetic.asset.files]]
+role = "model_record"
+path = "model.json"
+url = "https://data-collections.psdi.ac.uk/api/records/1g8rw-q8128/files/model.json/content"
+checksum = "sha256:108c299904c288d5954fdcf8211c6abe76e18f65acf7299e347c4a71da13ce4b"
+size = 11417
+
+[[defaults.is_magnetic.asset.files]]
+role = "weights"
+path = "is_magnetic.pt"
+url = "https://data-collections.psdi.ac.uk/api/records/1g8rw-q8128/files/is_magnetic.pt/content"
+checksum = "sha256:b575832a9bfdc2a089d81704a09e0578e2ace62f720fc72c2092f845bcd23d2b"
+size = 474957
+
+[[defaults.is_magnetic.asset.files]]
+role = "licence"
+path = "MODEL_CARD.md"
+url = "https://data-collections.psdi.ac.uk/api/records/1g8rw-q8128/files/README.md/content"
+checksum = "sha256:bb61f460e441326a8020b2e649797d8b94da9a31965828f031769753dfe04acd"
+size = 1545

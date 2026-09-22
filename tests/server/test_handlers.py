@@ -11,6 +11,7 @@ from goldilocks_core.server import _handlers
 from goldilocks_core.server.documents import (
     ComputeRequestDocument,
     InlineStructureDocument,
+    MagneticOrderingsRequestDocument,
 )
 from goldilocks_core.service import AdviceIncomplete
 
@@ -24,6 +25,42 @@ class TestInspect:
         inspection = _handlers.inspect(document)
 
         assert inspection["structure"]["reduced_formula"] == "Si"
+
+
+class TestMagneticOrderings:
+    def test_lists_the_fm_candidate_unranked_by_default(self, silicon_cif) -> None:
+        document = MagneticOrderingsRequestDocument(structure_content=silicon_cif)
+
+        result = _handlers.magnetic_orderings(document)
+
+        assert result["ranked"] is False
+        [candidate] = result["candidates"]
+        assert candidate["label"] == "fm"
+        assert candidate["formula"] == "Si"
+        assert candidate["natoms"] == 8
+        assert candidate["energy_per_atom_ev"] is None
+        assert candidate["status"] is None
+        assert candidate["is_recommended"] is False
+        # The fm candidate is exactly the caller's own structure -- no
+        # overrides needed, /run's usual pipeline already handles it.
+        assert candidate["structure_format"] == "cif"
+        assert candidate["overrides"] == {}
+        assert "data_Si" in candidate["structure_content"]
+        assert result["warnings"] == []
+
+    def test_rank_with_mmace_degrades_with_a_warning_when_unconfigured(
+        self, silicon_cif, monkeypatch
+    ) -> None:
+        monkeypatch.delenv("GOLDILOCKS_MACE_BACKBONE", raising=False)
+        document = MagneticOrderingsRequestDocument(
+            structure_content=silicon_cif, rank_with_mmace=True
+        )
+
+        result = _handlers.magnetic_orderings(document)
+
+        assert result["ranked"] is False
+        assert len(result["warnings"]) == 1
+        assert result["warnings"][0]["code"] == "magnetic.ordering_ranking_unavailable"
 
 
 class TestExplain:

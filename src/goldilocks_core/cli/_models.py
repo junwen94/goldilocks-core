@@ -1,8 +1,8 @@
-"""``goldilocks models list|show``: what ml models are installed (v2
-epic 8, #8). Always empty today -- ml integration is deliberately last
-(v2 epic 11, #11); this command exists now so scripts/docs referencing
-it don't need to wait for that epic, and so the empty state is honest
-rather than the command not existing at all.
+"""``goldilocks models list|show``: what ml models are registered (v2
+epic 8, #8; populated for real in v2 epic 11, #11). Lists every model
+``ml/registry.toml`` declares, whether or not it is actually installed
+-- ``goldilocks assets status``/a fact's own ``approaches`` in
+``capabilities`` are where "is it actually usable right now" lives.
 """
 
 from __future__ import annotations

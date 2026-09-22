@@ -59,7 +59,7 @@ def is_magnetic(
             "magnetic" if human.is_magnetic else "non_magnetic",
             Provenance(source="human"),
         )
-    ml_value: bool | None = None  # no ml model wired yet; stubbed until epic 11
+    ml_value = _ml_is_magnetic(structure)
     if ml_value is not None:
         return Resolved(
             "magnetic" if ml_value else "non_magnetic", Provenance(source="ml")
@@ -70,6 +70,35 @@ def is_magnetic(
             Provenance(source="llm"),
         )
     return _heuristic(structure)
+
+
+def _ml_is_magnetic(structure: Structure) -> bool | None:
+    """The published mMACE-embedding MLP classifier (v2 epic 11, #11), or
+    ``None`` if its model asset is not installed, ``mace``/``e3nn``/
+    ``sphericart`` are not importable (manual installs -- goldilocks-ml has
+    no extra for these; see its own README's "Use the is_magnetic
+    classifier"), or ``GOLDILOCKS_MACE_BACKBONE`` is not configured.
+
+    That last one is a real requirement, not an aspiration: confirmed
+    empirically (2026-09-21) against the real published record
+    (1g8rw-q8128) that its own ``model.json`` declares no automatic
+    download for the mMACE backbone its embedding needs --
+    ``goldilocks_ml.inference.load_model`` requires it passed explicitly
+    as an ``artifacts={"mace_backbone": path}`` override, which
+    ``ml.predict`` supplies from the same manually-configured
+    ``GOLDILOCKS_MACE_BACKBONE`` checkpoint
+    ``advisors/magnetic_ordering_ml.py``'s ranking feature already uses,
+    reused rather than downloaded a second time. Never a reason to fail
+    ``is_magnetic()`` itself, the same degrade-to-heuristic policy every
+    ML-backed advisor in this codebase already follows for a missing
+    external dependency."""
+    from goldilocks_core.ml.predict import MlModelUnavailable, predict
+
+    try:
+        prediction = predict("is_magnetic", structure)
+    except MlModelUnavailable:
+        return None
+    return bool(prediction.value)
 
 
 def _heuristic(structure: Structure) -> FieldState[Magnetism]:

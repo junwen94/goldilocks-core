@@ -1,33 +1,27 @@
-import { Accordion, Badge, Group, Stack, Text, Title } from "@mantine/core";
+import { Accordion, Stack, Text } from "@mantine/core";
 
-import type { ResolvedField } from "../api/coreClient";
 import { OverrideControl } from "../controls/OverrideControl";
 import { RecordAccordionItem } from "../review/RecordAccordionItem";
 import { isAdvisorRecordKey } from "../workspace/recordGroups";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
-
-const STATUS_COLORS: Readonly<Record<ResolvedField["status"], string>> = {
-  resolved: "green",
-  unavailable: "yellow",
-  blocked: "red",
-};
 
 /** goldilocks-core's own analysis tier only ever needs the structure --
  * `capabilities.facts` (is_metal/is_magnetic/needs_soc/needs_correlation,
  * each overridable) plus any other resolved record that isn't tied to a
  * settings group (composition/geometry/symmetry/... -- see
  * recordGroups.ts for exactly how that split is derived). Advisor
- * records live in the Calculation card instead, next to the override
- * control they belong to. */
+ * records live in the Advisors card instead, next to the override
+ * control they belong to. Rendered inside `AnalysisCard`, which owns the
+ * "Analysis" heading -- this component starts directly with its content. */
 export function AnalysisSection() {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
   const { capabilities, draft, inspection, reviewed } = snapshot;
-  if (capabilities === null || draft === null || inspection === null) {
+  if (capabilities === null || draft === null) {
     return null;
   }
 
-  const disabled = snapshot.operation === "inspect";
+  const disabled = snapshot.operation === "inspect" || inspection === null;
   const overrides = draft.overrides;
   const factKeys = new Set(capabilities.facts.map((fact) => fact.key));
 
@@ -37,26 +31,12 @@ export function AnalysisSection() {
 
   return (
     <Stack gap="sm">
-      <Title order={3}>Goldilocks analysis</Title>
       {capabilities.facts.length === 0 ? null : (
         <Stack gap="sm">
           {capabilities.facts.map((fact) => {
             const record = reviewed?.records[fact.key];
             return (
               <div key={fact.key}>
-                {record === undefined ? null : (
-                  <Group gap="xs" mb={4}>
-                    <Badge
-                      size="xs"
-                      circle
-                      color={STATUS_COLORS[record.status]}
-                      aria-hidden="true"
-                    />
-                    <Text size="xs" c="dimmed">
-                      {record.status}
-                    </Text>
-                  </Group>
-                )}
                 <OverrideControl
                   meta={{
                     key: fact.key,
@@ -66,6 +46,12 @@ export function AnalysisSection() {
                     description: fact.description,
                   }}
                   value={overrides[fact.key]}
+                  resolvedValue={
+                    record?.status === "resolved" ? record.value : undefined
+                  }
+                  source={
+                    record?.status === "resolved" ? record.source : undefined
+                  }
                   disabled={disabled}
                   onChange={(value) => {
                     void workspace.dispatch({
@@ -74,6 +60,17 @@ export function AnalysisSection() {
                     });
                   }}
                 />
+                {record === undefined || record.status === "resolved" ? null : (
+                  <Text
+                    size="xs"
+                    c={record.status === "blocked" ? "red" : "dimmed"}
+                    mt={4}
+                  >
+                    {record.status === "blocked"
+                      ? `Blocked — ${record.blocked_by ?? "an upstream field failed"}`
+                      : `Unavailable — ${record.reason ?? "no reason given"}`}
+                  </Text>
+                )}
               </div>
             );
           })}

@@ -136,7 +136,10 @@ export function StructureSourceControls({
         </Paper>
       ) : (
         <Paper withBorder p="xs" {...dropzoneProps}>
-          <Group justify="space-between" wrap="nowrap" gap="xs">
+          <Stack gap={4}>
+            {/* The filename gets its own full-width row -- sharing a row
+             * with the site-count/status text left too little room for
+             * either, so both truncated into near-unreadable fragments. */}
             <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
               {inspecting ? (
                 <Loader size="xs" aria-hidden="true" />
@@ -146,21 +149,23 @@ export function StructureSourceControls({
               <Text fw={600} truncate>
                 {source.structure_name}
               </Text>
+            </Group>
+            <Group justify="space-between" wrap="nowrap" gap="xs">
               <Text id="structure-source-help" c="dimmed" size="sm" truncate>
                 {sourceHelp}
               </Text>
+              {fileButton}
             </Group>
-            {fileButton}
-          </Group>
+            {inspection === null ? null : (
+              <StructureSummary inspection={inspection} />
+            )}
+          </Stack>
         </Paper>
       )}
       {readError === null ? null : (
         <Text c="red" size="sm" role="alert">
           {readError}
         </Text>
-      )}
-      {inspection === null ? null : (
-        <StructureSummary inspection={inspection} />
       )}
     </>
   );
@@ -184,7 +189,6 @@ function StructureSummary({
     <Text
       size="sm"
       c="dimmed"
-      mt="xs"
       truncate
       aria-label="Inspected structure summary"
     >

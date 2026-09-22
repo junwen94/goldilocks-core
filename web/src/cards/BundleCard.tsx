@@ -14,7 +14,7 @@ import { GeneratedInputReview } from "../review/GeneratedInputReview";
 import { WarningsPanel } from "../review/WarningsPanel";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
 
-export function GeneratedInputsCard() {
+export function BundleCard({ kicker }: { readonly kicker: string }) {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
   const reviewed = snapshot.reviewed;
@@ -22,16 +22,16 @@ export function GeneratedInputsCard() {
   return (
     <Paper
       component="section"
-      id="generated-inputs-panel"
-      aria-label="Generated input files"
+      id="bundle-panel"
+      aria-label="Bundle"
       aria-busy={snapshot.operation === "explain"}
       withBorder
       p="md"
-      className="workbench-card card-inputs"
+      className="workbench-card card-bundle"
     >
       <Group component="header" className="card-header" mb="md" wrap="nowrap">
-        <Text className="card-kicker">03</Text>
-        <Title order={2}>Generation of input files</Title>
+        <Text className="card-kicker">{kicker}</Text>
+        <Title order={2}>Bundle</Title>
       </Group>
       <div className="card-body">
         {reviewed === null ? (
@@ -47,6 +47,11 @@ export function GeneratedInputsCard() {
                 ? "Computing recommendation"
                 : "No recommendation yet"}
             </Text>
+            {snapshot.operation === "explain" ? null : (
+              <Text c="dimmed" size="sm">
+                Load a structure to generate input files.
+              </Text>
+            )}
           </Stack>
         ) : (
           <Stack gap="lg">

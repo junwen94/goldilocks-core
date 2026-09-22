@@ -21,6 +21,7 @@ from goldilocks_core.resolution import FieldState, ResolvedField
 from goldilocks_core.server.documents import (
     ComputeRequestDocument,
     InlineStructureDocument,
+    MagneticOrderingsRequestDocument,
 )
 from goldilocks_core.server.readiness import AssetReadiness
 from goldilocks_core.service import (
@@ -33,9 +34,11 @@ from goldilocks_core.service import (
     generate,
     generate_dos,
     generate_relax,
+    list_magnetic_orderings,
     render_submission,
     render_submission_dos,
     render_submission_relax,
+    report_to_json,
     to_bundle_input,
     to_bundle_input_dos,
     to_bundle_input_relax,
@@ -78,6 +81,14 @@ def _records_document(records: dict[str, FieldState[object]]) -> dict[str, Any]:
 
 def inspect(document: InlineStructureDocument) -> dict[str, Any]:
     return normalize_structure(_structure_source(document)).inspection
+
+
+def magnetic_orderings(document: MagneticOrderingsRequestDocument) -> dict[str, Any]:
+    structure = normalize_structure(_structure_source(document)).structure
+    report = list_magnetic_orderings(
+        structure, rank_with_mmace=document.rank_with_mmace
+    )
+    return report_to_json(report)
 
 
 def explain(document: ComputeRequestDocument) -> dict[str, Any]:

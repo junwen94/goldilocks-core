@@ -36,7 +36,7 @@ SmearingType = Literal["fixed", "gaussian", "mp", "cold"]
 
 ModelSource = Literal["huggingface", "local"]
 
-ModelType = Literal["random_forest", "cgcnn", "xgboost"]
+ModelType = Literal["random_forest", "cgcnn", "xgboost", "mlp"]
 
 PseudoAccuracy = Literal["efficiency", "precision"]
 

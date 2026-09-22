@@ -99,6 +99,16 @@ class RunRequestDocument(ComputeRequestDocument):
     respond_with: Literal["json", "archive"] = "json"
 
 
+class MagneticOrderingsRequestDocument(InlineStructureDocument):
+    """Shared by ``/magnetic-orderings`` and MCP's ``magnetic_orderings``
+    tool (#87). Its own document, not ``ComputeRequestDocument``: this
+    lists candidates independently of any code/task/hpc/overrides choice,
+    the same reason ``service.list_magnetic_orderings`` sits outside
+    ``advise()``/``generate()`` entirely."""
+
+    rank_with_mmace: bool = False
+
+
 class ErrorDocument(BaseModel):
     model_config = _STRICT
 

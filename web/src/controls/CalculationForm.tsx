@@ -39,67 +39,58 @@ const STATUS_COLORS: Readonly<Record<ResolvedField["status"], string>> = {
   blocked: "red",
 };
 
-export function CalculationForm() {
+/** Code/Task/HPC profile: which target this calculation is even for, as
+ * opposed to `CalculationForm` below's per-step *settings* for that
+ * target. Lives in `StructureCard` (v2 epic 12 follow-up) -- right
+ * between loading a structure and viewing it, since it's the other
+ * half of "what am I calculating" alongside the structure itself,
+ * rather than a settings-tuning concern like the accordion is. */
+export function CalculationContextControls() {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
-  const { draft, capabilities, inspection, reviewed } = snapshot;
-  if (draft === null || capabilities === null || inspection === null) {
+  const { draft, capabilities, inspection } = snapshot;
+  if (draft === null || capabilities === null) {
     return null;
   }
 
-  const inspecting = snapshot.operation === "inspect";
-
-  const elements = uniqueElements(inspection);
-  const overrides = draft.overrides;
-
-  function patchOverrides(patch: Readonly<Record<string, unknown>>): void {
-    void workspace.dispatch({ type: "draft.patch", overrides: patch });
-  }
+  const disabled = snapshot.operation === "inspect" || inspection === null;
 
   return (
-    <Stack>
-      {inspecting ? (
-        <Text c="red" size="sm" role="status">
-          Calculation settings are disabled while the new structure loads.
-        </Text>
-      ) : null}
-
-      <SimpleGrid cols={{ base: 1, xs: 2 }}>
-        <NativeSelect
-          label="Code"
-          disabled={inspecting}
-          value={draft.code}
-          data={capabilities.codes.map((code) => ({
-            value: code.id,
-            label: code.name,
-          }))}
-          onChange={(event) => {
-            void workspace.dispatch({
-              type: "draft.patch",
-              code: event.currentTarget.value,
-            });
-          }}
-        />
-        <NativeSelect
-          label="Task"
-          disabled={inspecting}
-          value={draft.task}
-          data={capabilities.tasks.map((task) => ({
-            value: task.id,
-            label: task.name,
-          }))}
-          onChange={(event) => {
-            void workspace.dispatch({
-              type: "draft.patch",
-              task: event.currentTarget.value as CalcTask,
-            });
-          }}
-        />
-      </SimpleGrid>
+    <Stack gap="sm">
+      <NativeSelect
+        label="Code"
+        disabled={disabled}
+        value={draft.code}
+        data={capabilities.codes.map((code) => ({
+          value: code.id,
+          label: code.name,
+        }))}
+        onChange={(event) => {
+          void workspace.dispatch({
+            type: "draft.patch",
+            code: event.currentTarget.value,
+          });
+        }}
+      />
+      <NativeSelect
+        label="Task"
+        disabled={disabled}
+        value={draft.task}
+        data={capabilities.tasks.map((task) => ({
+          value: task.id,
+          label: task.name,
+        }))}
+        onChange={(event) => {
+          void workspace.dispatch({
+            type: "draft.patch",
+            task: event.currentTarget.value as CalcTask,
+          });
+        }}
+      />
 
       <NativeSelect
         label="HPC profile"
-        disabled={inspecting}
+        disabled={disabled}
         value={draft.hpc ?? ""}
         data={[
           { value: "", label: "Automatic" },
@@ -115,6 +106,41 @@ export function CalculationForm() {
           });
         }}
       />
+    </Stack>
+  );
+}
+
+export function CalculationForm() {
+  const workspace = useWorkspace();
+  const snapshot = useWorkspaceSnapshot();
+  const { draft, capabilities, inspection, reviewed } = snapshot;
+  if (draft === null || capabilities === null) {
+    return null;
+  }
+
+  const inspecting = snapshot.operation === "inspect";
+  const disabled = inspecting || inspection === null;
+
+  const elements = inspection === null ? [] : uniqueElements(inspection);
+  const overrides = draft.overrides;
+
+  function patchOverrides(patch: Readonly<Record<string, unknown>>): void {
+    void workspace.dispatch({ type: "draft.patch", overrides: patch });
+  }
+
+  return (
+    <Stack>
+      {inspecting ? (
+        <Text c="red" size="sm" role="status">
+          Calculation settings are disabled while the new structure loads.
+        </Text>
+      ) : null}
+      {inspection === null ? (
+        <Text c="dimmed" size="sm">
+          Showing default settings — load a structure to configure a
+          calculation.
+        </Text>
+      ) : null}
 
       <Accordion multiple transitionDuration={0}>
         <SettingsGroupItems
@@ -124,7 +150,7 @@ export function CalculationForm() {
           reviewed={reviewed}
           elements={elements}
           pseudopotentialTables={capabilities.pseudopotential_tables}
-          disabled={inspecting}
+          disabled={disabled}
           onChange={patchOverrides}
         />
       </Accordion>

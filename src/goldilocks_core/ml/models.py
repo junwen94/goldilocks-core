@@ -59,15 +59,7 @@ class QrfKpointsConfig:
 
 
 def load_default_qrf_config(path: PathLike | None = None) -> QrfKpointsConfig:
-    registry_path = path or os.environ.get(MODEL_REGISTRY_ENV)
-    if registry_path is None:
-        registry = resources.files("goldilocks_core.ml").joinpath(_REGISTRY_RESOURCE)
-        with registry.open("rb") as registry_file:
-            data = tomllib.load(registry_file)
-    else:
-        with Path(registry_path).open("rb") as registry_file:
-            data = tomllib.load(registry_file)
-
+    data = _load_registry(path)
     kpoints = data["defaults"]["kpoints"]
     metallicity = kpoints["metallicity"]
     calibration = kpoints["calibration"]
@@ -92,9 +84,69 @@ def load_default_qrf_config(path: PathLike | None = None) -> QrfKpointsConfig:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class MlClassifierConfig:
+    """One standalone ML model this build can call directly (v2 epic 11,
+    #11): is_metal/is_magnetic today, registered under
+    ``[defaults.<name>]`` in registry.toml. Distinct from
+    ``QrfKpointsConfig`` above, which is kpoints' own *embedded*
+    dependency shape (a feature extractor with no decision threshold of
+    its own, never called standalone) -- these are complete,
+    ``goldilocks_ml.inference.load_model``-loadable releases."""
+
+    role: str
+    """``ml_target`` in ``capabilities.py``'s vocabulary (e.g.
+    ``"is_metal"``) -- what ``analysis/is_metal.py`` and friends ask
+    ``ml.predict.predict`` for by name."""
+    model: ModelSpec
+    asset: AssetSpec
+
+
+ML_CLASSIFIER_ROLES: tuple[str, ...] = ("is_metal", "is_magnetic")
+"""Every standalone classifier registry.toml declares under
+``[defaults.<role>]`` -- the ``k_distance`` (QRF) case predates this and
+stays its own ``QrfKpointsConfig`` shape above; a role added here needs
+no other change than a matching registry.toml section, since
+``load_ml_classifier``/``ml.predict.predict`` are both already generic
+over it."""
+
+
+def load_ml_classifier(role: str, path: PathLike | None = None) -> MlClassifierConfig:
+    """Load one ``[defaults.<role>]`` standalone classifier section."""
+    if role not in ML_CLASSIFIER_ROLES:
+        raise ValueError(
+            f"unknown ML classifier role {role!r}; this build knows: "
+            + ", ".join(ML_CLASSIFIER_ROLES)
+        )
+    data = _load_registry(path)
+    section = data["defaults"][role]
+    asset = _asset_spec(section["asset"])
+    if asset is None:
+        raise ValueError(f"[defaults.{role}] must declare an [defaults.{role}.asset]")
+    return MlClassifierConfig(
+        role=role, model=_model_spec(section, asset.id), asset=asset
+    )
+
+
+def registered_ml_classifiers(
+    path: PathLike | None = None,
+) -> tuple[MlClassifierConfig, ...]:
+    return tuple(load_ml_classifier(role, path) for role in ML_CLASSIFIER_ROLES)
+
+
+def _load_registry(path: PathLike | None) -> dict[str, Any]:
+    registry_path = path or os.environ.get(MODEL_REGISTRY_ENV)
+    if registry_path is None:
+        registry = resources.files("goldilocks_core.ml").joinpath(_REGISTRY_RESOURCE)
+        with registry.open("rb") as registry_file:
+            return tomllib.load(registry_file)
+    with Path(registry_path).open("rb") as registry_file:
+        return tomllib.load(registry_file)
+
+
 def registered_models(path: PathLike | None = None) -> tuple[RegisteredModel, ...]:
     config = load_default_qrf_config(path)
-    return (
+    models = [
         RegisteredModel(
             id=config.model_asset.id if config.model_asset else config.model.name,
             role="k_point_advisor",
@@ -109,16 +161,25 @@ def registered_models(path: PathLike | None = None) -> tuple[RegisteredModel, ..
             role="metallicity_classifier",
             spec=config.metallicity_model,
         ),
+    ]
+    models.extend(
+        RegisteredModel(
+            id=classifier.asset.id, role=classifier.role, spec=classifier.model
+        )
+        for classifier in registered_ml_classifiers(path)
     )
+    return tuple(models)
 
 
 def model_asset_specs(path: PathLike | None = None) -> tuple[AssetSpec, ...]:
     config = load_default_qrf_config(path)
-    return tuple(
+    specs = [
         spec
         for spec in (config.model_asset, config.metallicity_asset)
         if spec is not None
-    )
+    ]
+    specs.extend(classifier.asset for classifier in registered_ml_classifiers(path))
+    return tuple(specs)
 
 
 def _asset_spec(data: dict[str, Any] | None) -> AssetSpec | None:

@@ -7,6 +7,8 @@ import type {
   ComputeRequest,
   CoreClient,
   ExplainResult,
+  MagneticOrderingsRequest,
+  MagneticOrderingsResult,
   StructureInput,
   StructureInspection,
 } from "../api/coreClient";
@@ -14,6 +16,14 @@ import { CoreFailure } from "../api/coreClient";
 
 export type WorkspaceOperation =
   "capabilities" | "inspect" | "explain" | "download";
+
+/** Independent of `WorkspaceOperation`: listing/ranking/downloading
+ * magnetic-ordering candidates is an opt-in side-quest a user runs from
+ * the Advisors card, not the main structure -> compute -> download
+ * pipeline -- it must not disable the rest of that pipeline's controls
+ * (or vice versa) while in flight. One nullable field, same idiom as
+ * `WorkspaceOperation` itself, covering its own three concerns. */
+export type MagneticOrderingsOperation = "list" | "rank" | "download";
 
 /** The v2 request shape has no `intent`/`hints` vocabulary: every tunable
  * knob is a flat `overrides` entry reflected from `capabilities().settings`/
@@ -47,6 +57,12 @@ export interface WorkspaceSnapshot {
   readonly operation: WorkspaceOperation | null;
   readonly failure: CoreFailure | null;
   readonly failureOperation: WorkspaceOperation | null;
+  readonly magneticOrderings: MagneticOrderingsResult | null;
+  readonly magneticOrderingsOperation: MagneticOrderingsOperation | null;
+  /** Shown inline in the Advisors card, not the global `FailureBanner` --
+   * this is a side-quest failure, not a reason to block the main
+   * pipeline the banner exists for. */
+  readonly magneticOrderingsError: string | null;
 }
 
 export type WorkspaceAction =
@@ -67,6 +83,12 @@ export type WorkspaceAction =
    * -- the auto-preview effect calls this, not a user action. */
   | { readonly type: "review.refreshArchive" }
   | { readonly type: "review.download" }
+  | { readonly type: "magneticOrderings.list" }
+  | { readonly type: "magneticOrderings.rank" }
+  | {
+      readonly type: "magneticOrderings.downloadSelected";
+      readonly labels: readonly string[];
+    }
   | { readonly type: "failure.retry" }
   | { readonly type: "failure.dismiss" }
   | { readonly type: "workspace.reset" };
@@ -95,6 +117,9 @@ const EMPTY_SNAPSHOT: WorkspaceSnapshot = {
   operation: null,
   failure: null,
   failureOperation: null,
+  magneticOrderings: null,
+  magneticOrderingsOperation: null,
+  magneticOrderingsError: null,
 };
 
 function defaultDraft(capabilities: Capabilities): CalculationDraft {
@@ -124,6 +149,26 @@ function toComputeRequest(
     overrides: draft.overrides,
     fetch_missing: draft.fetchMissing,
   };
+}
+
+function toMagneticOrderingsRequest(
+  structureInput: StructureInput,
+  rankWithMmace: boolean,
+): MagneticOrderingsRequest {
+  return {
+    structure_content: structureInput.structure_content,
+    structure_name: structureInput.structure_name,
+    ...(structureInput.structure_format
+      ? { structure_format: structureInput.structure_format }
+      : {}),
+    rank_with_mmace: rankWithMmace,
+  };
+}
+
+function magneticOrderingsErrorMessage(error: unknown): string {
+  return error instanceof CoreFailure
+    ? error.message
+    : "Cannot reach Goldilocks Core.";
 }
 
 function mergeOverrides(
@@ -187,7 +232,10 @@ export function createWorkspace(
     const promise = core.capabilities().then(
       (capabilities) => {
         if (startup?.owner === owner) startup = null;
-        completeOperation(owner, { capabilities });
+        completeOperation(owner, {
+          capabilities,
+          draft: defaultDraft(capabilities),
+        });
       },
       (error: unknown) => {
         if (startup?.owner === owner) startup = null;
@@ -215,6 +263,9 @@ export function createWorkspace(
         reviewed: null,
         outOfDate: false,
         lastDownload: null,
+        magneticOrderings: null,
+        magneticOrderingsOperation: null,
+        magneticOrderingsError: null,
       });
     } catch (error) {
       failOperation(owner, error);
@@ -310,6 +361,83 @@ export function createWorkspace(
     if (archive !== null) saveArchive(archive);
   }
 
+  async function listMagneticOrderings(rankWithMmace: boolean): Promise<void> {
+    const snapshot = store.getState();
+    if (
+      snapshot.structureInput === null ||
+      snapshot.magneticOrderingsOperation !== null
+    ) {
+      return;
+    }
+    const request = toMagneticOrderingsRequest(
+      snapshot.structureInput,
+      rankWithMmace,
+    );
+    store.setState({
+      magneticOrderingsOperation: rankWithMmace ? "rank" : "list",
+      magneticOrderingsError: null,
+    });
+    try {
+      const magneticOrderings = await core.magneticOrderings(request);
+      store.setState({ magneticOrderings, magneticOrderingsOperation: null });
+    } catch (error) {
+      store.setState({
+        magneticOrderingsOperation: null,
+        magneticOrderingsError: magneticOrderingsErrorMessage(error),
+      });
+    }
+  }
+
+  /** Generates and downloads each selected candidate's own DFT input
+   * bundle -- one `runArchive` call per candidate (each is a fresh
+   * top-level structure + its own overrides, not a variant of the
+   * currently reviewed structure), one browser download per archive. */
+  async function downloadSelectedOrderings(
+    labels: readonly string[],
+  ): Promise<void> {
+    const snapshot = store.getState();
+    const { structureInput, draft, magneticOrderings } = snapshot;
+    if (
+      structureInput === null ||
+      draft === null ||
+      magneticOrderings === null ||
+      snapshot.magneticOrderingsOperation !== null ||
+      labels.length === 0
+    ) {
+      return;
+    }
+    store.setState({
+      magneticOrderingsOperation: "download",
+      magneticOrderingsError: null,
+    });
+    try {
+      const selected = magneticOrderings.candidates.filter((candidate) =>
+        labels.includes(candidate.label),
+      );
+      const archives = await Promise.all(
+        selected.map((candidate) =>
+          core.runArchive({
+            structure_content: candidate.structure_content,
+            structure_name: `${structureInput.structure_name}-${candidate.label}`,
+            structure_format: candidate.structure_format,
+            code: draft.code,
+            task: draft.task,
+            hpc: draft.hpc,
+            overrides: { ...draft.overrides, ...candidate.overrides },
+            fetch_missing: draft.fetchMissing,
+          }),
+        ),
+      );
+      for (const archive of archives) saveArchive(archive);
+      store.setState({ magneticOrderingsOperation: null });
+    } catch (error) {
+      store.setState({
+        magneticOrderingsOperation: null,
+        magneticOrderingsError: magneticOrderingsErrorMessage(error),
+      });
+    }
+  }
+
   async function retryFailure(): Promise<void> {
     const { failureOperation, attemptedStructureInput } = store.getState();
     switch (failureOperation) {
@@ -368,6 +496,15 @@ export function createWorkspace(
         return;
       case "review.download":
         await downloadReviewed();
+        return;
+      case "magneticOrderings.list":
+        await listMagneticOrderings(false);
+        return;
+      case "magneticOrderings.rank":
+        await listMagneticOrderings(true);
+        return;
+      case "magneticOrderings.downloadSelected":
+        await downloadSelectedOrderings(action.labels);
         return;
       case "failure.retry":
         return retryFailure();

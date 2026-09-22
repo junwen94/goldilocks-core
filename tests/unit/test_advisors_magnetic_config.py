@@ -8,7 +8,9 @@ from pymatgen.core import Lattice, Structure
 from goldilocks_core.advisors import magnetic_config as magnetic_config_module
 from goldilocks_core.advisors.magnetic_config import (
     MagneticConfigHumanInput,
+    enumerate_magnetic_orderings,
     magnetic_config,
+    magnetic_elements_in,
 )
 from goldilocks_core.analysis.is_magnetic import is_magnetic
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
@@ -397,3 +399,63 @@ def test_afm_ordering_degrades_when_no_compensated_ordering_is_found(
         and "no compensated" in warning.message
         for warning in state.value.warnings
     )
+
+
+def test_enumerate_magnetic_orderings_is_just_fm_when_enumlib_is_missing(
+    monkeypatch,
+) -> None:
+    """#87's listing capability degrades the same way ``_attempt_afm_relabeling``
+    does: no enumlib means no antiferromagnetic candidates, not an error."""
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    candidates, reason = enumerate_magnetic_orderings(
+        _ROCK_SALT_FEO, magnetic_elements_in(_ROCK_SALT_FEO)
+    )
+
+    assert candidates == (("fm", _ROCK_SALT_FEO),)
+    assert reason is not None and "enumlib" in reason
+
+
+def test_enumerate_magnetic_orderings_never_picks_a_winner(monkeypatch) -> None:
+    """Unlike ``_attempt_afm_relabeling``, listing every candidate is the
+    whole point -- #87's mMACE ranking (or a human) picks the winner, not
+    this function."""
+
+    class _TwoAfmCandidates:
+        def __init__(self, *_args, **_kwargs) -> None:
+            afm_one = _ROCK_SALT_FEO.copy()
+            afm_two = _ROCK_SALT_FEO.copy()
+            self.ordered_structures = [afm_one, afm_two]
+            self.ordered_structure_origins = ["afm", "afm"]
+
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/enum.x")
+    monkeypatch.setattr(
+        magnetic_config_module, "MagneticStructureEnumerator", _TwoAfmCandidates
+    )
+
+    candidates, reason = enumerate_magnetic_orderings(
+        _ROCK_SALT_FEO, magnetic_elements_in(_ROCK_SALT_FEO)
+    )
+
+    labels = [label for label, _structure in candidates]
+    assert labels == ["fm", "afm-1", "afm-2"]
+    assert reason is None
+
+
+@pytest.mark.skipif(
+    _ENUMLIB_MISSING,
+    reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
+)
+def test_enumerate_magnetic_orderings_finds_the_same_split_relabeling_does() -> None:
+    candidates, reason = enumerate_magnetic_orderings(
+        _ROCK_SALT_FEO, magnetic_elements_in(_ROCK_SALT_FEO)
+    )
+
+    assert reason is None
+    assert candidates[0][0] == "fm"
+    assert candidates[0][1] == _ROCK_SALT_FEO
+    afm_candidates = candidates[1:]
+    assert len(afm_candidates) > 0
+    for label, candidate in afm_candidates:
+        assert label.startswith("afm-")
+        assert len(set(candidate.species)) > len(set(_ROCK_SALT_FEO.species))

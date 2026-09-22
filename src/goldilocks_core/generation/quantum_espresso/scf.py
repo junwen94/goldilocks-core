@@ -61,16 +61,25 @@ makes that impossible by construction.
   ``vdw.use_vdw`` is true) or *which QE spelling* an already-chosen
   value maps to (``_QE_VDW_CORR``) -- never which value to choose.
 
-**Not in this epic's scope, on purpose:**
+**Hubbard ``HUBBARD`` card (v2 #88).** ``advisors/hubbard_u.py``'s own
+docstring once claimed QE >= 7.1's real card is atom-index-keyed --
+verified against QE 7.3's own ``Doc/Hubbard_input.tex`` and
+``Modules/read_cards.f90``'s ``card_hubbard`` parsing, that is only true
+of the inter-site ``V`` line; the onsite ``U`` line (the only Hubbard
+parameter ``HubbardUDecision`` models) is keyed by atomic *type*
+(species label) plus its Hubbard manifold, e.g. ``U Mn-3d 5.0`` -- no
+atom index at all. ``hubbard_card`` below renders exactly that, for
+``plan="table"`` only.
 
-- The Hubbard ``HUBBARD`` card. ``advisors/hubbard_u.py``'s own
-  docstring flags that QE >= 7.1's real card is atom-index-keyed, not
-  the label-keyed shape ``expand_hubbard_label`` produces, and leaves
-  "which format to target" as "epic 7's decision to make once it
-  exists" -- rendering either format is a real, separate piece of work,
-  not a one-line addition. ``write_qe_scf`` raises ``GenerationError``
-  whenever ``hubbard.plan != "not_needed"`` rather than silently
-  dropping a +U decision the advisor layer already made.
+**Still not in this epic's scope, on purpose:**
+
+- ``plan="self_consistent_calibration_needed"``. This needs an ``hp.x``
+  self-consistent-linear-response calibration *input* this codebase has
+  never written (``advisors/hubbard_u.py``'s own ``CalibrationRequest``
+  only carries what such a writer would need, not a writer itself) --
+  real, separate, larger scope than one card. ``write_qe_scf`` still
+  raises ``GenerationError`` for this plan rather than silently dropping
+  a +U decision the advisor layer already made.
 - ``ConvergenceDecision.etot_conv_thr``/``RelaxOptions``. QE only
   consults ``etot_conv_thr``/``forc_conv_thr`` for ionic minimization
   (``calculation`` in ``{relax, vc-relax, md, ...}``); a plain ``scf``
@@ -96,6 +105,7 @@ from typing import Literal
 
 from pymatgen.core.periodic_table import Element
 
+from goldilocks_core.advisors.hubbard_u import expand_hubbard_label, manifold_for
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.namelists import render_namelist
@@ -151,14 +161,6 @@ def write_qe_scf(
             raise GenerationError(
                 f"PwSettings.{name} is required to generate {purpose}.in"
             )
-    if system.hubbard.plan != "not_needed":
-        raise GenerationError(
-            "a Hubbard +U correction was resolved "
-            f"(plan={system.hubbard.plan!r}), but rendering the HUBBARD card "
-            "is not implemented by this writer yet -- see advisors/hubbard_u.py's "
-            "own note on the atom-index-keyed QE >= 7.1 card format"
-        )
-
     elements = sorted({site.specie.symbol for site in structure})
     pseudo_by_element = validated_pseudo_by_element(elements, system)
     species_labels = sorted({site.label for site in structure})
@@ -177,6 +179,7 @@ def write_qe_scf(
     lines.append(cell_parameters(structure))
     lines.append(atomic_positions(structure))
     lines.append(k_points(step))
+    lines.extend(hubbard_lines(system, structure, label_to_element))
     content = "\n".join(lines)
 
     args = ["-npool", str(step.parallel.npool)]
@@ -414,6 +417,43 @@ def atomic_positions(
             line += "  0  0  0"
         lines.append(line)
     return "\n".join(lines) + "\n"
+
+
+def hubbard_card(u_by_label: dict[str, float], label_to_element: dict[str, str]) -> str:
+    """``plan="table"`` only -- ``u_by_label`` is ``expand_hubbard_label``'s
+    already species-label-keyed output (module docstring's own ``U``-line
+    citation for why this is label-keyed, not atom-index-keyed).
+    ``ortho-atomic`` is QE's own recommended projector choice
+    (Doc/Hubbard_input.tex: "It is recommended to use ortho-atomic
+    whenever possible") -- this writer has no resolved fact to pick a
+    different one from, so it is the one fixed literal here, the same
+    role ``ibrav = 0`` plays above."""
+    lines = ["HUBBARD (ortho-atomic)"]
+    for label in sorted(u_by_label):
+        manifold = manifold_for(label_to_element[label])
+        lines.append(f"  U  {label}-{manifold}  {_format_float(u_by_label[label])}")
+    return "\n".join(lines) + "\n"
+
+
+def hubbard_lines(
+    system: SystemSettings, structure, label_to_element: dict[str, str]
+) -> list[str]:
+    """Every line ``system.hubbard`` contributes to the card list, shared
+    by ``write_qe_scf``/``write_qe_relax`` so neither writer's own branch
+    count carries this a second time. Raises for
+    ``plan="self_consistent_calibration_needed"`` (see ``hubbard_card``'s
+    own docstring for why); returns ``[]`` for ``plan="not_needed"``."""
+    if system.hubbard.plan == "self_consistent_calibration_needed":
+        raise GenerationError(
+            "a Hubbard +U correction needs self-consistent calibration "
+            "(plan='self_consistent_calibration_needed'), but rendering an "
+            "hp.x calibration input is not implemented by this writer yet -- "
+            "see advisors/hubbard_u.py's own CalibrationRequest"
+        )
+    if system.hubbard.plan != "table":
+        return []
+    u_by_label = expand_hubbard_label(system.hubbard.u_by_element, structure)
+    return [hubbard_card(u_by_label, label_to_element)]
 
 
 def k_points(step: PwSettings) -> str:

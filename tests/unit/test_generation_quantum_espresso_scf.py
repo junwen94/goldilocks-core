@@ -422,16 +422,41 @@ def test_smearing_occupations_emit_smearing_type_and_degauss(
     assert "degauss          = 0.01" in content
 
 
-def test_hubbard_plan_not_yet_supported_raises_generation_error(
+def test_hubbard_table_plan_renders_the_qe_hubbard_card(
     silicon_structure, pseudo_metadata_factory
 ) -> None:
+    """QE >= 7.1's onsite U line is species-label-keyed plus its Hubbard
+    manifold, not atom-index-keyed -- verified against QE 7.3's own
+    Doc/Hubbard_input.tex ("U Mn-3d 5.0") and Modules/read_cards.f90's
+    card_hubbard parsing (#88); this confirms the writer renders exactly
+    that for plan="table", the common package-default-U case."""
     system = _system(
         silicon_structure,
         pseudo_metadata_factory,
         hubbard=HubbardUDecision(plan="table", u_by_element={"Si": 3.0}),
     )
 
-    with pytest.raises(GenerationError, match="Hubbard"):
+    content = write_qe_scf(system, _step(), _JOB, _CTX)[0].files["scf.in"]
+
+    assert "HUBBARD (ortho-atomic)" in content
+    assert "U  Si-3p  3" in content
+
+
+def test_hubbard_calibration_needed_plan_still_raises_generation_error(
+    silicon_structure, pseudo_metadata_factory
+) -> None:
+    """plan="self_consistent_calibration_needed" needs an hp.x
+    calibration input this codebase has never written (#88) -- real,
+    separate, larger scope than the table-plan card above."""
+    system = _system(
+        silicon_structure,
+        pseudo_metadata_factory,
+        hubbard=HubbardUDecision(
+            plan="self_consistent_calibration_needed", u_by_element={}
+        ),
+    )
+
+    with pytest.raises(GenerationError, match="calibration"):
         write_qe_scf(system, _step(), _JOB, _CTX)
 
 

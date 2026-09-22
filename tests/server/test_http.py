@@ -154,6 +154,7 @@ class TestOpenAPISchema:
             "/inspect",
             "/explain",
             "/run",
+            "/magnetic-orderings",
         }
 
 
@@ -188,6 +189,44 @@ class TestInspect:
         json.dumps(body)
 
 
+class TestMagneticOrderings:
+    def test_returns_the_fm_candidate_unranked_by_default(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        response = client.post(
+            "/magnetic-orderings", json={"structure_content": silicon_cif}
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ranked"] is False
+        assert [c["label"] for c in body["candidates"]] == ["fm"]
+        assert body["candidates"][0]["energy_per_atom_ev"] is None
+
+    def test_rank_with_mmace_degrades_with_a_warning_when_unconfigured(
+        self, client: TestClient, silicon_cif: str, monkeypatch
+    ) -> None:
+        monkeypatch.delenv("GOLDILOCKS_MACE_BACKBONE", raising=False)
+
+        response = client.post(
+            "/magnetic-orderings",
+            json={"structure_content": silicon_cif, "rank_with_mmace": True},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ranked"] is False
+        assert len(body["warnings"]) == 1
+        assert body["warnings"][0]["code"] == "magnetic.ordering_ranking_unavailable"
+
+    def test_rejects_a_path_shaped_value_as_422(self, client: TestClient) -> None:
+        response = client.post(
+            "/magnetic-orderings", json={"structure_content": "/etc/passwd"}
+        )
+
+        assert response.status_code == 422
+
+
 class TestExplain:
     def test_returns_records_and_warnings(
         self, client: TestClient, real_assets, silicon_cif: str
@@ -214,7 +253,12 @@ class TestExplain:
 
         assert response.status_code == 200
         records = response.json()["records"]
-        assert records["occupations"]["value"]["occupations"] == "smearing"
+        # v2 epic 11 (#11): the real, installed CGCNN classifier now
+        # resolves Si confidently non-metal (source=ml), so the scf
+        # step's own occupations correctly follows the non-metal branch
+        # -- unlike nscf_occupations below, which dos's own advisor
+        # always pins to tetrahedra_opt regardless of metallicity.
+        assert records["occupations"]["value"]["occupations"] == "fixed"
         assert records["nscf_occupations"]["value"]["occupations"] == ("tetrahedra_opt")
         assert records["dos"]["value"]["delta_e"] == 0.01
 

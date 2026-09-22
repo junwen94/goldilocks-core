@@ -11,6 +11,8 @@ import type { components } from "./schema";
 export type StructureInput = components["schemas"]["InlineStructureDocument"];
 export type ComputeRequest = components["schemas"]["ComputeRequestDocument"];
 export type CalcTask = ComputeRequest["task"];
+export type MagneticOrderingsRequest =
+  components["schemas"]["MagneticOrderingsRequestDocument"];
 
 export type Source = "human" | "ml" | "llm" | "heuristic";
 export type FieldStatus = "resolved" | "unavailable" | "blocked";
@@ -193,6 +195,36 @@ export interface RunResult {
   readonly warnings: readonly AdvisorWarning[];
 }
 
+// ---------------------------------------------------------------------
+// POST /magnetic-orderings -- mirrors service/_magnetic_orderings.py's
+// `report_to_json`/`candidate_to_json`. `structure_content`/`overrides`
+// are everything needed to generate *this exact* candidate's own input
+// files: feed them straight back as a brand new top-level structure +
+// overrides to `run`/`runArchive`, merged on top of the current draft's
+// own overrides (see `_bundle_inputs`'s docstring for why an AFM
+// candidate needs an explicit `starting_magnetization` override -- CIF
+// text cannot round-trip the sign that distinguishes its two magnetic
+// sublattices).
+// ---------------------------------------------------------------------
+
+export interface MagneticOrderingCandidate {
+  readonly label: string;
+  readonly formula: string;
+  readonly natoms: number;
+  readonly energy_per_atom_ev: number | null;
+  readonly status: string | null;
+  readonly is_recommended: boolean;
+  readonly structure_content: string;
+  readonly structure_format: "cif";
+  readonly overrides: Readonly<Record<string, unknown>>;
+}
+
+export interface MagneticOrderingsResult {
+  readonly ranked: boolean;
+  readonly candidates: readonly MagneticOrderingCandidate[];
+  readonly warnings: readonly AdvisorWarning[];
+}
+
 export interface ArchiveDownload {
   readonly blob: Blob;
   readonly filename: string;
@@ -219,6 +251,11 @@ export interface CoreClient {
    * `run` would refuse with `advice_incomplete` (the tri-state
    * "diagnosis is always available" promise). */
   explain(request: ComputeRequest): Promise<ExplainResult>;
+  /** Lists candidate magnetic orderings (FM plus any AFM candidates),
+   * optionally mMACE-ranked by relaxed energy per atom. */
+  magneticOrderings(
+    request: MagneticOrderingsRequest,
+  ): Promise<MagneticOrderingsResult>;
   /** Executes the pipeline and returns the JSON summary (file list +
    * records + warnings), not the files themselves. */
   run(request: ComputeRequest): Promise<RunResult>;
@@ -283,6 +320,20 @@ export class HttpCoreClient implements CoreClient {
       method: "POST",
     });
     return parseJson<ExplainResult>(response);
+  }
+
+  async magneticOrderings(
+    request: MagneticOrderingsRequest,
+  ): Promise<MagneticOrderingsResult> {
+    const response = await this.request("/magnetic-orderings", {
+      body: JSON.stringify(request),
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
+    return parseJson<MagneticOrderingsResult>(response);
   }
 
   async run(request: ComputeRequest): Promise<RunResult> {
