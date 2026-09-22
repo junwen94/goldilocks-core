@@ -1,10 +1,4 @@
-"""Tests for goldilocks_core.capabilities (v2 epic 8, #8).
-
-Named ``test_capabilities_v2.py``, not ``test_capabilities.py``: that
-name is already taken by v1's ``runtime.capabilities`` tests, which
-this module does not replace (v2 epic 9 deletes the v1 tree, not this
-one).
-"""
+"""Tests for goldilocks_core.capabilities (v2 epic 8, #8)."""
 
 from __future__ import annotations
 
