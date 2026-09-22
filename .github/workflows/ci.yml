@@ -21,7 +21,12 @@ jobs:
   quality-and-test:
     name: Quality, tests, and mutations
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Confirmed 2026-09-22: a real, crash-free mutmut run (post-forkserver-fix,
+    # #104) reached 813/817 mutants at exactly 30m22s before the job's own
+    # 30-minute ceiling cut it off -- lint+pytest+enumlib setup alone already
+    # eat a meaningful chunk of that budget, so mutation testing was never
+    # actually given a comfortable margin to finish in the first place.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
