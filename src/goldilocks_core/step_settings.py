@@ -33,11 +33,11 @@ fabricated value.** ``PwSettings``'s ``occupations``/``k_sampling``/
 producers, just still optional here because nothing has wired a full
 per-step orchestration loop that constructs one of these yet (v2 epic
 8). ``relax`` (v2 epic 7's ``advisors/relax.py``) has a real *type*
-(``RelaxOptions | VcRelaxOptions``) but genuinely no producer that
-decides *values* -- this epic's own generation rewrite does not render
-a relax/vc-relax input at all, so nothing ever constructs a non-``None``
-one yet; full relax parameter coverage is v2 epic 10's job.
-``BaseStepSettings``'s ``disk_io`` and all of ``DosSettings``'s/
+(``RelaxOptions | VcRelaxOptions``) with a real producer too, since v2
+epic 10: ``advisors/relax.py``'s ``relax_settings()`` is called by
+``service/_relax.py`` and threaded into ``generate(relax=...)``, so a
+``relax``/``vc-relax`` task genuinely constructs a non-``None`` value
+here today. ``BaseStepSettings``'s ``disk_io`` and all of ``DosSettings``'s/
 ``PhSettings``'s fields have no producer or real type at all yet (their
 own per-step advisors do not exist). Every optional field here is
 expected to become required once its real producer exists -- a

@@ -11,18 +11,19 @@ This module owns the source and status axes (``Provenance``/``Source``
 and ``Resolved``/``Unavailable``/``Blocked``); the scope axis has no
 code yet, it shows up once per-step settings exist (v2 epic 6).
 
-Kept as one top-level module, not a package: ``Provenance`` needs a
+Kept as one top-level module, not a package: ``Provenance`` needed a
 fresh v2-only shape (``Source`` is the clean four-tier list, not v1's
-six-value, two-concerns-conflated ``ProvenanceSource``) and can't reuse
-v1's existing ``goldilocks_core.provenance`` module without breaking
-the still-running v1 code that constructs the old shape -- but a type
-that every ``Resolved`` field must carry is exactly the kind of
-genuinely cross-cutting primitive that belongs at top level, next to
+six-value, two-concerns-conflated ``ProvenanceSource``) and couldn't
+reuse v1's existing ``goldilocks_core.provenance`` module without
+breaking the v1 code that constructed the old shape -- but a type that
+every ``Resolved`` field must carry is exactly the kind of genuinely
+cross-cutting primitive that belongs at top level, next to
 ``kmesh.py``/``functionals.py``/``units.py``, not inside any one
 ``analysis/``/``advisors/`` module (goldilocks-core-design.md S13:
-three named top-level files, no ``utils/``). v1's ``provenance.py`` is
-left untouched; it still describes v1's own advisors until they're
-deleted (v2 epic 9).
+three named top-level files, no ``utils/``). v1's ``provenance.py``
+was left untouched until v1's own advisors -- and the module itself --
+were deleted along with the rest of the v1 tree (v2 epic 9, commit
+d64f46b).
 
 ``Resolved``/``Unavailable``/``Blocked`` are core's *internal*
 representation, used inside analysis/ and advisors/. They are

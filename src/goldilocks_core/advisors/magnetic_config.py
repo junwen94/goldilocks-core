@@ -5,14 +5,16 @@ silently override each other.
 New in v2 (v2 epic 5, #5). Fixes two real bugs found in v1's pipeline
 (`advice/parameters.py`'s `_advise_magnetism`/`_advise_spin_orbit`,
 `generation/qe/scf.py`'s `_spin_lines`), demonstrated here on this fresh
-standalone advisor rather than by touching v1's still-running pipeline --
-same policy as every prior epic in this rewrite (v1 stays untouched until
-cutover, v2 epic 9). The two `tests/physics/test_dft_decisions.py` xfails
-this issue names ("A2"/"A2b") exercise `compute()`, v1's own pipeline
-end-to-end; they stay `xfail` because v1's `advice/parameters.py` and
-`generation/qe/scf.py` genuinely have not changed. What this file actually
-proves is in `tests/unit/test_advisors_magnetic_config.py`, against the same
-physical scenarios (bulk Fe, with and without SOC).
+standalone advisor rather than by touching v1's pipeline directly --
+same policy as every prior epic in this rewrite (v1 stayed untouched
+until cutover, v2 epic 9, which deleted it in commit d64f46b). The two
+`tests/physics/test_dft_decisions.py` tests this issue names ("A2"/
+"A2b") used to `xfail` against `compute()`, v1's own pipeline
+end-to-end, because v1's `advice/parameters.py` and
+`generation/qe/scf.py` genuinely never changed; now that v1 is gone,
+they exercise `magnetic_config()` directly instead. What this file
+actually proves is in `tests/unit/test_advisors_magnetic_config.py`,
+against the same physical scenarios (bulk Fe, with and without SOC).
 
 - **A2** (stfc/goldilocks-core#177, still open upstream): v1 emits
   `nspin = 2` with every `starting_magnetization` implicitly zero, so QE

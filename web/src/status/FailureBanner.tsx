@@ -43,12 +43,14 @@ export function FailureBanner({
   );
 }
 
-// Kept in sync with every ExpectedFailure.kind reachable through the
-// v2 HTTP transport (grep `kind = "..."` across src/goldilocks_core/),
-// plus the client-only kinds coreClient.ts synthesizes itself. An
-// unrecognized kind still degrades to the generic fallback title below
-// rather than failing loudly -- acceptable per #12's own scope note,
-// since `failure.message` is always shown regardless.
+// Intended to stay in sync with every ExpectedFailure.kind reachable
+// through the v2 HTTP transport (grep `kind = "..."` across
+// src/goldilocks_core/), plus the client-only kinds coreClient.ts
+// synthesizes itself -- though this is a manually maintained list, not
+// a generated one, so it can drift. An unrecognized kind still degrades
+// to the generic fallback title below rather than failing loudly --
+// acceptable per #12's own scope note, since `failure.message` is
+// always shown regardless.
 const FAILURE_TITLES: Readonly<Record<string, string>> = {
   invalid_request: "Check the request",
   invalid_setting: "Check your overrides",
@@ -58,6 +60,7 @@ const FAILURE_TITLES: Readonly<Record<string, string>> = {
   assets_unavailable: "Runtime assets unavailable",
   asset_not_installed: "Runtime assets unavailable",
   asset_corrupt: "Runtime assets unavailable",
+  pseudo_import_error: "Pseudopotential import failed",
   generation_error: "Could not generate input files",
   submission_error: "Could not generate the submission script",
   network_error: "Cannot reach Core",

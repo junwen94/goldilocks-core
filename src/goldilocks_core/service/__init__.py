@@ -2,9 +2,10 @@
 
 New in v2 (v2 epic 8, #8); no v1 precedent -- this is not a port of
 ``runtime/service.py``'s ``Service``/``Runtime``/``Dispatcher`` machinery
-(that pipeline still runs on v1's ``legacy_analysis``/``request.py`` and
-is left untouched for the CLI/HTTP/MCP modules this epic also replaces
-to stop calling; it becomes dead code for v2 epic 9 to delete).
+(that pipeline ran on v1's ``legacy_analysis``/``request.py`` and was
+left untouched only until the CLI/HTTP/MCP modules this epic replaces
+stopped calling it; it became dead code that v2 epic 9 then deleted,
+commit d64f46b).
 
 Nothing before this module called ``analysis/`` -> ``advisors/`` ->
 ``checks.check_all`` -> ``generation/quantum_espresso`` ->

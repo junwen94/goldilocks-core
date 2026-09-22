@@ -7,7 +7,7 @@ frontend builds a filter").
 A dedicated aggregator, not ``capabilities.py`` importing each advisor
 directly: this project's own import-surface ceiling
 (``scripts/check_complexity.py``) would make a "god module" of a
-capabilities builder that imports all ten advisors that emit warnings.
+capabilities builder that imports all eleven advisors that emit warnings.
 This module absorbs that cost instead -- it exists for no other
 purpose -- while ``capabilities.py`` only ever imports this one name.
 """
