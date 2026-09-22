@@ -42,8 +42,9 @@ N_i = max(1, ceil(round(|b_i| / k_distance, 5)))
 Rounding to five decimal places avoids numerical noise at integer boundaries. A
 smaller `k_distance` gives a denser mesh. The human-override, `k_distance`,
 and `k_grid` paths all default to shift `[0, 0, 0]` (Gamma-centered) when no
-explicit `shift` is given; there is no ML-based k-point model wired yet
-(planned for epic #11). In Quantum ESPRESSO's `K_POINTS automatic` convention
+explicit `shift` is given; the ML-based k-point model (`qrf-kpoints`) is
+wired into `k_distance`'s own heuristic-vs-ml resolution, not into shift
+selection. In Quantum ESPRESSO's `K_POINTS automatic` convention
 this includes Γ (the reciprocal-space origin), even for even-sized meshes; a
 shift flag of `1` means a half-grid shift on that axis.
 
@@ -93,9 +94,10 @@ exceptions belong to the [table guide](pseudopotentials.md#choose-a-table).
 Fields below are `--set`-able keys (see `goldilocks settings` for the full,
 live list) that `set_overrides.build_overrides` turns into a `RunOverrides`
 object consumed by `service.advise()`/`generate()`. Leaving a key unset
-leaves the choice to Goldilocks's heuristics (or, once wired, its ML/LLM
-tiers -- currently none are wired; every setting today only has
-`human`/`heuristic` sources, per `goldilocks settings`).
+leaves the choice to Goldilocks's heuristics, or -- for `is_metal`,
+`is_magnetic`, and `k_distance`, where an ML tier is wired and resolves
+ahead of the heuristic -- to a real model prediction (`human > ml > llm >
+heuristic`; see `goldilocks settings` for each key's actual sources).
 
 - `k_grid` wins over `k_distance`; either one bypasses the heuristic
   k-point sizing entirely (the `k_sampling.grid_and_distance_conflict` info
