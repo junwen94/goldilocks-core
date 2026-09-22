@@ -382,7 +382,9 @@ test("reflows intermediate widths without horizontal clipping", async ({
   await waitForBundleReady(page);
 
   const workspace = await page.getByRole("main").boundingBox();
-  const bundle = await page.getByRole("region", { name: "Bundle" }).boundingBox();
+  const bundle = await page
+    .getByRole("region", { name: "Bundle" })
+    .boundingBox();
   expect(workspace).not.toBeNull();
   expect(bundle).not.toBeNull();
   expect((workspace?.x ?? 0) + (workspace?.width ?? 0)).toBeLessThanOrEqual(
@@ -426,9 +428,9 @@ test("keeps the document static and scrolls long content inside its own card", a
   const analysisBody = page.locator(".card-analysis .card-body");
   const lastRecord = page.locator(".card-analysis .record-card").last();
   await analysisBody.focus();
-  await analysisBody.evaluate((element) => {
-    element.scrollTop = element.scrollHeight;
-  });
+  await analysisBody.evaluate(
+    "(element) => { element.scrollTop = element.scrollHeight; }",
+  );
   await expect(lastRecord).toBeInViewport();
 });
 
@@ -521,13 +523,20 @@ test("table treatment clears when the functional changes", async ({ page }) => {
   await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
   await expandAdvisorGroup(page, "Pseudopotential table");
   await expandAdvisorGroup(page, "Functional");
-  const table = page.getByRole("combobox", { name: "Pseudopotential table", exact: true });
+  const table = page.getByRole("combobox", {
+    name: "Pseudopotential table",
+    exact: true,
+  });
 
-  await page.getByRole("combobox", { name: "Functional", exact: true }).selectOption("PBEsol");
+  await page
+    .getByRole("combobox", { name: "Functional", exact: true })
+    .selectOption("PBEsol");
   await table.selectOption("pseudodojo-pbesol-efficiency-fr");
   expect(await table.inputValue()).toBe("pseudodojo-pbesol-efficiency-fr");
 
-  await page.getByRole("combobox", { name: "Functional", exact: true }).selectOption("LDA");
+  await page
+    .getByRole("combobox", { name: "Functional", exact: true })
+    .selectOption("LDA");
   expect(await table.inputValue()).toBe("");
   await expect(
     table.locator('option[value="pseudodojo-pbesol-efficiency-fr"]'),
@@ -542,8 +551,13 @@ test("table choices exclude tables that don't cover the structure's elements", a
   await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
   await expandAdvisorGroup(page, "Functional");
   await expandAdvisorGroup(page, "Pseudopotential table");
-  await page.getByRole("combobox", { name: "Functional", exact: true }).selectOption("PBE");
-  const table = page.getByRole("combobox", { name: "Pseudopotential table", exact: true });
+  await page
+    .getByRole("combobox", { name: "Functional", exact: true })
+    .selectOption("PBE");
+  const table = page.getByRole("combobox", {
+    name: "Pseudopotential table",
+    exact: true,
+  });
   await expect(
     table.locator('option[value="pseudodojo-pbe-lanthanides-sr"]'),
   ).toHaveCount(0);
@@ -560,7 +574,9 @@ test("table choices exclude tables that don't cover the structure's elements", a
   await expect(page.getByLabel("Inspected structure summary")).toContainText(
     "Ce1",
   );
-  await page.getByRole("combobox", { name: "Functional", exact: true }).selectOption("PBE");
+  await page
+    .getByRole("combobox", { name: "Functional", exact: true })
+    .selectOption("PBE");
   // Confirmed against a live /capabilities call: three real tables cover
   // Ce+PBE (pseudodojo's own lanthanides table plus both sssp accuracy
   // levels). The frontend deliberately doesn't replicate the backend's
@@ -590,7 +606,9 @@ test("keeps lattice details out of the crystal viewer until requested", async ({
   await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
   const viewer = page.getByRole("region", { name: "Crystal structure viewer" });
   await expect(viewer.locator("canvas")).toBeVisible();
-  await expect(viewer.getByRole("heading", { name: "Si", exact: true })).toBeVisible();
+  await expect(
+    viewer.getByRole("heading", { name: "Si", exact: true }),
+  ).toBeVisible();
   await expect(page.locator("dl")).toHaveCount(0);
 
   await viewer
