@@ -37,8 +37,9 @@ instead of failing.
 Narrower slices are also available directly:
 
 - `uv run goldilocks settings --json` — every `--set`-able key, its type,
-  default, and sources (49 keys today; the same objects as `capabilities`'s
-  `settings[]`).
+  default, and sources (the same objects as `capabilities`'s `settings[]`;
+  run this command for the current key count rather than trusting a number
+  in these docs).
 - `uv run goldilocks models --json` — every model `ml/registry.toml`
   registers, whether or not it is actually installed (see [Scientific
   controls](#scientific-controls)).
@@ -155,9 +156,11 @@ uv run goldilocks assets status default
 uv run goldilocks assets verify default
 ```
 
-Use a profile, asset ID, or table ID. `default` installs the two prediction
-models and a PBEsol efficiency PseudoDojo table; `workbench` installs all
-registered models and tables. `install` also repairs corrupt installations.
+Use a profile, asset ID, or table ID. `default` installs the four prediction
+models (`qrf-kpoints`, `metallicity-cgcnn`, `is-metal-classifier`,
+`is-magnetic-classifier`) and a PBEsol efficiency PseudoDojo table;
+`workbench` installs all registered models and tables. `install` also
+repairs corrupt installations.
 
 `run --fetch-missing` (or `explain --fetch-missing`) installs a missing
 pseudopotential table instead of failing, then retries; it does not apply to

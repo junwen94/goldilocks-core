@@ -10,7 +10,7 @@ Not published to PyPI yet -- clone the repository. Install
 [uv](https://docs.astral.sh/uv/getting-started/installation/) first:
 
 ```bash
-git clone https://github.com/stfc/goldilocks-core.git
+git clone https://github.com/junwen94/goldilocks-core.git
 cd goldilocks-core
 uv sync
 ```

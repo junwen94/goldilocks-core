@@ -177,16 +177,17 @@ Installation is explicit through `goldilocks assets install`/`status`/
 `verify` or the CLI's `--fetch-missing` retry; scientific operations never
 install assets themselves.
 
-The `default` asset profile also installs two ML models
-(`models/qrf-kpoints`, `models/metallicity-cgcnn`) alongside the
-pseudopotential table, but no advisor calls `ml.models.load_model` yet —
-every advisor's heuristic tier is the only tier that runs today (e.g.
-`analysis/is_metal.py` decides `metal`/`Unavailable` from composition alone;
-`advisors/k_sampling.py` picks a flat k-point spacing from `is_metal`). ML
-selection is a separate, still-empty pluggable model registry reserved for a
-later epic (`goldilocks models list` reports none installed even after
-installing the `default` profile) — do not describe model-backed selection
-as live behavior.
+The `default` asset profile also installs four ML models
+(`models/qrf-kpoints`, `models/metallicity-cgcnn`,
+`models/is-metal-classifier`, `models/is-magnetic-classifier`) alongside the
+pseudopotential table. `analysis/is_metal.py`, `analysis/is_magnetic.py`, and
+`advisors/k_sampling.py` all call through `ml.predict` (`predict()` for the
+two classifiers, `predict_k_distance()` for `qrf-kpoints`), which resolves
+the registered asset via `AssetStore` and loads it through
+`goldilocks_ml.inference.load_model()`; each caller falls back to its own
+heuristic tier only when the model asset is not installed, fails checksum
+verification, or `goldilocks-ml` itself is not importable (see
+`ml/predict.py`).
 
 Independent assets install concurrently with at most eight workers. Results
 retain profile order; each asset retains its own lock, checksum verification,
@@ -224,8 +225,8 @@ requirements.
 - **Citations come from pseudopotentials, not models.** A published bundle's
   `citations` are pulled exclusively from the selected pseudopotential
   table's registry metadata (`metadata.pseudo_info.get("citation")`); there
-  is currently no ML-model citation/licence path in the bundle, consistent
-  with the model registry being empty.
+  is currently no ML-model citation/licence path in the bundle, even though
+  the `default` profile installs and uses ML models by default.
 - **Keep remote callers away from local paths.** HTTP and MCP accept inline
   structures and registered table IDs, not filesystem sources, model
   locations, or publication paths. Keep authentication and deployment

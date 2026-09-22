@@ -16,9 +16,9 @@ uv run goldilocks assets install default
 uv run goldilocks assets verify default
 ```
 
-This downloads and checks the k-point model, the metallicity classifier, and the
-PseudoDojo PBEsol efficiency pseudopotential table. The first installation needs
-an internet connection.
+This downloads and checks the k-point model, the metallicity classifier, the
+is-metal and is-magnetic classifiers, and the PseudoDojo PBEsol efficiency
+pseudopotential table. The first installation needs an internet connection.
 
 ## 2. Generate an input
 

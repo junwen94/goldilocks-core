@@ -33,7 +33,8 @@ Without an explicit source, Goldilocks chooses a compatible registered table,
 preferring PseudoDojo unless the structure contains lanthanides or actinides. It
 does not choose a different table merely because that table is installed. The
 `default` asset profile includes the scalar-relativistic PBEsol efficiency
-table, plus the default k-point and metallicity models.
+table, plus the default `qrf-kpoints`, `metallicity-cgcnn`,
+`is-metal-classifier`, and `is-magnetic-classifier` models.
 
 To choose a table explicitly, pin `pseudo_table_id`: `--set
 pseudo_table_id=<table-id>` on the CLI, `build_overrides({"pseudo_table_id":

@@ -21,17 +21,19 @@ analysis fact:
 | `metal`, or unavailable (composition couldn't confirm) | Smearing (`smearing_type='cold'`, `degauss=0.01` Ry) |
 | `non_metal`                                            | Fixed occupations, without smearing               |
 
-The heuristic used when no override is set excludes common anion-forming
-elements (O, N, S, Se, Te, F, Cl, Br, I, H) from the composition, then checks
-whether every remaining element is a metal according to pymatgen. It returns
-`metal` if so; otherwise it reports that composition alone can't confirm
-metallic character, which -- like an actual `metal` result -- still defaults
-to smearing, not fixed occupations, because assuming "fixed" on an
-undetected metal risks silent non-convergence. There is currently no
-machine-learning metallicity model in this decision path (that lands with
-v2 epic 11); a confident `non_metal` result today is only reachable via a
-human or LLM override. Neither the heuristic nor a future model determines
-a band structure.
+Ahead of the heuristic, a published CGCNN classifier (installed by default as
+`models/is-metal-classifier`) can resolve `is_metal` directly from structure;
+`is_metal` only falls back to the heuristic below when that model asset is
+not installed or `goldilocks-ml` is not importable. The heuristic itself
+excludes common anion-forming elements (O, N, S, Se, Te, F, Cl, Br, I, H)
+from the composition, then checks whether every remaining element is a metal
+according to pymatgen. It returns `metal` if so; otherwise it reports that
+composition alone can't confirm metallic character, which -- like an actual
+`metal` result -- still defaults to smearing, not fixed occupations, because
+assuming "fixed" on an undetected metal risks silent non-convergence. A
+confident `non_metal` result is reachable via a human override, the ML
+classifier, or an LLM override. Neither the heuristic nor the ML model
+determines a band structure.
 
 Check the `is_metal` record's `status`, `source`, and `reason` (via
 `goldilocks explain --json` or the published `goldilocks.json`'s
@@ -47,15 +49,16 @@ width together with the k-point mesh.
 K-points sample the Brillouin zone for reciprocal-space integration. Too sparse
 a mesh can leave energies, forces, or electronic properties unconverged.
 
-Without a grid or distance hint, Goldilocks picks a target k-point spacing
-(`k_distance`) heuristically: 0.15 Å⁻¹ if `is_metal` resolves to `metal`,
-otherwise 0.30 Å⁻¹ (this also covers the unavailable case, since a mesh that
-is too coarse on an undetected metal risks silent under-convergence, while a
-mesh that is too fine on an actual insulator only costs more compute). A
-machine-learning k-point model (`qrf-kpoints`) is installable via
-`goldilocks assets install`, but it is not yet wired into this decision --
-that also lands with v2 epic 11. There is no "confidence" or
-prediction-interval field in `explain`/`run` output today.
+Without a grid or distance hint, Goldilocks first asks a published
+machine-learning k-point model (`qrf-kpoints`, installed by default) to
+predict a raw `k_distance` for the structure; only when that model asset is
+not installed or `goldilocks-ml` is not importable does it fall back to
+picking a target k-point spacing heuristically: 0.15 Å⁻¹ if `is_metal`
+resolves to `metal`, otherwise 0.30 Å⁻¹ (this also covers the unavailable
+case, since a mesh that is too coarse on an undetected metal risks silent
+under-convergence, while a mesh that is too fine on an actual insulator only
+costs more compute). There is no "confidence" or prediction-interval field
+in `explain`/`run` output today.
 
 Compare results on denser meshes. For slabs, wires, or molecules in periodic
 cells, check sampling along vacuum directions explicitly; dimensionality advice
@@ -80,7 +83,7 @@ for selection rules, installation, and custom files.
 ## Check magnetism and spin-orbit coupling
 
 Spin polarization allows different spin populations, decided by `is_magnetic`
-(`human > ml > heuristic`, see [CLI reference](cli.md#scientific-controls)).
+(`human > ml > llm > heuristic`, see [CLI reference](cli.md#scientific-controls)).
 Once its ML asset is installed, `mace`/`e3nn`/`sphericart` are on hand (a
 manual install -- see the CLI reference), and `GOLDILOCKS_MACE_BACKBONE`
 points at a downloaded mMACE checkpoint, a published mMACE-embedding
