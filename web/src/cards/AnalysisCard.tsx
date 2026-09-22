@@ -18,7 +18,8 @@ export function AnalysisCard({ kicker }: { readonly kicker: string }) {
         <Text className="card-kicker">{kicker}</Text>
         <Title order={2}>Analysis</Title>
       </Group>
-      <div className="card-body">
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- axe's scrollable-region-focusable rule requires this overflow-y:auto container itself to be keyboard-reachable, not just its children. */}
+      <div className="card-body" tabIndex={0}>
         {snapshot.capabilities === null || snapshot.inspection === null ? (
           <Text c="dimmed">Load a structure to see its analysis.</Text>
         ) : (

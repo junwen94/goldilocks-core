@@ -106,7 +106,7 @@ export function StructureViewport({
           }}
         />
         <Group pos="absolute" top={10} left={10} align="baseline" gap={6}>
-          <Title order={5}>{inspection.structure.reduced_formula}</Title>
+          <Title order={3}>{inspection.structure.reduced_formula}</Title>
           <Text size="xs" c="dimmed">
             {inspection.structure.site_count} atomic sites
           </Text>
