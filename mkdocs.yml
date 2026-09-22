@@ -39,5 +39,6 @@ nav:
   - Recommendations: science.md
   - Pseudopotentials: pseudopotentials.md
   - CLI reference: cli.md
+  - mMACE setup: mmace-setup.md
   - Scientific conventions: conventions.md
   - Contributing: architecture.md
