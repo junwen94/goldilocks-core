@@ -72,10 +72,6 @@ class InlineStructureDocument(BaseModel):
         return value
 
 
-class InspectRequestDocument(InlineStructureDocument):
-    pass
-
-
 class ComputeRequestDocument(InlineStructureDocument):
     """Shared by ``/explain`` and ``/run`` (and MCP's ``explain``/``run``
     tools) -- one request shape, per this epic's own "one shared
@@ -107,17 +103,3 @@ class MagneticOrderingsRequestDocument(InlineStructureDocument):
     ``advise()``/``generate()`` entirely."""
 
     rank_with_mmace: bool = False
-
-
-class ErrorDocument(BaseModel):
-    model_config = _STRICT
-
-    kind: str
-    message: str
-    details: dict[str, Any] | None = None
-
-
-class ErrorResponseDocument(BaseModel):
-    model_config = _STRICT
-
-    error: ErrorDocument

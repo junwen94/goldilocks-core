@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal, get_args
+from typing import Any, Literal
 
 ProvenanceSource = Literal[
     "analysis",
@@ -19,12 +19,6 @@ JsonDict = dict[str, Any]
 
 PathLike = str | Path
 
-TaskId = str
-
-StageId = str
-
-RecordId = str
-
 CodeName = str
 
 CalcTask = Literal["scf_single_point", "dos", "relax", "vc-relax"]
@@ -33,8 +27,6 @@ CalcTask = Literal["scf_single_point", "dos", "relax", "vc-relax"]
 accordingly), unlike ``dos``'s three-step scf/nscf/dos.x sequence."""
 
 SmearingType = Literal["fixed", "gaussian", "mp", "cold"]
-
-ModelSource = Literal["huggingface", "local"]
 
 ModelType = Literal["random_forest", "cgcnn", "xgboost", "mlp"]
 
@@ -58,6 +50,3 @@ not confirmed. ``unknown``: cannot determine from structure alone."""
 VdwMethod = Literal["d3", "d3bj", "ts", "mbd"]
 """Code-agnostic labels mapped to code-specific keywords in Generate
 (e.g. ``d3bj`` → QE ``vdw_corr='grimme-d3'`` with ``dftd3_version=4``)."""
-
-_VALID_SMEARING_TYPES: frozenset[str] = frozenset(get_args(SmearingType))
-_VALID_VDW_METHODS: frozenset[str] = frozenset(get_args(VdwMethod))

@@ -137,10 +137,6 @@ def default_table(tables: dict[str, PseudoTable] | None = None) -> PseudoTable:
     return defaults[0]
 
 
-def table_asset_specs(path: PathLike | None = None) -> tuple[AssetSpec, ...]:
-    return tuple(table.asset for table in load_tables(path).values())
-
-
 def _table_payload(
     table_id: str, entry: dict[str, Any]
 ) -> tuple[tuple[str, ...], AssetSpec]:

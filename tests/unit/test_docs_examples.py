@@ -87,17 +87,10 @@ def _check_python(body: str, label: str) -> None:
         ):
             module = __import__(node.module, fromlist=["__package__"])
             for alias in node.names:
-                if not hasattr(module, alias.name):
-                    # A real v2 example never imports a name its own
-                    # target module doesn't export; this can only mean
-                    # a stale v1-API reference (v1 tree deleted, v2
-                    # epic 9, #9) -- same deferred-rewrite bucket as
-                    # _check_bash's retired-command xfail above.
-                    pytest.xfail(
-                        f"{label} imports {alias.name!r}, which "
-                        f"{node.module} does not export; docs rewrite "
-                        "deferred to v2 epic 9 (#9)"
-                    )
+                assert hasattr(module, alias.name), (
+                    f"{label} imports {alias.name!r}, which "
+                    f"{node.module} does not export"
+                )
 
 
 def _check_bash(body: str, label: str) -> None:

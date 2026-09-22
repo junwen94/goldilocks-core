@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 from goldilocks_core.server.documents import (
     ComputeRequestDocument,
-    ErrorResponseDocument,
     InlineStructureDocument,
     RunRequestDocument,
 )
@@ -85,13 +84,3 @@ class TestRunRequestDocument:
             RunRequestDocument(
                 structure_content="line one\nline two", respond_with="xml"
             )
-
-
-class TestErrorResponseDocument:
-    def test_round_trips_kind_and_message(self) -> None:
-        document = ErrorResponseDocument(
-            error={"kind": "invalid_setting", "message": "unknown setting 'x'"}
-        )
-
-        assert document.error.kind == "invalid_setting"
-        assert document.error.details is None

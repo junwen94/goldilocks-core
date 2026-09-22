@@ -9,7 +9,7 @@ from typing import Annotated, Any, cast, get_args
 
 from goldilocks_core.assets.records import AssetFile, AssetSpec
 from goldilocks_core.serialization import Portable, portable_record, to_portable
-from goldilocks_core.types import JsonDict, ModelSource, ModelType, PathLike
+from goldilocks_core.types import JsonDict, ModelType, PathLike
 
 
 @dataclass(slots=True)
@@ -19,7 +19,6 @@ class ModelSpec:
     model_type: ModelType
     target: str
     feature_set: str
-    source: ModelSource
     location: Annotated[str, Portable()]
     revision: str | None = None
     licence: str | None = None
@@ -34,7 +33,6 @@ def _model_spec_portable(spec: ModelSpec) -> JsonDict:
 
 MODEL_REGISTRY_ENV = "GOLDILOCKS_MODEL_REGISTRY"
 _REGISTRY_RESOURCE = "registry.toml"
-_VALID_MODEL_SOURCES = frozenset(get_args(ModelSource))
 _VALID_MODEL_TYPES = frozenset(get_args(ModelType))
 
 
@@ -231,11 +229,6 @@ def _model_spec(data: dict[str, Any], location: str) -> ModelSpec:
             f"model revision must be a non-empty string, or absent; got {revision!r}"
         )
 
-    source_value = data.get("source", "local")
-    if source_value not in _VALID_MODEL_SOURCES:
-        valid = ", ".join(sorted(_VALID_MODEL_SOURCES))
-        raise ValueError(f"model source must be one of {valid}; got {source_value!r}")
-    source = cast(ModelSource, source_value)
     model_type_value = data["model_type"]
     if model_type_value not in _VALID_MODEL_TYPES:
         valid = ", ".join(sorted(_VALID_MODEL_TYPES))
@@ -256,7 +249,6 @@ def _model_spec(data: dict[str, Any], location: str) -> ModelSpec:
         model_type=model_type,
         target=identity["target"],
         feature_set=identity["feature_set"],
-        source=source,
         location=data.get("location", location),
         revision=revision,
         **optional_material,
