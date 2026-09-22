@@ -70,51 +70,49 @@ test("prepares and downloads a real Core calculation", async ({ page }) => {
     page.getByRole("heading", { name: "No structure selected" }),
   ).toBeVisible();
 
+  await page.waitForLoadState("networkidle");
   await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
   await expect(page.getByLabel("Crystal structure viewer")).toBeVisible();
   await expect(page.getByText("8 atomic sites", { exact: true })).toBeVisible();
+  await expandAdvisorGroup(page, "Pseudopotential table");
   await page
-    .getByLabel("Pseudopotential table")
+    .getByRole("combobox", { name: "Pseudopotential table", exact: true })
     .selectOption("pseudodojo-pbesol-efficiency-sr");
 
-  await page.getByRole("button", { name: "Generate recommendation" }).click();
-  const recommendation = page.getByRole("region", {
-    name: "Recommendation results",
-  });
-  await expect(recommendation).toBeVisible();
-  await expect(
-    page.getByText(/Generate input files to preview them here/),
-  ).toBeVisible();
+  await waitForBundleReady(page);
 
   const downloadStarted = page.waitForEvent("download");
-  await page
-    .getByRole("button", { name: "Generate input files (.zip)" })
-    .click();
+  await page.getByRole("button", { name: "Download (.zip)" }).click();
   const download = await downloadStarted;
   expect(download.suggestedFilename()).toMatch(/\.zip$/);
 
-  // scf.in is the default active tab (review order: .in, submit.sh,
-  // README.md, .json, then everything else) -- only the active tab's
-  // panel renders a GeneratedInputPreview.
+  // scf.in is the highest-ranked file (review order: .in, submit.sh,
+  // README.md, .json, then everything else) -- each file is its own
+  // collapsed Accordion.Item; expanding it renders a GeneratedInputPreview.
+  await page.getByRole("button", { name: /^scf\.in/ }).click();
   const generatedInput = page.getByLabel("Generated input scf.in");
+  await generatedInput.scrollIntoViewIfNeeded();
   await expect(generatedInput).toBeInViewport();
 
   const inputResize = page.getByRole("separator", {
     name: "Resize generated input",
   });
+  await inputResize.scrollIntoViewIfNeeded();
   const initialInput = await generatedInput.boundingBox();
   const resizeBox = await inputResize.boundingBox();
   assert(initialInput, "Generated input must have a layout box");
   assert(resizeBox, "Generated input resize handle must have a layout box");
   const resizeX = resizeBox.x + resizeBox.width / 2;
   const resizeY = resizeBox.y + resizeBox.height / 2;
+  // Drag upward (shrink), not downward -- the compact one-screen dashboard
+  // leaves little room below the handle within the actual browser viewport.
   await page.mouse.move(resizeX, resizeY);
   await page.mouse.down();
-  await page.mouse.move(resizeX, resizeY + 64, { steps: 4 });
+  await page.mouse.move(resizeX, resizeY - 64, { steps: 4 });
   await page.mouse.up();
   const resizedInput = await generatedInput.boundingBox();
   assert(resizedInput, "Resizing must retain the generated input");
-  expect(resizedInput.height - initialInput.height).toBeGreaterThan(40);
+  expect(initialInput.height - resizedInput.height).toBeGreaterThan(40);
 
   await inputResize.press("End");
   await expect(inputResize).toHaveAttribute(
@@ -122,13 +120,6 @@ test("prepares and downloads a real Core calculation", async ({ page }) => {
     "Full input file visible",
   );
   await expectNoAxeViolations(page);
-
-  await page.getByRole("button", { name: "Back to structure" }).click();
-  await expect(page.getByLabel("Crystal structure viewer")).toBeVisible();
-  await expect(recommendation).toHaveCount(0);
-  await page
-    .getByRole("button", { name: "Recommendation", exact: true })
-    .click();
 
   await page.getByRole("button", { name: "Switch to dark mode" }).click();
   await expectNoAxeViolations(page);
@@ -140,9 +131,10 @@ test("prepares and downloads a real Core calculation", async ({ page }) => {
     tableId: "pseudodojo-pbesol-efficiency-sr",
     tableVersion: "0.4",
   });
-  expect(runRequests).toHaveLength(1);
-  expect(runRequests[0]?.method).toBe("POST");
-  const runBody = JSON.parse(runRequests[0]?.body ?? "{}") as {
+  expect(runRequests.length).toBeGreaterThanOrEqual(1);
+  const lastRun = runRequests[runRequests.length - 1];
+  expect(lastRun?.method).toBe("POST");
+  const runBody = JSON.parse(lastRun?.body ?? "{}") as {
     overrides?: Record<string, unknown>;
   };
   expect(runBody.overrides?.pseudo_table_id).toBe(
@@ -154,13 +146,11 @@ test("opens and closes scientific details with the keyboard", async ({
   page,
 }) => {
   await page.goto("/");
+  await page.waitForLoadState("networkidle");
   await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
-  await page.getByRole("button", { name: "Generate recommendation" }).click();
-  await expect(
-    page.getByRole("region", { name: "Recommendation results" }),
-  ).toBeVisible();
+  await waitForBundleReady(page);
 
-  const sampling = page.getByRole("button", { name: /^K Sampling/ });
+  const sampling = page.getByRole("button", { name: /^K Sampling/i });
   await expect(sampling).toHaveAttribute("aria-expanded", "false");
   await sampling.press("Enter");
   await expect(sampling).toHaveAttribute("aria-expanded", "true");
@@ -173,35 +163,32 @@ test("applies a paired smearing treatment and width override", async ({
   page,
 }) => {
   await page.goto("/");
+  await page.waitForLoadState("networkidle");
   await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
   await page.getByRole("button", { name: "Occupations" }).click();
+  await page
+    .getByRole("combobox", { name: "occupations", exact: true })
+    .selectOption("smearing");
   await page.getByLabel("smearing type").selectOption("cold");
   await page.getByLabel("degauss · Ry").fill("0.02");
 
-  await page.getByRole("button", { name: "Generate recommendation" }).click();
-  await expect(
-    page.getByRole("region", { name: "Recommendation results" }),
-  ).toBeVisible();
-  await page
-    .getByRole("button", { name: "Generate input files (.zip)" })
-    .click();
-  await page.getByRole("tab", { name: "scf.in" }).click();
+  await waitForBundleReady(page);
+  await page.getByRole("button", { name: /^scf\.in/ }).click();
 
   const input = page.getByLabel("Generated input scf.in");
   await expect(input).toContainText("smearing = 'cold'");
   await expect(input).toContainText("degauss = 0.02");
 });
 
-test("keeps an old Result visible until an edited Draft is recomputed", async ({
+test("keeps an old Result visible until the recommendation auto-recomputes", async ({
   page,
 }) => {
   await page.goto("/");
+  await page.waitForLoadState("networkidle");
   await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
-  await page.getByRole("button", { name: "Generate recommendation" }).click();
-  const recommendation = page.getByRole("region", {
-    name: "Recommendation results",
-  });
-  await expect(recommendation).toBeVisible();
+  await waitForBundleReady(page);
+  const downloadButton = page.getByRole("button", { name: "Download (.zip)" });
+  await expect(downloadButton).toBeEnabled();
 
   await page.getByRole("button", { name: "K sampling", exact: true }).click();
   await page.getByRole("checkbox", { name: "Set an explicit grid" }).check();
@@ -209,22 +196,18 @@ test("keeps an old Result visible until an edited Draft is recomputed", async ({
   await expect(
     page.getByRole("status", { name: "Recommendation notice" }),
   ).toContainText(
-    "Your settings changed. Update the recommendation before generating input files.",
+    "Settings changed — recomputing the recommendation automatically.",
   );
-  await expect(recommendation).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Generate input files (.zip)" }),
-  ).toBeDisabled();
+  await expect(downloadButton).toBeDisabled();
   await expectNoAxeViolations(page);
 
-  await page.getByRole("button", { name: "Update recommendation" }).click();
+  // No manual "update" action exists any more -- the recommendation
+  // recomputes on its own; just wait for it to settle again.
   await expect(
     page.getByRole("status", { name: "Recommendation notice" }),
-  ).toBeHidden();
-  await page
-    .getByRole("button", { name: "Generate input files (.zip)" })
-    .click();
-  await page.getByRole("tab", { name: "scf.in" }).click();
+  ).toBeHidden({ timeout: 20_000 });
+  await expect(downloadButton).toBeEnabled();
+  await page.getByRole("button", { name: /^scf\.in/ }).click();
   await expect(page.getByLabel("Generated input scf.in")).toContainText(
     "1 1 1",
   );
@@ -248,7 +231,7 @@ test("has no Axe violations in empty, failure, and viewer fallback states", asyn
   await expectNoAxeViolations(page);
   await lightMode.click();
 
-  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
+  await page.waitForLoadState("networkidle");
   await page.route(
     "**/explain",
     async (route) => {
@@ -265,7 +248,7 @@ test("has no Axe violations in empty, failure, and viewer fallback states", asyn
     },
     { times: 1 },
   );
-  await page.getByRole("button", { name: "Generate recommendation" }).click();
+  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
   const alert = page.getByRole("alert");
   await expect(alert).toContainText("Recommendation incomplete");
   await expect(alert).toContainText("Core failed temporarily.");
@@ -291,6 +274,7 @@ test("has no Axe violations in empty, failure, and viewer fallback states", asyn
     `,
   });
   await page.reload();
+  await page.waitForLoadState("networkidle");
   await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
   await expect(
     page.getByRole("status", { name: "3D structure preview unavailable" }),
@@ -302,10 +286,14 @@ test("completes the preparation workflow with keyboard-only activation", async (
   page,
 }) => {
   await page.goto("/");
+  await page.waitForLoadState("networkidle");
   const browse = page.getByRole("button", {
     name: "Choose a CIF or POSCAR structure",
   });
   await browse.waitFor();
+  // Tab 1: theme toggle. Tab 2: Structure card's scrollable .card-body
+  // (focusable so keyboard users can scroll it, see App.css). Tab 3: browse.
+  await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
   await expect(browse).toBeFocused();
@@ -314,14 +302,7 @@ test("completes the preparation workflow with keyboard-only activation", async (
   const chooser = await chooserPromise;
   await chooser.setFiles(SILICON_CIF);
   await expect(page.getByLabel("Crystal structure viewer")).toBeVisible();
-
-  const generate = page.getByRole("button", {
-    name: "Generate recommendation",
-  });
-  await generate.press("Enter");
-  await expect(
-    page.getByRole("region", { name: "Recommendation results" }),
-  ).toBeVisible();
+  await waitForBundleReady(page);
 
   const kSampling = page.getByRole("button", {
     name: "K sampling",
@@ -337,7 +318,7 @@ test("completes the preparation workflow with keyboard-only activation", async (
   await expect(
     page.getByRole("status", { name: "Recommendation notice" }),
   ).toContainText(
-    "Your settings changed. Update the recommendation before generating input files.",
+    "Settings changed — recomputing the recommendation automatically.",
   );
 
   const firstRecord = page
@@ -362,6 +343,9 @@ test("keeps keyboard focus visible and primary targets usable", async ({
   await expect(
     page.getByRole("button", { name: "Switch to dark mode" }),
   ).toBeFocused();
+  // Structure card's scrollable .card-body is the next stop (focusable so
+  // keyboard users can scroll it, see App.css), then the browse button.
+  await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
   await expect(browse).toBeFocused();
   const box = await browse.boundingBox();
@@ -372,48 +356,11 @@ test("keeps keyboard focus visible and primary targets usable", async ({
   await expect(browse).toHaveCSS("outline-width", "3px");
 });
 
-test("resizes the two-panel layout with pointer and keyboard input", async ({
+test("constrains a narrow desktop layout without clipping", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1600, height: 900 });
-  await page.goto("/");
-
-  const controls = page.getByRole("region", { name: "Calculation setup" });
-  const structure = page.getByRole("region", { name: "Structure workspace" });
-  const controlsHandle = page.getByRole("separator", {
-    name: "Resize calculation setup",
-  });
-  const initialControls = await controls.boundingBox();
-  const initialStructure = await structure.boundingBox();
-  const handle = await controlsHandle.boundingBox();
-  assert(initialControls, "Calculation panel must have a layout box");
-  assert(initialStructure, "Structure panel must have a layout box");
-  assert(handle, "Panel resize handle must have a layout box");
-  await page.mouse.move(handle.x + handle.width / 2, handle.y + 200);
-  await page.mouse.down();
-  await page.mouse.move(handle.x + 120, handle.y + 200);
-  await page.mouse.up();
-
-  const resizedControls = await controls.boundingBox();
-  const resizedStructure = await structure.boundingBox();
-  assert(resizedControls, "Resizing must retain the calculation panel");
-  assert(resizedStructure, "Resizing must retain the structure panel");
-  expect(resizedControls.width - initialControls.width).toBeGreaterThan(80);
-  expect(initialStructure.width - resizedStructure.width).toBeGreaterThan(80);
-
-  expect(await page.getByRole("separator").count()).toBe(1);
-  await controlsHandle.press("Home");
-  await expect(controlsHandle).toHaveAttribute("aria-valuenow", "24");
-});
-
-test("constrains resized desktop panes without clipping", async ({ page }) => {
   await page.setViewportSize({ width: 920, height: 700 });
   await page.goto("/");
-  const resize = page.getByRole("separator", {
-    name: "Resize calculation setup",
-  });
-  await resize.press("End");
-  await expect(resize).toHaveAttribute("aria-valuenow", "42");
 
   const dimensions = await page.evaluate<{
     readonly scrollWidth: number;
@@ -430,33 +377,33 @@ test("reflows intermediate widths without horizontal clipping", async ({
 }) => {
   await page.setViewportSize({ width: 1050, height: 900 });
   await page.goto("/");
+  await page.waitForLoadState("networkidle");
   await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
-  await page.getByRole("button", { name: "Generate recommendation" }).click();
-  const review = page.getByRole("region", { name: "Recommendation results" });
-  await expect(review).toBeVisible();
+  await waitForBundleReady(page);
 
   const workspace = await page.getByRole("main").boundingBox();
-  const reviewBox = await review.boundingBox();
+  const bundle = await page
+    .getByRole("region", { name: "Bundle" })
+    .boundingBox();
   expect(workspace).not.toBeNull();
-  expect(reviewBox).not.toBeNull();
+  expect(bundle).not.toBeNull();
   expect((workspace?.x ?? 0) + (workspace?.width ?? 0)).toBeLessThanOrEqual(
     1050,
   );
-  expect((reviewBox?.x ?? 0) + (reviewBox?.width ?? 0)).toBeLessThanOrEqual(
-    1050,
-  );
+  expect((bundle?.x ?? 0) + (bundle?.width ?? 0)).toBeLessThanOrEqual(1050);
 });
 
-test("uses the document scrollbar for long desktop content", async ({
+test("keeps the document static and scrolls long content inside its own card", async ({
   page,
 }) => {
+  // The 4-card dashboard is deliberately designed to fit one screen (no
+  // document-level scrollbar); each card's own .card-body scrolls
+  // internally instead once its content overflows.
   await page.setViewportSize({ width: 1440, height: 700 });
   await page.goto("/");
+  await page.waitForLoadState("networkidle");
   await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
-  await page.getByRole("button", { name: "Generate recommendation" }).click();
-  await expect(
-    page.getByRole("region", { name: "Recommendation results" }),
-  ).toBeVisible();
+  await waitForBundleReady(page);
 
   const documentScrolls = await page.evaluate<{
     readonly scrollHeight: number;
@@ -465,11 +412,26 @@ test("uses the document scrollbar for long desktop content", async ({
     scrollHeight: document.documentElement.scrollHeight,
     viewportHeight: window.innerHeight,
   })`);
-  expect(documentScrolls.scrollHeight).toBeGreaterThan(
+  expect(documentScrolls.scrollHeight).toBeLessThanOrEqual(
     documentScrolls.viewportHeight,
   );
-  await page.evaluate("window.scrollTo(0, document.body.scrollHeight)");
-  await expect(page.locator(".record-card").last()).toBeInViewport();
+
+  for (const name of [
+    "Composition composition",
+    "Geometry geometry",
+    "Symmetry symmetry",
+    "Relativistic relativistic",
+    "Symmetry Eff symmetry_eff",
+  ]) {
+    await page.getByRole("button", { name }).click();
+  }
+  const analysisBody = page.locator(".card-analysis .card-body");
+  const lastRecord = page.locator(".card-analysis .record-card").last();
+  await analysisBody.focus();
+  await analysisBody.evaluate(
+    "(element) => { element.scrollTop = element.scrollHeight; }",
+  );
+  await expect(lastRecord).toBeInViewport();
 });
 
 test("reflows at effective 200 percent zoom without clipping", async ({
@@ -499,6 +461,7 @@ test("removes nonessential animation when reduced motion is requested", async ({
     { times: 1 },
   );
   await page.goto("/");
+  await page.waitForLoadState("networkidle");
   await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
   await expect(
     page.getByRole("status", { name: "Workbench status" }),
@@ -511,6 +474,7 @@ test("removes nonessential animation when reduced motion is requested", async ({
 
 test("prepares a real Core recommendation from POSCAR", async ({ page }) => {
   await page.goto("/");
+  await page.waitForLoadState("networkidle");
   await page.locator('input[type="file"]').setInputFiles({
     name: "POSCAR",
     mimeType: "text/plain",
@@ -519,22 +483,18 @@ test("prepares a real Core recommendation from POSCAR", async ({ page }) => {
 
   await expect(page.getByLabel("Crystal structure viewer")).toBeVisible();
   await expect(page.getByText("1 atomic sites")).toBeVisible();
+  await expandAdvisorGroup(page, "Pseudopotential table");
   await page
-    .getByLabel("Pseudopotential table")
+    .getByRole("combobox", { name: "Pseudopotential table", exact: true })
     .selectOption("sssp-pbesol-efficiency-sr");
-  await page.getByRole("button", { name: "Generate recommendation" }).click();
-  await expect(
-    page.getByRole("region", { name: "Recommendation results" }),
-  ).toBeVisible();
-  await expandRecord(page, "Pseudo Table");
-  await expect(recordPanel(page, "Pseudo Table")).toContainText(
+  await waitForBundleReady(page);
+  await expandAdvisorGroup(page, "Pseudopotential table");
+  await expect(advisorGroupPanel(page, "Pseudopotential table")).toContainText(
     "sssp-pbesol-efficiency-sr",
   );
 
   const downloadStarted = page.waitForEvent("download");
-  await page
-    .getByRole("button", { name: "Generate input files (.zip)" })
-    .click();
+  await page.getByRole("button", { name: "Download (.zip)" }).click();
   const download = await downloadStarted;
   const path = await download.path();
   assert(path, "Download must have a local path");
@@ -549,23 +509,34 @@ test("relax-only overrides stay hidden until the relax task is chosen", async ({
   page,
 }) => {
   await page.goto("/");
+  await page.waitForLoadState("networkidle");
   await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
   await expect(page.getByRole("button", { name: "Relax" })).not.toBeVisible();
 
-  await page.getByLabel("Task").selectOption("relax");
+  await page.getByLabel("Task", { exact: true }).selectOption("relax");
   await expect(page.getByRole("button", { name: "Relax" })).toBeVisible();
 });
 
 test("table treatment clears when the functional changes", async ({ page }) => {
   await page.goto("/");
+  await page.waitForLoadState("networkidle");
   await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
-  const table = page.getByLabel("Pseudopotential table");
+  await expandAdvisorGroup(page, "Pseudopotential table");
+  await expandAdvisorGroup(page, "Functional");
+  const table = page.getByRole("combobox", {
+    name: "Pseudopotential table",
+    exact: true,
+  });
 
-  await page.getByLabel("Functional").selectOption("PBEsol");
+  await page
+    .getByRole("combobox", { name: "Functional", exact: true })
+    .selectOption("PBEsol");
   await table.selectOption("pseudodojo-pbesol-efficiency-fr");
   expect(await table.inputValue()).toBe("pseudodojo-pbesol-efficiency-fr");
 
-  await page.getByLabel("Functional").selectOption("LDA");
+  await page
+    .getByRole("combobox", { name: "Functional", exact: true })
+    .selectOption("LDA");
   expect(await table.inputValue()).toBe("");
   await expect(
     table.locator('option[value="pseudodojo-pbesol-efficiency-fr"]'),
@@ -576,12 +547,22 @@ test("table choices exclude tables that don't cover the structure's elements", a
   page,
 }) => {
   await page.goto("/");
+  await page.waitForLoadState("networkidle");
   await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
-  await page.getByLabel("Functional").selectOption("PBE");
-  const table = page.getByLabel("Pseudopotential table");
+  await expandAdvisorGroup(page, "Functional");
+  await expandAdvisorGroup(page, "Pseudopotential table");
+  await page
+    .getByRole("combobox", { name: "Functional", exact: true })
+    .selectOption("PBE");
+  const table = page.getByRole("combobox", {
+    name: "Pseudopotential table",
+    exact: true,
+  });
   await expect(
     table.locator('option[value="pseudodojo-pbe-lanthanides-sr"]'),
   ).toHaveCount(0);
+  await waitForBundleReady(page);
+  await page.waitForLoadState("networkidle");
 
   await page.locator('input[type="file"]').setInputFiles({
     name: "POSCAR",
@@ -590,8 +571,12 @@ test("table choices exclude tables that don't cover the structure's elements", a
       "Cerium\n1.0\n5.16 0 0\n0 5.16 0\n0 0 5.16\nCe\n1\nDirect\n0 0 0\n",
     ),
   });
-  await expect(page.getByText("Ce1", { exact: true })).toBeVisible();
-  await page.getByLabel("Functional").selectOption("PBE");
+  await expect(page.getByLabel("Inspected structure summary")).toContainText(
+    "Ce1",
+  );
+  await page
+    .getByRole("combobox", { name: "Functional", exact: true })
+    .selectOption("PBE");
   // Confirmed against a live /capabilities call: three real tables cover
   // Ce+PBE (pseudodojo's own lanthanides table plus both sssp accuracy
   // levels). The frontend deliberately doesn't replicate the backend's
@@ -606,23 +591,64 @@ test("table choices exclude tables that don't cover the structure's elements", a
     "sssp · PBE · precision · scalar",
   ]);
   await table.selectOption("sssp-pbe-efficiency-sr");
-  await page.getByRole("button", { name: "Generate recommendation" }).click();
-  await expandRecord(page, "Pseudo Table");
-  await expect(recordPanel(page, "Pseudo Table")).toContainText(
+  await waitForBundleReady(page);
+  await expandAdvisorGroup(page, "Pseudopotential table");
+  await expect(advisorGroupPanel(page, "Pseudopotential table")).toContainText(
     "sssp-pbe-efficiency-sr",
   );
 });
 
-async function expandRecord(page: Page, name: string): Promise<void> {
-  const control = page.getByRole("button", { name });
+test("keeps lattice details out of the crystal viewer until requested", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
+  const viewer = page.getByRole("region", { name: "Crystal structure viewer" });
+  await expect(viewer.locator("canvas")).toBeVisible();
+  await expect(
+    viewer.getByRole("heading", { name: "Si", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator("dl")).toHaveCount(0);
+
+  await viewer
+    .getByRole("button", { name: "Inspect lattice, sites and occupancies" })
+    .click();
+  await expect(
+    page.getByRole("dialog", { name: "Lattice, sites and occupancies" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Lattice parameters" }).locator("dl"),
+  ).toBeVisible();
+});
+
+/** Every settings-group Accordion.Panel is a `role="region"` whose
+ * accessible name is its own control's text (Mantine's Accordion gives
+ * the panel `aria-labelledby` pointing at the control) -- scoping by
+ * role keeps this from also matching the group's own form control,
+ * which can carry the identical accessible name (e.g. the
+ * "Pseudopotential table" group's own select). */
+async function expandAdvisorGroup(page: Page, name: string): Promise<void> {
+  const control = page.getByRole("button", { name, exact: true });
   if ((await control.getAttribute("aria-expanded")) === "true") return;
   await control.click();
 }
 
-function recordPanel(page: Page, name: string) {
-  return page
-    .getByRole("button", { name })
-    .locator("xpath=ancestor::*[contains(@class, 'record-card')]");
+function advisorGroupPanel(page: Page, name: string) {
+  return page.getByRole("region", { name, exact: true });
+}
+
+/** Waits for useAutoCompute's debounced recommendation to finish and the
+ * archive to be fetched -- there is no manual "generate" action any more,
+ * everything computes automatically once a structure loads or a setting
+ * changes (see BundleCard.tsx). */
+async function waitForBundleReady(page: Page): Promise<void> {
+  await expect(page.getByText("No recommendation yet")).toHaveCount(0, {
+    timeout: 20_000,
+  });
+  await expect(
+    page.getByRole("button", { name: "Download (.zip)" }),
+  ).toBeEnabled({ timeout: 20_000 });
 }
 
 function verifyArchive(
@@ -713,17 +739,3 @@ async function expectNoAxeViolations(page: Page): Promise<void> {
 function sha256(payload: Uint8Array): string {
   return createHash("sha256").update(payload).digest("hex");
 }
-
-test("keeps the crystal title clear of lattice details", async ({ page }) => {
-  await page.goto("/");
-  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
-  const viewer = page.getByRole("region", { name: "Crystal structure viewer" });
-  await expect(viewer.locator("canvas")).toBeVisible();
-  const title = await viewer
-    .getByRole("heading", { name: "Si", exact: true })
-    .boundingBox();
-  const lattice = await viewer.locator("dl").boundingBox();
-  assert(title, "Crystal title must have a layout box");
-  assert(lattice, "Lattice details must have a layout box");
-  expect(lattice.y).toBeGreaterThan(title.y + title.height);
-});
