@@ -44,3 +44,6 @@ graph.json
 # Generated transport contracts
 web/openapi.json
 web/src/api/schema.d.ts
+
+# Vite library-mode build output
+web/dist-lib/

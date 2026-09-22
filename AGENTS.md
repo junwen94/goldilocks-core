@@ -13,7 +13,7 @@ uv run pre-commit run --all-files
 
 `uv run poe` lists tasks, including `workbench` (backend :8000 + Vite :5173 in one command).
 
-Run `pre-commit` before committing. CI (on `main` and PRs) runs Ruff, pytest with branch coverage, focused mutation testing, and distribution validation — all via `uv`.
+Run `pre-commit` before committing. CI (on `main` and PRs) runs Ruff, pytest with branch coverage, focused mutation testing, and distribution validation — all via `uv` — plus a `workbench` job that builds/lints/tests the Node frontend, runs `docker build --check`, builds and boots the production Docker image, and runs a real Playwright e2e suite against it.
 
 ## Code style
 
