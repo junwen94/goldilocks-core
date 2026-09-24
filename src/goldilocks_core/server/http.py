@@ -6,15 +6,17 @@ calls ``server/_handlers.py``'s free functions, the exact same path
 ``server/mcp.py`` calls -- one shared request-validation/dispatch
 implementation for both transports, not two.
 
-**Workbench static-file mount.** When ``GOLDILOCKS_WORKBENCH_STATIC_ROOT``
-is set, or ``create_app()``/``serve()`` is given an explicit
-``static_root``, the built Workbench frontend (``web/dist``) is mounted
-at ``/`` -- same origin as the API, no CORS (v2 epic 12, #12). The
-explicit parameter takes precedence over the env var if both are given.
-Unset by default, so plain API use (tests, ``goldilocks serve http`` in
-dev) never needs a frontend build lying around. ``cli/_serve.py``'s own
-``--static-root`` flag (#59) is the other, CLI-facing way to reach this
-same parameter -- the Docker image uses the env var instead since it has
+**Workbench static-file mount.** Three ways to reach it, in precedence
+order: an explicit ``static_root`` given to ``create_app()``/``serve()``;
+``GOLDILOCKS_WORKBENCH_STATIC_ROOT``; a ``webapp/`` directory bundled
+inside this installed package (#122) -- present only when this package
+was built from a release that ran ``npm run build`` first (see
+``.github/workflows/release.yml``), absent from a plain source checkout
+or dev install, so ``uv build``/``uv sync`` here never needs a frontend
+build lying around either. Whichever is found is mounted at ``/`` --
+same origin as the API, no CORS (v2 epic 12, #12). ``cli/_serve.py``'s
+own ``--static-root`` flag (#59) is the other, CLI-facing way to reach
+the first tier -- the Docker image uses the env var instead since it has
 no CLI invocation to add a flag to.
 
 Behind the optional ``[http]`` extra; importing ``goldilocks_core``
@@ -101,8 +103,22 @@ def create_app(*, static_root: str | Path | None = None) -> Any:
     return app
 
 
+def _bundled_static_root() -> Path | None:
+    """A ``webapp/`` directory shipped inside this installed package, if a
+    release build put one there (#122) -- ``None`` for a plain source
+    checkout or dev install, where nothing ever creates it."""
+    from importlib import resources
+
+    candidate = resources.files("goldilocks_core") / "webapp"
+    if candidate.is_dir() and (candidate / "index.html").is_file():
+        return Path(str(candidate))
+    return None
+
+
 def _mount_workbench(app: Any, static_root: str | Path | None) -> None:
-    static_root = static_root or os.environ.get(_STATIC_ROOT_ENV)
+    static_root = (
+        static_root or os.environ.get(_STATIC_ROOT_ENV) or _bundled_static_root()
+    )
     if not static_root:
         return
     from fastapi.staticfiles import StaticFiles

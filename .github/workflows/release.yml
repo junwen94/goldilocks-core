@@ -47,11 +47,45 @@ jobs:
             exit 1
           fi
 
+      # Bundled into the wheel (#122) so `pip install goldilocks-core[http]`
+      # serves the real Workbench, not just the API -- a plain `uv build`
+      # outside this workflow never runs these two steps, so src/goldilocks_
+      # core/webapp/ stays absent (and the package-data glob matching it
+      # matches nothing) for every other build path.
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build the Workbench frontend
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Bundle the built frontend into the package
+        run: |
+          mkdir -p src/goldilocks_core/webapp
+          cp -r web/dist/. src/goldilocks_core/webapp/
+
       - name: Build
         run: uv build
 
       - name: Check the artifacts are well formed
         run: uvx twine check --strict dist/*
+
+      # A silently-empty package-data glob (e.g. the wheel's own internal
+      # layout changing under it) would ship an API-only wheel with no
+      # error anywhere -- exactly the #122 bug this workflow exists to fix,
+      # just reintroduced. Fail loudly instead.
+      - name: Check the Workbench frontend actually made it into the wheel
+        run: |
+          if ! unzip -l dist/*.whl | grep -q 'goldilocks_core/webapp/index.html'; then
+            echo "::error::the built wheel has no bundled Workbench frontend"
+            exit 1
+          fi
 
       - name: Create the GitHub release
         uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0

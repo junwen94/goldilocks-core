@@ -98,6 +98,54 @@ class TestWorkbenchStaticMount:
 
         assert "Param" in response.text
 
+    def test_root_serves_the_bundled_frontend_when_one_ships_with_this_install(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#122: a release build copies web/dist into src/goldilocks_core/
+        webapp/ before packaging -- neither the explicit parameter nor the
+        env var is involved, so this is the only tier left once both are
+        unset."""
+        (tmp_path / "index.html").write_text("<!doctype html><title>Bundled</title>")
+        monkeypatch.setattr(
+            "goldilocks_core.server.http._bundled_static_root", lambda: tmp_path
+        )
+
+        client = TestClient(create_app())
+        response = client.get("/")
+
+        assert response.status_code == 200
+        assert "Bundled" in response.text
+
+    def test_the_env_var_wins_over_the_bundled_frontend(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bundled_root = tmp_path / "bundled"
+        bundled_root.mkdir()
+        (bundled_root / "index.html").write_text(
+            "<!doctype html><title>Bundled</title>"
+        )
+        env_root = tmp_path / "from-env"
+        env_root.mkdir()
+        (env_root / "index.html").write_text("<!doctype html><title>Env</title>")
+        monkeypatch.setattr(
+            "goldilocks_core.server.http._bundled_static_root", lambda: bundled_root
+        )
+        monkeypatch.setenv("GOLDILOCKS_WORKBENCH_STATIC_ROOT", str(env_root))
+
+        client = TestClient(create_app())
+        response = client.get("/")
+
+        assert "Env" in response.text
+
+    def test_no_bundled_frontend_ships_with_a_plain_source_install(self) -> None:
+        """The whole point of #122's design: a dev/source install (this
+        test suite's own environment) never has anything under
+        src/goldilocks_core/webapp/, so this must resolve to None here --
+        not mocked, the real function against the real installed package."""
+        from goldilocks_core.server.http import _bundled_static_root
+
+        assert _bundled_static_root() is None
+
 
 class TestOperationalRoutes:
     def test_health(self, client: TestClient) -> None:

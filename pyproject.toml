@@ -259,6 +259,10 @@ goldilocks_core = [
     "inputs/profiles/*.toml",
     "examples/structures/*.cif",
     "examples/structures/README.md",
+    # Populated only by release.yml (npm run build, copied in before `uv
+    # build`) -- a plain local/dev build never creates this directory, so
+    # this glob matches nothing and contributes nothing to the wheel (#122).
+    "webapp/**/*",
 ]
 
 

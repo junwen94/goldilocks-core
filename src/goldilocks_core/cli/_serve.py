@@ -24,7 +24,11 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     http.add_argument(
         "--static-root",
         default=None,
-        help="Serve the built Workbench frontend (a web/dist directory) at /.",
+        help=(
+            "Serve the built Workbench frontend (a web/dist directory) at /. "
+            "Defaults to the frontend bundled into this install, if this "
+            "package was installed from a release build (#122)."
+        ),
     )
     transports.add_parser("mcp", help="Run the MCP stdio transport.")
 

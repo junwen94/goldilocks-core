@@ -6,11 +6,22 @@ variable-cell relaxation) from a crystal structure.
 
 ## Installation
 
-Published on PyPI -- for just the `goldilocks` CLI:
+Published on PyPI. For just the `goldilocks` CLI:
 
 ```bash
 pip install goldilocks-core
 ```
+
+For the CLI plus the built Workbench, ready to serve with no separate
+frontend build:
+
+```bash
+pip install "goldilocks-core[http]"
+goldilocks serve http
+```
+
+Open **http://127.0.0.1:8000** -- the Workbench frontend is bundled into
+the package itself as of this release.
 
 To work on the Workbench or the codebase itself, clone the repository
 instead. Install [uv](https://docs.astral.sh/uv/getting-started/installation/)
