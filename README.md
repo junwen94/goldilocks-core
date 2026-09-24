@@ -6,11 +6,18 @@ variable-cell relaxation) from a crystal structure.
 
 ## Installation
 
-Not published to PyPI yet -- clone the repository. Install
-[uv](https://docs.astral.sh/uv/getting-started/installation/) first:
+Published on PyPI -- for just the `goldilocks` CLI:
 
 ```bash
-git clone https://github.com/junwen94/goldilocks-core.git
+pip install goldilocks-core
+```
+
+To work on the Workbench or the codebase itself, clone the repository
+instead. Install [uv](https://docs.astral.sh/uv/getting-started/installation/)
+first:
+
+```bash
+git clone https://github.com/stfc/goldilocks-core.git
 cd goldilocks-core
 uv sync
 ```
