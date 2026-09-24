@@ -163,6 +163,32 @@ export const capabilities: Capabilities = {
       description: "Explicit Monkhorst-Pack mesh dimensions.",
     },
     {
+      key: "k_distance",
+      group: "k_sampling",
+      type: "number",
+      unit: "Å⁻¹",
+      codes: null,
+      tasks: null,
+      programs: ["pw.x"],
+      scope: "per_step",
+      ml_target: "k_distance",
+      approaches: ["human", "ml", "heuristic"],
+      description: "Target reciprocal-space spacing between k-points.",
+    },
+    {
+      key: "nosym",
+      group: "n_irr_k",
+      type: "boolean",
+      unit: null,
+      codes: null,
+      tasks: null,
+      programs: ["pw.x"],
+      scope: "per_step",
+      ml_target: null,
+      approaches: ["human", "heuristic"],
+      description: "Disable symmetry reduction when counting k-points.",
+    },
+    {
       key: "ion_dynamics",
       group: "relax",
       type: "string",
@@ -265,6 +291,7 @@ const cutoffsRecord: ResolvedField<{ ecutwfc_ry: number; ecutrho_ry: number }> =
 
 export const scientificRecords: Readonly<Record<string, ResolvedField>> = {
   k_sampling: kSamplingRecord,
+  n_irr_k: { status: "resolved", value: 10, source: "heuristic" },
   cutoffs: cutoffsRecord,
   magnetic: {
     status: "resolved",

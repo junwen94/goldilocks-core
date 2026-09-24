@@ -152,6 +152,19 @@ describe("Goldilocks Workbench", () => {
     expect(optionValues(table)).toEqual(["", pbe.id]);
   });
 
+  it("shows the sole HPC profile's real name instead of a fake Automatic option", async () => {
+    // resolve_hpc_profile (server-side) isn't a smart picker -- with none
+    // given it uses the one installed profile because there is no
+    // ambiguity, not because it "automatically" chose SCARF over some
+    // alternative. The fixture only registers one profile.
+    renderApp(new CoreStub(Promise.resolve(capabilities)));
+
+    const hpc = await screen.findByRole("combobox", { name: "HPC profile" });
+    expect(hpc).toHaveValue("scarf");
+    expect(optionValues(hpc)).toEqual(["scarf"]);
+    expect(screen.queryByText("Automatic")).not.toBeInTheDocument();
+  });
+
   it("exposes all four workspace columns at once", async () => {
     renderApp(new CoreStub(Promise.resolve(capabilities)));
 
@@ -424,14 +437,65 @@ describe("Goldilocks Workbench", () => {
 
     // The k_sampling/cutoffs/magnetic records (all advisor-tier) merge
     // into their own settings-group accordion item rather than a
-    // separate global list -- expanding "K sampling" shows the actual
-    // resolved value alongside its override controls.
+    // separate global list -- expanding "K sampling" shows each
+    // setting's own control pre-filled with its actual resolved value,
+    // not a separate read-only card next to an always-"Automatic" one.
     const calculation = advisorsPanel();
     await user.click(within(calculation).getByText("K sampling"));
-    // 0.15 (the resolved k_distance) uniquely identifies this record's
-    // own value merged into its group -- "Heuristic default" alone
-    // would be ambiguous, all three fixture records share that source.
-    expect(within(calculation).getByText("0.15")).toBeInTheDocument();
+    // 0.15 (the resolved k_distance) is shown directly inside its own
+    // override control -- this codebase's "no separate card, the box
+    // itself shows the real value" pattern, same as the Analysis facts.
+    expect(within(calculation).getByLabelText("k distance · Å⁻¹")).toHaveValue(
+      "0.15",
+    );
+    // n_irr_k (10, merged into this same section) has no override of
+    // its own -- shown as a plain resolved-value line instead.
+    expect(
+      within(calculation).getByText(/Irreducible k-points: 10/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the k_distance interval instead of a fabricated point when k_index resolved the mesh", async () => {
+    const user = userEvent.setup();
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [
+      Promise.resolve({
+        records: {
+          ...explainResult.records,
+          k_sampling: {
+            status: "resolved",
+            value: {
+              mesh: [4, 4, 4],
+              shift: [0, 0, 0],
+              k_distance: null,
+              k_distance_interval: [0.12, 0.18],
+              k_index: 5,
+              warnings: [],
+            },
+            source: "human",
+          },
+        },
+        warnings: [],
+      }),
+    ];
+    const { container } = renderApp(core);
+
+    await openStructure(user, container);
+    await screen.findByRole("button", { name: "Download (.zip)" });
+
+    const calculation = advisorsPanel();
+    await user.click(within(calculation).getByText("K sampling"));
+
+    // k_distance itself has nothing to show (a whole interval maps to
+    // one rung, not one point) -- the honest range appears as a plain
+    // line instead of a fabricated single number in the box.
+    expect(within(calculation).getByLabelText("k distance · Å⁻¹")).toHaveValue(
+      "",
+    );
+    expect(
+      within(calculation).getByText(/Δk ∈ \[0\.120, 0\.180\] Å⁻¹/),
+    ).toBeInTheDocument();
   });
 
   it("announces structured scientific warnings returned with a recommendation", async () => {

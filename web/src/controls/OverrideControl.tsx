@@ -95,10 +95,10 @@ export function OverrideControl({
     return (
       <NumberInput
         label={label}
-        description={meta.description}
+        description={description}
         disabled={disabled}
         placeholder={automaticPlaceholder(meta)}
-        value={pinned ? (value as number) : ""}
+        value={typeof effective === "number" ? effective : ""}
         onChange={(raw) => {
           if (raw === "") {
             onChange(undefined);
@@ -115,10 +115,10 @@ export function OverrideControl({
     return (
       <TextInput
         label={label}
-        description={meta.description}
+        description={description}
         disabled={disabled}
         placeholder={automaticPlaceholder(meta)}
-        value={pinned ? stringifyValue(value) : ""}
+        value={typeof effective === "string" ? effective : ""}
         onChange={(event) => {
           const raw = event.currentTarget.value;
           onChange(raw === "" ? undefined : raw);

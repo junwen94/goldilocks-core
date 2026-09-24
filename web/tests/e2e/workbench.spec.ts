@@ -191,7 +191,12 @@ test("keeps an old Result visible until the recommendation auto-recomputes", asy
   await expect(downloadButton).toBeEnabled();
 
   await page.getByRole("button", { name: "K sampling", exact: true }).click();
-  await page.getByRole("checkbox", { name: "Set an explicit grid" }).check();
+  // No "set an explicit grid" checkbox any more -- each axis shows its
+  // resolved value directly and pins the whole grid as soon as one axis
+  // is edited (see KGridControl's own docstring).
+  await page.getByLabel("K-point grid x").fill("1");
+  await page.getByLabel("K-point grid y").fill("1");
+  await page.getByLabel("K-point grid z").fill("1");
 
   await expect(
     page.getByRole("status", { name: "Recommendation notice" }),
@@ -310,11 +315,15 @@ test("completes the preparation workflow with keyboard-only activation", async (
   });
   await kSampling.press("Enter");
   await expect(kSampling).toHaveAttribute("aria-expanded", "true");
-  const explicitGrid = page.getByRole("checkbox", {
-    name: "Set an explicit grid",
-  });
-  await explicitGrid.press("Space");
-  await expect(explicitGrid).toBeChecked();
+  // No "set an explicit grid" checkbox any more -- Tab from the header
+  // into the K-point grid's first axis (its own first focusable control)
+  // and type a value, same keyboard-only spirit as the checkbox this
+  // replaces.
+  const gridX = page.getByLabel("K-point grid x");
+  await page.keyboard.press("Tab");
+  await expect(gridX).toBeFocused();
+  await page.keyboard.type("1");
+  await page.keyboard.press("Tab");
   await expect(
     page.getByRole("status", { name: "Recommendation notice" }),
   ).toContainText(
@@ -489,9 +498,12 @@ test("prepares a real Core recommendation from POSCAR", async ({ page }) => {
     .selectOption("sssp-pbesol-efficiency-sr");
   await waitForBundleReady(page);
   await expandAdvisorGroup(page, "Pseudopotential table");
-  await expect(advisorGroupPanel(page, "Pseudopotential table")).toContainText(
-    "sssp-pbesol-efficiency-sr",
-  );
+  // The pinned table's own id is the select's value, not rendered as
+  // separate text anywhere -- PseudoTableControl shows the real
+  // provider/functional/accuracy/relativistic label, not a raw id.
+  await expect(
+    page.getByRole("combobox", { name: "Pseudopotential table", exact: true }),
+  ).toHaveValue("sssp-pbesol-efficiency-sr");
 
   const downloadStarted = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download (.zip)" }).click();
@@ -584,8 +596,12 @@ test("table choices exclude tables that don't cover the structure's elements", a
   // heuristic lives in advisors/pseudo_selection.py, not duplicated
   // here) -- picking a table here is an explicit human override, not
   // automatic selection, so every element-eligible table is offered.
+  // "—" (not a literal "Automatic" label) is the pseudopotential-table
+  // control's own placeholder, shown only while nothing has resolved yet
+  // -- see OverrideControl.tsx/CalculationForm.tsx's PseudoTableControl,
+  // which otherwise pre-selects whichever table actually resolved.
   await expect(table.locator("option")).toHaveText([
-    "Automatic",
+    "—",
     "pseudodojo · PBE · efficiency · scalar",
     "sssp · PBE · efficiency · scalar",
     "sssp · PBE · precision · scalar",
@@ -593,9 +609,7 @@ test("table choices exclude tables that don't cover the structure's elements", a
   await table.selectOption("sssp-pbe-efficiency-sr");
   await waitForBundleReady(page);
   await expandAdvisorGroup(page, "Pseudopotential table");
-  await expect(advisorGroupPanel(page, "Pseudopotential table")).toContainText(
-    "sssp-pbe-efficiency-sr",
-  );
+  await expect(table).toHaveValue("sssp-pbe-efficiency-sr");
 });
 
 test("keeps lattice details out of the crystal viewer until requested", async ({
@@ -632,10 +646,6 @@ async function expandAdvisorGroup(page: Page, name: string): Promise<void> {
   const control = page.getByRole("button", { name, exact: true });
   if ((await control.getAttribute("aria-expanded")) === "true") return;
   await control.click();
-}
-
-function advisorGroupPanel(page: Page, name: string) {
-  return page.getByRole("region", { name, exact: true });
 }
 
 /** Waits for useAutoCompute's debounced recommendation to finish and the
