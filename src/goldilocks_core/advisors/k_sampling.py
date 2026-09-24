@@ -73,7 +73,7 @@ isotropic and does not special-case low-dimensional structures.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Annotated
 
 from pydantic import Field
@@ -137,6 +137,21 @@ class KSamplingDecision:
     shift: tuple[int, int, int]
     k_distance: float | None
     warnings: tuple[Warning, ...] = ()
+    k_index: int | None = None
+    """Best-effort reverse lookup of the resolved ``mesh`` onto this
+    structure's own k-mesh ladder (``kmesh.build_gamma_kmesh_entries``) --
+    see ``_with_k_index`` below. ``None`` when the resolved mesh doesn't
+    land exactly on a rung (expected whenever the mesh came from
+    ``k_distance``/ml/heuristic rather than an explicit ``k_index``
+    override), not a failure."""
+    k_distance_interval: tuple[float, float] | None = None
+    """The matched rung's own ``KMeshEntry.k_distance_interval``, carried
+    alongside ``k_index`` whenever a rung is known. Exists so a caller
+    resolving via ``k_index`` -- where ``k_distance`` itself is
+    deliberately ``None``, a whole interval maps to one rung, not one
+    point -- still has something honest to show instead of nothing at
+    all; showing a fabricated single point (e.g. the interval midpoint)
+    would be worse than showing no number."""
 
 
 class KSamplingHumanInput(HumanInput):
@@ -184,7 +199,7 @@ def k_sampling(
             k_distance=None,
             warnings=warnings,
         )
-        return Resolved(decision, Provenance(source="human"))
+        return Resolved(_with_k_index(decision, structure), Provenance(source="human"))
     if human.k_index is not None:
         resolved = _from_k_index(structure, human.k_index, human.shift)
         if isinstance(resolved, str):
@@ -195,33 +210,50 @@ def k_sampling(
             shift=resolved.shift,
             k_distance=resolved.k_distance,
             warnings=warnings,
+            # Already known exactly -- this *is* the rung the human asked
+            # for, no reverse lookup needed (and it would be redundant:
+            # building the ladder a second time to find what we already
+            # have). `_from_k_index` already attached both from the same
+            # matched `KMeshEntry`.
+            k_index=resolved.k_index,
+            k_distance_interval=resolved.k_distance_interval,
         )
         return Resolved(decision, Provenance(source="human"))
     if human.k_distance is not None:
         return Resolved(
-            _from_k_distance(structure, human.k_distance, human.shift),
+            _with_k_index(
+                _from_k_distance(structure, human.k_distance, human.shift), structure
+            ),
             Provenance(source="human"),
         )
     ml_value = _ml_k_distance(structure)
     if ml_value is not None:
         return Resolved(
-            _from_k_distance(structure, ml_value, human.shift),
+            _with_k_index(
+                _from_k_distance(structure, ml_value, human.shift), structure
+            ),
             Provenance(source="ml"),
         )
     if llm.k_distance is not None:
         return Resolved(
-            _from_k_distance(structure, llm.k_distance, None), Provenance(source="llm")
+            _with_k_index(_from_k_distance(structure, llm.k_distance, None), structure),
+            Provenance(source="llm"),
         )
 
     if isinstance(is_metal, Blocked):
         return Blocked(by=is_metal)
     if is_metal.ok and is_metal.value == "non_metal":
         return Resolved(
-            _from_k_distance(structure, _NON_METAL_K_DISTANCE, human.shift),
+            _with_k_index(
+                _from_k_distance(structure, _NON_METAL_K_DISTANCE, human.shift),
+                structure,
+            ),
             Provenance(source="heuristic"),
         )
     return Resolved(
-        _from_k_distance(structure, _METAL_K_DISTANCE, human.shift),
+        _with_k_index(
+            _from_k_distance(structure, _METAL_K_DISTANCE, human.shift), structure
+        ),
         Provenance(source="heuristic"),
     )
 
@@ -270,5 +302,29 @@ def _from_k_index(
         )
     entry = entries[k_index - 1]
     return KSamplingDecision(
-        mesh=entry.mesh, shift=shift or _GAMMA_SHIFT, k_distance=None
+        mesh=entry.mesh,
+        shift=shift or _GAMMA_SHIFT,
+        k_distance=None,
+        k_index=entry.kindex,
+        k_distance_interval=entry.k_distance_interval,
     )
+
+
+def _with_k_index(
+    decision: KSamplingDecision, structure: Structure
+) -> KSamplingDecision:
+    """Best-effort reverse lookup: does the resolved ``mesh`` land exactly
+    on a rung of this structure's own ladder? ``build_gamma_kmesh_entries``
+    guarantees the ladder is complete and non-repeating (its own
+    docstring), so at most one entry can match and the first hit is
+    authoritative. Leaves ``decision`` untouched (``k_index`` stays
+    ``None``) when the mesh came from a ``k_distance``/ml/heuristic value
+    that falls between rungs -- not every resolved mesh has one."""
+    for entry in build_gamma_kmesh_entries(structure):
+        if entry.mesh == decision.mesh:
+            return replace(
+                decision,
+                k_index=entry.kindex,
+                k_distance_interval=entry.k_distance_interval,
+            )
+    return decision

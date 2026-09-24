@@ -158,7 +158,65 @@ def test_human_k_index_resolves_to_that_rung_s_own_mesh() -> None:
     assert state.ok
     assert state.value.mesh == entries[2].mesh
     assert state.value.k_distance is None
+    assert state.value.k_index == 3
+    assert state.value.k_distance_interval == entries[2].k_distance_interval
     assert state.source == "human"
+
+
+def test_heuristic_default_k_index_matches_the_ladder() -> None:
+    """Not every resolved mesh lands on a rung -- this cross-checks
+    whatever `k_index` the heuristic path attached against an
+    independently built ladder, rather than assuming 0.15 A^-1 happens to
+    land on one for this particular fixture (it may not)."""
+    state = k_sampling(is_metal(_IRON), _IRON)
+
+    entries = build_gamma_kmesh_entries(_IRON)
+    expected = next(
+        (entry.kindex for entry in entries if entry.mesh == state.value.mesh), None
+    )
+    assert state.value.k_index == expected
+
+
+def test_human_k_distance_landing_on_a_rung_reverse_derives_k_index() -> None:
+    entries = build_gamma_kmesh_entries(_IRON)
+    third_rung = entries[2]
+    low, high = third_rung.k_distance_interval
+    midpoint = (low + high) / 2
+
+    state = k_sampling(
+        is_metal(_IRON), _IRON, human=KSamplingHumanInput(k_distance=midpoint)
+    )
+
+    assert state.ok
+    assert state.value.mesh == third_rung.mesh
+    assert state.value.k_index == 3
+    assert state.value.k_distance_interval == third_rung.k_distance_interval
+
+
+def test_human_k_grid_matching_a_ladder_rung_reverse_derives_k_index() -> None:
+    entries = build_gamma_kmesh_entries(_IRON)
+    third_rung_mesh = entries[2].mesh
+
+    state = k_sampling(
+        is_metal(_IRON), _IRON, human=KSamplingHumanInput(k_grid=third_rung_mesh)
+    )
+
+    assert state.ok
+    assert state.value.k_index == 3
+    assert state.value.k_distance_interval == entries[2].k_distance_interval
+
+
+def test_human_k_grid_off_the_ladder_leaves_k_index_none() -> None:
+    """Iron is cubic, so its ladder only ever contains (n, n, n) meshes --
+    an anisotropic grid can never land on a rung."""
+    state = k_sampling(
+        is_metal(_IRON), _IRON, human=KSamplingHumanInput(k_grid=(1, 2, 1))
+    )
+
+    assert state.ok
+    assert state.value.mesh == (1, 2, 1)
+    assert state.value.k_index is None
+    assert state.value.k_distance_interval is None
 
 
 def test_human_k_index_with_a_shift() -> None:
