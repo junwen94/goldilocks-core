@@ -49,16 +49,32 @@ sensible fallback value for a missing electron count, so this is not
 made optional with a guessed default -- a caller that does not yet know
 ``nelec`` should not call this advisor yet.
 
-**Per-purpose band boosting is a known, real gap, not addressed here.**
-A ``nscf``/``bands``/``dos`` step commonly wants materially more empty
+**Per-purpose band boosting is not directly implemented, but the DOS
+task already gets it as a side effect, worth knowing about.** A
+``nscf``/``bands``/``dos`` step commonly wants materially more empty
 bands than a plain ``scf`` step, to actually cover the energy window a
-DOS or band structure plot needs -- but no source in this codebase
-specifies a multiplier or a target energy window, so this heuristic
-applies the same QE-official base formula regardless of ``purpose``.
-``purpose`` is still accepted in the signature (signature-stable for
-whenever that rule exists), it is simply not yet consulted -- the same
-treatment ``advisors/k_sampling.py`` gives its own currently-unused
-``occupations`` input.
+DOS or band structure plot needs -- this module has no explicit
+multiplier or target-energy-window rule keyed on ``purpose`` (it is
+still accepted in the signature, signature-stable for whenever such a
+rule exists, but not yet consulted -- the same treatment
+``advisors/k_sampling.py`` gives its own currently-unused
+``occupations`` input). In practice, ``service/_dos.py``'s nscf step
+already forces ``occupations="tetrahedra_opt"`` (aiida-quantumespresso's
+own DOS protocol default, chosen for integration-grid quality, not for
+band count) -- and ``tetrahedra_opt`` is one of this module's own
+``_METAL_LIKE_OCCUPATIONS``, so ``nbnd()`` called for that nscf step
+takes the metal-like +20%/minimum-+4 branch regardless of the
+material's real classification, incidentally giving the nscf step real
+empty bands an insulator's own scf step gets none of (confirmed
+empirically 2026-09-24 against the bundled ``Si.cif``: scf ``nbnd=16``,
+exactly ``nelec/2``; nscf ``nbnd=20``). This is a genuine, working
+mechanism, just an accidental one -- nobody chose 20%/+4 *for* band-gap
+visibility, it is only there because of how ``occupations`` classifies
+``tetrahedra_opt``. It has not been checked whether that margin is
+actually enough for every case (a narrow-gap material, or a DOS/band
+plot that wants to show several eV of conduction states) -- a future
+``purpose``-aware rule, if one is ever added, should treat this as the
+thing it would be replacing, not something already solved on purpose.
 """
 
 from __future__ import annotations
