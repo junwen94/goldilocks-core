@@ -376,6 +376,35 @@ def test_afm_relabeled_species_reach_atomic_species_and_positions(
     assert "Fe2  0.5" in positions
 
 
+def test_non_afm_structure_collapses_source_labels_to_one_species_per_element(
+    pseudo_metadata_factory,
+) -> None:
+    """Real CIF files often carry their own per-atom label per
+    crystallographic site (e.g. ``Si1``..``Si40`` for a plain,
+    non-magnetic silicon cell) that has nothing to do with magnetism --
+    AFM species-splitting did not run here (`afm_relabeled=False`, the
+    default), so those source labels must not leak into ATOMIC_SPECIES/
+    ATOMIC_POSITIONS as if they were real, distinct QE species."""
+    structure = Structure(
+        Lattice.cubic(5.43),
+        ["Si", "Si", "Si"],
+        [[0.0, 0.0, 0.0], [0.25, 0.25, 0.25], [0.5, 0.5, 0.0]],
+        labels=["Si1", "Si7", "Si23"],
+    )
+    system = _system(structure, pseudo_metadata_factory)
+
+    content = write_qe_scf(system, _step(), _JOB, _CTX)[0].files["scf.in"]
+
+    assert "ntyp             = 1" in content
+    species = content.split("ATOMIC_SPECIES\n")[1].split("\n\n")[0]
+    assert species == "  Si  28.0855  Si.UPF"
+    positions = content.split("ATOMIC_POSITIONS")[1]
+    assert "Si1" not in positions
+    assert "Si7" not in positions
+    assert "Si23" not in positions
+    assert positions.count("Si  ") == 3
+
+
 def test_vdw_method_translates_to_qe_keyword(
     silicon_structure, pseudo_metadata_factory
 ) -> None:

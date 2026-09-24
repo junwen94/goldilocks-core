@@ -520,7 +520,13 @@ class TestRunAndExplainAgainstRealAssets:
         ('Fe') even with zero --set flags and no AFM relabeling -- this
         used to crash goldilocks run with an uncaught KeyError on the
         plain default heuristic path, a regression #27 introduced while
-        fixing the AFM-specific case."""
+        fixing the AFM-specific case.
+
+        Both sites get the identical heuristic-default fraction (no AFM
+        requested), so generation collapses 'Fe0'/'Fe1' back to one 'Fe'
+        species with one shared starting_magnetization -- not two
+        redundant, identically-valued ATOMIC_SPECIES entries just because
+        the source CIF happened to label its two sites separately."""
         destination = tmp_path / "out"
 
         completed = _run_cli(
@@ -534,8 +540,9 @@ class TestRunAndExplainAgainstRealAssets:
 
         assert completed.returncode == 0, completed.stderr
         content = (destination / "scf.in").read_text()
+        assert "ntyp             = 1" in content
         assert "starting_magnetization(1)" in content
-        assert "starting_magnetization(2)" in content
+        assert "starting_magnetization(2)" not in content
 
     def test_run_json_output_is_stable_and_sorted(self, real_assets: None) -> None:
         silicon = structure("Si.cif")

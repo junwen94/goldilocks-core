@@ -64,6 +64,7 @@ from goldilocks_core.generation.quantum_espresso.namelists import render_namelis
 from goldilocks_core.generation.quantum_espresso.scf import (
     atomic_positions,
     atomic_species,
+    canonicalize_system_for_generation,
     cell_parameters,
     control_keywords,
     electrons_keywords,
@@ -103,6 +104,7 @@ def write_qe_relax(
     own type (``RelaxOptions | VcRelaxOptions | None``) cannot enforce
     that by itself.
     """
+    system = canonicalize_system_for_generation(system)
     structure = system.magnetic.relabeled_structure
     if not structure.is_ordered:
         raise GenerationError(

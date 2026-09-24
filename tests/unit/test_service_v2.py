@@ -350,7 +350,13 @@ def test_forced_spin_polarization_survives_generation_on_a_labeled_structure(
     Uses the silicon-covering installed_table fixture (real Fe pseudo
     coverage isn't fixtured) with spin_polarized forced on -- the
     crash reproduces for any spin-polarized, label-carrying structure,
-    not only genuinely magnetic elements."""
+    not only genuinely magnetic elements.
+
+    Both sites get the identical heuristic-default fraction (no AFM, no
+    per-site override) -- generation collapses ``Si0``/``Si1`` back to
+    one ``Si`` species with one shared ``starting_magnetization(1))``,
+    not two redundant, identically-valued species (the #32-era fix kept
+    them split only to avoid the crash, not because physics needed two)."""
     store, _table = installed_table
     two_silicon_sites = Structure(
         Lattice.cubic(5.43),
@@ -368,8 +374,9 @@ def test_forced_spin_polarization_survives_generation_on_a_labeled_structure(
     assert report.ok, report.blocking
     steps = generate(advice, report, ctx=default_shared_context())
     content = steps[0].files["scf.in"]
+    assert "ntyp             = 1" in content
     assert "starting_magnetization(1)" in content
-    assert "starting_magnetization(2)" in content
+    assert "starting_magnetization(2)" not in content
 
 
 @pytest.mark.skipif(
