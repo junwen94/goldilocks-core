@@ -59,6 +59,13 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      # web/'s own `prebuild` script (generate:api) runs `uv run --frozen
+      # --no-sync ../scripts/export_workbench_openapi.py`, which imports
+      # goldilocks_core[http] -- needs a real synced venv to import from,
+      # not just the sdist/wheel `uv build` produces later.
+      - name: Install goldilocks-core itself, for the OpenAPI schema export
+        run: uv sync --frozen --extra http
+
       - name: Build the Workbench frontend
         working-directory: web
         run: |
