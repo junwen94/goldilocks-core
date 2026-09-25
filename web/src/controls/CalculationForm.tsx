@@ -222,7 +222,11 @@ export function CalculationForm() {
         </Text>
       ) : null}
 
-      <Accordion multiple transitionDuration={0}>
+      <Accordion
+        multiple
+        transitionDuration={0}
+        classNames={{ label: "advisor-setting-label" }}
+      >
         <SettingsGroupItems
           settings={capabilities.settings}
           task={draft.task}

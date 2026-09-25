@@ -132,6 +132,14 @@
   min-width: var(--workbench-narrow-card-min);
 }
 
+/* Mantine's own Accordion.Control label padding (--mantine-spacing-sm,
+ * ~10px) reads as cramped for a list this long (13 groups) -- a two-class
+ * selector beats the single hashed Mantine class without needing
+ * !important or fighting cascade order. */
+.card-advisors .advisor-setting-label {
+  padding-block: var(--mantine-spacing-md);
+}
+
 .card-magnetic-orderings {
   --card-accent: #0f766e;
   /* Overrides .workbench-card's min-width: 0 (same specificity, later

@@ -32,16 +32,15 @@ export function App() {
   );
 }
 
-function Workbench() {
+// Header-less: everything `Workbench` renders except `AppHeader` -- the
+// piece goldilocks-agent embeds directly into its own app shell (which has
+// its own header/navigation already), re-exported via `index.ts`'s library
+// build for that purpose. Kept in sync with `Workbench` below by
+// construction (one calls the other), not by duplicating this JSX a
+// second time.
+export function WorkbenchContent() {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
-  const theme = useComputedColorScheme("light");
-  const { toggleColorScheme: toggleTheme } = useMantineColorScheme();
-  useEffect(() => {
-    document
-      .querySelector<HTMLMetaElement>('meta[name="theme-color"]')
-      ?.setAttribute("content", theme === "light" ? "#ffffff" : "#242424");
-  }, [theme]);
   useAutoCompute(workspace, snapshot);
 
   // Magnetic-ordering exploration is only meaningful once the structure
@@ -55,7 +54,6 @@ function Workbench() {
 
   return (
     <>
-      <AppHeader theme={theme} onToggleTheme={toggleTheme} />
       <OperationStatus
         operation={snapshot.operation}
         hasFailure={snapshot.failure !== null}
@@ -92,6 +90,23 @@ function Workbench() {
         {showMagneticOrderings ? <MagneticOrderingsCard kicker="04" /> : null}
         <BundleCard kicker={showMagneticOrderings ? "05" : "04"} />
       </main>
+    </>
+  );
+}
+
+function Workbench() {
+  const theme = useComputedColorScheme("light");
+  const { toggleColorScheme: toggleTheme } = useMantineColorScheme();
+  useEffect(() => {
+    document
+      .querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+      ?.setAttribute("content", theme === "light" ? "#ffffff" : "#242424");
+  }, [theme]);
+
+  return (
+    <>
+      <AppHeader theme={theme} onToggleTheme={toggleTheme} />
+      <WorkbenchContent />
     </>
   );
 }
