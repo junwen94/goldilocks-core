@@ -77,7 +77,11 @@ export function AnalysisSection() {
         </Stack>
       )}
       {analysisOnlyRecords.length === 0 ? null : (
-        <Accordion multiple transitionDuration={0}>
+        <Accordion
+          multiple
+          transitionDuration={0}
+          classNames={{ label: "workbench-accordion-label" }}
+        >
           {analysisOnlyRecords.map(([key, field]) => (
             <RecordAccordionItem key={key} name={key} field={field} />
           ))}

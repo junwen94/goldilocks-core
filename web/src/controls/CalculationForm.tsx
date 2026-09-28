@@ -225,7 +225,7 @@ export function CalculationForm() {
       <Accordion
         multiple
         transitionDuration={0}
-        classNames={{ label: "advisor-setting-label" }}
+        classNames={{ label: "workbench-accordion-label" }}
       >
         <SettingsGroupItems
           settings={capabilities.settings}

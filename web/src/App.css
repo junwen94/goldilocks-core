@@ -133,10 +133,16 @@
 }
 
 /* Mantine's own Accordion.Control label padding (--mantine-spacing-sm,
- * ~10px) reads as cramped for a list this long (13 groups) -- a two-class
- * selector beats the single hashed Mantine class without needing
- * !important or fighting cascade order. */
-.card-advisors .advisor-setting-label {
+ * ~10px) reads as cramped for a list this long (Advisors' 13 groups;
+ * Analysis' own read-only records list, RecordAccordionItem, can run just
+ * as long) -- a two-class selector beats the single hashed Mantine class
+ * without needing !important or fighting cascade order. Both cards opt
+ * into the same `workbench-accordion-label` class (CalculationForm,
+ * AnalysisSection) rather than each defining its own rule, so the two
+ * lists stay visually consistent by construction instead of by
+ * coincidence. */
+.card-advisors .workbench-accordion-label,
+.card-analysis .workbench-accordion-label {
   padding-block: var(--mantine-spacing-md);
 }
 
