@@ -7,6 +7,7 @@ import shutil
 
 import pytest
 from pymatgen.core import Lattice, Structure
+from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from support import (
     SSSP_FIXTURE_UPF as _UPF,
     sssp_fixture_table_spec as _sssp_table_spec,
@@ -443,3 +444,29 @@ def test_pseudo_requirements_reflects_first_pass_spin_orbit(
     assert advice.system.magnetic.ok
     assert advice.system.pseudo.table.ok
     assert advice.system.pseudo.table.value.id == table.id
+
+
+def test_advise_reduces_only_the_chosen_mesh_by_symmetry(hpc, monkeypatch) -> None:
+    """Regression for #155: labelling the chosen mesh with its ``k_index``
+    rebuilt the whole ladder with one spglib reduction per rung -- 73
+    reductions for this cell, seconds of them on a low-symmetry one.
+    ``n_irr_k`` is the one reduction left, of the mesh the step uses."""
+    bcc_iron = Structure(
+        Lattice.cubic(2.87), ["Fe", "Fe"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
+    )
+    reduced_meshes = []
+    reduce = SpacegroupAnalyzer.get_ir_reciprocal_mesh
+
+    def counting_reduce(self, mesh, *args, **kwargs):
+        reduced_meshes.append(tuple(mesh))
+        return reduce(self, mesh, *args, **kwargs)
+
+    monkeypatch.setattr(SpacegroupAnalyzer, "get_ir_reciprocal_mesh", counting_reduce)
+
+    advice = advise(bcc_iron, hpc=hpc)
+
+    k_sampling = advice.step.kpoints.k_sampling
+    assert k_sampling.ok
+    assert k_sampling.value.k_index is not None
+    assert reduced_meshes == [k_sampling.value.mesh]
+    assert advice.step.kpoints.n_irr_k.ok
