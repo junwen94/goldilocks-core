@@ -29,7 +29,7 @@ _JOB = JobDecision(
     ntasks=64,
     ntasks_per_node=64,
     walltime_h=168.0,
-    max_seconds=574560,
+    max_seconds_by_step={"scf": 574560},
     account=None,
 )
 _SCHEMA = "./out/pwscf.save/data-file-schema.xml"

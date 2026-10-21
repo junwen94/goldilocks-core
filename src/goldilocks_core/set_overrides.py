@@ -25,9 +25,9 @@ P1/P5: validate identically, fail the same way, regardless of caller.
 
 **`steps.<name>.<key>=value` is accepted but not yet load-bearing, for
 either name in `_STEP_NAMES`** (#33, v2 epic 9, #9): `service`'s own
-per-step advisors compute exactly one `StepAdvice` per `advise()` call
-(`service/_step.py`'s own docstring: no `PlannedStep`/task-expansion
-layer exists to route a per-step override to a specific step). The
+per-step advisors get one flat `StepOverrides` for every step of a task
+(`advise_dos` gives its scf and nscf steps the same one, plus the nscf
+protocol defaults), so nothing routes a per-step override to one step. The
 `steps.` prefix here is validated against `_STEP_NAMES` and then
 stripped -- functionally identical to the flat key, because there is
 nowhere else for a per-step override to land, for *either* `scf` or

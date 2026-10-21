@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from pymatgen.core import Lattice, Structure
 from support import sssp_fixture_table_spec
 
@@ -15,9 +16,11 @@ from goldilocks_core.service import (
     RunOverrides,
     StepOverrides,
     advise_dos,
+    check,
     check_dos,
     generate_dos,
 )
+from goldilocks_core.service._pipeline import advise_steps
 from goldilocks_core.set_overrides import build_overrides
 
 
@@ -36,6 +39,24 @@ def _hpc() -> HpcProfile:
 
 def _silicon() -> Structure:
     return Structure(Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]])
+
+
+def _diamond_silicon() -> Structure:
+    """Diamond Si's two-atom primitive cell, as in the #169 reproduction."""
+    a = 5.43
+    lattice = Lattice([[0, a / 2, a / 2], [a / 2, 0, a / 2], [a / 2, a / 2, 0]])
+    return Structure(lattice, ["Si", "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]])
+
+
+def _installed_store(tmp_path, monkeypatch) -> AssetStore:
+    spec, registry_table = sssp_fixture_table_spec(tmp_path / "sources")
+    monkeypatch.setattr(
+        "goldilocks_core.service._pseudo.load_tables",
+        lambda *a, **kw: {registry_table.id: registry_table},
+    )
+    store = AssetStore(tmp_path / "store")
+    store.install(spec, sssp_preparer(registry_table))
+    return store
 
 
 class TestAdviseDosDegradation:
@@ -108,6 +129,14 @@ class TestAdviseDosDegradation:
         assert advice.dos.value.delta_e == 0.01
         assert advice.dos.value.ngauss == 0
 
+    def test_both_pw_x_steps_share_one_analysis_and_system_advice(self) -> None:
+        """The task runs analysis and system advice once (#169, #184 part
+        B); the two pw.x steps differ only in their per-step advice."""
+        advice = advise_dos(_diamond_silicon(), hpc=_hpc())
+
+        assert advice.nscf.analysis is advice.scf.analysis
+        assert advice.nscf.system is advice.scf.system
+
     def test_unknown_table_id_blocks_both_pw_steps_and_check_dos_reports_it(
         self,
     ) -> None:
@@ -126,17 +155,78 @@ class TestAdviseDosDegradation:
         assert any("does-not-exist" in reason for reason in report.blocking)
 
 
+class TestOneJobForTheTask:
+    """#169: dos runs its steps in one allocation, so the task has one job,
+    sized over both pw.x steps, that budgets each step's max_seconds."""
+
+    def test_both_pw_x_steps_hold_the_tasks_one_job(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        store = _installed_store(tmp_path, monkeypatch)
+
+        advice = advise_dos(_diamond_silicon(), hpc=_hpc(), store=store)
+
+        job = advice.scf.step.resources.job
+        assert advice.nscf.step.resources.job is job
+        assert job.value.max_seconds_by_step.keys() == {"scf", "nscf"}
+        for step in (advice.scf.step, advice.nscf.step):
+            parallel = step.resources.parallelisation.value
+            assert parallel.kpoint_spin_pairs == step.kpoints.n_irr_k.value
+            assert job.value.ntasks % parallel.npool == 0
+
+    def test_records_carry_one_job_and_no_nscf_copy(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        store = _installed_store(tmp_path, monkeypatch)
+
+        records = advise_dos(_diamond_silicon(), hpc=_hpc(), store=store).records()
+
+        assert "nscf_job" not in records
+        assert records["job"].value["max_seconds_by_step"].keys() == {"scf", "nscf"}
+        assert "nscf_parallelisation" in records
+
+    @pytest.mark.parametrize("unresolved", ["scf", "nscf"])
+    def test_one_step_s_unresolved_input_blocks_the_job_of_both_steps(
+        self, unresolved, tmp_path, monkeypatch
+    ) -> None:
+        """The job covers every step, so one step's unresolved nbnd also
+        blocks the other step. Flat overrides reach both steps alike, so
+        each step gets its own through ``advise_steps``, which
+        ``advise_dos`` wraps."""
+        store = _installed_store(tmp_path, monkeypatch)
+        overrides = build_overrides({})
+        no_bands = build_overrides({"extra_bands": -100}).step
+        steps = {
+            purpose: no_bands if purpose == unresolved else overrides.step
+            for purpose in ("scf", "nscf")
+        }
+
+        advice = advise_steps(
+            _diamond_silicon(),
+            code="quantum_espresso",
+            hpc=_hpc(),
+            overrides=overrides,
+            steps=steps,
+            store=store,
+            fetch_missing=False,
+        )
+
+        for purpose, step_advice in advice.items():
+            assert step_advice.step.kpoints.nbnd.ok == (purpose != unresolved)
+            resources = step_advice.step.resources
+            assert isinstance(resources.job, Blocked)
+            assert isinstance(resources.parallelisation, Blocked)
+            assert "extra_bands=-100" in resources.job.root_cause()
+            assert resources.max_seconds is None
+            report = check(step_advice, purpose=purpose)
+            assert any("extra_bands=-100" in reason for reason in report.blocking)
+
+
 class TestGenerateDosEndToEnd:
     def test_generate_dos_produces_three_steps_sharing_one_context(
         self, tmp_path, monkeypatch
     ) -> None:
-        spec, registry_table = sssp_fixture_table_spec(tmp_path / "sources")
-        monkeypatch.setattr(
-            "goldilocks_core.service._pseudo.load_tables",
-            lambda *a, **kw: {registry_table.id: registry_table},
-        )
-        store = AssetStore(tmp_path / "store")
-        store.install(spec, sssp_preparer(registry_table))
+        store = _installed_store(tmp_path, monkeypatch)
 
         advice = advise_dos(_silicon(), hpc=_hpc(), store=store)
         report = check_dos(advice)

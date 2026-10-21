@@ -55,6 +55,13 @@ against a sphere of radius `sqrt(ecutrho)`, giving a volume ratio of
 `6/pi ~= 1.91` -- and QE's own rounding adds a further, structure
 -dependent margin on top. This module uses a flat factor of 2.0 as a
 readable middle estimate; it is not calibrated against real QE runs.
+
+**`workload` is relative, not a time.** A step's diagonalisation work
+scales with its k-point/spin pairs x ``nbnd`` x spinor components x
+``npw`` per pass over the k-points; a step with an SCF loop counts
+``_SCF_LOOP_PASSES`` passes, an nscf step one.
+``advisors/job_resources.py`` uses only the ratio between a task's
+steps, to split ``max_seconds``.
 """
 
 from __future__ import annotations
@@ -71,6 +78,12 @@ _FFT_GRID_TO_NGM_RATIO = 2.0
 _COMPLEX_BYTES = 16
 _REAL_BYTES = 8
 _BYTES_PER_MB = 1024 * 1024
+_SCF_LOOP_PASSES = 3
+"""Passes over its k-points counted for a step with an SCF loop, against
+one for an nscf step: about 10-20 SCF iterations of 2-3 Davidson sweeps
+each, against 15-30 sweeps for one tightly converged nscf
+diagonalisation. Uncalibrated (one SCARF Si timing so far); revisit when
+timing data exists."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +92,7 @@ class ResourceEstimate:
     ngm: int
     fft_grid_points: int
     ram_mb: float
+    workload: int
 
 
 def resource_estimate(
@@ -86,13 +100,17 @@ def resource_estimate(
     ecutwfc_ry: float,
     ecutrho_ry: float,
     nbnd: int,
+    n_kpoint_spin: int,
+    scf_loop: bool,
     nspin: int = 1,
     noncollinear: bool = False,
 ) -> ResourceEstimate:
     """Pure arithmetic; no `FieldState`, no human/llm input (design doc:
     "not a four-way choice"). Every argument here is a plain, already
     -resolved value -- a caller with anything still `Unavailable`/
-    `Blocked` should not call this yet.
+    `Blocked` should not call this yet. ``n_kpoint_spin`` (the k-point/
+    spin pairs pw.x distributes) and ``scf_loop`` (the step runs an SCF
+    loop) enter only the ``workload``.
     """
     volume_bohr3 = structure.lattice.volume * _BOHR_PER_ANGSTROM**3
 
@@ -109,8 +127,13 @@ def resource_estimate(
     density_bytes = 3 * scf_type_bytes
 
     ram_mb = (wavefunction_bytes + density_bytes) / _BYTES_PER_MB
+    passes = _SCF_LOOP_PASSES if scf_loop else 1
     return ResourceEstimate(
-        npw=npw, ngm=ngm, fft_grid_points=fft_grid_points, ram_mb=ram_mb
+        npw=npw,
+        ngm=ngm,
+        fft_grid_points=fft_grid_points,
+        ram_mb=ram_mb,
+        workload=n_kpoint_spin * nbnd * npol * npw * passes,
     )
 
 
@@ -127,6 +150,7 @@ def envelope(estimates: list[ResourceEstimate]) -> ResourceEstimate:
         ngm=max(e.ngm for e in estimates),
         fft_grid_points=max(e.fft_grid_points for e in estimates),
         ram_mb=max(e.ram_mb for e in estimates),
+        workload=max(e.workload for e in estimates),
     )
 
 

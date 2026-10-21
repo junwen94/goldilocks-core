@@ -17,14 +17,16 @@ the new types; namelist formatting (``&CONTROL``/``&SYSTEM``/
 v1's own hand-written ``_control_section``/``_system_section``/
 ``_electrons_section``.
 
-Takes a ``JobDecision`` (``advisors/job_resources.py``) alongside
-``SystemSettings``/``PwSettings`` for exactly one field: ``max_seconds``
-(&CONTROL). This has to be baked into the input file at generation time,
-not injected by ``submission/slurm.py`` at runtime -- editing the input
-file after generation to add a dynamically-shrinking time budget would
-mean the published ``goldilocks.json`` sha256 no longer describes the
-bytes actually run (goldilocks-core-design.md:1230-1237, publication
-guarantee 3). The rest of ``JobDecision`` (``nodes``/``ntasks``/
+``max_seconds`` (&CONTROL) is ``PwSettings.max_seconds``, this step's
+own share of the task's walltime (``JobDecision.max_seconds_by_step``,
+``advisors/job_resources.py``): pw.x counts it from its own start, so
+every step of a multi-step task needs its own. It has to be baked into
+the input file at generation time, not injected by
+``submission/slurm.py`` at runtime -- pw.x has no command-line switch
+for it, and editing the input file after generation would mean the
+published ``goldilocks.json`` sha256 no longer describes the bytes
+actually run (goldilocks-core-design.md:1230-1237, publication
+guarantee 3). The allocation itself (``nodes``/``ntasks``/
 ``walltime_h``/``partition``) is ``submission/slurm.py``'s concern, not
 this writer's.
 
@@ -108,7 +110,6 @@ from pymatgen.core import Structure
 from pymatgen.core.periodic_table import Element
 
 from goldilocks_core.advisors.hubbard_u import expand_hubbard_label, manifold_for
-from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.namelists import render_namelist
 from goldilocks_core.step_settings import PwSettings
@@ -230,7 +231,6 @@ def _species_relabeling(
 def write_qe_scf(
     system: SystemSettings,
     step: PwSettings,
-    job: JobDecision,
     ctx: SharedContext,
     purpose: Literal["scf", "nscf"] = "scf",
 ) -> list[Step]:
@@ -259,6 +259,7 @@ def write_qe_scf(
         ("nbnd", step.nbnd),
         ("convergence", step.convergence),
         ("parallel", step.parallel),
+        ("max_seconds", step.max_seconds),
     ):
         if value is None:
             raise GenerationError(
@@ -271,7 +272,7 @@ def write_qe_scf(
     species_index = {label: index + 1 for index, label in enumerate(species_labels)}
 
     keywords: dict[str, object] = {}
-    keywords.update(control_keywords(ctx, step, job, purpose))
+    keywords.update(control_keywords(ctx, step, purpose))
     keywords.update(
         system_keywords(structure, system, step, len(species_labels), species_index)
     )
@@ -344,7 +345,6 @@ def validated_pseudo_by_element(
 def control_keywords(
     ctx: SharedContext,
     step: PwSettings,
-    job: JobDecision,
     purpose: Literal["scf", "nscf", "relax", "vc-relax"],
 ) -> dict[str, object]:
     keywords: dict[str, object] = {
@@ -354,7 +354,7 @@ def control_keywords(
         "pseudo_dir": ctx.pseudo_dir,
         "tprnfor": True,
         "tstress": True,
-        "max_seconds": job.max_seconds,
+        "max_seconds": step.max_seconds,
     }
     if step.relax is not None:
         # forc_conv_thr/etot_conv_thr/nstep are real &CONTROL keys, not

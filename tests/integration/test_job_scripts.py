@@ -9,6 +9,8 @@ C2-box layouts that stopped or hung pw.x on SCARF. Before #134 the dos
 task launched dos.x on all 64 tasks, where it aborts on every rank that
 owns no FFT z-plane. Before #129 every step's check read out/pwscf.xml,
 which pw.x writes only after a finished run, and passed on JOB DONE.
+Before #169 the dos task's scf and nscf each got max_seconds = 0.95 x
+the whole walltime, although pw.x counts it from its own start.
 """
 
 from __future__ import annotations
@@ -47,6 +49,13 @@ def _installed_store(tmp_path, monkeypatch) -> AssetStore:
 
 def _silicon() -> Structure:
     return Structure(Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]])
+
+
+def _diamond_silicon() -> Structure:
+    """Diamond Si's two-atom primitive cell, as in the #169 reproduction."""
+    a = 5.43
+    lattice = Lattice([[0, a / 2, a / 2], [a / 2, 0, a / 2], [a / 2, a / 2, 0]])
+    return Structure(lattice, ["Si", "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]])
 
 
 @pytest.mark.parametrize("k_grid", [[1, 1, 1], [3, 3, 3]])
@@ -164,3 +173,60 @@ def test_dos_script_checks_each_step_by_its_own_completion(
         '"$goldilocks_before"'
     ) in lines
     assert lines[-1] == 'goldilocks_check_stdout_marker "dos" "dos.out" "JOB DONE"'
+
+
+def _max_seconds(content: str) -> int:
+    (line,) = (line for line in content.splitlines() if "max_seconds" in line)
+    return int(line.split("=")[1])
+
+
+def test_dos_task_splits_one_walltime_across_its_pw_x_steps(
+    tmp_path, monkeypatch
+) -> None:
+    """#169: pw.x counts max_seconds from its own start, so the scf and the
+    nscf of one allocation share 95% of its walltime (13680 s of 4 h) by
+    workload: k-point/spin pairs x nbnd x 3 SCF passes for the scf, x 1
+    for the nscf (npw and npol are the same for both steps and cancel).
+    On the fixture that is 104 x 8 x 3 against 286 x 8, so neither step
+    is assumed to be the larger one."""
+    store = _installed_store(tmp_path, monkeypatch)
+    hpc = load_hpc_profile("scarf")
+    overrides = build_overrides({"walltime_h": 4})
+    advice = advise_dos(_diamond_silicon(), hpc=hpc, overrides=overrides, store=store)
+    report = check_dos(advice)
+    assert report.ok, report.blocking
+    steps = generate_dos(advice, report, ctx=default_shared_context())
+    scf, nscf, _dos = steps
+
+    seconds = {
+        "scf": _max_seconds(scf.files["scf.in"]),
+        "nscf": _max_seconds(nscf.files["nscf.in"]),
+    }
+    assert sum(seconds.values()) <= 13680
+    assert min(seconds.values()) > 0
+    workload = {
+        name: (
+            step.resources.parallelisation.value.kpoint_spin_pairs
+            * step.kpoints.nbnd.value.nbnd
+            * passes
+        )
+        for name, step, passes in (
+            ("scf", advice.scf.step, 3),
+            ("nscf", advice.nscf.step, 1),
+        )
+    }
+    for name, share in seconds.items():
+        assert abs(share - 13680 * workload[name] / sum(workload.values())) < 1
+
+    records = advice.records()
+    assert "nscf_job" not in records
+    job = records["job"].value
+    assert job["max_seconds_by_step"] == seconds
+    script = render_submission_dos(advice, hpc, "quantum_espresso", steps)
+    lines = script.splitlines()
+    assert f"#SBATCH --partition={job['partition']}" in lines
+    assert f"#SBATCH --nodes={job['nodes']}" in lines
+    assert f"#SBATCH --ntasks={job['ntasks']}" in lines
+    assert f"#SBATCH --ntasks-per-node={job['ntasks_per_node']}" in lines
+    assert job["walltime_h"] == 4
+    assert "#SBATCH --time=4:00:00" in lines

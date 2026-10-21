@@ -4,12 +4,12 @@
 **Single-step, unlike ``dos``.** ``relax``/``vc-relax`` are one ``pw.x``
 run each (``calculation='relax'``/``'vc-relax'`` does the electronic
 scf loop *and* the ionic/cell optimization together) -- not a second
-task needing ``service/_dos.py``'s "call the single-step pipeline
-twice" shape. This module calls ``advise()``/``generate()`` exactly
-once, the same as a plain ``scf_single_point`` task, and adds exactly
-one more resolved decision (``relax``) on top -- mirroring how
-``service/_dos.py``'s own ``DosAdvice`` adds ``dos`` on top of two
-``Advice``s, just with one ``Advice`` instead of two.
+pw.x step like ``service/_dos.py``'s nscf. This module asks
+``advise_steps`` for that one step, keyed by its ``calculation`` (so
+the job's ``max_seconds_by_step`` names it), calls ``generate()`` once,
+and adds exactly one more resolved decision (``relax``) on top --
+mirroring how ``service/_dos.py``'s own ``DosAdvice`` adds ``dos`` on
+top of two ``Advice``s, just with one ``Advice`` instead of two.
 
 **``RelaxOverrides`` is real request-validation plumbing, not a
 task-specific side channel.** ``relax``/``relax_llm`` are read off
@@ -40,7 +40,7 @@ from goldilocks_core.resolution import FieldState
 from goldilocks_core.service._advice import Advice, RunOverrides, warnings_from_records
 from goldilocks_core.service._bundle import assemble_bundle_input, render_submission
 from goldilocks_core.service._generate import AdviceIncomplete, generate
-from goldilocks_core.service._pipeline import advise, check
+from goldilocks_core.service._pipeline import advise_steps, check
 from goldilocks_core.steps import SharedContext, Step, default_shared_context
 
 
@@ -79,14 +79,15 @@ def advise_relax(
     ``cell_dofree`` hexagonal-2D default) off the very same ``Advice``
     this function just built -- no second structure-analysis pass."""
     overrides = overrides or RunOverrides()
-    advice = advise(
+    advice = advise_steps(
         structure,
         code=code,
         hpc=hpc,
         overrides=overrides,
+        steps={calculation: overrides.step},
         store=store,
         fetch_missing=fetch_missing,
-    )
+    )[calculation]
     relax_overrides = overrides.step.relax
     relax = relax_settings(
         calculation,

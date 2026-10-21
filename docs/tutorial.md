@@ -140,8 +140,8 @@ print(inspection["canonical_cif"])
 ## Generate a multi-step task (DOS)
 
 Tasks with more than one Quantum ESPRESSO step use the `_dos`-suffixed
-equivalents, which internally run `advise()`/`generate()` once per step
-(scf, then a denser nscf pass) and merge the results:
+equivalents, which advise the scf and a denser nscf pass together, then
+generate one input per step:
 
 ```python
 from goldilocks_core.service import (
@@ -161,13 +161,17 @@ if dos_report.ok:
     print([step.name for step in dos_steps])
 ```
 
-`dos_advice.records()` keys the shared system-level fields unprefixed, the
-nscf step's own fields under an `nscf_`-prefixed name, and the DOS decision
-itself under `"dos"`. The submission script uses the scf step's resource
-decision, since `pw.x`'s scf pass is normally the dominant cost and `dos.x`
-is fast. Both `pw.x` steps run on the whole allocation; `dos.x` runs on one
-task of it (`srun --nodes=1 --ntasks=1`), because every extra task would
-repeat the whole DOS and `dos.x` aborts when a task owns no FFT plane.
+`dos_advice.records()` keys the shared system-level fields and the task's
+one `job` unprefixed, the nscf step's own fields under an `nscf_`-prefixed
+name, and the DOS decision itself under `"dos"`. The three steps run in one
+allocation, so there is one job, sized over both `pw.x` steps. `pw.x`
+counts `max_seconds` from its own start, so the job splits 95% of the
+walltime between the scf and the nscf by estimated workload
+(`job.max_seconds_by_step`), and each input gets its own share; `dos.x`
+runs in what is left. Both `pw.x` steps run on the whole allocation;
+`dos.x` runs on one task of it (`srun --nodes=1 --ntasks=1`), because every
+extra task would repeat the whole DOS and `dos.x` aborts when a task owns no
+FFT plane.
 
 See [Recommendations](science.md) to interpret other settings, or
 [Architecture](architecture.md) to extend the computation workflow.

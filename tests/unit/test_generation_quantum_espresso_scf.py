@@ -10,7 +10,6 @@ from goldilocks_core.advisors.convergence import ConvergenceDecision
 from goldilocks_core.advisors.cutoffs import CutoffsDecision
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.hubbard_u import HubbardUDecision
-from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.k_sampling import KSamplingDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.nbnd import NbndDecision
@@ -27,15 +26,6 @@ from goldilocks_core.steps import ExitStatusCheck, SharedContext
 from goldilocks_core.system_settings import SystemSettings
 
 _CTX = SharedContext(prefix="pwscf", outdir="./out", pseudo_dir="./pseudo")
-_JOB = JobDecision(
-    partition="scarf",
-    nodes=1,
-    ntasks=64,
-    ntasks_per_node=64,
-    walltime_h=168.0,
-    max_seconds=574560,
-    account=None,
-)
 
 
 def _magnetic(
@@ -100,6 +90,7 @@ def _step(
     nbnd: NbndDecision | None = _UNSET,
     convergence: ConvergenceDecision | None = _UNSET,
     parallel: ParallelisationDecision | None = _UNSET,
+    max_seconds: int | None = 6946,
     relax=None,
 ) -> PwSettings:
     return PwSettings(
@@ -128,10 +119,11 @@ def _step(
             else convergence
         ),
         parallel=(
-            ParallelisationDecision(npool=2, ndiag=None)
+            ParallelisationDecision(npool=2, ndiag=None, kpoint_spin_pairs=4)
             if parallel is _UNSET
             else parallel
         ),
+        max_seconds=max_seconds,
         relax=relax,
     )
 
@@ -152,7 +144,7 @@ def test_nelec_override_translates_to_qe_s_real_tot_charge_keyword(
     )
     step = _step()
 
-    content = write_qe_scf(system, step, _JOB, _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, step, _CTX)[0].files["scf.in"]
 
     assert "tot_charge       = 1.0" in content
     assert "nelec" not in content
@@ -167,7 +159,7 @@ def test_no_tot_charge_keyword_when_nelec_matches_the_natural_count(
     system = _system(silicon_structure, pseudo_metadata_factory)
     step = _step()
 
-    content = write_qe_scf(system, step, _JOB, _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, step, _CTX)[0].files["scf.in"]
 
     assert "tot_charge" not in content
 
@@ -178,7 +170,7 @@ def test_writes_one_scf_step_with_pure_translated_content(
     system = _system(silicon_structure, pseudo_metadata_factory)
     step = _step()
 
-    steps = write_qe_scf(system, step, _JOB, _CTX)
+    steps = write_qe_scf(system, step, _CTX)
 
     assert len(steps) == 1
     rendered = steps[0]
@@ -194,7 +186,7 @@ def test_writes_one_scf_step_with_pure_translated_content(
     assert "pseudo_dir       = './pseudo'" in content
     assert "ecutwfc          = 30.0" in content
     assert "ecutrho          = 120.0" in content
-    assert "max_seconds      = 574560" in content
+    assert "max_seconds      = 6946" in content
     assert "ATOMIC_SPECIES" in content
     assert "Si  " in content and "Si.UPF" in content
     assert "CELL_PARAMETERS angstrom" in content
@@ -208,6 +200,24 @@ def test_writes_one_scf_step_with_pure_translated_content(
     assert "disk_io" not in content
 
 
+@pytest.mark.parametrize("purpose, seconds", [("scf", 6946), ("nscf", 6733)])
+def test_max_seconds_is_the_steps_own_share_of_the_walltime(
+    diamond_silicon, pseudo_metadata_factory, purpose, seconds
+) -> None:
+    """#169: pw.x counts max_seconds from its own start, so each step
+    renders its own share (PwSettings.max_seconds), not the job's."""
+    system = _system(diamond_silicon, pseudo_metadata_factory)
+
+    (rendered,) = write_qe_scf(
+        system, _step(max_seconds=seconds), _CTX, purpose=purpose
+    )
+
+    lines = rendered.files[f"{purpose}.in"].splitlines()
+    assert [line for line in lines if "max_seconds" in line] == [
+        f"   max_seconds      = {seconds}"
+    ]
+
+
 @pytest.mark.parametrize("purpose", ["scf", "nscf"])
 def test_pw_x_step_is_checked_by_the_status_it_always_writes(
     diamond_silicon, pseudo_metadata_factory, purpose
@@ -216,7 +226,7 @@ def test_pw_x_step_is_checked_by_the_status_it_always_writes(
     the <prefix>.xml copy is missing after a non-converged stop."""
     system = _system(diamond_silicon, pseudo_metadata_factory)
 
-    (rendered,) = write_qe_scf(system, _step(), _JOB, _CTX, purpose=purpose)
+    (rendered,) = write_qe_scf(system, _step(), _CTX, purpose=purpose)
 
     assert rendered.completion == ExitStatusCheck(
         "./out/pwscf.save/data-file-schema.xml"
@@ -229,7 +239,7 @@ def test_status_file_follows_the_shared_prefix_and_outdir(
     system = _system(diamond_silicon, pseudo_metadata_factory)
     ctx = SharedContext(prefix="si", outdir="/scratch/run", pseudo_dir="./pseudo")
 
-    (rendered,) = write_qe_scf(system, _step(), _JOB, ctx)
+    (rendered,) = write_qe_scf(system, _step(), ctx)
 
     assert rendered.completion == ExitStatusCheck(
         "/scratch/run/si.save/data-file-schema.xml"
@@ -245,7 +255,7 @@ def test_purpose_nscf_renames_the_step_and_the_calculation_keyword(
     system = _system(silicon_structure, pseudo_metadata_factory)
     step = _step()
 
-    steps = write_qe_scf(system, step, _JOB, _CTX, purpose="nscf")
+    steps = write_qe_scf(system, step, _CTX, purpose="nscf")
 
     assert len(steps) == 1
     rendered = steps[0]
@@ -260,9 +270,11 @@ def test_ndiag_is_appended_to_args_when_resolved(
     silicon_structure, pseudo_metadata_factory
 ) -> None:
     system = _system(silicon_structure, pseudo_metadata_factory)
-    step = _step(parallel=ParallelisationDecision(npool=4, ndiag=16))
+    step = _step(
+        parallel=ParallelisationDecision(npool=4, ndiag=16, kpoint_spin_pairs=4)
+    )
 
-    steps = write_qe_scf(system, step, _JOB, _CTX)
+    steps = write_qe_scf(system, step, _CTX)
 
     assert steps[0].args == ("-npool", "4", "-ndiag", "16", "-in", "scf.in")
 
@@ -280,7 +292,7 @@ def test_spin_polarized_starting_magnetization_survives_unclobbered(
     system = _system(structure, pseudo_metadata_factory, magnetic=magnetic)
     step = _step()
 
-    content = write_qe_scf(system, step, _JOB, _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, step, _CTX)[0].files["scf.in"]
 
     assert "nspin            = 2" in content
     assert "starting_magnetization(1) = 0.6923" in content
@@ -299,7 +311,7 @@ def test_tot_magnetization_emitted_only_without_spin_orbit(
     )
     system = _system(structure, pseudo_metadata_factory, magnetic=magnetic)
 
-    content = write_qe_scf(system, _step(), _JOB, _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
 
     assert "tot_magnetization = 2.0" in content
 
@@ -318,7 +330,7 @@ def test_tot_magnetization_with_spin_orbit_is_rejected(pseudo_metadata_factory) 
     system = _system(structure, pseudo_metadata_factory, magnetic=magnetic)
 
     with pytest.raises(GenerationError, match="tot_magnetization"):
-        write_qe_scf(system, _step(), _JOB, _CTX)
+        write_qe_scf(system, _step(), _CTX)
 
 
 def test_spin_orbit_magnetic_emits_noncolin_lspinorb_and_angles(
@@ -335,7 +347,7 @@ def test_spin_orbit_magnetic_emits_noncolin_lspinorb_and_angles(
     )
     system = _system(structure, pseudo_metadata_factory, magnetic=magnetic)
 
-    content = write_qe_scf(system, _step(), _JOB, _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
 
     assert "noncolin         = .true." in content
     assert "lspinorb         = .true." in content
@@ -386,7 +398,7 @@ def test_qe_spin_layout_matches_the_spin_keywords_the_writer_renders(
     )
     system = _system(feco, pseudo_metadata_factory, magnetic=magnetic)
 
-    content = write_qe_scf(system, _step(), _JOB, _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
 
     assert qe_spin_layout(magnetic) == layout
     for keyword in rendered:
@@ -430,7 +442,7 @@ def test_afm_relabeled_species_reach_atomic_species_and_positions(
     )
     system = _system(original, pseudo_metadata_factory, magnetic=magnetic)
 
-    content = write_qe_scf(system, _step(), _JOB, _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
 
     assert "ntyp             = 3" in content
     assert "nat              = 4" in content
@@ -463,7 +475,7 @@ def test_non_afm_structure_collapses_source_labels_to_one_species_per_element(
     )
     system = _system(structure, pseudo_metadata_factory)
 
-    content = write_qe_scf(system, _step(), _JOB, _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
 
     assert "ntyp             = 1" in content
     species = content.split("ATOMIC_SPECIES\n")[1].split("\n\n")[0]
@@ -484,7 +496,7 @@ def test_vdw_method_translates_to_qe_keyword(
         vdw=VdwFacts(use_vdw=True, method="d3bj"),
     )
 
-    content = write_qe_scf(system, _step(), _JOB, _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
 
     assert "vdw_corr         = 'grimme-d3'" in content
     assert "dftd3_version    = 4" in content
@@ -499,7 +511,7 @@ def test_boundary_assume_isolated_emitted_when_not_none(
         boundary=BoundaryFacts(assume_isolated="martyna-tuckerman"),
     )
 
-    content = write_qe_scf(system, _step(), _JOB, _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
 
     assert "assume_isolated  = 'martyna-tuckerman'" in content
 
@@ -514,7 +526,7 @@ def test_smearing_occupations_emit_smearing_type_and_degauss(
         )
     )
 
-    content = write_qe_scf(system, step, _JOB, _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, step, _CTX)[0].files["scf.in"]
 
     assert "occupations      = 'smearing'" in content
     assert "smearing         = 'cold'" in content
@@ -535,7 +547,7 @@ def test_hubbard_table_plan_renders_the_qe_hubbard_card(
         hubbard=HubbardUDecision(plan="table", u_by_element={"Si": 3.0}),
     )
 
-    content = write_qe_scf(system, _step(), _JOB, _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
 
     assert "HUBBARD (ortho-atomic)" in content
     assert "U  Si-3p  3" in content
@@ -556,11 +568,12 @@ def test_hubbard_calibration_needed_plan_still_raises_generation_error(
     )
 
     with pytest.raises(GenerationError, match="calibration"):
-        write_qe_scf(system, _step(), _JOB, _CTX)
+        write_qe_scf(system, _step(), _CTX)
 
 
 @pytest.mark.parametrize(
-    "field", ["occupations", "k_sampling", "nbnd", "convergence", "parallel"]
+    "field",
+    ["occupations", "k_sampling", "nbnd", "convergence", "parallel", "max_seconds"],
 )
 def test_missing_required_step_setting_raises_generation_error(
     silicon_structure, pseudo_metadata_factory, field
@@ -569,7 +582,7 @@ def test_missing_required_step_setting_raises_generation_error(
     step = _step(**{field: None})
 
     with pytest.raises(GenerationError, match=field):
-        write_qe_scf(system, step, _JOB, _CTX)
+        write_qe_scf(system, step, _CTX)
 
 
 def test_relax_settings_on_an_scf_step_is_rejected(
@@ -581,7 +594,7 @@ def test_relax_settings_on_an_scf_step_is_rejected(
     step = _step(relax=RelaxOptions())
 
     with pytest.raises(GenerationError, match="relax"):
-        write_qe_scf(system, step, _JOB, _CTX)
+        write_qe_scf(system, step, _CTX)
 
 
 def test_missing_pseudopotential_element_raises_generation_error(
@@ -602,7 +615,7 @@ def test_missing_pseudopotential_element_raises_generation_error(
     )
 
     with pytest.raises(GenerationError, match="missing"):
-        write_qe_scf(system, _step(), _JOB, _CTX)
+        write_qe_scf(system, _step(), _CTX)
 
 
 def test_pseudopotential_functional_mismatch_raises_generation_error(
@@ -620,7 +633,7 @@ def test_pseudopotential_functional_mismatch_raises_generation_error(
     )
 
     with pytest.raises(GenerationError, match="functional mismatch"):
-        write_qe_scf(system, _step(), _JOB, _CTX)
+        write_qe_scf(system, _step(), _CTX)
 
 
 def test_disordered_structure_is_rejected(pseudo_metadata_factory) -> None:
@@ -642,4 +655,4 @@ def test_disordered_structure_is_rejected(pseudo_metadata_factory) -> None:
     )
 
     with pytest.raises(GenerationError, match="disordered"):
-        write_qe_scf(system, _step(), _JOB, _CTX)
+        write_qe_scf(system, _step(), _CTX)

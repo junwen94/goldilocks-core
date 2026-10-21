@@ -27,9 +27,8 @@ before any settings exist yet) -- distinct enough concerns that
 ``plan.py``'s own docstring explains its scope separately.
 
 ``Step.args`` is a tuple, not the design doc's literal ``list[str]``,
-matching every other rendered-decision dataclass in this codebase
-(``ResourceEstimate``, ``JobDecision``, ...): frozen dataclasses here
-use immutable field types throughout, not just an immutable container.
+like the sequence fields of the frozen decision dataclasses
+(``ResourceEstimate.species``, every ``warnings``).
 """
 
 from __future__ import annotations

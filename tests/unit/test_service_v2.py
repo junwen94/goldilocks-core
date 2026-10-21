@@ -108,6 +108,22 @@ class TestAdviseEndToEnd:
         assert (destination / "scf.in").exists()
         assert (destination / "submit.sh").exists()
 
+    def test_generate_renders_the_advised_steps_own_max_seconds_share(
+        self, silicon, hpc, installed_table
+    ) -> None:
+        """#169: the share travels with the advised step, so ``purpose``
+        only picks the writer; an scf advice rendered as nscf used to
+        raise a bare KeyError looking up max_seconds_by_step['nscf']."""
+        store, _table = installed_table
+        advice = advise(silicon, hpc=hpc, store=store)
+        report = check(advice)
+
+        (nscf,) = generate(advice, report, purpose="nscf")
+
+        share = advice.step.resources.job.value.max_seconds_by_step["scf"]
+        assert advice.step.resources.max_seconds == share == 574560
+        assert f"   max_seconds      = {share}" in nscf.files["nscf.in"].splitlines()
+
     def test_warnings_flattens_every_record_s_structured_warnings(
         self, silicon, hpc, installed_table
     ) -> None:
@@ -240,6 +256,35 @@ class TestPoolsShareKpointSpinPairs:
         assert parallel.npool == 8
         assert self._codes(parallel) == []
         assert parallel.kpoint_spin_pairs == 12
+
+
+class TestUnresolvedStepInputBlocksTheJob:
+    """#169: the job is sized from each step's ``nbnd`` and ``n_irr_k``,
+    so operator input that leaves either unresolved blocks the job and
+    the step's parallelisation, with that input as the root cause."""
+
+    @pytest.mark.parametrize(
+        ("settings", "cause"),
+        [
+            pytest.param({"extra_bands": -100}, "extra_bands=-100", id="nbnd"),
+            pytest.param({"k_index": 99999}, "k_index=99999", id="n_irr_k"),
+        ],
+    )
+    def test_advise_returns_a_blocked_job_that_check_refuses(
+        self, diamond_silicon, hpc, installed_table, settings, cause
+    ) -> None:
+        store, _table = installed_table
+        overrides = build_overrides(settings)
+
+        advice = advise(diamond_silicon, hpc=hpc, overrides=overrides, store=store)
+
+        resources = advice.step.resources
+        assert isinstance(resources.job, Blocked)
+        assert isinstance(resources.parallelisation, Blocked)
+        assert cause in resources.job.root_cause()
+        assert cause in resources.parallelisation.root_cause()
+        assert resources.max_seconds is None
+        assert not check(advice).ok
 
 
 class TestAdviseDegradation:

@@ -48,8 +48,8 @@ is now where that decision belongs.
    silently truncates to the nearest even count (QE only ever prints an
    ``infomsg`` -- "the system is metallic, specify occupations" --
    never an error), converging on a wrong total charge with nothing
-   obviously wrong in the output. Same ``_SCF_LIKE_PURPOSES`` scoping as
-   rule 2, same reasoning.
+   obviously wrong in the output. Same ``plan.SCF_LIKE_PURPOSES``
+   scoping as rule 2, same reasoning.
 
 4. A user ``ndiag`` whose s x s diagonalization grid cannot distribute
    ``nbnd`` bands (#133), s = isqrt(min(ndiag, ntasks/npool)): pw.x
@@ -86,6 +86,7 @@ from goldilocks_core.advisors.parallelisation import (
 )
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.analysis.geometry import GeometryFacts
+from goldilocks_core.plan import SCF_LIKE_PURPOSES
 from goldilocks_core.resolution import Blocked, FieldState
 
 _MISSING_TOT_MAGNETIZATION = (
@@ -98,13 +99,6 @@ _EVEN_ELECTRON_COUNT_TOLERANCE = 1e-6
 integer despite floating-point noise, without also treating a
 genuinely fractional ``nelec`` (e.g. a disordered/partial-occupancy
 structure) as spuriously even."""
-_SCF_LIKE_PURPOSES = frozenset({"scf", "relax", "vc-relax"})
-"""``purpose``s that run their own electronic-structure scf loop and so
-still need the fixed-occupations/integer-moment rule below -- unlike
-``nscf``, which reads a prior step's already-converged density/spin and
-does not re-derive it (v2 epic 9, #9's original scoping). ``relax``/
-``vc-relax`` re-run scf at every ionic step (v2 epic 10, #10), so the
-same constraint applies to them too."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,7 +200,7 @@ def _fixed_occupations_needs_integer_moment(
     electron_count: FieldState[ElectronCountDecision] | None,
     purpose: str,
 ) -> str | None:
-    if purpose not in _SCF_LIKE_PURPOSES or occupations is None or magnetic is None:
+    if purpose not in SCF_LIKE_PURPOSES or occupations is None or magnetic is None:
         return None
     if not (occupations.ok and magnetic.ok):
         return None  # already surfaced via collect_blocked, or genuinely unknown
@@ -247,7 +241,7 @@ def _fixed_occupations_needs_even_electron_count(
     against real QE 7.3 source (``PW/src/iweights.f90``) -- see this
     module's own docstring, rule 3."""
     if (
-        purpose not in _SCF_LIKE_PURPOSES
+        purpose not in SCF_LIKE_PURPOSES
         or occupations is None
         or magnetic is None
         or electron_count is None

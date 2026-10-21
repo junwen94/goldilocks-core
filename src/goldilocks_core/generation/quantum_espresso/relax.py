@@ -57,7 +57,6 @@ from pymatgen.core import Structure
 from pymatgen.core.graphs import StructureGraph
 from pymatgen.io.ase import AseAtomsAdaptor
 
-from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.namelists import render_namelist
@@ -95,7 +94,6 @@ systems rather than treated as authoritative."""
 def write_qe_relax(
     system: SystemSettings,
     step: PwSettings,
-    job: JobDecision,
     ctx: SharedContext,
     purpose: Literal["relax", "vc-relax"],
 ) -> list[Step]:
@@ -133,6 +131,7 @@ def write_qe_relax(
         ("nbnd", step.nbnd),
         ("convergence", step.convergence),
         ("parallel", step.parallel),
+        ("max_seconds", step.max_seconds),
     ):
         if value is None:
             raise GenerationError(
@@ -145,7 +144,7 @@ def write_qe_relax(
     species_index = {label: index + 1 for index, label in enumerate(species_labels)}
 
     keywords: dict[str, object] = {}
-    keywords.update(control_keywords(ctx, step, job, purpose))
+    keywords.update(control_keywords(ctx, step, purpose))
     keywords.update(
         system_keywords(structure, system, step, len(species_labels), species_index)
     )

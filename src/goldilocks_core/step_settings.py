@@ -82,7 +82,9 @@ class BaseStepSettings:
 
 @dataclass(frozen=True, slots=True)
 class PwSettings(BaseStepSettings):
-    """pw.x: scf / nscf / bands / relax."""
+    """pw.x: scf / nscf / bands / relax. ``max_seconds`` is this step's
+    share of the task's walltime (``JobDecision.max_seconds_by_step``,
+    ``advisors/job_resources.py``)."""
 
     occupations: OccupationsDecision | None = None
     k_sampling: KSamplingDecision | None = None
@@ -90,6 +92,7 @@ class PwSettings(BaseStepSettings):
     nbnd: NbndDecision | None = None
     convergence: ConvergenceDecision | None = None
     parallel: ParallelisationDecision | None = None
+    max_seconds: int | None = None
     relax: RelaxOptions | VcRelaxOptions | None = None
 
 

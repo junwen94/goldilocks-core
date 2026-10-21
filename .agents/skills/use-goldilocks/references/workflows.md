@@ -120,9 +120,11 @@ if dos_report.ok:
     print([step.name for step in dos_steps])
 ```
 
-`DosAdvice.records()` keys the shared system-level fields unprefixed, the
-nscf step's own fields under `nscf_`, and the DOS decision itself under
-`"dos"`. CLI/HTTP/MCP equivalent: pass `task="dos"` (CLI: `--task dos`).
+`DosAdvice.records()` keys the shared system-level fields and the task's one
+`job` unprefixed, the nscf step's own fields under `nscf_`, and the DOS
+decision itself under `"dos"`. The job splits 95% of `walltime_h` between the
+scf and nscf inputs as `max_seconds` (`job.max_seconds_by_step`).
+CLI/HTTP/MCP equivalent: pass `task="dos"` (CLI: `--task dos`).
 
 ## Optional transports
 

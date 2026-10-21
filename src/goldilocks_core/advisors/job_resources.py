@@ -1,5 +1,6 @@
-"""job_resources: partition, nodes, ntasks, walltime -- from a
-resource_estimate envelope and an HPC profile.
+"""job_resources: one job per task -- partition, nodes, ntasks, walltime,
+and each ``pw.x`` step's ``max_seconds`` -- from the task's per-step
+resource estimates and an HPC profile.
 
 New in v2 (v2 epic 7, #7); no v1 precedent. Part of the false
 -circularity fix goldilocks-core-design.md:3176-3195 describes:
@@ -19,6 +20,11 @@ partition in the same profile (and only warns, does not silently
 guess, if none exists -- SCARF's own profile today has no such
 "bigmem"-style escape hatch to fall back to).
 
+**One job for all of a task's steps.** The steps run one after another
+in one allocation, so partition and nodes are sized for the largest
+step (``size.envelope`` over every step's estimate), and the steps share
+one walltime.
+
 **`nodes`/`ntasks` are a rough, heuristic-tier sizing, not a
 precision-critical one.** ``resource_estimate``'s ``ram_mb`` is treated
 as the calculation's aggregate memory footprint across however many
@@ -34,10 +40,20 @@ middling guess** (goldilocks-core-design.md:1337-1394): `size` gives
 throughput constant has ever been calibrated -- guessing short kills
 the job (the whole run is wasted); guessing long only costs queue time.
 So the heuristic default is `max_walltime_h` itself, with a warning,
-never a "conservative-looking" smaller number. `max_seconds` (95% of
-the requested walltime, matching aiida-quantumespresso's own
-`max_seconds` convention) is meant to give the code a chance to
-checkpoint gracefully before SLURM kills it outright.
+never a "conservative-looking" smaller number.
+
+**`max_seconds_by_step` splits 95% of the walltime across the steps**
+(the 95% matches aiida-quantumespresso's own `max_seconds` convention).
+pw.x counts `max_seconds` from its own start (QE 7.3
+`Modules/check_stop.f90:69`, `:147-148`), so steps that each got 95% of
+the walltime would overrun it together, and SLURM would kill the later
+one without restart data. Each step's share is proportional to its
+estimated `workload` and floored to whole seconds, so the shares never
+sum past the 95%; a single step gets all of it. A step that reaches its
+share stops cleanly with exit_status 255, which the submission script
+reports (`submission/slurm.py`). The shares are static because they are
+written into each step's input (`generation/quantum_espresso/scf.py`).
+Programs other than pw.x (`dos.x`) get no share and run in the rest.
 
 `npool`/`ndiag`/`nimage` are not decided here -- that is
 `advisors/parallelisation.py`'s job, reading this module's `ntasks` as
@@ -50,11 +66,12 @@ never supplied.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from pydantic import Field
 
-from goldilocks_core.advisors.size import ResourceEstimate
+from goldilocks_core.advisors.size import ResourceEstimate, envelope
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import (
@@ -127,12 +144,15 @@ of each code, for a caller that has not seen it fire."""
 
 @dataclass(frozen=True, slots=True)
 class JobDecision:
+    """The task's one job. ``max_seconds_by_step`` maps each pw.x step's
+    purpose to its share of the walltime, in seconds (module docstring)."""
+
     partition: str
     nodes: int
     ntasks: int
     ntasks_per_node: int
     walltime_h: float
-    max_seconds: int
+    max_seconds_by_step: dict[str, int]
     account: str | None
     warnings: tuple[Warning, ...] = ()
 
@@ -163,11 +183,15 @@ class JobLlmInput(LlmInput):
 
 
 def job_resources(
-    estimate: ResourceEstimate,
+    estimates: Mapping[str, ResourceEstimate],
     hpc: HpcProfile,
     human: JobHumanInput | None = None,
     llm: JobLlmInput | None = None,
 ) -> FieldState[JobDecision]:
+    """The job for a task whose pw.x steps run one after another in one
+    allocation; ``estimates`` maps each step's purpose to its estimate.
+    The largest step sizes partition and nodes, and every step gets a
+    ``max_seconds`` share (module docstring)."""
     human = human or JobHumanInput()
     llm = llm or JobLlmInput()
 
@@ -179,7 +203,8 @@ def job_resources(
             f"{requested_partition!r}; available: {available}"
         )
 
-    partition, warnings = _pick_partition(estimate, hpc, human, llm)
+    largest = envelope(list(estimates.values()))
+    partition, warnings = _pick_partition(largest, hpc, human, llm)
     ntasks_per_node = partition.hardware.cores_per_node
 
     if human.nodes is not None:
@@ -194,7 +219,7 @@ def job_resources(
         # Deriving nodes from ntasks here keeps the two self-consistent.
         nodes = math.ceil(human.ntasks / ntasks_per_node)
     else:
-        nodes = _nodes_needed(estimate, partition.hardware)
+        nodes = _nodes_needed(largest, partition.hardware)
     ntasks = human.ntasks if human.ntasks is not None else nodes * ntasks_per_node
 
     if nodes > partition.hardware.max_nodes:
@@ -226,7 +251,6 @@ def job_resources(
                 ),
             )
         )
-    max_seconds = int(walltime_h * 3600 * _MAX_SECONDS_FRACTION)
 
     decision = JobDecision(
         partition=partition.name,
@@ -234,7 +258,7 @@ def job_resources(
         ntasks=ntasks,
         ntasks_per_node=ntasks_per_node,
         walltime_h=walltime_h,
-        max_seconds=max_seconds,
+        max_seconds_by_step=_max_seconds_by_step(walltime_h, estimates),
         account=human.account,
         warnings=tuple(warnings),
     )
@@ -288,6 +312,19 @@ def _pick_partition(
             ),
         )
     ]
+
+
+def _max_seconds_by_step(
+    walltime_h: float, estimates: Mapping[str, ResourceEstimate]
+) -> dict[str, int]:
+    """Each step's share of 95% of the walltime, in proportion to its
+    workload and floored, so the shares never sum past it."""
+    budget = int(walltime_h * 3600 * _MAX_SECONDS_FRACTION)
+    total = sum(estimate.workload for estimate in estimates.values())
+    return {
+        purpose: budget * estimate.workload // total
+        for purpose, estimate in estimates.items()
+    }
 
 
 def _nodes_needed(estimate: ResourceEstimate, hardware: Hardware) -> int:

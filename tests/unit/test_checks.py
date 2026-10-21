@@ -346,7 +346,7 @@ def _job(ntasks: int) -> Resolved[JobDecision]:
         ntasks=ntasks,
         ntasks_per_node=ntasks,
         walltime_h=168.0,
-        max_seconds=574560,
+        max_seconds_by_step={"scf": 574560},
         account=None,
     )
     return Resolved(decision, Provenance(source="heuristic"))
@@ -355,7 +355,7 @@ def _job(ntasks: int) -> Resolved[JobDecision]:
 def _parallel(
     npool: int, ndiag: int | None = None
 ) -> Resolved[ParallelisationDecision]:
-    decision = ParallelisationDecision(npool=npool, ndiag=ndiag)
+    decision = ParallelisationDecision(npool=npool, ndiag=ndiag, kpoint_spin_pairs=64)
     return Resolved(decision, Provenance(source="human"))
 
 

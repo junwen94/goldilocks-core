@@ -32,13 +32,14 @@ module into one file. Split by pipeline phase instead, matching
   ``step_settings.PwSettings``'s own field list one layer up
 - ``_advice.py`` -- ``Advice``/``RunOverrides``, composing the three
   phases above
-- ``_pipeline.py`` -- ``advise()``/``check()``
+- ``_pipeline.py`` -- ``advise()``/``check()``, and ``advise_steps``,
+  which advises every ``pw.x`` step of one task with one shared job
 - ``_generate.py`` -- ``generate()``, the hard-fail boundary
 - ``_bundle.py`` -- submission-script rendering + bundle assembly
-- ``_dos.py`` -- ``dos`` task multi-step path (epic 9), reusing the
-  single-step phases above twice rather than a fourth phase of its own
-- ``_relax.py`` -- ``relax``/``vc-relax`` task path (epic 10), reusing
-  the single-step phases above once (single-step tasks, unlike ``dos``)
+- ``_dos.py`` -- ``dos`` task multi-step path (epic 9): ``advise_steps``
+  for its scf and nscf steps, rather than a fourth phase of its own
+- ``_relax.py`` -- ``relax``/``vc-relax`` task path (epic 10):
+  ``advise_steps`` for its one step (single-step tasks, unlike ``dos``)
 - ``_magnetic_orderings.py`` -- ``list_magnetic_orderings`` (#87),
   deliberately outside the ``advise()``/``generate()`` pipeline above: a
   listing capability a caller consults *before* deciding which magnetic

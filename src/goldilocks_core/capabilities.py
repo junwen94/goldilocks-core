@@ -407,7 +407,9 @@ _SETTING_META: dict[str, _SettingExtra] = {
     "walltime_h": {
         "unit": "hours",
         "description": (
-            "Requested job walltime; heuristic default is the partition's own maximum."
+            "Requested job walltime; heuristic default is the partition's own "
+            "maximum. 95% of it is split across the task's pw.x steps as "
+            "max_seconds, by estimated workload."
         ),
     },
     "account": {

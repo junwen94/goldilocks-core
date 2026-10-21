@@ -74,14 +74,6 @@ def test_npool_prefers_a_divisor_of_both_ntasks_and_the_pairs() -> None:
     assert state.value.npool == 32
 
 
-def test_npool_defaults_to_one_without_n_irr_k() -> None:
-    state = parallelisation(_NTASKS, None)
-
-    assert state.value.npool == 1
-    assert state.value.kpoint_spin_pairs is None
-    assert state.value.warnings == ()
-
-
 @pytest.mark.parametrize(
     ("n_kpoint_spin", "npool", "codes"),
     [
@@ -162,11 +154,9 @@ def test_default_npool_divides_ntasks_and_never_idles_a_pool(ntasks: int) -> Non
 
 @pytest.mark.parametrize(
     ("ntasks", "n_kpoint_spin"),
-    [(64, 1), (64, 6), (128, 32), (64, None)],
+    [(64, 1), (64, 6), (128, 32)],
 )
-def test_ndiag_is_left_to_pw_x_by_default(
-    ntasks: int, n_kpoint_spin: int | None
-) -> None:
+def test_ndiag_is_left_to_pw_x_by_default(ntasks: int, n_kpoint_spin: int) -> None:
     """Regression for #133: with ScaLAPACK the default was the largest
     square <= ntasks/npool (-ndiag 64 for a Gamma-only run on one node,
     -ndiag 16 with npool 4), whatever nbnd was, which aborted or hung
@@ -185,7 +175,7 @@ def test_nimage_is_always_none() -> None:
 
 
 def test_human_npool_override_is_honored() -> None:
-    state = parallelisation(_NTASKS, None, ParallelisationHumanInput(npool=4))
+    state = parallelisation(_NTASKS, 32, ParallelisationHumanInput(npool=4))
 
     assert state.value.npool == 4
     assert state.value.warnings == ()
@@ -193,7 +183,7 @@ def test_human_npool_override_is_honored() -> None:
 
 
 def test_human_npool_that_does_not_divide_ntasks_warns() -> None:
-    state = parallelisation(_NTASKS, None, ParallelisationHumanInput(npool=5))
+    state = parallelisation(_NTASKS, 32, ParallelisationHumanInput(npool=5))
 
     assert state.value.npool == 5
     assert _codes(state) == ["parallelisation.npool_does_not_divide_ntasks"]

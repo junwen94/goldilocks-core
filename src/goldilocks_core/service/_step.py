@@ -1,7 +1,7 @@
 """``StepAdvice``/``StepOverrides``: composes the two per-step-advisor
 phases -- ``_step_kpoints.py`` (occupations/k-mesh/bands/convergence)
-and ``_step_resources.py`` (resource envelope/job/parallelisation) --
-one level up, mirroring ``_advice.Advice``'s own composition of
+and ``_step_resources.py`` (job/parallelisation) -- one level up,
+mirroring ``_advice.Advice``'s own composition of
 ``AnalysisFacts``/``SystemAdvice``/``StepAdvice`` (v2 epic 8, #8).
 
 Split into two advisor phases, and this composing file kept separate
@@ -13,19 +13,19 @@ own, the same problem ``_advice.py`` solves for the top-level ``Advice``.
 Composing two already-typed sub-objects costs this module only two
 local origins.
 
-Only the one task epics 1-7 actually built a generation writer for
-(``scf_single_point`` on Quantum ESPRESSO) is wired here. Task
-sequencing (``PlannedStep``/``plan.py``) does not exist yet either
-(``steps.py``'s own docstring: "add once a second task actually needs
-step sequencing").
+``steps_advice`` builds every pw.x step of one task together (#169):
+each step's electronic advice first, then the task's resources over all
+of them, since the steps share one job (``_step_resources.py``).
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from pymatgen.core import Structure
 
+from goldilocks_core.advisors.job_resources import JobHumanInput, JobLlmInput
 from goldilocks_core.advisors.relax import RelaxHumanInput, RelaxLlmInput
 from goldilocks_core.advisors.size import ResourceEstimate
 from goldilocks_core.inputs.hpc import HpcProfile
@@ -39,7 +39,7 @@ from goldilocks_core.service._step_kpoints import (
 from goldilocks_core.service._step_resources import (
     ResourceOverrides,
     ResourceStepAdvice,
-    resource_step_advice,
+    task_resources,
 )
 from goldilocks_core.service._system import SystemAdvice
 
@@ -90,15 +90,33 @@ class StepAdvice:
         return {**self.kpoints.records(), **self.resources.records()}
 
 
-def step_advice(
+def steps_advice(
     structure: Structure,
     analysis: AnalysisFacts,
     system: SystemAdvice,
     hpc: HpcProfile,
-    overrides: StepOverrides,
-) -> StepAdvice:
-    kpoints = electronic_step_advice(structure, analysis, system, overrides.kpoints)
-    resources = resource_step_advice(
-        structure, system, kpoints.nbnd, kpoints.n_irr_k, hpc, overrides.resources
+    steps: Mapping[str, StepOverrides],
+    job_human: JobHumanInput | None,
+    job_llm: JobLlmInput | None,
+) -> dict[str, StepAdvice]:
+    """One ``StepAdvice`` per entry of ``steps`` (a pw.x step's purpose ->
+    its overrides, in run order). The steps share one job, sized with
+    the task-level ``job_human``/``job_llm``; each step's own overrides
+    give its k-point/band advice and npool/ndiag."""
+    electronic = {
+        purpose: electronic_step_advice(structure, analysis, system, step.kpoints)
+        for purpose, step in steps.items()
+    }
+    resources = task_resources(
+        structure,
+        system,
+        electronic,
+        hpc,
+        job_human,
+        job_llm,
+        {purpose: step.resources.parallelisation for purpose, step in steps.items()},
     )
-    return StepAdvice(kpoints=kpoints, resources=resources)
+    return {
+        purpose: StepAdvice(kpoints=electronic[purpose], resources=resources[purpose])
+        for purpose in steps
+    }

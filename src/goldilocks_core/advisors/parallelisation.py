@@ -120,10 +120,9 @@ generations); a factor of 4/3 or more would pick 32 pools there."""
 class ParallelisationDecision:
     npool: int
     ndiag: int | None
+    kpoint_spin_pairs: int
+    """The k-point/spin pairs pw.x splits over the pools."""
     nimage: int | None = None
-    kpoint_spin_pairs: int | None = None
-    """The k-point/spin pairs pw.x splits over the pools; ``None`` when
-    n_irr_k is unresolved."""
     warnings: tuple[Warning, ...] = ()
 
 
@@ -165,13 +164,12 @@ def kpoint_spin_pairs(n_irr_k: int, magnetic: MagneticConfigFacts) -> int:
 
 def parallelisation(
     ntasks: int,
-    n_kpoint_spin: int | None,
+    n_kpoint_spin: int,
     human: ParallelisationHumanInput | None = None,
 ) -> FieldState[ParallelisationDecision]:
     """``npool`` for ``ntasks`` processes and ``n_kpoint_spin``
-    k-point/spin pairs (``kpoint_spin_pairs``; ``None`` when n_irr_k is
-    unresolved) unless ``human`` sets it; ``ndiag`` only from ``human``
-    (``None`` leaves it to pw.x)."""
+    k-point/spin pairs (``kpoint_spin_pairs``) unless ``human`` sets it;
+    ``ndiag`` only from ``human`` (``None`` leaves it to pw.x)."""
     human = human or ParallelisationHumanInput()
 
     if human.npool is not None:
@@ -196,13 +194,10 @@ def parallelisation(
     return Resolved(decision, Provenance(source=source))
 
 
-def best_npool(ntasks: int, n_kpoint_spin: int | None) -> int:
+def best_npool(ntasks: int, n_kpoint_spin: int) -> int:
     """The largest divisor of ``ntasks`` that is at most
     ``n_kpoint_spin`` (N) and whose ceil(N/npool) x npool pair slots stay
-    within ``_POOL_SLOT_TOLERANCE`` x N; 1 when N is ``None``. npool=1
-    always qualifies."""
-    if n_kpoint_spin is None:
-        return 1
+    within ``_POOL_SLOT_TOLERANCE`` x N. npool=1 always qualifies."""
     return max(
         npool
         for npool in range(1, min(ntasks, n_kpoint_spin) + 1)
@@ -212,9 +207,7 @@ def best_npool(ntasks: int, n_kpoint_spin: int | None) -> int:
     )
 
 
-def _human_npool_warnings(
-    npool: int, ntasks: int, n_kpoint_spin: int | None
-) -> list[Warning]:
+def _human_npool_warnings(npool: int, ntasks: int, n_kpoint_spin: int) -> list[Warning]:
     warnings: list[Warning] = []
     if ntasks % npool != 0:
         warnings.append(
@@ -228,7 +221,7 @@ def _human_npool_warnings(
                 ),
             )
         )
-    if n_kpoint_spin is not None and npool > n_kpoint_spin:
+    if npool > n_kpoint_spin:
         warnings.append(
             Warning(
                 code="parallelisation.npool_exceeds_kpoints",
@@ -244,10 +237,10 @@ def _human_npool_warnings(
     return warnings
 
 
-def _load_imbalance_notes(npool: int, n_kpoint_spin: int | None) -> list[Warning]:
+def _load_imbalance_notes(npool: int, n_kpoint_spin: int) -> list[Warning]:
     """A note when the first N mod npool pools take one pair more than
     the rest (``PW/src/divide_et_impera.f90:49-56``)."""
-    if n_kpoint_spin is None or n_kpoint_spin % npool == 0:
+    if n_kpoint_spin % npool == 0:
         return []
     return [
         Warning(

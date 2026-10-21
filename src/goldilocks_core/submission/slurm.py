@@ -6,7 +6,7 @@ comes from -- goldilocks-core-design.md:1297-1310's own signpost,
 translated:
 
     nodes / ntasks / walltime / partition  <- advisors/job_resources.py
-                                               (the allocation)
+                                               (the task's one allocation)
     npool / ndiag / nimage                 <- advisors/parallelisation.py
                                                (already baked into Step.args)
     which programs run, in what order,     <- generation/<code>/<task>.py's
@@ -72,18 +72,16 @@ Only the functions the steps use are emitted. A QE build with
 ``__RETURN_EXIT_STATUS`` exits non-zero on 2, 3 and 255, so ``set -e``
 stops the script before the check runs; the job still fails.
 
-**Walltime is allocated whole to however many steps there are.**
-goldilocks-core-design.md:1226-1237 calls for a *proportional*, size
--weighted split across multiple steps -- there is only ever one step
-in this epic's own generation output (``scf``), so there is nothing yet
-to split proportionally between; ``JobDecision.max_seconds`` is written
-into the QE input itself by ``generation/quantum_espresso/scf.py``, not
-here (see that module's docstring for why: baking it in at generation
-time, not injecting it into the input at submission time, is what keeps
-the published manifest's sha256 describing the bytes actually run).
-Splitting proportionally across several steps' own ``size`` estimates
-is deferred to whichever future task-writer (``nscf``/``bands``/
-``phonon``) actually produces more than one step.
+**One job for all steps; ``job_resources`` splits its walltime.**
+``JobDecision`` is the task's one job, sized over every step's estimate,
+and ``max_seconds_by_step`` gives each ``pw.x`` step a share of 95% of
+the walltime in proportion to its estimated workload
+(goldilocks-core-design.md:1226-1237's size-weighted split; see
+``advisors/job_resources.py``). Each share is written into that step's
+input by ``generation/quantum_espresso/scf.py``, not here: baking it in
+at generation time keeps the published manifest's sha256 describing the
+bytes actually run. ``dos.x`` has no ``max_seconds`` and runs in the
+remaining 5% or more.
 """
 
 from __future__ import annotations
