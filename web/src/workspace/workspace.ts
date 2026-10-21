@@ -45,12 +45,12 @@ export interface WorkspaceSnapshot {
   readonly attemptedStructureInput: StructureInput | null;
   readonly inspection: StructureInspection | null;
   readonly draft: CalculationDraft | null;
-  /** The last `/explain` preview -- records + warnings, no files. Never
-   * carries an archive: `/explain` never calls `generate()`, so it can
-   * succeed even when a `/run` would still refuse with
+  /** The last `/explain` preview -- records, warnings and the `blocking`
+   * verdict, no files. Never carries an archive: `/explain` never calls
+   * `generate()`, so it succeeds even when a `/run` would refuse with
    * `advice_incomplete` (the tri-state "diagnosis is always available"
-   * promise). Downloading real files is a separate `review.download`
-   * step against `/run`. */
+   * promise), and `blocking` then lists the reasons. Downloading real
+   * files is a separate `review.download` step against `/run`. */
   readonly reviewed: ExplainResult | null;
   readonly outOfDate: boolean;
   readonly lastDownload: ArchiveDownload | null;

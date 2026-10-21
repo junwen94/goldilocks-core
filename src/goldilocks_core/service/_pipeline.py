@@ -7,9 +7,10 @@ it cannot decide is ``unavailable``/``blocked``, not an exception);
 ``generate()`` (``service/_generate.py``) hard-fails via
 ``checks.check_all`` if anything needed is ``unavailable``/``blocked``
 (delivery has preconditions). A fault is not an undecided field: it
-propagates out of both. CLI's ``explain`` command is exactly
-``advise()``; ``run`` is ``advise()`` -> ``generate()`` -> submission
-script -> bundle.
+propagates out of both. ``explain`` (CLI, HTTP, MCP) is ``advise()`` ->
+``check()``, reporting ``CheckReport.blocking`` without rendering anything
+(#165); ``run`` is ``advise()`` -> ``check()`` -> ``generate()`` ->
+submission script -> bundle.
 
 ``advise_steps`` diagnoses every pw.x step of one task together (#169):
 analysis and system advice run once, then each step's own advice, then

@@ -114,9 +114,11 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
 
     @server.tool(
         description=(
-            "Run analysis and advisors only, without generating any files. "
-            "Returns every decision (with its source) and a warnings array "
-            "the caller must relay verbatim. task='dos' explains all three "
+            "Run analysis, advisors and run's checks, without generating any "
+            "files. Returns every decision (with its source), a warnings "
+            "array the caller must relay verbatim, and a blocking array "
+            "listing the reasons run would refuse to generate an input "
+            "(empty when those checks pass). task='dos' explains all three "
             "of the density-of-states task's steps (scf, nscf, dos.x); "
             "its nscf-step decisions are returned under nscf_-prefixed keys. "
             "task='relax'/'vc-relax' explains one pw.x step with ionic (and, "

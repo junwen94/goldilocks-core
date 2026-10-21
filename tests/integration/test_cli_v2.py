@@ -393,6 +393,49 @@ def test_blocked_pipeline_reports_deduplicated_reasons_and_exits_nonzero() -> No
     assert "does-not-exist" in lines[0]
 
 
+@pytest.mark.parametrize(
+    ("task_arguments", "expected"),
+    [
+        pytest.param([], ["is not installed"], id="scf"),
+        pytest.param(["--task", "dos"], ["is not installed"], id="dos"),
+        pytest.param(
+            ["--task", "vc-relax", "--set", "ion_dynamics=damp"],
+            ["is not installed", "vc-relax requires ion_dynamics='bfgs'"],
+            id="vc-relax",
+        ),
+    ],
+)
+def test_explain_reports_the_reasons_run_refuses_with_and_still_exits_zero(
+    task_arguments: list[str], expected: list[str]
+) -> None:
+    """#165: no real assets, so the isolated asset root's uninstalled
+    default table is a deterministic blocker (vc-relax adds its named
+    check rule). explain prints run's verdict (diagnosis output, on stdout)
+    and still exits 0; run refuses with the same reasons on stderr."""
+    arguments = [str(structure("Si.cif")), "--hpc", "scarf", *task_arguments]
+
+    as_json = _run_cli("explain", *arguments, "--json")
+    as_text = _run_cli("explain", *arguments)
+    refused = _run_cli("run", *arguments)
+
+    assert as_json.returncode == 0, as_json.stderr
+    blocking = json.loads(as_json.stdout)["blocking"]
+    assert len(blocking) == len(expected)
+    for reason, fragment in zip(blocking, expected, strict=True):
+        assert fragment in reason
+    assert as_text.returncode == 0, as_text.stderr
+    assert refused.returncode == 2
+    text_lines = [
+        line for line in as_text.stdout.splitlines() if line.startswith("blocked:")
+    ]
+    refused_lines = [
+        line for line in refused.stderr.splitlines() if line.startswith("blocked:")
+    ]
+    assert text_lines == [f"blocked: {reason}" for reason in blocking]
+    assert text_lines == refused_lines
+    assert as_text.stdout.splitlines()[-len(text_lines) :] == text_lines
+
+
 class TestRunAndExplainAgainstRealAssets:
     """Skips itself when the default pseudopotential profile isn't
     installed (same convention as test_docs_executable.py's
@@ -418,15 +461,16 @@ class TestRunAndExplainAgainstRealAssets:
         self, real_assets: None
     ) -> None:
         """Matches HTTP/MCP's own ``/explain`` shape
-        (``{"records", "warnings"}``) -- v2 epic 8's own "warnings array
-        in every CLI/HTTP/MCP response" requirement."""
+        (``{"records", "warnings", "blocking"}``) -- v2 epic 8's own
+        "warnings array in every CLI/HTTP/MCP response" requirement."""
         silicon = structure("Si.cif")
 
         completed = _run_cli("explain", str(silicon), "--hpc", "scarf", "--json")
 
         assert completed.returncode == 0, completed.stderr
         document = json.loads(completed.stdout)
-        assert document.keys() == {"records", "warnings"}
+        assert document.keys() == {"records", "warnings", "blocking"}
+        assert document["blocking"] == []
         assert document["warnings"]
         assert any(
             warning["code"] == "job.walltime_defaulted"

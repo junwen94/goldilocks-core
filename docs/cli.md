@@ -15,8 +15,10 @@ uv run goldilocks run structure.cif --out silicon-run
 
 `inspect` reports structure metadata. `explain` runs analysis and every
 advisor, printing each decision and its source (`human`, `ml`, `llm`, or
-`heuristic`) — it never writes anything, even without `--json`. `run`
-generates a complete runnable input (Quantum ESPRESSO by default) and
+`heuristic`), then the checks `run` applies, printing one `blocked: <reason>`
+line for each reason `run` would refuse to generate an input. It never writes
+anything, even without `--json`, and exits 0 whether or not it is blocked.
+`run` generates a complete runnable input (Quantum ESPRESSO by default) and
 publishes it to `silicon-run` because `-o/--out` was given; omit `-o/--out`
 for a memory-only preview instead. Use `uv run goldilocks --help` or a
 subcommand's `--help` for full syntax.
@@ -71,7 +73,9 @@ naming no longer exists in any form).
 an output flag: without `-o/--out` it prints `{"files": [...], "records":
 {...}, "warnings": [...]}`; with `-o/--out` it prints `{"files": [...],
 "kind": "directory"|"archive", "path": "..."}`. `explain --json` prints
-`{"records": {...}, "warnings": [...]}`.
+`{"records": {...}, "warnings": [...], "blocking": [...]}`, where `blocking`
+lists the distinct reasons `run` would refuse to generate an input and is empty
+when its checks pass.
 
 `--json` output and the published `goldilocks.json` are strict JSON: a value
 with no finite number is `null`, never `Infinity` or `NaN`. For example, the
@@ -207,7 +211,7 @@ the address. `--static-root DIRECTORY` also serves a built Workbench; a relative
 | ------------------- | --------------------------------------------------------------------------------- |
 | `GET /capabilities` | Codes, tasks, facts, settings, pseudopotential tables, HPC profiles, models, warnings |
 | `POST /inspect`     | Structure inspection (inline `structure_content`, not a path)                     |
-| `POST /explain`     | Analysis and advisor decisions only; never writes anything                        |
+| `POST /explain`     | Analysis and advisor decisions, plus `blocking`: the reasons `/run` would refuse; never writes anything |
 | `POST /run`         | Generate a runnable input; `respond_with: "json"` (default) returns a JSON summary, `respond_with: "archive"` returns ZIP bytes |
 | `GET /health`       | Process health                                                                     |
 | `GET /ready`        | Asset readiness; 503 for missing or corrupt assets                                |
@@ -236,8 +240,9 @@ uv run --extra mcp goldilocks serve mcp
 ```
 
 The stdio tools are `capabilities`, `inspect_structure`, `explain`, and `run`.
-MCP's `run` tool never writes to the server's filesystem — it always returns
-only the published file list, every resolved decision (with its source), and
-a warnings array the caller must relay verbatim. To obtain actual file bytes,
-use the CLI (`goldilocks run ... -o/--out`) or the HTTP transport's `/run`
-endpoint with `respond_with: "archive"`.
+MCP's `explain` tool returns the same `records`, `warnings`, and `blocking` as
+`POST /explain`. MCP's `run` tool never writes to the server's filesystem — it
+always returns only the published file list, every resolved decision (with its
+source), and a warnings array the caller must relay verbatim. To obtain actual
+file bytes, use the CLI (`goldilocks run ... -o/--out`) or the HTTP transport's
+`/run` endpoint with `respond_with: "archive"`.

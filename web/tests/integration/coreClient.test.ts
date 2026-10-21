@@ -151,7 +151,7 @@ describe("HttpCoreClient", () => {
   });
 
   describe("explain", () => {
-    it("posts to /explain and returns records + warnings, no schema_version required", async () => {
+    it("posts to /explain and returns records, warnings and blocking, no schema_version required", async () => {
       const fetcher = vi
         .fn<typeof fetch>()
         .mockResolvedValue(Response.json(explainResult));
@@ -166,6 +166,23 @@ describe("HttpCoreClient", () => {
         },
         method: "POST",
       });
+    });
+
+    it("returns the reasons /run would refuse with as a successful verdict", async () => {
+      const blocked = {
+        ...explainResult,
+        blocking: [
+          "npool=7 does not divide ntasks=64; QE refuses this MPI layout.",
+        ],
+      };
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json(blocked));
+      const client = new HttpCoreClient("", fetcher);
+
+      await expect(client.explain(request)).resolves.toEqual(blocked);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(fetcher).toHaveBeenCalledWith("/explain", expect.anything());
     });
 
     it("surfaces advice_incomplete without ever having called /run", async () => {

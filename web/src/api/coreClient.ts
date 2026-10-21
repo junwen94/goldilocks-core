@@ -187,6 +187,10 @@ export interface StructureInspection {
 export interface ExplainResult {
   readonly records: Readonly<Record<string, ResolvedField>>;
   readonly warnings: readonly AdvisorWarning[];
+  /** The distinct reasons `/run` would refuse to generate input files
+   * for (the task's `check()` verdict, in first-seen order); empty when
+   * those checks pass. */
+  readonly blocking: readonly string[];
 }
 
 export interface RunResult {
@@ -247,9 +251,10 @@ export class CoreFailure extends Error {
 export interface CoreClient {
   capabilities(): Promise<Capabilities>;
   inspectStructure(input: StructureInput): Promise<StructureInspection>;
-  /** Advice-only preview: never generates files, can succeed even when
+  /** Advice-only preview: never generates files, and still succeeds when
    * `run` would refuse with `advice_incomplete` (the tri-state
-   * "diagnosis is always available" promise). */
+   * "diagnosis is always available" promise) -- `blocking` then lists
+   * the reasons `run` would give. */
   explain(request: ComputeRequest): Promise<ExplainResult>;
   /** Lists candidate magnetic orderings (FM plus any AFM candidates),
    * optionally mMACE-ranked by relaxed energy per atom. */

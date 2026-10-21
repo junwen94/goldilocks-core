@@ -1,6 +1,8 @@
-"""``goldilocks explain``: analysis+advisors only, printing every
-decision and its source (v2 epic 8, #8). A scientifically incomplete
-request still prints: ``service.advise()`` marks what it cannot decide
+"""``goldilocks explain``: analysis, advisors and ``run``'s check, without
+generating anything (v2 epic 8, #8). Prints every decision with its source,
+then one ``blocked:`` line per distinct reason ``run`` would refuse to
+generate an input for (#165). A scientifically incomplete or blocked request
+still prints and exits 0: ``service.advise()`` marks what it cannot decide
 unavailable or blocked instead of raising.
 """
 
@@ -19,13 +21,23 @@ from goldilocks_core.cli._common import (
     resolve_structure,
 )
 from goldilocks_core.cli._output import write_json
-from goldilocks_core.service import advise, advise_dos, advise_relax
+from goldilocks_core.service import (
+    advise,
+    advise_dos,
+    advise_relax,
+    check,
+    check_dos,
+    check_relax,
+)
 
 
 def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "explain",
-        help="Run analysis+advisors only; print every decision and its source.",
+        help=(
+            "Run analysis+advisors without generating files; print every "
+            "decision, its source, and the blocking reasons run would report."
+        ),
     )
     add_run_arguments(parser)
     add_fetch_missing_argument(parser)
@@ -43,6 +55,7 @@ def run(args: argparse.Namespace, out: TextIO) -> None:
             overrides=overrides,
             fetch_missing=args.fetch_missing,
         )
+        report = check_dos(advice)
     elif args.task in ("relax", "vc-relax"):
         advice = advise_relax(
             structure,
@@ -52,6 +65,7 @@ def run(args: argparse.Namespace, out: TextIO) -> None:
             overrides=overrides,
             fetch_missing=args.fetch_missing,
         )
+        report = check_relax(advice)
     else:
         advice = advise(
             structure,
@@ -60,12 +74,20 @@ def run(args: argparse.Namespace, out: TextIO) -> None:
             overrides=overrides,
             fetch_missing=args.fetch_missing,
         )
+        report = check(advice)
     records = advice.records()
+    blocking = list(dict.fromkeys(report.blocking))
     if args.json:
         write_json(
             out,
-            {"records": records_to_json(records), "warnings": advice.warnings()},
+            {
+                "records": records_to_json(records),
+                "warnings": advice.warnings(),
+                "blocking": blocking,
+            },
         )
         return
     for name, state in sorted(records.items()):
         print(f"{name}: {format_field_state(state)}", file=out)
+    for reason in blocking:
+        print(f"blocked: {reason}", file=out)
