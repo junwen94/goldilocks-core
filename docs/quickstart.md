@@ -76,7 +76,10 @@ pw.x -in scf.in > scf.out
 
 Review `scf.out` to check that the SCF calculation converged. On an HPC
 cluster, submit the generated `submit.sh` instead — it already runs `pw.x`
-with the right MPI/OpenMP layout for the `--hpc` profile you chose.
+with the right MPI/OpenMP layout for the `--hpc` profile you chose, and it
+stops with a `goldilocks:` message on stderr unless `pw.x` recorded
+`exit_status` 0 for every step, so an SCF that did not converge fails the
+job.
 
 ## Next
 

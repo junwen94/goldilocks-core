@@ -37,11 +37,11 @@ per-step orchestration loop that constructs one of these yet (v2 epic
 epic 10: ``advisors/relax.py``'s ``relax_settings()`` is called by
 ``service/_relax.py`` and threaded into ``generate(relax=...)``, so a
 ``relax``/``vc-relax`` task genuinely constructs a non-``None`` value
-here today. ``BaseStepSettings``'s ``disk_io`` and all of ``DosSettings``'s/
-``PhSettings``'s fields have no producer or real type at all yet (their
-own per-step advisors do not exist). Every optional field here is
-expected to become required once its real producer exists -- a
-natural, signature-breaking change at that point, not scope creep now.
+here today. ``DosSettings``'s/``PhSettings``'s fields have no producer
+or real type at all yet (their own per-step advisors do not exist).
+Every optional field here is expected to become required once its real
+producer exists -- a natural, signature-breaking change at that point,
+not scope creep now.
 
 ``DosSettings`` existing as its own type with its own ``broadening``
 field (QE calls this ``degauss`` too, in ``dos.x``/``projwfc.x`` --
@@ -67,14 +67,15 @@ from goldilocks_core.advisors.size import ResourceEstimate
 
 @dataclass(frozen=True, slots=True)
 class BaseStepSettings:
-    """Common to every program: disk-usage convention and per-process
-    resource estimates. ``size``/``mem_per_proc`` are produced by v2
-    epic 7's ``advisors/size.py`` (``resource_estimate``/
-    ``memory_per_process``); ``disk_io`` still has no producer in this
-    codebase (no ``advisors/disk_io.py`` exists yet) and stays unknown.
+    """Common to every program: per-process resource estimates, produced
+    by v2 epic 7's ``advisors/size.py`` (``resource_estimate``/
+    ``memory_per_process``).
+
+    There is no ``disk_io``: QE's default always writes the status file
+    the submission script checks (``steps.ExitStatusCheck``), and
+    ``disk_io='none'`` would write none (``PW/src/punch.f90:60-63``).
     """
 
-    disk_io: str | None = None
     size: ResourceEstimate | None = None
     mem_per_proc: float | None = None
 

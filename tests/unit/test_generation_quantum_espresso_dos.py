@@ -5,7 +5,7 @@ import pytest
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.dos import write_qe_dos
 from goldilocks_core.step_settings import DosSettings
-from goldilocks_core.steps import SharedContext
+from goldilocks_core.steps import SharedContext, StdoutMarkerCheck
 
 
 def _ctx() -> SharedContext:
@@ -67,3 +67,12 @@ def test_dos_x_runs_on_one_task_without_pools() -> None:
 
     assert dos_step.ntasks == 1
     assert "-npool" not in dos_step.args
+
+
+def test_dos_x_is_checked_by_job_done_in_its_stdout() -> None:
+    """#129: dos.x writes no status file, so the pw.x status check
+    cannot apply to it."""
+    (dos_step,) = write_qe_dos(DosSettings(delta_e=0.01, ngauss=0), _ctx())
+
+    assert dos_step.completion == StdoutMarkerCheck("JOB DONE")
+    assert dos_step.stdout == "dos.out"

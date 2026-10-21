@@ -112,7 +112,7 @@ from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.namelists import render_namelist
 from goldilocks_core.step_settings import PwSettings
-from goldilocks_core.steps import SharedContext, Step
+from goldilocks_core.steps import ExitStatusCheck, SharedContext, Step
 from goldilocks_core.system_settings import SystemSettings
 
 _QE_VDW_CORR: dict[str, tuple[str, int | None]] = {
@@ -297,8 +297,20 @@ def write_qe_scf(
             args=tuple(args),
             files={f"{purpose}.in": content},
             stdout=f"{purpose}.out",
+            completion=pw_exit_status_check(ctx),
         )
     ]
+
+
+def pw_exit_status_check(ctx: SharedContext) -> ExitStatusCheck:
+    """How the submission script decides a ``pw.x`` step finished: the
+    ``<exit_status>`` in ``<outdir>/<prefix>.save/data-file-schema.xml``.
+    QE 7.3 writes that file on every ``punch`` (``PW/src/punch.f90:77``),
+    including after a non-converged or ``max_seconds`` stop
+    (``run_pwscf.f90:197-212``); the ``<outdir>/<prefix>.xml`` copy is
+    made only by ``punch('all')`` (``punch.f90:110-120``), so it is
+    missing or stale after exactly those stops."""
+    return ExitStatusCheck(f"{ctx.outdir}/{ctx.prefix}.save/data-file-schema.xml")
 
 
 def validated_pseudo_by_element(
@@ -344,8 +356,6 @@ def control_keywords(
         "tstress": True,
         "max_seconds": job.max_seconds,
     }
-    if step.disk_io is not None:
-        keywords["disk_io"] = step.disk_io
     if step.relax is not None:
         # forc_conv_thr/etot_conv_thr/nstep are real &CONTROL keys, not
         # &IONS ones (INPUT_PW.txt, ASE's own ALL_KEYS['pw']['control']

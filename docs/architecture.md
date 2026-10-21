@@ -51,8 +51,10 @@ A `run` (or `explain`) request follows this path:
    `generation.quantum_espresso.scf.write_qe_scf` or
    `generation.quantum_espresso.relax.write_qe_relax` directly. There is no
    dispatch table.
-5. `service.render_submission(advice, hpc, code, ctx, steps)` renders the
-   SLURM script via `submission/slurm.py`.
+5. `service.render_submission(advice, hpc, code, steps)` renders the
+   SLURM script via `submission/slurm.py`. Each step is followed by the
+   completion check its writer declared (`Step.completion`), and the script
+   stops with a `goldilocks:` message when one fails.
 6. `service.to_bundle_input(advice, steps, submission_script, ctx)` assembles
    a `bundle.BundleInput`: the rendered input file(s), the pseudopotential
    bytes read straight off disk for each selected element, the submission
@@ -163,7 +165,12 @@ formatting." The writers today cover all four tasks: `write_qe_scf`,
 `write_qe_relax`, and a DOS writer (`generation/quantum_espresso/dos.py`).
 A writer sets `Step.ntasks` when its program cannot use the whole allocation
 (the DOS writer sets 1); `submission/slurm.py` then launches that step on that
-many tasks instead of every task the job allocates.
+many tasks instead of every task the job allocates. Every `Step` also declares
+how the script decides it finished (`Step.completion`, from `steps.py`):
+`pw.x` steps use `ExitStatusCheck`, which passes only if
+`<outdir>/<prefix>.save/data-file-schema.xml` was rewritten during the step
+with `exit_status` 0, and `dos.x`, which writes no status file, uses
+`StdoutMarkerCheck` (`JOB DONE` in its stdout).
 
 ### Add a model or pseudopotential table
 

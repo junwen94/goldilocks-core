@@ -190,7 +190,6 @@ def generate_dos(
     scf_steps = generate(advice.scf, ok_report, ctx=shared_ctx)
     nscf_steps = generate(advice.nscf, ok_report, ctx=shared_ctx, purpose="nscf")
     dos_settings_value = DosSettings(
-        disk_io=None,
         size=None,
         mem_per_proc=None,
         emin=advice.dos.value.emin,
@@ -207,7 +206,6 @@ def render_submission_dos(
     advice: DosAdvice,
     hpc: HpcProfile,
     code: str,
-    ctx: SharedContext,
     steps: tuple[Step, ...],
 ) -> str:
     """One shared script for a ``dos`` task's three steps (v2 epic 9,
@@ -217,7 +215,7 @@ def render_submission_dos(
     the scf step's governs the shared allocation, a documented choice:
     it is normally the dominant cost, and ``dos.x`` itself is fast."""
     return render_slurm_script(
-        hpc, advice.scf.step.resources.job.value, code, ctx, list(steps)
+        hpc, advice.scf.step.resources.job.value, code, list(steps)
     )
 
 

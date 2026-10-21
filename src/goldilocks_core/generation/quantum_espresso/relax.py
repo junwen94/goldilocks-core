@@ -9,7 +9,7 @@ purpose-agnostic card/namelist helper with ``scf.py`` (un-privatized
 there for this reuse: ``control_keywords``/``system_keywords``/
 ``electrons_keywords``/``atomic_species``/``cell_parameters``/
 ``atomic_positions``/``k_points``/``validated_pseudo_by_element``/
-``hubbard_lines``) --
+``hubbard_lines``/``pw_exit_status_check``) --
 the &CONTROL/&SYSTEM/&ELECTRONS namelists and every card are identical
 between an scf step and a relax step; only &IONS/&CELL (this module's
 own ``ions_keywords``/``cell_keywords``) and the ``&CONTROL``
@@ -70,6 +70,7 @@ from goldilocks_core.generation.quantum_espresso.scf import (
     electrons_keywords,
     hubbard_lines,
     k_points,
+    pw_exit_status_check,
     system_keywords,
     validated_pseudo_by_element,
 )
@@ -173,6 +174,7 @@ def write_qe_relax(
             args=tuple(args),
             files={f"{purpose}.in": content},
             stdout=f"{purpose}.out",
+            completion=pw_exit_status_check(ctx),
         )
     ]
 

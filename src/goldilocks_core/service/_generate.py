@@ -83,7 +83,6 @@ def generate(
     )
     kpoints = advice.step.kpoints
     step_settings = PwSettings(
-        disk_io=None,
         size=advice.step.resource_estimate,
         mem_per_proc=advice.step.mem_per_proc,
         occupations=kpoints.occupations.value,

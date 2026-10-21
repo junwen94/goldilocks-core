@@ -18,7 +18,7 @@ from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.relax import write_qe_relax
 from goldilocks_core.step_settings import PwSettings
-from goldilocks_core.steps import SharedContext
+from goldilocks_core.steps import ExitStatusCheck, SharedContext
 from goldilocks_core.system_settings import SystemSettings
 
 _CTX = SharedContext(prefix="pwscf", outdir="./out", pseudo_dir="./pseudo")
@@ -68,7 +68,6 @@ def _system(
 
 def _step(*, relax, convergence: ConvergenceDecision | None = _UNSET) -> PwSettings:
     return PwSettings(
-        disk_io=None,
         occupations=OccupationsDecision(
             occupations="fixed", smearing_type=None, degauss=None
         ),
@@ -127,6 +126,26 @@ def test_writes_one_relax_step_with_an_ions_namelist_and_no_cell(
     assert "CELL_PARAMETERS angstrom" in content
     assert "ATOMIC_POSITIONS crystal" in content
     assert "K_POINTS automatic" in content
+
+
+@pytest.mark.parametrize(
+    "purpose, relax", [("relax", RelaxOptions()), ("vc-relax", VcRelaxOptions())]
+)
+def test_relax_step_is_checked_by_the_status_pw_x_always_writes(
+    diamond_silicon, pseudo_metadata_factory, purpose, relax
+) -> None:
+    """#129: a relax whose SCF does not converge, or that reaches
+    max_seconds, records exit_status 2 or 255 only in the .save schema
+    XML (punch('config')), not in <prefix>.xml."""
+    system = _system(diamond_silicon, pseudo_metadata_factory)
+    ctx = SharedContext(prefix="si", outdir="./scratch", pseudo_dir="./pseudo")
+
+    (rendered,) = write_qe_relax(system, _step(relax=relax), _JOB, ctx, purpose)
+
+    assert rendered.completion == ExitStatusCheck(
+        "./scratch/si.save/data-file-schema.xml"
+    )
+    assert "disk_io" not in rendered.files[f"{purpose}.in"]
 
 
 def test_writes_vc_relax_step_with_ions_and_cell_namelists(

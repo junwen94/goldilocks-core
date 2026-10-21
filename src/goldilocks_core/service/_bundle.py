@@ -19,12 +19,9 @@ def render_submission(
     advice: Advice,
     hpc: HpcProfile,
     code: str,
-    ctx: SharedContext,
     steps: tuple[Step, ...],
 ) -> str:
-    return render_slurm_script(
-        hpc, advice.step.resources.job.value, code, ctx, list(steps)
-    )
+    return render_slurm_script(hpc, advice.step.resources.job.value, code, list(steps))
 
 
 def to_bundle_input(

@@ -87,7 +87,7 @@ class TestAdviseEndToEnd:
         assert "scf.in" in steps[0].files
 
         ctx = default_shared_context()
-        script = render_submission(advice, hpc, "quantum_espresso", ctx, steps)
+        script = render_submission(advice, hpc, "quantum_espresso", steps)
         assert "#SBATCH" in script
         assert "pw.x" in script
 

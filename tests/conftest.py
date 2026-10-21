@@ -34,6 +34,18 @@ def silicon_structure() -> Structure:
 
 
 @pytest.fixture
+def diamond_silicon() -> Structure:
+    """Diamond Si in its two-atom primitive cell (a = 5.43 A): a real
+    dense cell for new tests, which later dimensionality rules cannot
+    reclassify the way they can ``silicon_structure``."""
+    return Structure(
+        Lattice.from_parameters(3.84, 3.84, 3.84, 60, 60, 60),
+        ["Si", "Si"],
+        [[0.0, 0.0, 0.0], [0.25, 0.25, 0.25]],
+    )
+
+
+@pytest.fixture
 def pseudo_metadata_factory() -> Callable[..., PseudoMetadata]:
 
     def make_metadata(

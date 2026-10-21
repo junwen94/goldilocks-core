@@ -112,7 +112,7 @@ then choose where the result goes:
 from goldilocks_core.bundle import ArchiveOutput, DirectoryOutput, bundle_files, publish
 from goldilocks_core.service import render_submission, to_bundle_input
 
-script = render_submission(advice, hpc, "quantum_espresso", ctx, steps)
+script = render_submission(advice, hpc, "quantum_espresso", steps)
 bundle_input = to_bundle_input(advice, steps, script, ctx)
 ```
 
@@ -156,7 +156,7 @@ dos_advice = advise_dos(silicon, hpc=hpc)
 dos_report = check_dos(dos_advice)
 if dos_report.ok:
     dos_steps = generate_dos(dos_advice, dos_report, ctx=ctx)
-    dos_script = render_submission_dos(dos_advice, hpc, "quantum_espresso", ctx, dos_steps)
+    dos_script = render_submission_dos(dos_advice, hpc, "quantum_espresso", dos_steps)
     dos_bundle = to_bundle_input_dos(dos_advice, dos_steps, dos_script, ctx)
     print([step.name for step in dos_steps])
 ```

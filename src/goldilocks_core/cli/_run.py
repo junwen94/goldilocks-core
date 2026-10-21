@@ -80,7 +80,7 @@ def _run_dos(structure, args, hpc, overrides, ctx):
     if not dos_report.ok:
         _print_blocked_and_exit(dos_report.blocking)
     steps = generate_dos(dos_advice, dos_report, ctx=ctx)
-    script = render_submission_dos(dos_advice, hpc, args.code, ctx, steps)
+    script = render_submission_dos(dos_advice, hpc, args.code, steps)
     bundle_input = to_bundle_input_dos(dos_advice, steps, script, ctx)
     return bundle_input, dos_advice.warnings()
 
@@ -98,7 +98,7 @@ def _run_relax(structure, args, hpc, overrides, ctx):
     if not relax_report.ok:
         _print_blocked_and_exit(relax_report.blocking)
     steps = generate_relax(relax_advice, relax_report, ctx=ctx)
-    script = render_submission_relax(relax_advice, hpc, args.code, ctx, steps)
+    script = render_submission_relax(relax_advice, hpc, args.code, steps)
     bundle_input = to_bundle_input_relax(relax_advice, steps, script, ctx)
     return bundle_input, relax_advice.warnings()
 
@@ -115,7 +115,7 @@ def _run_scf(structure, args, hpc, overrides, ctx):
     if not report.ok:
         _print_blocked_and_exit(report.blocking)
     steps = generate(advice, report)
-    script = render_submission(advice, hpc, args.code, ctx, steps)
+    script = render_submission(advice, hpc, args.code, steps)
     bundle_input = to_bundle_input(advice, steps, script, ctx)
     return bundle_input, advice.warnings()
 

@@ -132,10 +132,9 @@ def render_submission_relax(
     advice: RelaxAdvice,
     hpc: HpcProfile,
     code: str,
-    ctx: SharedContext,
     steps: tuple[Step, ...],
 ) -> str:
-    return render_submission(advice.advice, hpc, code, ctx, steps)
+    return render_submission(advice.advice, hpc, code, steps)
 
 
 def to_bundle_input_relax(

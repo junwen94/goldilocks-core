@@ -54,7 +54,7 @@ if not report.ok:
 
 ctx = default_shared_context()
 steps = generate(advice, report, ctx=ctx)
-script = render_submission(advice, hpc, "quantum_espresso", ctx, steps)
+script = render_submission(advice, hpc, "quantum_espresso", steps)
 bundle_input = to_bundle_input(advice, steps, script, ctx)
 
 publication = publish(bundle_input, DirectoryOutput("run-dir"))

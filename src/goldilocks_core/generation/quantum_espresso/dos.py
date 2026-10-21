@@ -29,6 +29,12 @@ many (QE 7.3):
 
 ``-pd .true.`` would avoid the abort, but every rank would still repeat
 the whole computation.
+
+**Checked by ``JOB DONE`` in its stdout** (``Step.completion``).
+``dos.x`` writes no status file. It prints ``JOB DONE`` only when it
+reaches ``environment_end`` (``PP/src/dos.f90:248``), and ``errore``
+exits non-zero (``UtilXlib/error_handler.f90``), which ``set -e``
+catches.
 """
 
 from __future__ import annotations
@@ -36,7 +42,7 @@ from __future__ import annotations
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.namelists import render_namelist
 from goldilocks_core.step_settings import DosSettings
-from goldilocks_core.steps import SharedContext, Step
+from goldilocks_core.steps import SharedContext, StdoutMarkerCheck, Step
 
 
 def write_qe_dos(step: DosSettings, ctx: SharedContext) -> list[Step]:
@@ -66,6 +72,7 @@ def write_qe_dos(step: DosSettings, ctx: SharedContext) -> list[Step]:
             args=("-in", "dos.in"),
             files={"dos.in": content},
             stdout="dos.out",
+            completion=StdoutMarkerCheck(),
             ntasks=1,
         )
     ]

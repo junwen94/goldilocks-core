@@ -7,7 +7,8 @@ isolated asset root (no ML tier), n_irr_k 1 with ``k_grid=[1,1,1]`` and
 ``-npool 1 -ndiag 64`` and ``-npool 4 -ndiag 16``: the H2O/N2-box and
 C2-box layouts that stopped or hung pw.x on SCARF. Before #134 the dos
 task launched dos.x on all 64 tasks, where it aborts on every rank that
-owns no FFT z-plane.
+owns no FFT z-plane. Before #129 every step's check read out/pwscf.xml,
+which pw.x writes only after a finished run, and passed on JOB DONE.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from goldilocks_core.service import (
     check_dos,
     generate,
     generate_dos,
+    render_submission,
     render_submission_dos,
 )
 from goldilocks_core.set_overrides import build_overrides
@@ -104,7 +106,7 @@ def test_dos_task_runs_dos_x_on_one_task(tmp_path, monkeypatch) -> None:
     report = check_dos(advice)
     assert report.ok, report.blocking
     steps = generate_dos(advice, report, ctx=ctx)
-    script = render_submission_dos(advice, hpc, "quantum_espresso", ctx, steps)
+    script = render_submission_dos(advice, hpc, "quantum_espresso", steps)
 
     lines = script.splitlines()
     assert "#SBATCH --ntasks=64" in lines
@@ -112,3 +114,53 @@ def test_dos_task_runs_dos_x_on_one_task(tmp_path, monkeypatch) -> None:
     pw_lines = [line for line in lines if " pw.x " in line]
     assert len(pw_lines) == 2
     assert all(line.startswith("srun pw.x -npool ") for line in pw_lines)
+
+
+def test_scf_script_checks_the_status_pw_x_always_writes(tmp_path, monkeypatch) -> None:
+    """#129: pw.x copies its status to out/pwscf.xml only after a finished
+    run, so the check must read the .save schema and fingerprint it first."""
+    store = _installed_store(tmp_path, monkeypatch)
+    hpc = load_hpc_profile("scarf")
+    advice = advise(_silicon(), hpc=hpc, store=store)
+    report = check(advice)
+    assert report.ok, report.blocking
+    steps = generate(advice, report, ctx=default_shared_context())
+
+    script = render_submission(advice, hpc, "quantum_espresso", steps)
+
+    schema = "./out/pwscf.save/data-file-schema.xml"
+    lines = script.splitlines()
+    (launch,) = (i for i, line in enumerate(lines) if line.startswith("srun pw.x "))
+    assert lines[launch].endswith(" -in scf.in > scf.out")
+    assert (
+        lines[launch - 1] == f'goldilocks_before=$(goldilocks_fingerprint "{schema}")'
+    )
+    assert lines[launch + 1] == (
+        f'goldilocks_check_exit_status "scf" "scf.out" "{schema}" "$goldilocks_before"'
+    )
+    assert "pwscf.xml" not in script
+    assert "JOB DONE" not in script
+
+
+def test_dos_script_checks_each_step_by_its_own_completion(
+    tmp_path, monkeypatch
+) -> None:
+    """The nscf is fingerprinted separately from the scf, so a max_seconds
+    stop in the nscf is not passed on the scf's status before dos.x runs."""
+    store = _installed_store(tmp_path, monkeypatch)
+    hpc = load_hpc_profile("scarf")
+    advice = advise_dos(_silicon(), hpc=hpc, store=store)
+    report = check_dos(advice)
+    assert report.ok, report.blocking
+    steps = generate_dos(advice, report, ctx=default_shared_context())
+
+    script = render_submission_dos(advice, hpc, "quantum_espresso", steps)
+
+    schema = "./out/pwscf.save/data-file-schema.xml"
+    lines = script.splitlines()
+    assert lines.count(f'goldilocks_before=$(goldilocks_fingerprint "{schema}")') == 2
+    assert (
+        f'goldilocks_check_exit_status "nscf" "nscf.out" "{schema}" '
+        '"$goldilocks_before"'
+    ) in lines
+    assert lines[-1] == 'goldilocks_check_stdout_marker "dos" "dos.out" "JOB DONE"'

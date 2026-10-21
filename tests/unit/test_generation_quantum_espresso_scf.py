@@ -23,7 +23,7 @@ from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.scf import write_qe_scf
 from goldilocks_core.step_settings import PwSettings
-from goldilocks_core.steps import SharedContext
+from goldilocks_core.steps import ExitStatusCheck, SharedContext
 from goldilocks_core.system_settings import SystemSettings
 
 _CTX = SharedContext(prefix="pwscf", outdir="./out", pseudo_dir="./pseudo")
@@ -101,10 +101,8 @@ def _step(
     convergence: ConvergenceDecision | None = _UNSET,
     parallel: ParallelisationDecision | None = _UNSET,
     relax=None,
-    disk_io: str | None = None,
 ) -> PwSettings:
     return PwSettings(
-        disk_io=disk_io,
         occupations=(
             OccupationsDecision(occupations="fixed", smearing_type=None, degauss=None)
             if occupations is _UNSET
@@ -207,6 +205,35 @@ def test_writes_one_scf_step_with_pure_translated_content(
     assert "&CELL" not in content
     assert "nspin" not in content
     assert "vdw_corr" not in content
+    assert "disk_io" not in content
+
+
+@pytest.mark.parametrize("purpose", ["scf", "nscf"])
+def test_pw_x_step_is_checked_by_the_status_it_always_writes(
+    diamond_silicon, pseudo_metadata_factory, purpose
+) -> None:
+    """#129: pw.x records every exit_status in <prefix>.save's schema XML;
+    the <prefix>.xml copy is missing after a non-converged stop."""
+    system = _system(diamond_silicon, pseudo_metadata_factory)
+
+    (rendered,) = write_qe_scf(system, _step(), _JOB, _CTX, purpose=purpose)
+
+    assert rendered.completion == ExitStatusCheck(
+        "./out/pwscf.save/data-file-schema.xml"
+    )
+
+
+def test_status_file_follows_the_shared_prefix_and_outdir(
+    diamond_silicon, pseudo_metadata_factory
+) -> None:
+    system = _system(diamond_silicon, pseudo_metadata_factory)
+    ctx = SharedContext(prefix="si", outdir="/scratch/run", pseudo_dir="./pseudo")
+
+    (rendered,) = write_qe_scf(system, _step(), _JOB, ctx)
+
+    assert rendered.completion == ExitStatusCheck(
+        "/scratch/run/si.save/data-file-schema.xml"
+    )
 
 
 def test_purpose_nscf_renames_the_step_and_the_calculation_keyword(

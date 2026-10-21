@@ -145,7 +145,7 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
         )
         dos_report = check_dos(dos_advice)
         steps = generate_dos(dos_advice, dos_report, ctx=ctx)
-        script = render_submission_dos(dos_advice, hpc, document.code, ctx, steps)
+        script = render_submission_dos(dos_advice, hpc, document.code, steps)
         bundle_input = to_bundle_input_dos(dos_advice, steps, script, ctx)
         records, adv_warnings = dos_advice.records(), dos_advice.warnings()
     elif document.task in ("relax", "vc-relax"):
@@ -160,7 +160,7 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
         relax_report = check_relax(relax_advice)
         # raises AdviceIncomplete if not ok
         steps = generate_relax(relax_advice, relax_report, ctx=ctx)
-        script = render_submission_relax(relax_advice, hpc, document.code, ctx, steps)
+        script = render_submission_relax(relax_advice, hpc, document.code, steps)
         bundle_input = to_bundle_input_relax(relax_advice, steps, script, ctx)
         records, adv_warnings = relax_advice.records(), relax_advice.warnings()
     else:
@@ -173,7 +173,7 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
         )
         report = check(advice)
         steps = generate(advice, report)  # raises AdviceIncomplete if not ok
-        script = render_submission(advice, hpc, document.code, ctx, steps)
+        script = render_submission(advice, hpc, document.code, steps)
         bundle_input = to_bundle_input(advice, steps, script, ctx)
         records, adv_warnings = advice.records(), advice.warnings()
     summary = {
