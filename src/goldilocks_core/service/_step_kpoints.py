@@ -70,10 +70,10 @@ class ElectronicStepAdvice:
     convergence: FieldState[ConvergenceDecision]
 
     def field_states(self) -> tuple[FieldState[object], ...]:
-        """Everything except ``occupations`` -- ``checks.check_all``
-        folds that in itself; see its own docstring on why a caller
-        must not repeat it here."""
-        return (self.k_sampling, self.n_irr_k, self.nbnd, self.convergence)
+        """Everything except ``occupations``/``nbnd`` --
+        ``checks.check_all`` folds those in itself; see its own docstring
+        on why a caller must not repeat them here."""
+        return (self.k_sampling, self.n_irr_k, self.convergence)
 
     def records(self) -> dict[str, FieldState[object]]:
         return {

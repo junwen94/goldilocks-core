@@ -38,7 +38,6 @@ def _profile(*, with_bigmem: bool = False) -> HpcProfile:
         scheduler="slurm",
         launcher="srun",
         modules={},
-        has_scalapack={},
         partitions=partitions,
     )
 

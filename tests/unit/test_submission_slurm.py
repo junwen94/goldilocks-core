@@ -18,7 +18,6 @@ _HPC = HpcProfile(
     scheduler="slurm",
     launcher="srun",
     modules={"quantum_espresso": ("QuantumESPRESSO/7.5-foss-2025a",)},
-    has_scalapack={"quantum_espresso": True},
     partitions={"scarf": Partition(name="scarf", hardware=_HARDWARE, default=True)},
 )
 _JOB = JobDecision(
@@ -143,7 +142,6 @@ def test_non_slurm_scheduler_is_rejected() -> None:
         scheduler="pbs",
         launcher="mpirun",
         modules={},
-        has_scalapack={},
         partitions={"main": Partition(name="main", hardware=_HARDWARE, default=True)},
     )
 

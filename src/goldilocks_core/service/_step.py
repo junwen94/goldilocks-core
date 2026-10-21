@@ -80,9 +80,10 @@ class StepAdvice:
         return self.resources.mem_per_proc
 
     def field_states(self) -> tuple[FieldState[object], ...]:
-        """Everything except ``occupations`` -- ``checks.check_all``
-        folds that in itself; see ``ElectronicStepAdvice``'s own
-        docstring on why a caller must not repeat it here."""
+        """Everything except ``occupations``/``nbnd`` --
+        ``checks.check_all`` folds those in itself; see
+        ``ElectronicStepAdvice``'s own docstring on why a caller must not
+        repeat them here."""
         return self.kpoints.field_states() + self.resources.field_states()
 
     def records(self) -> dict[str, FieldState[object]]:
@@ -91,7 +92,6 @@ class StepAdvice:
 
 def step_advice(
     structure: Structure,
-    code: str,
     analysis: AnalysisFacts,
     system: SystemAdvice,
     hpc: HpcProfile,
@@ -99,6 +99,6 @@ def step_advice(
 ) -> StepAdvice:
     kpoints = electronic_step_advice(structure, analysis, system, overrides.kpoints)
     resources = resource_step_advice(
-        structure, code, system, kpoints.nbnd, kpoints.n_irr_k, hpc, overrides.resources
+        structure, system, kpoints.nbnd, kpoints.n_irr_k, hpc, overrides.resources
     )
     return StepAdvice(kpoints=kpoints, resources=resources)

@@ -67,7 +67,6 @@ class ResourceStepAdvice:
 
 def resource_step_advice(
     structure: Structure,
-    code: str,
     system: SystemAdvice,
     nbnd: FieldState[NbndDecision],
     n_irr_k: FieldState[int],
@@ -99,10 +98,9 @@ def resource_step_advice(
     mem_per_proc: float | None = None
     parallel_state: FieldState[ParallelisationDecision]
     if job_state.ok:
-        has_scalapack = hpc.has_scalapack.get(code, False)
         n_irr_k_value = n_irr_k.value if n_irr_k.ok else None
         parallel_state = parallelisation(
-            job_state.value, has_scalapack, n_irr_k_value, overrides.parallelisation
+            job_state.value, n_irr_k_value, overrides.parallelisation
         )
         if parallel_state.ok and estimate is not None:
             mem_per_proc = memory_per_process(

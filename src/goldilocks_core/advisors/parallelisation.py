@@ -16,24 +16,22 @@ had a real `n_reduced_kpoints`, so v1's own parallel advice was always
 a guess). This module only enforces the hard constraint and *prefers*
 the soft one; it does not search for a global optimum -- picking the
 actually-fastest layout is explicitly named as needing ml eventually
-(goldilocks-core-design.md:1396-1407: `npool`/`ndiag` are an efficiency
-question, not a correctness one, with much smaller error-cost asymmetry
-than `walltime`).
+(goldilocks-core-design.md:1396-1407).
 
-**`ndiag`, gated on the HPC profile's `has_scalapack`**
-(goldilocks-core-design.md's `[codes.quantum_espresso] has_scalapack`
-profile field, matching the official user guide's own default-selection
-rule, verified directly 2026-09-14 against
-quantum-espresso.org/Doc/user_guide/node20.html -- not just the design
-doc's earlier citation of it): "nd is set to 1 if ScaLAPACK is not
-compiled, it is set to the square integer smaller than or equal to the
-number of processors of each pool." That page separately states the
-linear-algebra group size must be "smaller than" (strict) the pool's
-processor count as a general constraint -- a QE-documentation
-inconsistency in its own right (the two statements can disagree exactly
-when a pool's size is itself a perfect square), not a misreading here:
-this module replicates QE's own stated *default-selection* procedure
-verbatim (`<=`), which is what a caller actually wants reproduced.
+**`ndiag` is left to pw.x unless the user sets it (#133).** Without
+`-ndiag`, pw.x (QE >= 7.1) picks the largest square np^2 with
+np <= nint(nbnd/100) that fits the processes per pool, so 1 below 150
+bands (QE 7.3 `PW/src/setup.f90:827-832`). A user `ndiag` runs on an
+s x s grid (`diag_grid_side`) and can stop pw.x: it aborts at startup
+when s > nbnd (`Modules/set_para_diag.f90:54-55`), and ScaLAPACK's
+block layout leaves a process column without rows of an n x n subspace
+matrix for some n <= (s-1)^2 (`LAXlib/la_helper.f90:468-481`), which
+ELPA rejects and QE does not detect (`LAXlib/zhpev_drv.f90:1513`).
+`checks.py`'s `_ndiag_grid_must_distribute_bands` refuses such a value;
+this module only carries it. Without ScaLAPACK, LAXlib still honours
+`-ndiag` with its own distributed solver
+(`Modules/set_para_diag.f90:79-83`).
+
 `-nband`/`-nb` (band groups, useful for hybrid functionals) and
 `-ntg`/`-nt` (task groups, FFT parallelization for very large process
 counts) are real, separate QE parallelization layers this module does
@@ -89,21 +87,12 @@ WARNING_CATALOGUE = (
         ),
     ),
     Warning(
-        code="parallelisation.ndiag_ignored_no_scalapack",
-        level="warning",
-        category="parallelisation",
-        message=(
-            "ndiag was given but the code was not built with ScaLAPACK on "
-            "this profile; QE ignores -ndiag in that case."
-        ),
-    ),
-    Warning(
         code="parallelisation.ndiag_not_a_square_integer",
-        level="warning",
+        level="info",
         category="parallelisation",
         message=(
-            "ndiag is not a square integer; QE's own default-selection rule "
-            "always picks one, and a non-square value may be rejected."
+            "ndiag is not a square integer; pw.x runs the largest square "
+            "grid that fits and never rejects the value."
         ),
     ),
 )
@@ -123,19 +112,14 @@ class ParallelisationDecision:
 
 
 class ParallelisationHumanInput(HumanInput):
-    """``npool``/``ndiag`` must be positive (#35, v2 epic 9, #9) --
-    before this, ``npool=0`` reached ``job.ntasks % npool`` as a raw
-    ``ZeroDivisionError`` and a negative ``npool``/``ndiag`` reached
-    ``math.isqrt`` on a negative operand, both unhandled Python
-    exceptions instead of a clean ``InvalidSetting`` error. Squareness
-    and the ``has_scalapack`` gate on ``ndiag`` stay advisory warnings
-    (``_ndiag_advisory_warnings`` below) -- genuine QE-will-likely-ignore
-    -or-reject *preferences*, not the same category as ``npool`` not
-    dividing ``ntasks``, which is a hard MPI-layout requirement QE
-    itself refuses outright (found not to be enforced during the epic
-    5/6/7 delivery-layer audit; now a blocking rule in ``checks.py``'s
-    ``_npool_must_divide_ntasks``, not just the warning still emitted
-    below)."""
+    """``npool``/``ndiag`` must be positive (#35, v2 epic 9, #9): before
+    this, ``npool=0`` reached ``job.ntasks % npool`` as a raw
+    ``ZeroDivisionError`` and a negative ``ndiag`` reached ``math.isqrt``.
+    The layout itself is refused in ``checks.py``, not here: an ``npool``
+    that does not divide ``ntasks`` (``_npool_must_divide_ntasks``) and
+    an ``ndiag`` whose grid cannot distribute ``nbnd`` bands
+    (``_ndiag_grid_must_distribute_bands``, #133). A non-square ``ndiag``
+    only gets an info note: pw.x runs the largest square grid that fits."""
 
     npool: int | None = Field(default=None, gt=0)
     ndiag: int | None = Field(default=None, gt=0)
@@ -143,10 +127,11 @@ class ParallelisationHumanInput(HumanInput):
 
 def parallelisation(
     job: JobDecision,
-    has_scalapack: bool,
     n_irr_k: int | None = None,
     human: ParallelisationHumanInput | None = None,
 ) -> FieldState[ParallelisationDecision]:
+    """``npool`` from ``job.ntasks`` and ``n_irr_k`` unless ``human``
+    sets it; ``ndiag`` only from ``human`` (``None`` leaves it to pw.x)."""
     human = human or ParallelisationHumanInput()
 
     if human.npool is not None:
@@ -182,17 +167,12 @@ def parallelisation(
         npool, warnings = _best_npool(job.ntasks, n_irr_k)
         source = "heuristic"
 
-    ndiag = (
-        human.ndiag
-        if human.ndiag is not None
-        else _ndiag(job.ntasks, npool, has_scalapack)
-    )
     if human.ndiag is not None:
         source = "human"
-        warnings.extend(_ndiag_advisory_warnings(human.ndiag, has_scalapack))
+        warnings.extend(_ndiag_notes(human.ndiag, job.ntasks // npool))
 
     decision = ParallelisationDecision(
-        npool=npool, ndiag=ndiag, warnings=tuple(warnings)
+        npool=npool, ndiag=human.ndiag, warnings=tuple(warnings)
     )
     return Resolved(decision, Provenance(source=source))
 
@@ -228,45 +208,29 @@ def _best_npool(ntasks: int, n_irr_k: int | None) -> tuple[int, list[Warning]]:
     ]
 
 
-def _ndiag(ntasks: int, npool: int, has_scalapack: bool) -> int | None:
-    if not has_scalapack:
-        return None
-    per_pool = ntasks // npool
-    root = math.isqrt(per_pool)
-    return max(1, root * root)
+def diag_grid_side(ndiag: int, procs_per_pool: int) -> int:
+    """Side s of the s x s linear-algebra grid pw.x builds for
+    ``-ndiag``: isqrt(min(ndiag, processes per pool)), at least 1 (QE
+    7.3 ``LAXlib/la_helper.f90:125`` and ``:171-176``, ``GRID2D_DIMS``
+    'S' in ``LAXlib/distools.f90:84``). pw.x takes the processes of a
+    band group; without ``-nband`` that is the whole pool."""
+    return max(1, math.isqrt(min(ndiag, procs_per_pool)))
 
 
-def _ndiag_advisory_warnings(ndiag: int, has_scalapack: bool) -> list[Warning]:
-    """Advisory, not blocking (#35, v2 epic 9, #9) -- a human-supplied
-    ``ndiag`` that is not square, or that is given when the profile has
-    no ScaLAPACK, is a QE-will-likely-ignore-or-reject situation, the
-    same category ``npool_does_not_divide_ntasks`` above already treats
-    as warn-don't-block."""
-    warnings: list[Warning] = []
-    if not has_scalapack:
-        warnings.append(
-            Warning(
-                code="parallelisation.ndiag_ignored_no_scalapack",
-                level="warning",
-                category="parallelisation",
-                message=(
-                    f"ndiag={ndiag} was given but this profile's code was not "
-                    "built with ScaLAPACK; QE ignores -ndiag in that case."
-                ),
-            )
-        )
+def _ndiag_notes(ndiag: int, procs_per_pool: int) -> list[Warning]:
     root = math.isqrt(ndiag)
-    if root * root != ndiag:
-        warnings.append(
-            Warning(
-                code="parallelisation.ndiag_not_a_square_integer",
-                level="warning",
-                category="parallelisation",
-                message=(
-                    f"ndiag={ndiag} is not a square integer; QE's own "
-                    "default-selection rule always picks one, and a "
-                    "non-square value may be rejected."
-                ),
-            )
+    if root * root == ndiag:
+        return []
+    side = diag_grid_side(ndiag, procs_per_pool)
+    return [
+        Warning(
+            code="parallelisation.ndiag_not_a_square_integer",
+            level="info",
+            category="parallelisation",
+            message=(
+                f"ndiag={ndiag} is not a square integer; pw.x runs a "
+                f"{side}x{side} grid ({side * side} processes) and never "
+                "rejects the value."
+            ),
         )
-    return warnings
+    ]

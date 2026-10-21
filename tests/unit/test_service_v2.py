@@ -50,7 +50,6 @@ def hpc() -> HpcProfile:
         scheduler="slurm",
         launcher="srun",
         modules={"quantum_espresso": ("qe/7.2",)},
-        has_scalapack={"quantum_espresso": False},
         partitions={"scarf": Partition(name="scarf", hardware=hardware, default=True)},
     )
 

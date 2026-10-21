@@ -16,7 +16,8 @@ def test_loads_the_real_scarf_profile() -> None:
     assert profile.scheduler == "slurm"
     assert profile.launcher == "srun"
     assert profile.modules["quantum_espresso"] == ("QuantumESPRESSO/7.5-foss-2025a",)
-    assert profile.has_scalapack["quantum_espresso"] is True
+    # #133: nothing reads a ScaLAPACK flag; pw.x picks ndiag itself.
+    assert not hasattr(profile, "has_scalapack")
 
 
 def test_list_hpc_profiles_includes_scarf_and_is_sorted() -> None:

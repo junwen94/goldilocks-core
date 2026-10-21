@@ -422,8 +422,10 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "ndiag": {
         "description": (
-            "ScaLAPACK linear-algebra process-grid size; only meaningful "
-            "when has_scalapack is true."
+            "Linear-algebra group size passed to pw.x as -ndiag; unset by "
+            "default so pw.x chooses it from nbnd. Refused when its s x s "
+            "grid, s = isqrt(min(ndiag, ntasks/npool)), cannot distribute "
+            "nbnd bands (needs nbnd > (s-1)^2)."
         ),
     },
     "ion_dynamics": {

@@ -51,6 +51,15 @@ is now where that decision belongs.
    obviously wrong in the output. Same ``_SCF_LIKE_PURPOSES`` scoping as
    rule 2, same reasoning.
 
+4. A user ``ndiag`` whose s x s diagonalization grid cannot distribute
+   ``nbnd`` bands (#133), s = isqrt(min(ndiag, ntasks/npool)): pw.x
+   aborts at startup when s > nbnd (QE 7.3
+   ``Modules/set_para_diag.f90:54-55``), and ScaLAPACK's block layout
+   leaves a process column empty for subspace sizes up to (s-1)^2, which
+   ELPA rejects and QE does not detect. The subspace never shrinks below
+   nbnd, so nbnd > (s-1)^2 rules out both, for every purpose and on
+   every profile.
+
 **Everything else in the design doc's "constraint check table"**
 (memory overflow, disordered-structure generation blocking, the
 tri-tier override-conflict rules) needs infrastructure this epic does
@@ -63,13 +72,18 @@ checkable today, not to enumerate every rule up front.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
+from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
-from goldilocks_core.advisors.parallelisation import ParallelisationDecision
+from goldilocks_core.advisors.parallelisation import (
+    ParallelisationDecision,
+    diag_grid_side,
+)
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.analysis.geometry import GeometryFacts
 from goldilocks_core.resolution import Blocked, FieldState
@@ -125,6 +139,7 @@ def check_all(
     geometry: FieldState[GeometryFacts] | None = None,
     job: FieldState[JobDecision] | None = None,
     parallel: FieldState[ParallelisationDecision] | None = None,
+    nbnd: FieldState[NbndDecision] | None = None,
     purpose: str = "scf",
 ) -> CheckReport:
     """The single hard-fail gate.
@@ -133,14 +148,23 @@ def check_all(
     far (from any advisor) -- any that are ``Blocked`` land in
     ``report.blocking`` via ``collect_blocked``. ``occupations``/
     ``magnetic``/``electron_count``/``relax``/``geometry``/``job``/
-    ``parallel``/``purpose`` additionally opt into the named
+    ``parallel``/``nbnd``/``purpose`` additionally opt into the named
     cross-parameter rules this module implements; passing them here
     also folds them into the generic ``Blocked`` scan, so a caller does
     not need to repeat them in ``field_states`` as well.
     """
     optional = tuple(
         s
-        for s in (occupations, magnetic, electron_count, relax, geometry, job, parallel)
+        for s in (
+            occupations,
+            magnetic,
+            electron_count,
+            relax,
+            geometry,
+            job,
+            parallel,
+            nbnd,
+        )
         if s is not None
     )
     blocking = list(collect_blocked(*field_states, *optional))
@@ -166,6 +190,10 @@ def check_all(
         blocking.append(reason)
 
     reason = _npool_must_divide_ntasks(job, parallel)
+    if reason is not None:
+        blocking.append(reason)
+
+    reason = _ndiag_grid_must_distribute_bands(job, parallel, nbnd)
     if reason is not None:
         blocking.append(reason)
 
@@ -245,16 +273,14 @@ def _npool_must_divide_ntasks(
     parallel: FieldState[ParallelisationDecision] | None,
 ) -> str | None:
     """``npool`` not dividing ``ntasks`` is a hard MPI-layout requirement
-    QE itself refuses (``advisors/parallelisation.py``'s own docstring) --
-    unlike ``ndiag``'s squareness/``has_scalapack`` gate (a genuine
-    QE-will-likely-ignore-or-reject *preference*, correctly left
-    advisory), a bad ``npool`` here fails only once compute is already
-    allocated and the job is running, worse than the same "warn, don't
-    block" pattern used for e.g. ``nodes``/``walltime_h`` exceeding a
-    partition's ceiling (which fail at SLURM *submission*, before any
-    compute is consumed). ``parallelisation()``'s own heuristic default
-    (``_best_npool``) always returns a value that divides ``ntasks`` by
-    construction, so this can only ever fire for a human override."""
+    QE itself refuses (``advisors/parallelisation.py``'s own docstring):
+    a bad ``npool`` fails only once compute is already allocated and the
+    job is running, worse than the same "warn, don't block" pattern used
+    for e.g. ``nodes``/``walltime_h`` exceeding a partition's ceiling
+    (which fail at SLURM *submission*, before any compute is consumed).
+    ``parallelisation()``'s own heuristic default (``_best_npool``)
+    always returns a value that divides ``ntasks`` by construction, so
+    this can only ever fire for a human override."""
     if job is None or parallel is None or not job.ok or not parallel.ok:
         return None
     if job.value.ntasks % parallel.value.npool != 0:
@@ -263,6 +289,33 @@ def _npool_must_divide_ntasks(
             f"ntasks={job.value.ntasks}; QE refuses this MPI layout."
         )
     return None
+
+
+def _ndiag_grid_must_distribute_bands(
+    job: FieldState[JobDecision] | None,
+    parallel: FieldState[ParallelisationDecision] | None,
+    nbnd: FieldState[NbndDecision] | None,
+) -> str | None:
+    """Rule 4 of this module's docstring. ``parallelisation()`` never
+    sets ``ndiag`` itself, so this only fires for a human override; like
+    a bad ``npool``, such a layout fails only after queueing, or hangs a
+    node until the walltime runs out."""
+    if job is None or parallel is None or nbnd is None:
+        return None
+    if not (job.ok and parallel.ok and nbnd.ok) or parallel.value.ndiag is None:
+        return None  # already surfaced via collect_blocked, or left to pw.x
+    ndiag = parallel.value.ndiag
+    side = diag_grid_side(ndiag, job.value.ntasks // parallel.value.npool)
+    bands = nbnd.value.nbnd
+    if bands > (side - 1) ** 2:
+        return None
+    return (
+        f"ndiag={ndiag} gives a {side}x{side} diagonalization grid, which "
+        f"cannot distribute nbnd={bands} bands (it needs nbnd > "
+        f"{(side - 1) ** 2}); pw.x would abort at startup or fail in the "
+        "parallel eigensolver. Unset ndiag so pw.x chooses it from nbnd, "
+        f"or use ndiag <= {(math.isqrt(bands - 1) + 1) ** 2}."
+    )
 
 
 def _vc_relax_requires_bfgs_ion_dynamics(

@@ -68,7 +68,7 @@ def advise(
         store=store,
         fetch_missing=fetch_missing,
     )
-    step = step_advice(structure, code, analysis, system, hpc, overrides.step)
+    step = step_advice(structure, analysis, system, hpc, overrides.step)
     return Advice(structure=structure, analysis=analysis, system=system, step=step)
 
 
@@ -94,13 +94,15 @@ def check(
     which does not have a plain ``Advice`` field to fold it into --
     every other caller leaves it ``None``.
 
-    ``job``/``parallel``: always read straight off ``advice`` (every
-    ``Advice`` has both) -- the ``npool``-must-divide-``ntasks`` rule
-    (``checks.py``'s own ``_npool_must_divide_ntasks``) applies
-    regardless of ``purpose``. ``geometry`` (#44): same "always read
-    straight off ``advice``" treatment -- every ``Advice`` has an
-    ``analysis.geometry``, needed by ``_fix_bottom_layers_requires_2d_geometry``
-    regardless of ``purpose`` (a non-relax caller never sets
+    ``job``/``parallel``/``nbnd``: always read straight off ``advice``
+    (every ``Advice`` has all three) -- the ``npool``-must-divide-
+    ``ntasks`` rule and the ``ndiag`` grid rule (#133, ``checks.py``'s
+    ``_npool_must_divide_ntasks``/``_ndiag_grid_must_distribute_bands``)
+    apply regardless of ``purpose``, each step with its own ``nbnd``.
+    ``geometry`` (#44): same "always read straight off ``advice``"
+    treatment -- every ``Advice`` has an ``analysis.geometry``, needed
+    by ``_fix_bottom_layers_requires_2d_geometry`` regardless of
+    ``purpose`` (a non-relax caller never sets
     ``relax.fix_bottom_layers`` in the first place, so the rule is a
     no-op for them).
     """
@@ -113,5 +115,6 @@ def check(
         geometry=advice.analysis.geometry,
         job=advice.step.resources.job,
         parallel=advice.step.resources.parallelisation,
+        nbnd=advice.step.kpoints.nbnd,
         purpose=purpose,
     )
