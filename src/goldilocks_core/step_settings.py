@@ -22,8 +22,9 @@ given program does not use as ``None`` -- rejected
 (``emin``/``delta_e``/``ngauss``). ``StepSettings`` is instead a tagged
 union (``PwSettings | DosSettings | PhSettings``), dispatched by
 ordinary ``isinstance``/pattern matching -- there is no shared base
-data class for the union members, only ``BaseStepSettings`` below,
-which really is common to every program.
+data class for the union members. Resource estimates are not settings:
+no writer reads one, and the job record carries pw.x's estimated memory
+instead (``advisors/job_resources.py``, #148).
 
 **Only the fields this codebase currently has a producer for are
 required; every other field defaults to `None` rather than forcing a
@@ -37,11 +38,11 @@ per-step orchestration loop that constructs one of these yet (v2 epic
 epic 10: ``advisors/relax.py``'s ``relax_settings()`` is called by
 ``service/_relax.py`` and threaded into ``generate(relax=...)``, so a
 ``relax``/``vc-relax`` task genuinely constructs a non-``None`` value
-here today. ``BaseStepSettings``'s ``disk_io`` and all of ``DosSettings``'s/
-``PhSettings``'s fields have no producer or real type at all yet (their
-own per-step advisors do not exist). Every optional field here is
-expected to become required once its real producer exists -- a
-natural, signature-breaking change at that point, not scope creep now.
+here today. ``DosSettings``'s/``PhSettings``'s fields have no producer
+or real type at all yet (their own per-step advisors do not exist).
+Every optional field here is expected to become required once its real
+producer exists -- a natural, signature-breaking change at that point,
+not scope creep now.
 
 ``DosSettings`` existing as its own type with its own ``broadening``
 field (QE calls this ``degauss`` too, in ``dos.x``/``projwfc.x`` --
@@ -62,26 +63,16 @@ from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.parallelisation import ParallelisationDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
-from goldilocks_core.advisors.size import ResourceEstimate
 
 
 @dataclass(frozen=True, slots=True)
-class BaseStepSettings:
-    """Common to every program: disk-usage convention and per-process
-    resource estimates. ``size``/``mem_per_proc`` are produced by v2
-    epic 7's ``advisors/size.py`` (``resource_estimate``/
-    ``memory_per_process``); ``disk_io`` still has no producer in this
-    codebase (no ``advisors/disk_io.py`` exists yet) and stays unknown.
-    """
-
-    disk_io: str | None = None
-    size: ResourceEstimate | None = None
-    mem_per_proc: float | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class PwSettings(BaseStepSettings):
-    """pw.x: scf / nscf / bands / relax."""
+class PwSettings:
+    """pw.x: scf / nscf / bands / relax. ``max_seconds`` is this step's
+    share of the task's walltime (``JobDecision.max_seconds_by_step``,
+    ``advisors/job_resources.py``). There is no ``disk_io``: QE's default
+    always writes the status file the submission script checks
+    (``steps.ExitStatusCheck``), and ``disk_io='none'`` would write none
+    (``PW/src/punch.f90:60-63``)."""
 
     occupations: OccupationsDecision | None = None
     k_sampling: KSamplingDecision | None = None
@@ -89,11 +80,12 @@ class PwSettings(BaseStepSettings):
     nbnd: NbndDecision | None = None
     convergence: ConvergenceDecision | None = None
     parallel: ParallelisationDecision | None = None
+    max_seconds: int | None = None
     relax: RelaxOptions | VcRelaxOptions | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class DosSettings(BaseStepSettings):
+class DosSettings:
     """dos.x / projwfc.x: reads a previous step's wavefunctions --
     no k_sampling/n_irr_k/nbnd/convergence of its own."""
 
@@ -105,7 +97,7 @@ class DosSettings(BaseStepSettings):
 
 
 @dataclass(frozen=True, slots=True)
-class PhSettings(BaseStepSettings):
+class PhSettings:
     """ph.x: phonon q-point sampling and self-consistency threshold."""
 
     q_sampling: dict[str, float] | None = None

@@ -33,14 +33,15 @@ A `run` (or `explain`) request follows this path:
 2. `service.advise(structure, *, code, hpc, overrides, store, fetch_missing)`
    runs three phases in a fixed order: `_analysis.analyze` (structure facts),
    `_system.system_advice` (system-wide advisors, including pseudopotential-
-   table selection), and `_step.step_advice` (per-step k-point/occupation/
-   resource advisors). `advise()` returns an `Advice` even for an incomplete
-   request: a field it cannot decide, because an input is missing, something
-   is not installed or configured, or the request leaves it open, is
-   `Unavailable`/`Blocked`. A fault raises and fails the request instead: a
-   model that is set up but fails to load or predict, an enumeration error
-   that is not the enumerator's own answer about the structure, or a worker
-   process that dies.
+   table selection), and `_step.steps_advice` (per-step k-point/occupation
+   advisors, then the task's job and each step's parallelisation).
+   `advise()` returns an `Advice` even for an incomplete request: a field it
+   cannot decide, because an input is missing, something is not installed or
+   configured, or the request leaves it open, is `Unavailable`/`Blocked`. A
+   fault raises and fails the request instead: a model that is set up but
+   fails to load or predict, an enumeration error that is not the
+   enumerator's own answer about the structure, or a worker process that
+   dies.
 3. `service.check(advice, *, purpose="scf", relax=None)` calls
    `checks.check_all(...)`, the one place that refuses a request whose
    decisions are incomplete or inconsistent. It returns a `CheckReport`
@@ -51,8 +52,10 @@ A `run` (or `explain`) request follows this path:
    `generation.quantum_espresso.scf.write_qe_scf` or
    `generation.quantum_espresso.relax.write_qe_relax` directly. There is no
    dispatch table.
-5. `service.render_submission(advice, hpc, code, ctx, steps)` renders the
-   SLURM script via `submission/slurm.py`.
+5. `service.render_submission(advice, hpc, code, steps)` renders the
+   SLURM script via `submission/slurm.py`. Each step is followed by the
+   completion check its writer declared (`Step.completion`), and the script
+   stops with a `goldilocks:` message when one fails.
 6. `service.to_bundle_input(advice, steps, submission_script, ctx)` assembles
    a `bundle.BundleInput`: the rendered input file(s), the pseudopotential
    bytes read straight off disk for each selected element, the submission
@@ -71,14 +74,20 @@ ending in `.zip` publishes an archive. HTTP's `POST /run` takes a
 `respond_with: "archive"` field to get ZIP bytes back instead of a JSON
 summary (`server/http.py`).
 
-The `dos` task reuses steps 2-6 twice — once for `scf`, once for `nscf` — via
+`advise()` is the one-step case of `service/_pipeline.py`'s internal
+`advise_steps`, which diagnoses every `pw.x` step of a task together. The
+`dos` task asks it for an `scf` and an `nscf` step via
 `service.advise_dos`/`check_dos`/`generate_dos` (`service/_dos.py`), rather
 than any generic graph: nothing about resolving one step's own settings
-changes between an scf task and dos's scf/nscf steps, so the same
-single-step pipeline runs twice with nscf-specific overrides. `relax`/
-`vc-relax` similarly get `advise_relax`/`check_relax`/`generate_relax`
-(`service/_relax.py`), calling the single-step pipeline once and adding one
-more resolved decision (`relax`) on top.
+changes between an scf task and dos's scf/nscf steps, so both steps get the
+same per-step advisors, the nscf with nscf-specific overrides. Analysis and
+system advice run once, and the steps share one job, because they run one
+after another in one allocation: it is sized over both steps, and each
+`pw.x` step gets its own `max_seconds` share of the walltime, since `pw.x`
+counts `max_seconds` from its own start. `dos.x` runs in what is left.
+`relax`/`vc-relax` similarly get `advise_relax`/`check_relax`/
+`generate_relax` (`service/_relax.py`), asking `advise_steps` for their one
+step and adding one more resolved decision (`relax`) on top.
 
 ## Understand the pipeline phases
 
@@ -96,11 +105,17 @@ Inside `advise()` itself, the three phases are:
   and `service/_pseudo.py`.
 - **Step advice** (`service/_step.py`, split into `service/_step_kpoints.py`
   for occupations/k-mesh/bands/convergence and `service/_step_resources.py`
-  for the resource envelope/job/parallelisation, backed by per-step advisors
-  such as `advisors/k_sampling.py`, `advisors/nbnd.py`, `advisors/occupations.py`,
+  for the job/parallelisation, backed by per-step advisors such as
+  `advisors/k_sampling.py`, `advisors/nbnd.py`, `advisors/occupations.py`,
   `advisors/convergence.py`, `advisors/cutoffs.py`, `advisors/job_resources.py`,
   `advisors/parallelisation.py`, `advisors/n_irr_k.py`, `advisors/relax.py`)
-  recommends per-step parameters.
+  recommends per-step parameters. Resources are task-level: one job
+  (`advisors/job_resources.py`) takes the fewest nodes on which pw.x's
+  estimated memory per process fits for the layout every step will run
+  (`advisors/size.py`, a port of pw.x's own memory report), splits the
+  walltime into per-step `max_seconds` shares, and publishes that memory
+  in its record; each step's `npool`/`ndiag` then follow from that job's
+  `ntasks`.
 
 There is no generic "stage" or "graph executor" abstraction. Each phase is a
 plain typed function call; `Advice` composes the three phases' own
@@ -118,10 +133,10 @@ Paths below are relative to `src/goldilocks_core/` unless stated otherwise.
 | Area                | Files and responsibility                                                                                                                                                                                                                                                       |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Core types          | `resolution.py`: the `Resolved`/`Unavailable`/`Blocked` tri-state and `Provenance`/`Source`, used everywhere; `steps.py`: `Step`/`SharedContext`; `step_settings.py`/`system_settings.py`: the settings dataclasses `generate()` builds; `plan.py`: `PlannedStep`/`expand_task`, multi-step task planning. There is no centralized `contracts` package any more — importing `goldilocks_core.contracts` is a ruff-banned API; import from the module that defines the name instead. |
-| Orchestration       | `service/_pipeline.py`: `advise()`/`check()`, the single-step orchestration; `service/_generate.py`: `generate()`, the hard-fail boundary; `service/_dos.py` / `service/_relax.py`: the multi-step and relax task variants; `service/_bundle.py`: submission rendering and bundle assembly; `checks.py`: the sole cross-parameter hard-fail gateway.                                                                     |
+| Orchestration       | `service/_pipeline.py`: `advise()`/`check()`, and `advise_steps`, which advises every `pw.x` step of a task with one shared job; `service/_generate.py`: `generate()`, the hard-fail boundary; `service/_dos.py` / `service/_relax.py`: the multi-step and relax task variants; `service/_bundle.py`: submission rendering and bundle assembly; `checks.py`: the sole cross-parameter hard-fail gateway. |
 | Input and discovery | `inputs/structure.py`: structure normalization and inspection; `capabilities.py`: available codes, tasks, settings, pseudopotential tables, HPC profiles, and warnings — reflected from the override dataclasses and advisor warning catalogues, not hand-listed.                                                        |
 | Scientific behavior | `analysis/`: structure facts (`composition.py`, `geometry.py`, `is_magnetic.py`, `is_metal.py`, `needs_correlation.py`, `needs_soc.py`, `symmetry.py`); `advisors/`: the recommendation layer (`boundary.py`, `convergence.py`, `cutoffs.py`, `electron_count.py`, `functional.py`, `hubbard_u.py`, `job_resources.py`, `k_sampling.py`, `magnetic_config.py`, `n_irr_k.py`, `nbnd.py`, `occupations.py`, `parallelisation.py`, `pseudo_selection.py`, `relax.py`, `size.py`, `vdw_method.py`, `dos.py`, `warning_catalogue.py`); top-level `kmesh.py`: k-point mesh ladder math. |
-| Assets              | `assets/`: installation and integrity (`AssetStore`); `ml/models.py`: model declarations (loading plumbing only — no advisor calls it yet, see below); `assets/pseudopotentials/registry.py` and `assets/pseudopotentials/importers.py`: table declarations and provider normalization; `service/_pseudo.py`: the one place in the pipeline that touches the asset store/filesystem, resolving the installed asset, loading its manifest, and narrowing it to a structure's elements. |
+| Assets              | `assets/`: installation and integrity (`AssetStore`); `ml/models.py`: model declarations (loading plumbing only — no advisor calls it yet, see below); `assets/pseudopotentials/registry.py` and `assets/pseudopotentials/importers.py`: table declarations and provider normalization; `service/_pseudo.py`: the one place in the pipeline that touches the asset store/filesystem, resolving the installed asset, loading its manifest, narrowing it to a structure's elements, and reading the selected UPF headers' projector counts for the memory estimate. |
 | Output              | `generation/`: target-code writers (`generation/quantum_espresso/scf.py`, `relax.py`, `dos.py`, `namelists.py`); top-level `bundle.py`: manifest assembly and directory/ZIP publication, replacing v1's separate `input_data.py`/`publication.py`/`serialization.py` roles.                                                                                                                        |
 | Transports          | `cli/core.py`: local commands; `server/documents.py`: request/response pydantic models; `server/_handlers.py`: the one shared request-validation/dispatch implementation both `server/http.py` and `server/mcp.py` call; `server/readiness.py`: cached asset checks.                                                     |
 | Browser             | Repository `web/src/api/`: HTTP client and generated types; `web/src/workspace/`: draft, request, result, and download state.                                                                                                                                                                                              |
@@ -131,14 +146,15 @@ Paths below are relative to `src/goldilocks_core/` unless stated otherwise.
 ### Add a task
 
 There is no generic task-registration API or graph to define. To add a new
-task, add a `service/_<task>.py` module that reuses the existing single-step
-phases (`_analysis.analyze`, `_system.system_advice`, `_step.step_advice`,
-and `_pipeline.advise`/`_generate.generate`) — calling them once for a
-single-step task, or more than once for a multi-step task, the way
-`service/_dos.py` calls the single-step pipeline twice (once for `scf`, once
-for `nscf`) instead of rebuilding `Advice`/`StepAdvice` as "one-or-many".
-Multi-step ordering is described by `plan.py`'s `PlannedStep`/`expand_task`,
-not a graph.
+task, add a `service/_<task>.py` module that calls `_pipeline.advise_steps`
+with one entry per `pw.x` step (purpose -> that step's `StepOverrides`, in
+run order) — one entry for a single-step task, like `service/_relax.py`,
+or several, like `service/_dos.py`'s `scf` and `nscf` — and then
+`_generate.generate` once per step with that step's purpose. `advise_steps`
+returns one `Advice` per step, all sharing the same analysis, system advice
+and job, so the submission script is rendered from that one job, which
+holds every step's `max_seconds` share. Multi-step ordering is described by
+`plan.py`'s `PlannedStep`/`expand_task`, not a graph.
 
 Export the new `advise_<task>`/`check_<task>`/`generate_<task>`/
 `render_submission_<task>`/`to_bundle_input_<task>` functions from
@@ -161,6 +177,14 @@ per `generation/quantum_espresso/scf.py`'s own governing invariant,
 "generation never makes a scientific choice, only translation and
 formatting." The writers today cover all four tasks: `write_qe_scf`,
 `write_qe_relax`, and a DOS writer (`generation/quantum_espresso/dos.py`).
+A writer sets `Step.ntasks` when its program cannot use the whole allocation
+(the DOS writer sets 1); `submission/slurm.py` then launches that step on that
+many tasks instead of every task the job allocates. Every `Step` also declares
+how the script decides it finished (`Step.completion`, from `steps.py`):
+`pw.x` steps use `ExitStatusCheck`, which passes only if
+`<outdir>/<prefix>.save/data-file-schema.xml` was rewritten during the step
+with `exit_status` 0, and `dos.x`, which writes no status file, uses
+`StdoutMarkerCheck` (`JOB DONE` in its stdout).
 
 ### Add a model or pseudopotential table
 

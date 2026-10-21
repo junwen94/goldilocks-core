@@ -7,9 +7,6 @@ launcher  = "srun"
 [modules]
 quantum_espresso = ["QuantumESPRESSO/7.5-foss-2025a"]
 
-[codes.quantum_espresso]
-has_scalapack = true   # foss toolchain ships ScaLAPACK; -ndiag is meaningful
-
 [hardware]
 # scarf/devel/preemptable share one heterogeneous cn[...] node pool; sinfo
 # reports these as the *minimum* guaranteed spec ("64+ CPUs", "257000+ MB")

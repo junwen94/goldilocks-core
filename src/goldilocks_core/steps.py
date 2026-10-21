@@ -27,9 +27,8 @@ before any settings exist yet) -- distinct enough concerns that
 ``plan.py``'s own docstring explains its scope separately.
 
 ``Step.args`` is a tuple, not the design doc's literal ``list[str]``,
-matching every other rendered-decision dataclass in this codebase
-(``ResourceEstimate``, ``JobDecision``, ...): frozen dataclasses here
-use immutable field types throughout, not just an immutable container.
+like the sequence fields of the frozen decision dataclasses
+(``ResourceEstimate.species``, every ``warnings``).
 """
 
 from __future__ import annotations
@@ -38,6 +37,31 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True, slots=True)
+class ExitStatusCheck:
+    """Passes a step only if ``status_file`` was rewritten while the step
+    ran and records ``<exit_status>0</exit_status>``.
+
+    For ``pw.x``, whose real status is the ``<exit_status>`` it writes
+    into ``<outdir>/<prefix>.save/data-file-schema.xml``; its exit code
+    and ``JOB DONE`` say nothing about convergence
+    (``submission/slurm.py``)."""
+
+    status_file: str
+
+
+@dataclass(frozen=True, slots=True)
+class StdoutMarkerCheck:
+    """Passes a step only if its stdout contains ``marker``. For a
+    program that writes no status file (``dos.x``); a non-zero exit code
+    already stops the script."""
+
+    marker: str = "JOB DONE"
+
+
+type CompletionCheck = ExitStatusCheck | StdoutMarkerCheck
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Step:
     """One executable invocation, fully rendered -- no decisions left.
 
@@ -45,14 +69,26 @@ class Step:
     ``-in``; VASP would carry none, per goldilocks-core-design.md:1244-1247)
     so ``submission/slurm.py`` can stay ignorant of which code produced
     the step it is scheduling.
+
+    ``completion`` is how the submission script decides the step
+    finished; the writer that knows the program declares it, so no step
+    runs unchecked. ``stdout`` is the file the step's output is
+    redirected to.
+
+    ``ntasks`` is the step's launch shape: how many MPI tasks its program
+    runs on, with ``None`` meaning every task the job allocates. A writer
+    sets it when its program cannot use the whole allocation (``dos.x``
+    runs on one task).
     """
 
     name: str
     executable: str
+    stdout: str
+    completion: CompletionCheck
     args: tuple[str, ...] = ()
     files: dict[str, str] = field(default_factory=dict)
-    stdout: str | None = None
     workdir: str | None = None
+    ntasks: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

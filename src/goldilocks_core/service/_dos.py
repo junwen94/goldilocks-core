@@ -4,20 +4,17 @@ five-scenario table, scenario 5 ("DOS multi-step"), and the design doc's
 own admission that step-sequencing has never once been exercised before
 this epic.
 
-**Reuses the single-step pipeline twice, rather than rebuilding
-``Advice``/``StepAdvice`` as "one-or-many".** ``plan.py``'s own
+**One task, one ``Advice`` per ``pw.x`` step.** ``plan.py``'s own
 ``expand_task`` already says how many steps a task needs and what
 program each runs; nothing about *how* a single ``pw.x`` step's own
 settings get resolved changes between an scf task and dos's scf/nscf
-steps -- the same tri-state advisor pipeline (``advise()``) answers both,
-just with the nscf-specific overrides ``_nscf_overrides`` below forces.
-Rebuilding the whole delivery-layer response shape (``Advice``,
-``StepAdvice``, and every CLI/HTTP/MCP consumer of them) to be
-one-or-many per task is real work with no second task yet to prove it
-against beyond this one -- exactly the "do not build for a caller that
-does not exist yet" reasoning this codebase applies everywhere else,
-and well past this epic's own explicitly narrow scope ("prove the
-type-level split and a real multi-step path, not full DOS science").
+steps, so ``advise_dos`` asks ``advise_steps`` for both steps at once,
+the nscf with the overrides ``_nscf_overrides`` below forces. That runs
+analysis and system advice once, and sizes one job for the task (#169):
+the three steps share one allocation, so its ``#SBATCH`` request covers
+the larger ``pw.x`` step, and the scf and nscf each get their own
+``max_seconds`` share of the walltime (pw.x counts it from its own
+start). ``dos.x`` has no ``max_seconds`` and runs in the remainder.
 
 **nscf overrides, sourced from a real, citable place** (aiida-
 quantumespresso's own ``workflows/protocols/pdos.yaml``, confirmed
@@ -58,7 +55,7 @@ from goldilocks_core.resolution import FieldState
 from goldilocks_core.service._advice import Advice, RunOverrides, warnings_from_records
 from goldilocks_core.service._bundle import assemble_bundle_input
 from goldilocks_core.service._generate import AdviceIncomplete, generate
-from goldilocks_core.service._pipeline import advise, check
+from goldilocks_core.service._pipeline import advise_steps, check
 from goldilocks_core.step_settings import DosSettings
 from goldilocks_core.steps import SharedContext, Step, default_shared_context
 from goldilocks_core.submission.slurm import render_slurm_script
@@ -80,16 +77,19 @@ class DosAdvice:
     def records(self) -> dict[str, FieldState[object]]:
         """``scf``'s records unprefixed (system-level fields --
         ``functional``/``cutoffs``/``pseudopotentials``/``magnetic``/
-        etc. -- are identical between ``scf`` and ``nscf``, since only
-        per-step overrides differ between the two ``advise()`` calls
-        ``advise_dos`` makes), ``nscf``'s own per-step fields under an
-        ``nscf_`` prefix (v2 epic 9, #9, #28's delivery-layer routing --
-        the first caller that ever needs to tell the two steps' k
-        -sampling/occupations/nbnd/convergence/job apart), plus ``dos``
-        itself."""
+        etc. -- and the task's one ``job`` are the same objects in
+        ``scf`` and ``nscf``, ``advise_steps``), ``nscf``'s own per-step
+        fields under an ``nscf_`` prefix (v2 epic 9, #9, #28's
+        delivery-layer routing -- the first caller that ever needs to
+        tell the two steps' k-sampling/occupations/nbnd/convergence/
+        parallelisation apart), plus ``dos`` itself."""
         merged: dict[str, FieldState[object]] = dict(self.scf.records())
         merged.update(
-            {f"nscf_{name}": state for name, state in self.nscf.step.records().items()}
+            {
+                f"nscf_{name}": state
+                for name, state in self.nscf.step.records().items()
+                if name != "job"
+            }
         )
         merged["dos"] = self.dos
         return merged
@@ -138,24 +138,18 @@ def advise_dos(
     """Diagnosis for all three of dos's steps, under the same contract as
     ``advise()``: an undecided field degrades, a fault raises."""
     overrides = overrides or RunOverrides()
-    scf = advise(
+    advice = advise_steps(
         structure,
         code=code,
         hpc=hpc,
         overrides=overrides,
+        steps={"scf": overrides.step, "nscf": _nscf_overrides(overrides).step},
         store=store,
         fetch_missing=fetch_missing,
     )
-    nscf = advise(
-        structure,
-        code=code,
-        hpc=hpc,
-        overrides=_nscf_overrides(overrides),
-        store=store,
-        fetch_missing=fetch_missing,
-    )
+    nscf = advice["nscf"]
     dos = dos_settings(nscf.step.kpoints.occupations, dos_human, dos_llm)
-    return DosAdvice(scf=scf, nscf=nscf, dos=dos)
+    return DosAdvice(scf=advice["scf"], nscf=nscf, dos=dos)
 
 
 def check_dos(advice: DosAdvice) -> CheckReport:
@@ -190,9 +184,6 @@ def generate_dos(
     scf_steps = generate(advice.scf, ok_report, ctx=shared_ctx)
     nscf_steps = generate(advice.nscf, ok_report, ctx=shared_ctx, purpose="nscf")
     dos_settings_value = DosSettings(
-        disk_io=None,
-        size=None,
-        mem_per_proc=None,
         emin=advice.dos.value.emin,
         emax=advice.dos.value.emax,
         delta_e=advice.dos.value.delta_e,
@@ -207,17 +198,14 @@ def render_submission_dos(
     advice: DosAdvice,
     hpc: HpcProfile,
     code: str,
-    ctx: SharedContext,
     steps: tuple[Step, ...],
 ) -> str:
     """One shared script for a ``dos`` task's three steps (v2 epic 9,
-    #9, #28's delivery-layer routing). ``render_slurm_script`` takes
-    exactly one ``JobDecision`` for its ``#SBATCH`` directives, but
-    ``DosAdvice`` carries two independent ones (``scf``, ``nscf``) --
-    the scf step's governs the shared allocation, a documented choice:
-    it is normally the dominant cost, and ``dos.x`` itself is fast."""
+    #9, #28's delivery-layer routing), from the task's one job: ``scf``
+    and ``nscf`` hold the same ``JobDecision``, sized over both ``pw.x``
+    steps (#169)."""
     return render_slurm_script(
-        hpc, advice.scf.step.resources.job.value, code, ctx, list(steps)
+        hpc, advice.scf.step.resources.job.value, code, list(steps)
     )
 
 
@@ -229,8 +217,7 @@ def to_bundle_input_dos(
 ) -> BundleInput:
     """``service/_bundle.py``'s ``to_bundle_input``, for a ``dos``
     task. Pseudopotential file bytes come from ``advice.scf`` -- the
-    same system-level decision as ``advice.nscf``'s, since only
-    per-step settings differ between the two ``advise()`` calls."""
+    same system advice ``advice.nscf`` holds (``advise_steps``)."""
     return assemble_bundle_input(
         advice.scf.system.pseudo.metadata,
         steps,

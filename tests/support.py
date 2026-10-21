@@ -83,9 +83,12 @@ def strict_json(document: str | bytes) -> Any:
 SSSP_FIXTURE_UPF = (
     b'<UPF version="2.0.1">\n'
     b'<PP_HEADER element="Si" pseudo_type="NC" functional="PBEsol" '
-    b'relativistic="scalar" z_valence="4.0"/>\n'
+    b'relativistic="scalar" z_valence="4.0" number_of_wfc="2" '
+    b'number_of_proj="4" l_max="1"/>\n'
     b"</UPF>\n"
 )
+"""Carries the projector counts every installed UPF has: the job's
+memory estimate reads them from the header (#148)."""
 
 
 def sssp_fixture_archive(path: Path, members: dict[str, bytes]) -> None:

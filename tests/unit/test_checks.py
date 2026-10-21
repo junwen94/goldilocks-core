@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import pytest
 from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
+from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.parallelisation import ParallelisationDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
@@ -344,14 +346,18 @@ def _job(ntasks: int) -> Resolved[JobDecision]:
         ntasks=ntasks,
         ntasks_per_node=ntasks,
         walltime_h=168.0,
-        max_seconds=574560,
+        max_seconds_by_step={"scf": 574560},
+        memory_per_process_mb=12.5,
+        memory_total_mb=900.0,
         account=None,
     )
     return Resolved(decision, Provenance(source="heuristic"))
 
 
-def _parallel(npool: int) -> Resolved[ParallelisationDecision]:
-    decision = ParallelisationDecision(npool=npool, ndiag=None)
+def _parallel(
+    npool: int, ndiag: int | None = None
+) -> Resolved[ParallelisationDecision]:
+    decision = ParallelisationDecision(npool=npool, ndiag=ndiag, kpoint_spin_pairs=64)
     return Resolved(decision, Provenance(source="human"))
 
 
@@ -382,3 +388,99 @@ def test_npool_blocked_field_state_surfaces_via_the_generic_scan() -> None:
     report = check_all(parallel=Blocked(by="job resources undecided"))
 
     assert report.blocking == ("job resources undecided",)
+
+
+def _bands(nbnd: int) -> Resolved[NbndDecision]:
+    return Resolved(NbndDecision(nbnd=nbnd), Provenance(source="heuristic"))
+
+
+@pytest.mark.parametrize(
+    ("nbnd", "npool", "ndiag", "side", "largest"),
+    [
+        (1, 1, 4, 2, 1),  # s > nbnd: set_para_diag's startup abort
+        (2, 1, 9, 3, 4),  # LiH, k_grid=[3,3,3], ndiag=9
+        (2, 4, 16, 4, 4),  # LiH at the old default -npool 4 -ndiag 16
+        (8, 1, 16, 4, 9),  # the C2-box layout, nbnd 8 on a 4x4 grid
+        (9, 1, 16, 4, 9),  # nbnd == (s-1)^2: the last empty-column size
+        (8, 1, 64, 8, 9),  # the H2O/N2 boxes: -npool 1 -ndiag 64
+        (8, 4, 64, 4, 9),  # the grid is capped by 16 processes per pool
+        (49, 1, 64, 8, 49),
+    ],
+)
+def test_user_ndiag_whose_grid_cannot_distribute_the_bands_blocks(
+    nbnd: int, npool: int, ndiag: int, side: int, largest: int
+) -> None:
+    """Regression for #133: pw.x stops at startup when the grid side s
+    exceeds nbnd (set_para_diag), and leaves a process column without
+    rows of a subspace matrix of size n <= (s-1)^2, which ELPA rejects
+    and QE does not catch. Both used to pass check() and fail on SCARF."""
+    report = check_all(
+        job=_job(64), parallel=_parallel(npool, ndiag), nbnd=_bands(nbnd)
+    )
+
+    (reason,) = report.blocking
+    assert f"ndiag={ndiag}" in reason
+    assert f"{side}x{side}" in reason
+    assert f"nbnd={nbnd}" in reason
+    assert f"ndiag <= {largest}" in reason
+
+
+def test_ndiag_reason_states_the_grid_the_bound_and_the_remedy() -> None:
+    """The C2-box layout from #133: -npool 4 -ndiag 16 on 64 tasks."""
+    report = check_all(job=_job(64), parallel=_parallel(4, 16), nbnd=_bands(8))
+
+    assert report.blocking == (
+        "ndiag=16 gives a 4x4 diagonalization grid, which cannot distribute "
+        "nbnd=8 bands (it needs nbnd > 9); pw.x would abort at startup or "
+        "fail in the parallel eigensolver. Unset ndiag so pw.x chooses it "
+        "from nbnd, or use ndiag <= 9.",
+    )
+
+
+@pytest.mark.parametrize(
+    ("nbnd", "npool", "ndiag"),
+    [
+        (2, 1, 4),  # s=2 needs nbnd > 1
+        (10, 1, 16),  # s=4 needs nbnd > 9
+        (50, 1, 64),  # s=8 needs nbnd > 49
+        (2, 16, 64),  # 4 processes per pool: s=2
+        (8, 1, 10),  # non-square ndiag runs a 3x3 grid
+        (1, 1, 1),
+    ],
+)
+def test_user_ndiag_whose_grid_distributes_the_bands_is_ok(
+    nbnd: int, npool: int, ndiag: int
+) -> None:
+    report = check_all(
+        job=_job(64), parallel=_parallel(npool, ndiag), nbnd=_bands(nbnd)
+    )
+
+    assert report.ok, report.blocking
+
+
+def test_unset_ndiag_never_blocks() -> None:
+    report = check_all(job=_job(64), parallel=_parallel(1), nbnd=_bands(1))
+
+    assert report.ok
+
+
+def test_ndiag_check_needs_job_parallel_and_bands() -> None:
+    assert check_all(parallel=_parallel(1, 64), nbnd=_bands(8)).ok
+    assert check_all(job=_job(64), parallel=_parallel(1, 64)).ok
+    assert check_all(job=_job(64), nbnd=_bands(8)).ok
+
+
+def test_unresolved_bands_never_add_the_ndiag_reason() -> None:
+    blocked = check_all(
+        job=_job(64),
+        parallel=_parallel(1, 64),
+        nbnd=Blocked(by="electron count undecided"),
+    )
+    unavailable = check_all(
+        job=_job(64),
+        parallel=_parallel(1, 64),
+        nbnd=Unavailable(reason="no valid band count"),
+    )
+
+    assert blocked.blocking == ("electron count undecided",)
+    assert unavailable.ok

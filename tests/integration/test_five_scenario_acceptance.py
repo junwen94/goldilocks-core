@@ -77,6 +77,7 @@ from goldilocks_core.service import (
     generate_dos,
 )
 from goldilocks_core.step_settings import DosSettings
+from goldilocks_core.steps import SharedContext
 
 
 def _hpc() -> HpcProfile:
@@ -88,7 +89,6 @@ def _hpc() -> HpcProfile:
         scheduler="slurm",
         launcher="srun",
         modules={"quantum_espresso": ("qe/7.2",)},
-        has_scalapack={"quantum_espresso": False},
         partitions={"scarf": Partition(name="scarf", hardware=hardware, default=True)},
     )
 
@@ -306,8 +306,13 @@ class TestScenario5DosMultiStep:
         advice = advise_dos(_silicon(), hpc=_hpc(), store=store)
         report = check_dos(advice)
         assert report.ok, report.blocking
+        ctx = SharedContext(prefix="si", outdir="./scratch", pseudo_dir="./pseudo")
 
-        steps = generate_dos(advice, report)
+        steps = generate_dos(advice, report, ctx=ctx)
 
         assert [step.name for step in steps] == ["scf", "nscf", "dos"]
         assert [step.executable for step in steps] == ["pw.x", "pw.x", "dos.x"]
+        for step in steps:
+            (content,) = step.files.values()
+            assert "prefix           = 'si'" in content
+            assert "outdir           = './scratch'" in content

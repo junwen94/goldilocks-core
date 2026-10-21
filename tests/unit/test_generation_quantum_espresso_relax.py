@@ -7,7 +7,6 @@ from goldilocks_core.advisors.convergence import ConvergenceDecision
 from goldilocks_core.advisors.cutoffs import CutoffsDecision
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.hubbard_u import HubbardUDecision
-from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.k_sampling import KSamplingDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.nbnd import NbndDecision
@@ -18,19 +17,10 @@ from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.relax import write_qe_relax
 from goldilocks_core.step_settings import PwSettings
-from goldilocks_core.steps import SharedContext
+from goldilocks_core.steps import ExitStatusCheck, SharedContext
 from goldilocks_core.system_settings import SystemSettings
 
 _CTX = SharedContext(prefix="pwscf", outdir="./out", pseudo_dir="./pseudo")
-_JOB = JobDecision(
-    partition="scarf",
-    nodes=1,
-    ntasks=64,
-    ntasks_per_node=64,
-    walltime_h=168.0,
-    max_seconds=574560,
-    account=None,
-)
 _UNSET = object()
 
 
@@ -66,9 +56,13 @@ def _system(
     )
 
 
-def _step(*, relax, convergence: ConvergenceDecision | None = _UNSET) -> PwSettings:
+def _step(
+    *,
+    relax,
+    convergence: ConvergenceDecision | None = _UNSET,
+    max_seconds: int | None = 574560,
+) -> PwSettings:
     return PwSettings(
-        disk_io=None,
         occupations=OccupationsDecision(
             occupations="fixed", smearing_type=None, degauss=None
         ),
@@ -87,7 +81,8 @@ def _step(*, relax, convergence: ConvergenceDecision | None = _UNSET) -> PwSetti
             if convergence is _UNSET
             else convergence
         ),
-        parallel=ParallelisationDecision(npool=2, ndiag=None),
+        parallel=ParallelisationDecision(npool=2, ndiag=None, kpoint_spin_pairs=4),
+        max_seconds=max_seconds,
         relax=relax,
     )
 
@@ -103,7 +98,7 @@ def test_writes_one_relax_step_with_an_ions_namelist_and_no_cell(
     system = _system(silicon_structure, pseudo_metadata_factory)
     step = _step(relax=RelaxOptions())
 
-    steps = write_qe_relax(system, step, _JOB, _CTX, "relax")
+    steps = write_qe_relax(system, step, _CTX, "relax")
 
     assert len(steps) == 1
     rendered = steps[0]
@@ -129,13 +124,33 @@ def test_writes_one_relax_step_with_an_ions_namelist_and_no_cell(
     assert "K_POINTS automatic" in content
 
 
+@pytest.mark.parametrize(
+    "purpose, relax", [("relax", RelaxOptions()), ("vc-relax", VcRelaxOptions())]
+)
+def test_relax_step_is_checked_by_the_status_pw_x_always_writes(
+    diamond_silicon, pseudo_metadata_factory, purpose, relax
+) -> None:
+    """#129: a relax whose SCF does not converge, or that reaches
+    max_seconds, records exit_status 2 or 255 only in the .save schema
+    XML (punch('config')), not in <prefix>.xml."""
+    system = _system(diamond_silicon, pseudo_metadata_factory)
+    ctx = SharedContext(prefix="si", outdir="./scratch", pseudo_dir="./pseudo")
+
+    (rendered,) = write_qe_relax(system, _step(relax=relax), ctx, purpose)
+
+    assert rendered.completion == ExitStatusCheck(
+        "./scratch/si.save/data-file-schema.xml"
+    )
+    assert "disk_io" not in rendered.files[f"{purpose}.in"]
+
+
 def test_writes_vc_relax_step_with_ions_and_cell_namelists(
     silicon_structure, pseudo_metadata_factory
 ) -> None:
     system = _system(silicon_structure, pseudo_metadata_factory)
     step = _step(relax=VcRelaxOptions())
 
-    steps = write_qe_relax(system, step, _JOB, _CTX, "vc-relax")
+    steps = write_qe_relax(system, step, _CTX, "vc-relax")
 
     assert len(steps) == 1
     rendered = steps[0]
@@ -159,7 +174,7 @@ def test_etot_conv_thr_matches_the_resolved_convergence_decision(
     relax = RelaxOptions(etot_conv_thr=4e-5)
     step = _step(relax=relax)
 
-    content = write_qe_relax(system, step, _JOB, _CTX, "relax")[0].files["relax.in"]
+    content = write_qe_relax(system, step, _CTX, "relax")[0].files["relax.in"]
 
     assert "4e-05" in _line_with(content, "etot_conv_thr")
 
@@ -170,7 +185,7 @@ def test_trust_radius_omitted_when_ion_dynamics_is_not_bfgs(
     system = _system(silicon_structure, pseudo_metadata_factory)
     step = _step(relax=RelaxOptions(ion_dynamics="damp"))
 
-    content = write_qe_relax(system, step, _JOB, _CTX, "relax")[0].files["relax.in"]
+    content = write_qe_relax(system, step, _CTX, "relax")[0].files["relax.in"]
 
     assert "ion_dynamics     = 'damp'" in content
     assert "trust_radius_max" not in content
@@ -184,7 +199,7 @@ def test_remove_rigid_rot_true_is_rendered(
     system = _system(silicon_structure, pseudo_metadata_factory)
     step = _step(relax=RelaxOptions(remove_rigid_rot=True))
 
-    content = write_qe_relax(system, step, _JOB, _CTX, "relax")[0].files["relax.in"]
+    content = write_qe_relax(system, step, _CTX, "relax")[0].files["relax.in"]
 
     assert ".true." in _line_with(content, "remove_rigid_rot")
 
@@ -194,7 +209,7 @@ def test_missing_relax_field_raises(silicon_structure, pseudo_metadata_factory) 
     step = _step(relax=None)
 
     with pytest.raises(GenerationError, match="relax"):
-        write_qe_relax(system, step, _JOB, _CTX, "relax")
+        write_qe_relax(system, step, _CTX, "relax")
 
 
 def test_vc_relax_purpose_with_plain_relax_options_raises(
@@ -204,7 +219,7 @@ def test_vc_relax_purpose_with_plain_relax_options_raises(
     step = _step(relax=RelaxOptions())
 
     with pytest.raises(GenerationError, match="VcRelaxOptions"):
-        write_qe_relax(system, step, _JOB, _CTX, "vc-relax")
+        write_qe_relax(system, step, _CTX, "vc-relax")
 
 
 def test_relax_purpose_with_vc_relax_options_raises(
@@ -214,7 +229,7 @@ def test_relax_purpose_with_vc_relax_options_raises(
     step = _step(relax=VcRelaxOptions())
 
     with pytest.raises(GenerationError, match="RelaxOptions"):
-        write_qe_relax(system, step, _JOB, _CTX, "relax")
+        write_qe_relax(system, step, _CTX, "relax")
 
 
 def test_missing_convergence_still_raises_same_as_scf(
@@ -224,7 +239,30 @@ def test_missing_convergence_still_raises_same_as_scf(
     step = _step(relax=RelaxOptions(), convergence=None)
 
     with pytest.raises(GenerationError, match="convergence"):
-        write_qe_relax(system, step, _JOB, _CTX, "relax")
+        write_qe_relax(system, step, _CTX, "relax")
+
+
+def test_max_seconds_comes_from_the_steps_own_settings(
+    diamond_silicon, pseudo_metadata_factory
+) -> None:
+    """#169: the step renders PwSettings.max_seconds, its share of the
+    task's walltime (all of 95% of it for a one-step relax task)."""
+    system = _system(diamond_silicon, pseudo_metadata_factory)
+    step = _step(relax=RelaxOptions(), max_seconds=13680)
+
+    content = write_qe_relax(system, step, _CTX, "relax")[0].files["relax.in"]
+
+    assert _line_with(content, "max_seconds") == "   max_seconds      = 13680"
+
+
+def test_missing_max_seconds_raises_same_as_scf(
+    diamond_silicon, pseudo_metadata_factory
+) -> None:
+    system = _system(diamond_silicon, pseudo_metadata_factory)
+    step = _step(relax=RelaxOptions(), max_seconds=None)
+
+    with pytest.raises(GenerationError, match="max_seconds"):
+        write_qe_relax(system, step, _CTX, "relax")
 
 
 def _silicon_slab():
@@ -257,7 +295,7 @@ def test_fix_bottom_layers_none_writes_no_if_pos_columns(
     system = _system(slab, pseudo_metadata_factory)
     step = _step(relax=RelaxOptions(fix_bottom_layers=None))
 
-    content = write_qe_relax(system, step, _JOB, _CTX, "relax")[0].files["relax.in"]
+    content = write_qe_relax(system, step, _CTX, "relax")[0].files["relax.in"]
 
     rows = _atomic_positions_block(content)
     assert len(rows) == len(slab)
@@ -271,7 +309,7 @@ def test_fix_bottom_layers_fixes_exactly_the_lowest_atoms(
     system = _system(slab, pseudo_metadata_factory)
     step = _step(relax=RelaxOptions(fix_bottom_layers=2))
 
-    content = write_qe_relax(system, step, _JOB, _CTX, "relax")[0].files["relax.in"]
+    content = write_qe_relax(system, step, _CTX, "relax")[0].files["relax.in"]
 
     rows = _atomic_positions_block(content)
     assert len(rows) == len(slab)
@@ -298,7 +336,7 @@ def test_fix_bottom_layers_exceeding_detected_layers_raises(
     step = _step(relax=RelaxOptions(fix_bottom_layers=999))
 
     with pytest.raises(GenerationError, match="fix_bottom_layers=999"):
-        write_qe_relax(system, step, _JOB, _CTX, "relax")
+        write_qe_relax(system, step, _CTX, "relax")
 
 
 def test_fix_bottom_layers_on_a_bulk_structure_raises(
@@ -312,7 +350,7 @@ def test_fix_bottom_layers_on_a_bulk_structure_raises(
     step = _step(relax=RelaxOptions(fix_bottom_layers=1))
 
     with pytest.raises(GenerationError, match="2D bonded component"):
-        write_qe_relax(system, step, _JOB, _CTX, "relax")
+        write_qe_relax(system, step, _CTX, "relax")
 
 
 def test_hubbard_table_plan_renders_the_qe_hubbard_card(
@@ -328,7 +366,7 @@ def test_hubbard_table_plan_renders_the_qe_hubbard_card(
     )
     step = _step(relax=RelaxOptions())
 
-    content = write_qe_relax(system, step, _JOB, _CTX, "relax")[0].files["relax.in"]
+    content = write_qe_relax(system, step, _CTX, "relax")[0].files["relax.in"]
 
     assert "HUBBARD (ortho-atomic)" in content
     assert "U  Si-3p  3" in content
@@ -347,4 +385,4 @@ def test_hubbard_calibration_needed_plan_still_raises_generation_error(
     step = _step(relax=RelaxOptions())
 
     with pytest.raises(GenerationError, match="calibration"):
-        write_qe_relax(system, step, _JOB, _CTX, "relax")
+        write_qe_relax(system, step, _CTX, "relax")

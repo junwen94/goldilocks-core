@@ -5,7 +5,7 @@ import pytest
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.dos import write_qe_dos
 from goldilocks_core.step_settings import DosSettings
-from goldilocks_core.steps import SharedContext
+from goldilocks_core.steps import SharedContext, StdoutMarkerCheck
 
 
 def _ctx() -> SharedContext:
@@ -58,9 +58,21 @@ def test_missing_ngauss_is_a_generation_error() -> None:
         write_qe_dos(step, _ctx())
 
 
-def test_no_parallelisation_args_dos_x_has_no_such_concept_here() -> None:
+def test_dos_x_runs_on_one_task_without_pools() -> None:
+    """dos.x refuses pools, repeats the whole DOS on every rank and aborts
+    on ranks that own no FFT z-plane, so it runs on one task (#134)."""
     step = DosSettings(delta_e=0.01, ngauss=0)
 
-    args = write_qe_dos(step, _ctx())[0].args
+    (dos_step,) = write_qe_dos(step, _ctx())
 
-    assert "-npool" not in args
+    assert dos_step.ntasks == 1
+    assert "-npool" not in dos_step.args
+
+
+def test_dos_x_is_checked_by_job_done_in_its_stdout() -> None:
+    """#129: dos.x writes no status file, so the pw.x status check
+    cannot apply to it."""
+    (dos_step,) = write_qe_dos(DosSettings(delta_e=0.01, ngauss=0), _ctx())
+
+    assert dos_step.completion == StdoutMarkerCheck("JOB DONE")
+    assert dos_step.stdout == "dos.out"

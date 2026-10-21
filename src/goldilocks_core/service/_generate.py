@@ -56,9 +56,9 @@ def generate(
 
     ``purpose`` (v2 epic 9, #9): selects the writer and QE's own
     ``calculation`` value -- see ``write_qe_scf``/``write_qe_relax``'s
-    own docstrings. Every existing caller renders an scf step;
-    ``service/_dos.py``'s nscf pass is the first to pass
-    ``purpose="nscf"``.
+    own docstrings. ``service/_dos.py``'s nscf pass is the first to pass
+    ``purpose="nscf"``. ``max_seconds`` is the advised step's own share
+    of the task's walltime (``ResourceStepAdvice.max_seconds``, #169).
 
     ``relax`` (v2 epic 10, #10): only ``service/_relax.py`` ever passes
     this -- it is threaded onto ``PwSettings.relax`` and dispatches to
@@ -83,24 +83,16 @@ def generate(
     )
     kpoints = advice.step.kpoints
     step_settings = PwSettings(
-        disk_io=None,
-        size=advice.step.resource_estimate,
-        mem_per_proc=advice.step.mem_per_proc,
         occupations=kpoints.occupations.value,
         k_sampling=kpoints.k_sampling.value,
         n_irr_k=kpoints.n_irr_k.value if kpoints.n_irr_k.ok else None,
         nbnd=kpoints.nbnd.value,
         convergence=kpoints.convergence.value,
         parallel=advice.step.resources.parallelisation.value,
+        max_seconds=advice.step.resources.max_seconds,
         relax=relax,
     )
     writer = write_qe_relax if purpose in ("relax", "vc-relax") else write_qe_scf
     return tuple(
-        writer(
-            system,
-            step_settings,
-            advice.step.resources.job.value,
-            ctx or default_shared_context(),
-            purpose,
-        )
+        writer(system, step_settings, ctx or default_shared_context(), purpose)
     )

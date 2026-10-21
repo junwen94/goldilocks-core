@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import dataclasses
+
+import pytest
+
 from goldilocks_core.advisors.convergence import ConvergenceDecision
 from goldilocks_core.advisors.k_sampling import KSamplingDecision
 from goldilocks_core.advisors.nbnd import NbndDecision
@@ -43,11 +47,27 @@ def test_pw_settings_holds_every_per_step_advisors_decision() -> None:
 def test_pw_settings_has_no_producer_fields_default_to_none() -> None:
     settings = _pw_settings()
 
-    assert settings.disk_io is None
-    assert settings.size is None
-    assert settings.mem_per_proc is None
     assert settings.parallel is None
     assert settings.relax is None
+
+
+@pytest.mark.parametrize("settings", [PwSettings, DosSettings, PhSettings])
+@pytest.mark.parametrize("field", ["size", "mem_per_proc"])
+def test_no_step_settings_carry_a_memory_estimate(settings: type, field: str) -> None:
+    """#148: no writer reads a memory estimate; the job record carries
+    pw.x's per-process and total memory instead."""
+    assert field not in {item.name for item in dataclasses.fields(settings)}
+    with pytest.raises(TypeError, match=field):
+        settings(**{field: None})
+
+
+@pytest.mark.parametrize("settings", [PwSettings, DosSettings, PhSettings])
+def test_no_step_settings_carry_disk_io(settings: type) -> None:
+    """#129: disk_io='none' would leave pw.x no status file to check
+    (punch.f90:60-63), so no settings can request it."""
+    assert "disk_io" not in {field.name for field in dataclasses.fields(settings)}
+    with pytest.raises(TypeError, match="disk_io"):
+        settings(disk_io="none")
 
 
 def test_constructing_pw_settings_with_no_arguments_is_allowed() -> None:

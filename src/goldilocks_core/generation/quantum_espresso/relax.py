@@ -9,7 +9,7 @@ purpose-agnostic card/namelist helper with ``scf.py`` (un-privatized
 there for this reuse: ``control_keywords``/``system_keywords``/
 ``electrons_keywords``/``atomic_species``/``cell_parameters``/
 ``atomic_positions``/``k_points``/``validated_pseudo_by_element``/
-``hubbard_lines``) --
+``hubbard_lines``/``pw_exit_status_check``) --
 the &CONTROL/&SYSTEM/&ELECTRONS namelists and every card are identical
 between an scf step and a relax step; only &IONS/&CELL (this module's
 own ``ions_keywords``/``cell_keywords``) and the ``&CONTROL``
@@ -57,7 +57,6 @@ from pymatgen.core import Structure
 from pymatgen.core.graphs import StructureGraph
 from pymatgen.io.ase import AseAtomsAdaptor
 
-from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.namelists import render_namelist
@@ -70,6 +69,7 @@ from goldilocks_core.generation.quantum_espresso.scf import (
     electrons_keywords,
     hubbard_lines,
     k_points,
+    pw_exit_status_check,
     system_keywords,
     validated_pseudo_by_element,
 )
@@ -94,7 +94,6 @@ systems rather than treated as authoritative."""
 def write_qe_relax(
     system: SystemSettings,
     step: PwSettings,
-    job: JobDecision,
     ctx: SharedContext,
     purpose: Literal["relax", "vc-relax"],
 ) -> list[Step]:
@@ -132,6 +131,7 @@ def write_qe_relax(
         ("nbnd", step.nbnd),
         ("convergence", step.convergence),
         ("parallel", step.parallel),
+        ("max_seconds", step.max_seconds),
     ):
         if value is None:
             raise GenerationError(
@@ -144,7 +144,7 @@ def write_qe_relax(
     species_index = {label: index + 1 for index, label in enumerate(species_labels)}
 
     keywords: dict[str, object] = {}
-    keywords.update(control_keywords(ctx, step, job, purpose))
+    keywords.update(control_keywords(ctx, step, purpose))
     keywords.update(
         system_keywords(structure, system, step, len(species_labels), species_index)
     )
@@ -173,6 +173,7 @@ def write_qe_relax(
             args=tuple(args),
             files={f"{purpose}.in": content},
             stdout=f"{purpose}.out",
+            completion=pw_exit_status_check(ctx),
         )
     ]
 

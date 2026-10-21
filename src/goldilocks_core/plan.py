@@ -31,6 +31,13 @@ from typing import Literal
 
 from goldilocks_core.inputs.task import Task
 
+SCF_LIKE_PURPOSES = frozenset({"scf", "relax", "vc-relax"})
+"""``PlannedStep.purpose``s whose ``pw.x`` run has its own SCF loop:
+``relax``/``vc-relax`` re-run it at every ionic step, while ``nscf``
+reads an already-converged density. ``checks.py`` scopes its
+fixed-occupations rules to these, and ``advisors/size.py`` counts
+several passes over their k-points in a step's workload."""
+
 
 @dataclass(frozen=True, slots=True)
 class PlannedStep:

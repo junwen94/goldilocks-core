@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import pytest
@@ -14,8 +15,13 @@ from support import (
 
 from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
 from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
-from goldilocks_core.advisors.parallelisation import ParallelisationHumanInput
+from goldilocks_core.advisors.parallelisation import (
+    ParallelisationHumanInput,
+    diag_grid_side,
+)
+from goldilocks_core.advisors.size import Species, memory_estimate, resource_estimate
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
+from goldilocks_core.assets.pseudopotentials.upf import parse_upf_metadata
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.bundle import DirectoryOutput, is_complete, publish
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
@@ -27,11 +33,14 @@ from goldilocks_core.service import (
     StepOverrides,
     SystemOverrides,
     advise,
+    advise_relax,
     check,
     generate,
     render_submission,
     to_bundle_input,
 )
+from goldilocks_core.service._pseudo import upf_projectors
+from goldilocks_core.set_overrides import build_overrides
 from goldilocks_core.steps import default_shared_context
 
 
@@ -50,7 +59,6 @@ def hpc() -> HpcProfile:
         scheduler="slurm",
         launcher="srun",
         modules={"quantum_espresso": ("qe/7.2",)},
-        has_scalapack={"quantum_espresso": False},
         partitions={"scarf": Partition(name="scarf", hardware=hardware, default=True)},
     )
 
@@ -87,7 +95,7 @@ class TestAdviseEndToEnd:
         assert "scf.in" in steps[0].files
 
         ctx = default_shared_context()
-        script = render_submission(advice, hpc, "quantum_espresso", ctx, steps)
+        script = render_submission(advice, hpc, "quantum_espresso", steps)
         assert "#SBATCH" in script
         assert "pw.x" in script
 
@@ -107,6 +115,22 @@ class TestAdviseEndToEnd:
         assert (destination / "pseudo" / "Si.upf").read_bytes() == _UPF
         assert (destination / "scf.in").exists()
         assert (destination / "submit.sh").exists()
+
+    def test_generate_renders_the_advised_steps_own_max_seconds_share(
+        self, silicon, hpc, installed_table
+    ) -> None:
+        """#169: the share travels with the advised step, so ``purpose``
+        only picks the writer; an scf advice rendered as nscf used to
+        raise a bare KeyError looking up max_seconds_by_step['nscf']."""
+        store, _table = installed_table
+        advice = advise(silicon, hpc=hpc, store=store)
+        report = check(advice)
+
+        (nscf,) = generate(advice, report, purpose="nscf")
+
+        share = advice.step.resources.job.value.max_seconds_by_step["scf"]
+        assert advice.step.resources.max_seconds == share == 574560
+        assert f"   max_seconds      = {share}" in nscf.files["nscf.in"].splitlines()
 
     def test_warnings_flattens_every_record_s_structured_warnings(
         self, silicon, hpc, installed_table
@@ -186,6 +210,270 @@ class TestAdviseEndToEnd:
         assert advice.analysis.is_metal.ok
         assert advice.analysis.is_metal.value == "metal"
         assert advice.analysis.is_metal.source == "human"
+
+
+def _si_upf(header: str) -> bytes:
+    return (
+        '<UPF version="2.0.1">\n'
+        f'<PP_HEADER element="Si" functional="PBEsol" z_valence="4.0" {header}/>\n'
+        "</UPF>\n"
+    ).encode()
+
+
+def _store_with(
+    upf: bytes, tmp_path, monkeypatch, *, relativistic: str = "scalar"
+) -> AssetStore:
+    """The offline fixture table with ``upf`` as its Si file."""
+    import support
+
+    monkeypatch.setattr(support, "SSSP_FIXTURE_UPF", upf)
+    spec, registry_table = _sssp_table_spec(tmp_path / "sources")
+    registry_table = dataclasses.replace(registry_table, relativistic=relativistic)
+    store = AssetStore(tmp_path / "store")
+    store.install(spec, sssp_preparer(registry_table))
+    monkeypatch.setattr(
+        "goldilocks_core.service._pseudo.load_tables",
+        lambda *a, **kw: {registry_table.id: registry_table},
+    )
+    return store
+
+
+def _per_process_mb(
+    advice,
+    species: Species,
+    *,
+    npol: int = 1,
+    nspin: int = 1,
+    nspin_mag: int = 1,
+    variable_cell: bool = False,
+) -> float:
+    """pw.x's figure for the advised SCF-loop step of diamond Si, at the
+    advised layout, with the estimate inputs a test names."""
+    assert advice.step.kpoints.convergence.value.mixing_mode == "plain"
+    cutoffs = advice.system.cutoffs.value
+    nbnd = advice.step.kpoints.nbnd.value.nbnd
+    estimate = resource_estimate(
+        advice.system.magnetic.value.relabeled_structure.lattice,
+        (species,),
+        ecutwfc_ry=cutoffs.ecutwfc_ry,
+        ecutrho_ry=cutoffs.ecutrho_ry,
+        nbnd=nbnd,
+        n_kpoint_spin=advice.step.kpoints.n_irr_k.value,
+        nspin=nspin,
+        npol=npol,
+        nspin_mag=nspin_mag,
+        scf_loop=True,
+        variable_cell=variable_cell,
+        local_tf_mixing=False,
+    )
+    job = advice.step.resources.job.value
+    parallel = advice.step.resources.parallelisation.value
+    side = diag_grid_side(parallel.ndiag, job.ntasks // parallel.npool, nbnd)
+    memory = memory_estimate(
+        estimate, ntasks=job.ntasks, npool=parallel.npool, diag_side=side
+    )
+    return round(memory.per_process_mb, 2)
+
+
+class TestJobMemory:
+    """#148: the job is sized on pw.x's estimated memory, which reads the
+    projector counts from each pseudopotential's own UPF header."""
+
+    def test_projector_counts_come_from_a_upf_v1_text_header(self, tmp_path) -> None:
+        """120 installed SSSP files (GBRV, old pslibrary) give the counts
+        as text-header lines, not attributes; these are SSSP's
+        Co_pbe_v1.2.uspp.F.UPF lines verbatim."""
+        path = tmp_path / "Co_pbe_v1.2.uspp.F.UPF"
+        path.write_text(
+            "<PP_INFO>\n"
+            "    1        The Pseudo was generated with a Scalar-Relativistic "
+            "Calculation\n"
+            "</PP_INFO>\n"
+            "<PP_HEADER>\n"
+            "   0                   Version Number\n"
+            "  Co                   Element\n"
+            "   US                  Ultrasoft pseudopotential\n"
+            "SLA  PW   PBE  PBE     PBE  Exchange-Correlation functional\n"
+            "   17.00000000000      Z valence\n"
+            "    2                  Max angular momentum component\n"
+            "    5    6             Number of Wavefunctions, Number of Projectors\n"
+            "</PP_HEADER>\n"
+        )
+
+        assert upf_projectors((parse_upf_metadata(path),)) == {"Co": (6, 2)}
+
+    def test_ultrasoft_species_and_u_projectors_reach_the_estimate(
+        self, diamond_silicon, hpc, tmp_path, monkeypatch
+    ) -> None:
+        """The written species' pseudo_type and the HUBBARD card's
+        manifold, here U on an ultrasoft Si's 3p (l = 1)."""
+        upf = _si_upf(
+            'pseudo_type="US" relativistic="scalar" number_of_wfc="2" '
+            'number_of_proj="4" l_max="1"'
+        )
+        store = _store_with(upf, tmp_path, monkeypatch)
+        overrides = build_overrides({"u_by_element": {"Si": 4.0}})
+
+        advice = advise(diamond_silicon, hpc=hpc, overrides=overrides, store=store)
+
+        species = Species(atoms=2, projectors=4, l_max=1, ultrasoft=True, hubbard_l=1)
+        job = advice.step.resources.job.value
+        assert job.memory_per_process_mb == _per_process_mb(advice, species)
+
+    def test_a_non_magnetic_spin_orbit_run_has_one_magnetization_component(
+        self, diamond_silicon, hpc, tmp_path, monkeypatch
+    ) -> None:
+        """Spin-orbit runs nspin=4 spinors, but without a starting
+        magnetization only one magnetization component, which sizes the
+        ultrasoft scratch (``parallelisation.qe_spin_layout``); on one
+        task that scratch is the largest block."""
+        upf = _si_upf(
+            'pseudo_type="US" relativistic="full" number_of_wfc="2" '
+            'number_of_proj="4" l_max="1"'
+        )
+        store = _store_with(upf, tmp_path, monkeypatch, relativistic="full")
+        overrides = build_overrides({"spin_orbit_coupling": True, "ntasks": 1})
+
+        advice = advise(diamond_silicon, hpc=hpc, overrides=overrides, store=store)
+
+        magnetic = advice.system.magnetic.value
+        assert magnetic.spin_orbit_enabled and not magnetic.spin_polarized
+        species = Species(atoms=2, projectors=4, l_max=1, ultrasoft=True)
+        job = advice.step.resources.job.value
+        assert job.ntasks == 1
+        assert job.memory_per_process_mb == _per_process_mb(
+            advice, species, npol=2, nspin=4, nspin_mag=1
+        )
+
+    def test_a_vc_relax_estimate_holds_the_variable_cell_arrays(
+        self, diamond_silicon, hpc, installed_table
+    ) -> None:
+        store, _table = installed_table
+
+        relax = advise_relax(
+            diamond_silicon, calculation="vc-relax", hpc=hpc, store=store
+        )
+
+        species = Species(atoms=2, projectors=4, l_max=1, ultrasoft=False)
+        job = relax.advice.step.resources.job.value
+        assert job.memory_per_process_mb == _per_process_mb(
+            relax.advice, species, variable_cell=True
+        )
+
+    def test_a_header_without_projector_counts_makes_the_job_unavailable(
+        self, silicon, hpc, tmp_path, monkeypatch
+    ) -> None:
+        upf = _si_upf('pseudo_type="NC" relativistic="scalar"')
+        store = _store_with(upf, tmp_path, monkeypatch)
+
+        advice = advise(silicon, hpc=hpc, store=store)
+
+        job = advice.step.resources.job
+        assert isinstance(job, Unavailable)
+        assert "Si.upf" in job.reason
+        assert "number_of_proj" in job.reason
+        report = check(advice)
+        assert any("Si.upf" in reason for reason in report.blocking)
+
+    def test_a_disordered_cell_leaves_the_job_unavailable_not_a_crash(
+        self, hpc, installed_table
+    ) -> None:
+        """The estimate counts the species of the written cell, which a
+        partially occupied site does not have."""
+        store, _table = installed_table
+        vacancy = Structure(
+            Lattice.cubic(5.43), [{"Si": 0.5}, "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]]
+        )
+
+        advice = advise(vacancy, hpc=hpc, store=store)
+
+        job = advice.step.resources.job
+        assert isinstance(job, Unavailable)
+        assert "disordered" in job.reason
+        assert not check(advice).ok
+
+
+class TestPoolsShareKpointSpinPairs:
+    """#168: pw.x splits k-point/spin pairs over pools, two per k-point
+    with collinear spin. ``k_grid=[3,3,3]`` gives the fixture cell
+    n_irr_k 6, on the test cluster's 64 tasks."""
+
+    @staticmethod
+    def _parallelisation(silicon, hpc, store, **settings):
+        overrides = build_overrides({"k_grid": [3, 3, 3], **settings})
+        advice = advise(silicon, hpc=hpc, overrides=overrides, store=store)
+        assert advice.step.kpoints.n_irr_k.value == 6
+        assert advice.step.resources.job.value.ntasks == 64
+        assert check(advice).ok
+        return advice.step.resources.parallelisation.value
+
+    @staticmethod
+    def _codes(parallel) -> list[str]:
+        return [warning.code for warning in parallel.warnings]
+
+    def test_spin_polarized_run_pools_twelve_pairs_evenly(
+        self, silicon, hpc, installed_table
+    ) -> None:
+        store, _table = installed_table
+
+        parallel = self._parallelisation(silicon, hpc, store, spin_polarized=True)
+
+        assert parallel.npool == 4
+        assert self._codes(parallel) == []
+        assert parallel.kpoint_spin_pairs == 12
+
+    def test_spinless_run_takes_two_pools_for_six_k_points(
+        self, silicon, hpc, installed_table
+    ) -> None:
+        store, _table = installed_table
+
+        parallel = self._parallelisation(silicon, hpc, store)
+
+        assert parallel.npool == 2
+        assert self._codes(parallel) == []
+        assert parallel.kpoint_spin_pairs == 6
+
+    def test_user_npool_within_the_spin_pairs_is_not_called_idle(
+        self, silicon, hpc, installed_table
+    ) -> None:
+        store, _table = installed_table
+
+        parallel = self._parallelisation(
+            silicon, hpc, store, spin_polarized=True, npool=8
+        )
+
+        assert parallel.npool == 8
+        assert self._codes(parallel) == []
+        assert parallel.kpoint_spin_pairs == 12
+
+
+class TestUnresolvedStepInputBlocksTheJob:
+    """#169: the job is sized from each step's ``nbnd`` and ``n_irr_k``,
+    so operator input that leaves either unresolved blocks the job and
+    the step's parallelisation, with that input as the root cause."""
+
+    @pytest.mark.parametrize(
+        ("settings", "cause"),
+        [
+            pytest.param({"extra_bands": -100}, "extra_bands=-100", id="nbnd"),
+            pytest.param({"k_index": 99999}, "k_index=99999", id="n_irr_k"),
+        ],
+    )
+    def test_advise_returns_a_blocked_job_that_check_refuses(
+        self, diamond_silicon, hpc, installed_table, settings, cause
+    ) -> None:
+        store, _table = installed_table
+        overrides = build_overrides(settings)
+
+        advice = advise(diamond_silicon, hpc=hpc, overrides=overrides, store=store)
+
+        resources = advice.step.resources
+        assert isinstance(resources.job, Blocked)
+        assert isinstance(resources.parallelisation, Blocked)
+        assert cause in resources.job.root_cause()
+        assert cause in resources.parallelisation.root_cause()
+        assert resources.max_seconds is None
+        assert not check(advice).ok
 
 
 class TestAdviseDegradation:

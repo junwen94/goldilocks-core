@@ -395,8 +395,10 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "nodes": {
         "description": (
-            "Number of compute nodes requested; otherwise sized from the "
-            "estimated memory footprint."
+            "Number of compute nodes requested; otherwise the fewest on which "
+            "pw.x's estimated memory per process, for the layout each step "
+            "runs, times the tasks per node and a 1.2 safety factor fits a "
+            "node."
         ),
     },
     "ntasks": {
@@ -407,7 +409,9 @@ _SETTING_META: dict[str, _SettingExtra] = {
     "walltime_h": {
         "unit": "hours",
         "description": (
-            "Requested job walltime; heuristic default is the partition's own maximum."
+            "Requested job walltime; heuristic default is the partition's own "
+            "maximum. 95% of it is split across the task's pw.x steps as "
+            "max_seconds, by estimated workload."
         ),
     },
     "account": {
@@ -417,13 +421,18 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "npool": {
         "description": (
-            "Number of k-point parallelization pools; must divide ntasks evenly."
+            "Number of k-point pools passed to pw.x as -npool; must divide "
+            "ntasks. Default: the most pools, up to one per k-point/spin "
+            "pair (two per k-point with collinear spin), that keep the pools "
+            "at least 80% busy."
         ),
     },
     "ndiag": {
         "description": (
-            "ScaLAPACK linear-algebra process-grid size; only meaningful "
-            "when has_scalapack is true."
+            "Linear-algebra group size passed to pw.x as -ndiag; unset by "
+            "default so pw.x chooses it from nbnd. Refused when its s x s "
+            "grid, s = isqrt(min(ndiag, ntasks/npool)), cannot distribute "
+            "nbnd bands (needs nbnd > (s-1)^2)."
         ),
     },
     "ion_dynamics": {

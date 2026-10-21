@@ -4,10 +4,10 @@ New in v2 (v2 epic 7, #7); no v1 precedent -- v1's CLI wizard
 (`cli/wizard/hpc.py`, deleted from the v2 tree) did live runtime
 auto-detection via `sinfo`/`sacctmgr`/`module avail` rather than a
 stored profile. This codebase instead ships static profile files:
-`advisors/job_resources.py`/`advisors/parallelisation.py` read a
-profile's hardware/partition specs directly, rather than re-probing a
-live scheduler at every call (this package does not assume it is even
-running on the cluster it is generating inputs for).
+`advisors/job_resources.py` reads a profile's hardware/partition specs
+directly, rather than re-probing a live scheduler at every call (this
+package does not assume it is even running on the cluster it is
+generating inputs for).
 
 ``[hardware]`` is the baseline; ``[partitions.<name>]`` override only
 what differs, inheriting everything else -- the same pattern
@@ -63,7 +63,6 @@ class HpcProfile:
     scheduler: str
     launcher: str
     modules: dict[str, tuple[str, ...]]
-    has_scalapack: dict[str, bool]
     partitions: dict[str, Partition]
 
     def default_partition(self) -> Partition:
@@ -179,7 +178,6 @@ def _parse_profile(name: str, data: dict[str, object]) -> HpcProfile:
             f"found {found}"
         )
 
-    codes = data.get("codes", {})
     return HpcProfile(
         name=name,
         scheduler=scheduler,
@@ -187,10 +185,6 @@ def _parse_profile(name: str, data: dict[str, object]) -> HpcProfile:
         modules={
             code: tuple(module_lines)
             for code, module_lines in data.get("modules", {}).items()
-        },
-        has_scalapack={
-            code: bool(config.get("has_scalapack", False))
-            for code, config in codes.items()
         },
         partitions=partitions,
     )

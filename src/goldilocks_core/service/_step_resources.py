@@ -1,47 +1,68 @@
-"""Phase 3b of the v2 orchestrator (v2 epic 8, #8): per-step resource
-sizing (envelope/job/parallelisation), the other of the two ``_step*``
-files ``_step.py`` composes into ``StepAdvice`` -- see that module's own
-docstring on why the per-step advisor set is split across two files.
+"""Phase 3b of the v2 orchestrator (v2 epic 8, #8): resource sizing for
+a task, the other of the two ``_step*`` files ``_step.py`` composes into
+``StepAdvice`` -- see that module's own docstring on why the per-step
+advisor set is split across two files.
 
-Takes ``nbnd``/``n_irr_k`` as plain ``FieldState`` parameters rather
-than the whole ``ElectronicStepAdvice`` object, so this module never
-needs to import ``_step_kpoints`` at all: the resource-sizing chain
-only ever reads those two fields from phase 3a's output.
+**One job per task, parallelisation per step.** A task's pw.x steps run
+one after another in one allocation, so ``task_resources`` makes one
+``job_resources`` call over every step (#169): it sizes the allocation
+on pw.x's memory per process for the layout each step will run (#148)
+and gives each step its own ``max_seconds`` share of the walltime, which
+the step's ``ResourceStepAdvice`` carries for ``generate()``. Each
+step's ``parallelisation`` then reads that job's ``ntasks`` and the
+step's own k-point/spin pairs (``n_irr_k`` and the magnetic decision's
+spin layout) -- ``job_resources`` evaluates that same function for each
+candidate ``ntasks`` rather than reading its output (see
+``advisors/job_resources.py``'s own module note on false circularity).
+``job``/``job_llm`` overrides are task-level; ``npool``/``ndiag`` are
+per step.
 
-The resource envelope needs ``cutoffs``/``nbnd``/``magnetic`` all
-resolved before ``job_resources`` can run, and ``parallelisation`` needs
-``job_resources``'s plain output -- ``job_resources`` never reads
-``parallelisation``, only the reverse, by design (see
-``advisors/parallelisation.py``'s own module note on false circularity).
+**The estimate reads the cell the writer renders**: the magnetic
+decision's ``relabeled_structure`` (an AFM candidate can be a larger
+cell than the input), one species per (element, starting magnetization)
+pair as ``canonicalize_system_for_generation`` in
+``generation/quantum_espresso/scf.py`` splits them, each species'
+projector counts from its pseudopotential's PP_HEADER
+(``_pseudo.upf_projectors``), the +U manifolds the writer renders, and
+each step's mixing mode.
+
+The estimate needs ``cutoffs``, the pseudopotentials, ``magnetic`` and
+``hubbard``, and each step's ``nbnd``/``n_irr_k``/``convergence``
+resolved, so the job is ``Blocked`` by the first of those that is not;
+a disordered cell, or a pseudopotential header without projector counts
+(naming the file), makes it ``Unavailable``.
 """
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 
-from pymatgen.core import Structure
-
+from goldilocks_core.advisors.hubbard_u import manifold_for
 from goldilocks_core.advisors.job_resources import (
     JobDecision,
     JobHumanInput,
     JobLlmInput,
+    JobStep,
     job_resources,
 )
-from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.parallelisation import (
     ParallelisationDecision,
     ParallelisationHumanInput,
+    kpoint_spin_pairs,
     parallelisation,
+    qe_spin_layout,
 )
-from goldilocks_core.advisors.size import (
-    ResourceEstimate,
-    envelope,
-    memory_per_process,
-    resource_estimate,
-)
+from goldilocks_core.advisors.size import Species, resource_estimate
 from goldilocks_core.inputs.hpc import HpcProfile
-from goldilocks_core.resolution import Blocked, FieldState, blocked_by
+from goldilocks_core.plan import SCF_LIKE_PURPOSES
+from goldilocks_core.resolution import Blocked, FieldState, Unavailable, blocked_by
+from goldilocks_core.service._pseudo import upf_projectors
+from goldilocks_core.service._step_kpoints import ElectronicStepAdvice
 from goldilocks_core.service._system import SystemAdvice
+
+_ANGULAR_MOMENTA = "spdf"
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,10 +74,15 @@ class ResourceOverrides:
 
 @dataclass(frozen=True, slots=True)
 class ResourceStepAdvice:
+    """One step's resources: the task's one ``job`` (the same state in
+    every step of the task), the step's own ``parallelisation``, and its
+    ``max_seconds`` share of the job's walltime
+    (``JobDecision.max_seconds_by_step``), ``None`` while the job is not
+    resolved."""
+
     job: FieldState[JobDecision]
     parallelisation: FieldState[ParallelisationDecision]
-    resource_estimate: ResourceEstimate | None = None
-    mem_per_proc: float | None = None
+    max_seconds: int | None
 
     def field_states(self) -> tuple[FieldState[object], ...]:
         return (self.job, self.parallelisation)
@@ -65,55 +91,162 @@ class ResourceStepAdvice:
         return {"job": self.job, "parallelisation": self.parallelisation}
 
 
-def resource_step_advice(
-    structure: Structure,
-    code: str,
+def task_resources(
     system: SystemAdvice,
-    nbnd: FieldState[NbndDecision],
-    n_irr_k: FieldState[int],
+    electronic: Mapping[str, ElectronicStepAdvice],
     hpc: HpcProfile,
-    overrides: ResourceOverrides,
-) -> ResourceStepAdvice:
-    estimate: ResourceEstimate | None = None
-    job_state: FieldState[JobDecision]
-    if system.cutoffs.ok and nbnd.ok and system.magnetic.ok:
-        estimate = envelope(
-            [
-                resource_estimate(
-                    structure,
-                    system.cutoffs.value.ecutwfc_ry,
-                    system.cutoffs.value.ecutrho_ry,
-                    nbnd.value.nbnd,
-                    nspin=2 if system.magnetic.value.spin_polarized else 1,
-                    noncollinear=system.magnetic.value.spin_orbit_enabled,
-                )
-            ]
-        )
-        job_state = job_resources(estimate, hpc, overrides.job, overrides.job_llm)
-    else:
-        blocker = next(
-            state for state in (system.cutoffs, nbnd, system.magnetic) if not state.ok
-        )
-        job_state = Blocked(by=blocked_by(blocker))
-
-    mem_per_proc: float | None = None
-    parallel_state: FieldState[ParallelisationDecision]
-    if job_state.ok:
-        has_scalapack = hpc.has_scalapack.get(code, False)
-        n_irr_k_value = n_irr_k.value if n_irr_k.ok else None
-        parallel_state = parallelisation(
-            job_state.value, has_scalapack, n_irr_k_value, overrides.parallelisation
-        )
-        if parallel_state.ok and estimate is not None:
-            mem_per_proc = memory_per_process(
-                estimate, job_state.value.ntasks, parallel_state.value.npool
+    job_human: JobHumanInput | None,
+    job_llm: JobLlmInput | None,
+    parallelisation_human: Mapping[str, ParallelisationHumanInput | None],
+) -> dict[str, ResourceStepAdvice]:
+    """Each step's resources, keyed like ``electronic`` (purpose -> the
+    step's electronic advice): one job from ``job_human``/``job_llm``,
+    and each step's npool/ndiag from ``parallelisation_human[purpose]``."""
+    unresolved = next(
+        (
+            state
+            for step in electronic.values()
+            for state in (
+                system.cutoffs,
+                system.pseudo.metadata,
+                system.magnetic,
+                system.hubbard,
+                step.nbnd,
+                step.n_irr_k,
+                step.convergence,
             )
-    else:
-        parallel_state = Blocked(by=blocked_by(job_state))
+            if not state.ok
+        ),
+        None,
+    )
+    if unresolved is not None:
+        return _without_job(electronic, Blocked(by=blocked_by(unresolved)))
+    species = _written_species(system)
+    if isinstance(species, Unavailable):
+        return _without_job(electronic, species)
 
+    pairs = {
+        purpose: kpoint_spin_pairs(step.n_irr_k.value, system.magnetic.value)
+        for purpose, step in electronic.items()
+    }
+    steps = {
+        purpose: _job_step(
+            system, species, step, pairs[purpose], purpose, parallelisation_human
+        )
+        for purpose, step in electronic.items()
+    }
+    job = job_resources(steps, hpc, job_human, job_llm)
+    return {
+        purpose: _step_resources(
+            job, purpose, pairs[purpose], parallelisation_human[purpose]
+        )
+        for purpose in electronic
+    }
+
+
+def _without_job(
+    electronic: Mapping[str, ElectronicStepAdvice], job: Blocked | Unavailable
+) -> dict[str, ResourceStepAdvice]:
+    return {
+        purpose: ResourceStepAdvice(
+            job=job, parallelisation=Blocked(by=blocked_by(job)), max_seconds=None
+        )
+        for purpose in electronic
+    }
+
+
+def _written_species(system: SystemAdvice) -> tuple[Species, ...] | Unavailable:
+    """The species of the cell the writer renders (module docstring);
+    ``Unavailable`` for a disordered cell, which it cannot render."""
+    magnetic = system.magnetic.value
+    if not magnetic.relabeled_structure.is_ordered:
+        return Unavailable(
+            reason=(
+                "pw.x's memory cannot be estimated for a disordered structure: "
+                "a Quantum ESPRESSO input needs one element on every site"
+            )
+        )
+    metadata = system.pseudo.metadata.value
+    projectors = upf_projectors(metadata)
+    if isinstance(projectors, Unavailable):
+        return projectors
+    ultrasoft = {item.element: item.pseudo_type in ("USPP", "PAW") for item in metadata}
+    hubbard = _hubbard_elements(system)
+    magnetization = magnetic.starting_magnetization or {}
+    atoms = Counter(
+        (site.specie.symbol, magnetization.get(site.label, 0.0))
+        for site in magnetic.relabeled_structure
+    )
+    return tuple(
+        Species(
+            atoms=count,
+            projectors=projectors[element][0],
+            l_max=projectors[element][1],
+            ultrasoft=ultrasoft[element],
+            hubbard_l=(
+                _ANGULAR_MOMENTA.index(manifold_for(element)[-1])
+                if element in hubbard
+                else None
+            ),
+        )
+        for (element, _magnetization), count in atoms.items()
+    )
+
+
+def _hubbard_elements(system: SystemAdvice) -> set[str]:
+    """The elements the writer renders a +U line for: only a ``table``
+    plan renders a HUBBARD card, and a split species label (``Fe1``)
+    takes its element's manifold."""
+    hubbard = system.hubbard.value
+    if hubbard.plan != "table":
+        return set()
+    return {
+        label.rstrip("0123456789")
+        for label, u_ev in hubbard.u_by_element.items()
+        if u_ev
+    }
+
+
+def _job_step(
+    system: SystemAdvice,
+    species: tuple[Species, ...],
+    step: ElectronicStepAdvice,
+    n_kpoint_spin: int,
+    purpose: str,
+    parallelisation_human: Mapping[str, ParallelisationHumanInput | None],
+) -> JobStep:
+    """The step's estimate on the written cell, with its npool/ndiag."""
+    magnetic = system.magnetic.value
+    layout = qe_spin_layout(magnetic)
+    estimate = resource_estimate(
+        magnetic.relabeled_structure.lattice,
+        species,
+        ecutwfc_ry=system.cutoffs.value.ecutwfc_ry,
+        ecutrho_ry=system.cutoffs.value.ecutrho_ry,
+        nbnd=step.nbnd.value.nbnd,
+        n_kpoint_spin=n_kpoint_spin,
+        nspin=layout.nspin,
+        npol=layout.npol,
+        nspin_mag=layout.nspin_mag,
+        scf_loop=purpose in SCF_LIKE_PURPOSES,
+        variable_cell=purpose == "vc-relax",
+        local_tf_mixing=step.convergence.value.mixing_mode == "local-TF",
+    )
+    return JobStep(estimate, parallelisation_human[purpose])
+
+
+def _step_resources(
+    job: FieldState[JobDecision],
+    purpose: str,
+    n_kpoint_spin: int,
+    human: ParallelisationHumanInput | None,
+) -> ResourceStepAdvice:
+    if not job.ok:
+        return ResourceStepAdvice(
+            job=job, parallelisation=Blocked(by=blocked_by(job)), max_seconds=None
+        )
     return ResourceStepAdvice(
-        job=job_state,
-        parallelisation=parallel_state,
-        resource_estimate=estimate,
-        mem_per_proc=mem_per_proc,
+        job=job,
+        parallelisation=parallelisation(job.value.ntasks, n_kpoint_spin, human),
+        max_seconds=job.value.max_seconds_by_step[purpose],
     )
