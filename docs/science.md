@@ -222,10 +222,13 @@ together with the density. For the first `mixing_fixed_ns` iterations pw.x
 holds that matrix at its starting value, and it can report convergence before
 the window ends. The energy, forces and stress are then those of the starting
 occupations, not a self-consistent DFT+U result, and the stress calculation
-can abort with "non-symmetric stress contribution". Set a nonzero value only
-for a preparatory run whose output seeds a separate run with the occupations
-free. If a +U SCF needs more than `electron_maxstep` iterations, adjust
-`mixing_beta` or `electron_maxstep` rather than freezing the occupations.
+can abort with "non-symmetric stress contribution". A value you set is
+written as given. On an input with a HUBBARD card, a nonzero value carries a
+`convergence.mixing_fixed_ns_freezes_hubbard_occupations` warning; without a
+card, pw.x ignores the keyword. Set a nonzero value only for a preparatory
+run whose output seeds a separate run with the occupations free. If a +U SCF
+needs more than `electron_maxstep` iterations, adjust `mixing_beta` or
+`electron_maxstep` rather than freezing the occupations.
 
 ## Check relaxation settings
 

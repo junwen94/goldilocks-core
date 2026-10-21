@@ -73,7 +73,7 @@ fit this shape; they are not exposed here.
 advisor that can emit a ``resolution.Warning`` declares its own
 ``WARNING_CATALOGUE`` constant (code/level/category/a generic
 description), and ``advisors/warning_catalogue.py`` -- a dedicated
-aggregator, not this module -- imports all ten of them so this module
+aggregator, not this module -- imports every one of them so this module
 itself only needs one import to get the full list without blowing its
 own import-surface ceiling.
 

@@ -2,12 +2,15 @@
 
 The gate and the writers must agree: a request the gate accepts must
 never fail inside a writer. This runs ``advise``/``check``/``generate``
-end to end over a matrix of correlated oxides on a synthetic SSSP-shaped
-table (so it runs in CI) and asserts, for every scenario and task, that
-``check`` is ok, that generation succeeds, and that every ``pw.x`` input
-carries exactly the expected HUBBARD lines (or no Hubbard card at all).
-Pinning the card means a regression that drops or invents a U value
-fails here, not only one that raises.
+end to end over a matrix of correlated compounds on a synthetic
+SSSP-shaped table (so it runs in CI) and asserts, for every scenario and
+task, that ``check`` is ok, that generation succeeds, and that every
+``pw.x`` input carries exactly the expected HUBBARD lines (or no Hubbard
+card at all). Pinning the card means a regression that drops or invents a
+U value fails here, not only one that raises. +U-specific convergence
+output follows the same decision (#166): ``mixing_fixed_ns`` appears only
+as the user set it, and a nonzero value carries the frozen-occupation
+warning exactly when a card is rendered.
 
 Add a scenario here whenever another rule can let ``check`` pass while a
 writer refuses.
@@ -46,6 +49,7 @@ _Z_VALENCES = {
     "Eu": 17.0,
     "La": 11.0,
     "Lu": 25.0,
+    "N": 5.0,
     "Ni": 18.0,
     "O": 6.0,
     "Th": 12.0,
@@ -56,9 +60,9 @@ _Z_VALENCES = {
 }
 
 
-def _rock_salt(cation: str, a: float) -> Structure:
+def _rock_salt(cation: str, a: float, anion: str = "O") -> Structure:
     return Structure.from_spacegroup(
-        "Fm-3m", Lattice.cubic(a), [cation, "O"], [[0, 0, 0], [0.5, 0.5, 0.5]]
+        "Fm-3m", Lattice.cubic(a), [cation, anion], [[0, 0, 0], [0.5, 0.5, 0.5]]
     ).get_primitive_structure()
 
 
@@ -134,9 +138,23 @@ _SCENARIOS = {
     "CeO2 no +U": _Scenario(
         lambda: _fluorite("Ce", 5.41), (), {"hubbard_needs_correlation": False}
     ),
+    # A user mixing_fixed_ns, flagged only where a U is applied, whatever
+    # needs_correlation says (#166): true for ThO2, false for the nitride UN.
+    "ThO2 no +U, mixing_fixed_ns": _Scenario(
+        lambda: _fluorite("Th", 5.60),
+        (),
+        {"hubbard_needs_correlation": False, "mixing_fixed_ns": 50},
+    ),
+    "UN u_by_element, mixing_fixed_ns": _Scenario(
+        lambda: _rock_salt("U", 4.89, "N"),
+        ("U  U-5f  4",),
+        {"u_by_element": {"U": 4.0}, "mixing_fixed_ns": 50},
+    ),
 }
 
 _MULTI_TASK_SCENARIOS = ("NiO", "LaCuO3", "TiO2")
+
+_FROZEN_NS = "convergence.mixing_fixed_ns_freezes_hubbard_occupations"
 
 
 def _hpc() -> HpcProfile:
@@ -179,7 +197,7 @@ def _generate(task: str, scenario: _Scenario, store: AssetStore):
         )
         report, render = check_relax(advice), generate_relax
     assert report.ok, report.blocking
-    return render(advice, report)
+    return advice, render(advice, report)
 
 
 def _hubbard_lines(content: str) -> tuple[str, ...]:
@@ -205,8 +223,9 @@ def test_check_ok_implies_generate_renders_the_expected_hubbard_card(
     task: str, name: str, store: AssetStore
 ) -> None:
     scenario = _SCENARIOS[name]
+    fixed_ns = scenario.overrides.get("mixing_fixed_ns")
 
-    steps = _generate(task, scenario, store)
+    advice, steps = _generate(task, scenario, store)
 
     pw_inputs = [
         content
@@ -216,8 +235,10 @@ def test_check_ok_implies_generate_renders_the_expected_hubbard_card(
     ]
     assert pw_inputs
     for content in pw_inputs:
-        assert "mixing_fixed_ns" not in content
+        assert ("mixing_fixed_ns" in content) is (fixed_ns is not None)
         if scenario.hubbard:
             assert _hubbard_lines(content) == scenario.hubbard
         else:
             assert "hubbard" not in content.lower()
+    codes = {warning["code"] for warning in advice.warnings()}
+    assert (_FROZEN_NS in codes) is bool(scenario.hubbard and fixed_ns)

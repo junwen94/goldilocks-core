@@ -22,6 +22,9 @@ from __future__ import annotations
 
 from pymatgen.core import Lattice, Structure
 
+from goldilocks_core.advisors.convergence import ConvergenceHumanInput, convergence
+from goldilocks_core.advisors.functional import DEFAULT_FUNCTIONAL
+from goldilocks_core.advisors.hubbard_u import hubbard_u
 from goldilocks_core.advisors.magnetic_config import (
     MagneticConfigHumanInput,
     magnetic_config,
@@ -35,11 +38,10 @@ from goldilocks_core.advisors.pseudo_selection import (
 from goldilocks_core.analysis.composition import composition
 from goldilocks_core.analysis.is_magnetic import is_magnetic
 from goldilocks_core.analysis.is_metal import is_metal
+from goldilocks_core.analysis.needs_correlation import needs_correlation
 from goldilocks_core.analysis.needs_soc import needs_soc
 from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 from goldilocks_core.assets.records import AssetFile, AssetSpec
-from goldilocks_core.inputs.hpc import load_hpc_profile
-from goldilocks_core.service import advise
 
 
 def _table(
@@ -205,7 +207,9 @@ def test_hubbard_u_input_leaves_the_occupation_matrix_free_to_converge() -> None
     While iter <= mixing_fixed_ns, pw.x resets ns to its iteration-1 value,
     yet it still declares convergence if the density converges inside that
     window (QE 7.3 PW/src/electrons.f90:815-833, mix_rho.f90:162), and the
-    freeze restarts at every ionic step (electrons.f90:556).
+    freeze restarts at every ionic step (electrons.f90:556). A user's
+    nonzero value is kept but flagged, keyed on the Hubbard decision that
+    applies the U (#166).
 
     pw.x reference (SCARF, QE 7.5): the default bundle for this NiO cell
     (MC3D mc3d-29856, U Ni-3d 6.2), run as generated with mixing_fixed_ns = 50
@@ -221,8 +225,17 @@ def test_hubbard_u_input_leaves_the_occupation_matrix_free_to_converge() -> None
         ["Ni", "O"],
         [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
     )
+    hubbard = hubbard_u(nio, needs_correlation(composition(nio)), DEFAULT_FUNCTIONAL)
+    assert [(u.element, u.u_ev) for u in hubbard.value.u_values] == [("Ni", 6.2)]
 
-    advice = advise(nio, hpc=load_hpc_profile("scarf"))
+    free = convergence(len(nio), hubbard=hubbard)
+    frozen = convergence(
+        len(nio), hubbard=hubbard, human=ConvergenceHumanInput(mixing_fixed_ns=50)
+    )
 
-    assert advice.analysis.needs_correlation.value is True
-    assert advice.step.kpoints.convergence.value.mixing_fixed_ns is None
+    assert free.value.mixing_fixed_ns is None
+    assert free.value.warnings == ()
+    assert frozen.value.mixing_fixed_ns == 50
+    assert [warning.code for warning in frozen.value.warnings] == [
+        "convergence.mixing_fixed_ns_freezes_hubbard_occupations"
+    ]

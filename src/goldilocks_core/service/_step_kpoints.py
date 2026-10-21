@@ -128,6 +128,7 @@ def electronic_step_advice(
 
     convergence_state = convergence(
         len(structure),
+        hubbard=system.hubbard,
         geometry=analysis.geometry,
         human=overrides.convergence,
         llm=overrides.convergence_llm,

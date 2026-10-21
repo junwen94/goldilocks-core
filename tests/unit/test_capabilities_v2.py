@@ -134,6 +134,16 @@ class TestTopLevelShape:
 
         assert len(codes) == len(set(codes))
 
+    def test_warnings_catalogue_lists_the_frozen_hubbard_occupations_warning(
+        self,
+    ) -> None:
+        """#166: the convergence advisor's one code is published, so a
+        frontend can filter on it before any run has emitted it."""
+        by_code = {entry["code"]: entry for entry in capabilities()["warnings"]}
+
+        entry = by_code["convergence.mixing_fixed_ns_freezes_hubbard_occupations"]
+        assert (entry["level"], entry["category"]) == ("warning", "convergence")
+
     def test_codes_and_tasks_reflect_only_what_actually_runs(self) -> None:
         """v2 epic 9 (#9, #28): ``dos`` joined ``scf_single_point`` once
         the delivery layers actually routed it, not before -- this list
