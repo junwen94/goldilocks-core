@@ -20,14 +20,15 @@ The ml tier itself (v2 epic 11, #11; #92) calls QRF95 -- registered in
 ``ml/registry.toml``'s ``[defaults.kpoints]`` since before this epic,
 but never actually loaded until now: its own PSDI record always carried
 a real ``goldilocks_ml.inference``-shaped ``model.json``, it just was
-not one of this asset's registered files. ``ml.predict.predict_k_distance``
-degrades to ``None`` (falling through to heuristic) the same way
-``is_metal``/``is_magnetic`` do for a missing asset or import -- see
-that module's docstring. A *ladder-rung* k_index model also exists in
-goldilocks-ml but is not yet published/wired (#90); that is a distinct
-model from QRF95, not another name for it, despite ``capabilities.py``
-having (incorrectly) pointed ``k_distance``'s ``ml_target`` at
-``"k_index"`` until this same change fixed it.
+not one of this asset's registered files. When that model is not
+installed, ``ml.predict.predict_k_distance`` raises ``MlModelUnavailable``
+and this tier falls through to the heuristic, the same way
+``is_metal``/``is_magnetic`` do; any other model failure fails the
+request (#130) -- see that module's docstring. A *ladder-rung* k_index
+model also exists in goldilocks-ml but is not yet published/wired (#90);
+that is a distinct model from QRF95, not another name for it, despite
+``capabilities.py`` having (incorrectly) pointed ``k_distance``'s
+``ml_target`` at ``"k_index"`` until this same change fixed it.
 
 ``occupations`` is accepted as an explicit input -- not because either
 the heuristic or the now-wired QRF95 ml tier uses it (neither does;
@@ -144,14 +145,15 @@ class KSamplingDecision:
     land exactly on a rung (expected whenever the mesh came from
     ``k_distance``/ml/heuristic rather than an explicit ``k_index``
     override), not a failure."""
-    k_distance_interval: tuple[float, float] | None = None
+    k_distance_interval: tuple[float, float | None] | None = None
     """The matched rung's own ``KMeshEntry.k_distance_interval``, carried
     alongside ``k_index`` whenever a rung is known. Exists so a caller
     resolving via ``k_index`` -- where ``k_distance`` itself is
     deliberately ``None``, a whole interval maps to one rung, not one
     point -- still has something honest to show instead of nothing at
     all; showing a fabricated single point (e.g. the interval midpoint)
-    would be worse than showing no number."""
+    would be worse than showing no number. The upper bound is ``None``
+    only for rung 1, the Gamma-only mesh, whose interval is open above."""
 
 
 class KSamplingHumanInput(HumanInput):
@@ -259,11 +261,12 @@ def k_sampling(
 
 
 def _ml_k_distance(structure: Structure) -> float | None:
-    """QRF95's own raw k-distance (v2 epic 11, #11; #92), or ``None`` if
-    its model asset is not installed or goldilocks-ml is not importable
-    -- never a reason to fail ``k_sampling()`` itself, the same
-    degrade-to-heuristic policy ``analysis/is_metal.py``'s
-    ``_ml_is_metal`` already follows for a missing external dependency."""
+    """QRF95's own raw k-distance (v2 epic 11, #11; #92), or ``None`` if it
+    is not set up (its model asset is not installed or fails verification),
+    in which case ``k_sampling()`` falls back to its next tier, as
+    ``analysis/is_metal.py``'s ``_ml_is_metal`` does. A model that is set up
+    but fails to load or predict raises, failing ``k_sampling()`` itself
+    (#130)."""
     from goldilocks_core.ml.predict import MlModelUnavailable, predict_k_distance
 
     try:

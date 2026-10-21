@@ -7,9 +7,9 @@ order in the same Python session, or save them in a script and run
 
 ## Generate inputs
 
-`advise()` diagnoses a structure against an HPC profile: it always returns,
-degrading field-by-field rather than raising, so you can inspect what is
-known before deciding whether to generate anything.
+`advise()` diagnoses a structure against an HPC profile. A decision it
+cannot make is marked unavailable or blocked rather than raising, so you can
+inspect what is known before deciding whether to generate anything.
 
 ```python
 from goldilocks_core.examples.structures import structure
@@ -80,10 +80,10 @@ key.
 
 ## Generate and check before publishing
 
-`advise()` never fails; `check()`/`generate()` do, if something the run
-needs is still `unavailable`/`blocked`. Always call `check()` first and
-inspect `report.blocking` rather than relying on `generate()`'s exception
-alone:
+`advise()` does not refuse an incomplete request; `check()`/`generate()` do,
+if something the run needs is still `unavailable`/`blocked`. Always call
+`check()` first and inspect `report.blocking` rather than relying on
+`generate()`'s exception alone:
 
 ```python
 from goldilocks_core.service import check, generate

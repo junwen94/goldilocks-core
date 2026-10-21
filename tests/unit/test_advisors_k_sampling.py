@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import math
+
+import pytest
 from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.advisors.k_sampling import (
@@ -13,6 +16,9 @@ from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailabl
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
 _SILICON = Structure(Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]])
+_BCC_IRON = Structure.from_spacegroup(
+    "Im-3m", Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]]
+)
 
 
 def test_metal_gets_the_denser_default_k_distance() -> None:
@@ -217,6 +223,26 @@ def test_human_k_grid_off_the_ladder_leaves_k_index_none() -> None:
     assert state.value.mesh == (1, 2, 1)
     assert state.value.k_index is None
     assert state.value.k_distance_interval is None
+
+
+@pytest.mark.parametrize(
+    "human",
+    [KSamplingHumanInput(k_grid=(1, 1, 1)), KSamplingHumanInput(k_index=1)],
+    ids=["k_grid", "k_index"],
+)
+def test_gamma_only_mesh_has_an_open_k_distance_interval(
+    human: KSamplingHumanInput,
+) -> None:
+    """The Gamma-only mesh is rung 1, which every k-distance above the
+    largest reciprocal length |b| = 2 pi / a gives, so its interval has
+    no upper bound: None, never inf, which no strict JSON surface can
+    carry (#137)."""
+    state = k_sampling(is_metal(_BCC_IRON), _BCC_IRON, human=human)
+
+    assert state.ok
+    assert state.value.mesh == (1, 1, 1)
+    assert state.value.k_index == 1
+    assert state.value.k_distance_interval == (round(2 * math.pi / 2.87, 8), None)
 
 
 def test_human_k_index_with_a_shift() -> None:

@@ -12,7 +12,8 @@ complete on its own. The `mace-torch` package this needs is a research collabora
 with no PyPI release, and PyPI's own upload validation rejects a package that declares a
 direct git dependency in its metadata regardless. Without this setup, both features degrade
 to their next tier (LLM or heuristic for `is_magnetic`; an unranked candidate list with a
-warning for `--rank-with-mmace`) rather than failing.
+warning for `--rank-with-mmace`) rather than failing. Once it is set up, an `is_magnetic`
+model that fails to run fails the request instead of answering from the heuristic.
 
 ## 1. Install the model asset
 
@@ -102,17 +103,17 @@ current shell.
 A structure loading successfully is not proof the `ml` tier is live — check the `source`
 field explicitly:
 
-`Fe_bcc.cif` (bundled with this repo, and actually magnetic) makes a good check. Note:
-importing `mace` prints a UserWarning and a "cuequivariance ... will be disabled" line to
-stdout before anything else runs, ahead of the JSON `explain --json` prints — harmless, but
-it breaks a naive `json.load(sys.stdin)`. Skip to the first `{`:
+`Fe_bcc.cif` (bundled with this repo, and actually magnetic) makes a good check:
 
 ```bash
 STRUCTURE="$(uv run goldilocks examples path)/Fe_bcc.cif"
 uv run goldilocks explain "$STRUCTURE" --json | python3 -c \
-  "import json,sys; text=sys.stdin.read(); print(json.loads(text[text.index('{'):])['records']['is_magnetic']['source'])"
+  "import json,sys; print(json.load(sys.stdin)['records']['is_magnetic']['source'])"
 # expect: ml   (not: heuristic, or llm)
 ```
+
+Importing `mace` prints a UserWarning and a "cuequivariance ... will be disabled" line. Both
+go to stderr, so they never reach the JSON on stdout.
 
 For ordering ranking, a successful `--rank-with-mmace` run reports a `model_id` and real
 per-candidate energies instead of degrading with a warning:
@@ -151,26 +152,6 @@ switches from "Heuristic default" to **"Goldilocks-ML prediction"**. A "Magnetic
 column also appears automatically once a structure classifies as magnetic (it stays hidden
 for non-magnetic ones) — this is where `--rank-with-mmace` lives in the UI.
 
-**Known limitation (as of 2026-09-22): the "Run mMACE" button in the Workbench does not
-currently work.** Clicking it fails with *"mMACE-based magnetic ordering ranking failed to
-run: signal only works in main thread of the main interpreter"* — confirmed 100%
-reproducible, not intermittent. Root cause: `goldilocks-ml`'s
-`fm_fim_relax.seed_moments` guards a slow oxidation-state guess with a
-`signal.signal(signal.SIGALRM, ...)`-based timeout, which CPython only permits from the
-main thread of the main interpreter. `goldilocks-core`'s `POST /magnetic-orderings` HTTP
-handler is a synchronous (`def`, not `async def`) FastAPI route, which Starlette
-automatically runs in a worker thread — so this fails on *every* HTTP (and MCP, same
-reason) request that reaches it, not just occasionally. `rank_orderings()` already catches
-this and degrades gracefully (no crash, just an unranked list with a warning), but the
-feature is silently non-functional over HTTP/MCP until the upstream timeout mechanism is
-made thread-safe. Filed as
-[stfc/goldilocks-ml#95](https://github.com/stfc/goldilocks-ml/issues/95).
-
-**The CLI path is unaffected** (a single-threaded process is always "the main thread"):
-
-```bash
-uv run goldilocks magnetic-orderings "$STRUCTURE" --rank-with-mmace --json
-```
-
-is the reliable way to use ranking today; treat the Workbench button as broken until #95
-above is resolved.
+Clicking **Run mMACE** there ranks the candidates in a separate process, so editing a setting
+while it runs is unaffected; a second ranking waits for the first to finish. Rankings take
+minutes: rock-salt NiO's eight candidates take about two on a laptop CPU.

@@ -12,13 +12,16 @@ layer that exercises real argument parsing end to end.
 from __future__ import annotations
 
 import json
-import shutil
+import math
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 from pymatgen.core import Lattice, Structure
-from support import run_cli as _run_cli
+from support import run_cli as _run_cli, strict_json
 
+from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
 from goldilocks_core.capabilities import capabilities
 from goldilocks_core.examples.structures import structure
 
@@ -215,6 +218,110 @@ def test_examples_path_json_carries_the_same_directory() -> None:
     assert Path(document["path"]).is_dir()
 
 
+# Runs the real CLI with structure loading wrapped in a stand-in for a
+# library that prints mid-command, as mace does when it is first imported
+# (#183): through Python's sys.stdout, straight to fd 1, through C stdio
+# (buffered until the process exits), and from a child process that
+# inherits fd 1.
+_NOISY_LIBRARY_DRIVER = """
+import ctypes
+import os
+import subprocess
+import sys
+
+from goldilocks_core.cli import _common, core
+
+real_normalize_structure = _common.normalize_structure
+
+
+def noisy_normalize_structure(source):
+    print("python stdout marker")
+    os.write(1, b"fd 1 marker\\n")
+    ctypes.CDLL(None).printf(b"c stdio marker\\n")
+    subprocess.run([sys.executable, "-c", "print('child process marker')"], check=True)
+    return real_normalize_structure(source)
+
+
+_common.normalize_structure = noisy_normalize_structure
+core.main()
+"""
+_NOISE_MARKERS = (
+    "python stdout marker",
+    "fd 1 marker",
+    "c stdio marker",
+    "child process marker",
+)
+
+
+@pytest.mark.parametrize(
+    ("command", "example", "document_key"),
+    [
+        ("explain", "Si.cif", "records"),
+        ("magnetic-orderings", "Fe_bcc.cif", "candidates"),
+    ],
+)
+def test_json_stdout_is_only_the_document_when_a_library_prints(
+    command: str, example: str, document_key: str, tmp_path: Path
+) -> None:
+    """Library output lands on stderr, never in the ``--json`` document."""
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _NOISY_LIBRARY_DRIVER,
+            command,
+            str(structure(example)),
+            "--json",
+        ],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    document = json.loads(completed.stdout)
+    assert document_key in document
+    assert completed.stdout == json.dumps(document, indent=2, sort_keys=True) + "\n"
+    stderr = completed.stderr
+    assert all(marker in stderr for marker in _NOISE_MARKERS), stderr
+    # A Python print reaches stderr when it happens, not when stdout's
+    # buffer is flushed at exit.
+    assert stderr.index("python stdout marker") < stderr.index("child process marker")
+
+
+def test_serve_mcp_answers_initialize_on_stdout() -> None:
+    """``serve`` runs outside the CLI's stdout redirect: MCP's stdio
+    transport takes fd 1 for JSON-RPC only while ``sys.stdout`` is fd 1."""
+    pytest.importorskip("mcp")
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "goldilocks-tests", "version": "0"},
+        },
+    }
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "goldilocks_core.cli.core", "serve", "mcp"],
+        input=json.dumps(initialize) + "\n",
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    lines = completed.stdout.splitlines()
+    assert len(lines) == 1, completed.stderr
+    response = json.loads(lines[0])
+    assert response["id"] == 1
+    assert response["result"]["serverInfo"]["name"] == "goldilocks-core"
+
+
 def test_unknown_set_key_is_a_did_you_mean_operator_error() -> None:
     silicon = structure("Si.cif")
 
@@ -232,6 +339,36 @@ def test_unknown_hpc_profile_is_an_operator_error() -> None:
 
     assert completed.returncode == 2
     assert "Traceback" not in completed.stderr
+
+
+def test_explain_json_is_strict_json_for_a_gamma_only_mesh() -> None:
+    """Rung 1's open k-distance bound prints as null, never Infinity
+    (#137). Rung 1 of Si.cif's ladder (cubic, a = 5.431 A) is every
+    k-distance above |b| = 2 pi / a. No real assets needed: explain
+    reports every record either way."""
+    silicon = structure("Si.cif")
+
+    completed = _run_cli(
+        "explain", str(silicon), "--hpc", "scarf", "--set", "k_grid=[1,1,1]", "--json"
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    k_sampling = strict_json(completed.stdout)["records"]["k_sampling"]["value"]
+    assert k_sampling["k_index"] == 1
+    assert k_sampling["k_distance_interval"] == [round(2 * math.pi / 5.431, 8), None]
+
+
+def test_a_non_finite_set_value_is_an_operator_error() -> None:
+    """``1e999`` parses as inf: an invalid setting, not a k-distance (#137)."""
+    silicon = structure("Si.cif")
+
+    completed = _run_cli(
+        "explain", str(silicon), "--hpc", "scarf", "--set", "k_distance=1e999"
+    )
+
+    assert completed.returncode == 2
+    assert "Traceback" not in completed.stderr
+    assert "finite number" in completed.stderr
 
 
 def test_blocked_pipeline_reports_deduplicated_reasons_and_exits_nonzero() -> None:
@@ -475,7 +612,7 @@ class TestRunAndExplainAgainstRealAssets:
         )
 
     @pytest.mark.skipif(
-        shutil.which("enum.x") is None and shutil.which("multienum.x") is None,
+        not enumlib_installed(),
         reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
     )
     def test_run_afm_ordering_publishes_without_crashing(

@@ -2,20 +2,19 @@
 
 New in v2 (v2 epic 6, #6). Third of five per-step advisors
 (``occupations -> k_sampling -> n_irr_k -> nbnd -> convergence``,
-goldilocks-core-design.md:3239-3248, :3385). Uses the same
-``SpacegroupAnalyzer.get_ir_reciprocal_mesh`` call ``kmesh.py``'s own
-``build_gamma_kmesh_entries`` uses internally to fill in each
-``KMeshEntry.n_reduced_kpoints`` while enumerating a whole ladder -- this
-module makes the same computation available for one already-chosen mesh
-(the one ``advisors/k_sampling.py`` actually picked), without
-re-building the ladder from scratch.
+goldilocks-core-design.md:3239-3248, :3385). The one place core reduces
+a k-mesh by symmetry: one ``SpacegroupAnalyzer.get_ir_reciprocal_mesh``
+call on the mesh ``advisors/k_sampling.py`` picked. The ladder
+(``kmesh.build_gamma_kmesh_entries``) carries no reduced counts;
+reducing every rung of it cost seconds per ``advise()`` (#155).
 
 **Not guarded** against a structure ``SpacegroupAnalyzer`` cannot
-handle, for the same reason ``kmesh.py``'s own ladder builder is not
-guarded: the irreducible count and the full mesh size are both ordinary
-integers, so a caller cannot tell a fallback from a real answer, and
-core uses this number to size memory and choose ``npool`` -- a silently
-wrong value there is far more dangerous than a raised error.
+handle, and pymatgen is a required dependency, so there is no import
+fallback either. The irreducible count and the full mesh size are both
+ordinary integers, so a caller cannot tell a fallback from a real answer
+(a cubic cell reduces by up to 48x), and core uses this number to size
+memory and choose ``npool`` -- a silently wrong value there is far more
+dangerous than a raised error.
 
 **``nosym``**: QE's own flag to disable symmetry reduction entirely
 (every k-point in the full mesh is kept). When set, this returns the

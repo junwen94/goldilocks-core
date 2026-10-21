@@ -12,8 +12,8 @@ without touching disk, via ``bundle.bundle_files`` (a pure function).
 from __future__ import annotations
 
 import argparse
-import json
 import sys
+from typing import TextIO
 
 from goldilocks_core.bundle import ArchiveOutput, DirectoryOutput, bundle_files, publish
 from goldilocks_core.cli._common import (
@@ -24,6 +24,7 @@ from goldilocks_core.cli._common import (
     resolve_overrides,
     resolve_structure,
 )
+from goldilocks_core.cli._output import write_json
 from goldilocks_core.service import (
     advise,
     advise_dos,
@@ -119,7 +120,7 @@ def _run_scf(structure, args, hpc, overrides, ctx):
     return bundle_input, advice.warnings()
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: argparse.Namespace, out: TextIO) -> None:
     structure = resolve_structure(args.structure)
     hpc = resolve_hpc(args.hpc)
     overrides = resolve_overrides(args)
@@ -139,27 +140,24 @@ def run(args: argparse.Namespace) -> None:
         )
         publication = publish(bundle_input, output)
         if args.json:
-            print(json.dumps(publication, indent=2, sort_keys=True))
+            write_json(out, publication)
             return
-        print(f"published {publication['kind']} to {publication['path']}")
+        print(f"published {publication['kind']} to {publication['path']}", file=out)
         for file_path in publication["files"]:
-            print(f"  {file_path}")
+            print(f"  {file_path}", file=out)
         return
 
     files = bundle_files(bundle_input)
     if args.json:
-        print(
-            json.dumps(
-                {
-                    "files": [file["path"] for file in files],
-                    "records": records_to_json(bundle_input.records),
-                    "warnings": advice_warnings,
-                },
-                indent=2,
-                sort_keys=True,
-            )
+        write_json(
+            out,
+            {
+                "files": [file["path"] for file in files],
+                "records": records_to_json(bundle_input.records),
+                "warnings": advice_warnings,
+            },
         )
         return
-    print("memory-only preview (pass -o/--out to publish):")
+    print("memory-only preview (pass -o/--out to publish):", file=out)
     for file in files:
-        print(f"  {file['path']} ({len(file['content'])} bytes)")
+        print(f"  {file['path']} ({len(file['content'])} bytes)", file=out)

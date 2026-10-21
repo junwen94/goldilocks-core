@@ -15,15 +15,24 @@ docstring).
 Split into one module per command (``_run.py``/``_explain.py``/etc.),
 not kept flat here: this project's own import-surface ceiling
 (``scripts/check_complexity.py``) sets ``cli.core`` specifically to a
-*tighter* limit (9 origins/16 symbols) than the default, so the
+*tighter* limit (11 origins/16 symbols) than the default, so the
 dispatcher stays thin and every command's real logic lives in its own
-file -- one origin per command module, so a new command always needs
-this ceiling bumped by exactly one (see #62's own bump from 8).
+file -- one origin per command module plus ``failures`` and
+``cli._output``, so a new command always needs this ceiling bumped by
+exactly one (see #62's own bump from 8).
+
+stdout carries only the command's own output (#183): ``main()`` reserves
+it with ``cli._output.command_stdout`` before running any command but
+``serve``, and each command's ``run(args, out)`` writes there, so library
+prints, C extensions writing to fd 1 and child processes land on stderr.
+``serve`` runs unredirected because MCP's stdio transport claims fd 1
+itself, and only while ``sys.stdout`` is still fd 1.
 
 P1-P8 (goldilocks-core-design.md:3577-3584), carried forward:
 P1 every command has ``--json``; P2 JSON output is ``sort_keys=True``
-(each command's own ``json.dumps`` call); P3 ``--set``'s keys come from
-``capabilities()``, never hand-typed (``set_overrides.py``); P4 mutually
+(``cli._output.write_json``, the one place a command's JSON is
+serialized); P3 ``--set``'s keys come from ``capabilities()``, never
+hand-typed (``set_overrides.py``); P4 mutually
 -exclusive semantics via argparse subparsers; P5 ``--set``/``--config``
 validate immediately, before ``Service`` is ever reached
 (``set_overrides.build_overrides``); P6 user errors (any
@@ -50,6 +59,7 @@ from goldilocks_core.cli import (
     _serve,
     _settings,
 )
+from goldilocks_core.cli._output import command_stdout
 from goldilocks_core.failures import ExpectedFailure
 
 _COMMANDS = {
@@ -61,7 +71,6 @@ _COMMANDS = {
     "models": _models,
     "assets": _assets,
     "examples": _assets,
-    "serve": _serve,
     "magnetic-orderings": _magnetic_orderings,
 }
 
@@ -87,7 +96,11 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     try:
-        _COMMANDS[args.command].run(args)
+        if args.command == "serve":
+            _serve.run(args)
+        else:
+            with command_stdout() as out:
+                _COMMANDS[args.command].run(args, out)
     except (ExpectedFailure, FileExistsError) as error:
         parser.print_usage(sys.stderr)
         print(f"{parser.prog}: error: {error}", file=sys.stderr)

@@ -63,11 +63,12 @@ def is_metal(
 
 
 def _ml_is_metal(structure: Structure) -> bool | None:
-    """The published CGCNN classifier (v2 epic 11, #11), or ``None`` if
-    its model asset is not installed or goldilocks-ml is not importable
-    -- never a reason to fail ``is_metal()`` itself, the same
-    degrade-to-heuristic policy every ML-backed advisor in this codebase
-    already follows for a missing external dependency."""
+    """The published CGCNN classifier (v2 epic 11, #11), or ``None`` if it
+    is not set up (its model asset is not installed or fails verification),
+    in which case ``is_metal()`` falls back to its next tier. A model that is
+    set up but fails to load or predict raises, failing ``is_metal()``
+    itself: a silent heuristic answer would change the generated input
+    (#130)."""
     from goldilocks_core.ml.predict import MlModelUnavailable, predict
 
     try:

@@ -18,9 +18,10 @@ Workbench frontend drives (#87 layer 4), not this listing command.
 from __future__ import annotations
 
 import argparse
-import json
+from typing import TextIO
 
 from goldilocks_core.cli._common import resolve_structure
+from goldilocks_core.cli._output import write_json
 from goldilocks_core.service import list_magnetic_orderings, report_to_json
 
 
@@ -41,18 +42,18 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument("--json", action="store_true", help="Print JSON output.")
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: argparse.Namespace, out: TextIO) -> None:
     structure = resolve_structure(args.structure)
     report = list_magnetic_orderings(structure, rank_with_mmace=args.rank_with_mmace)
 
     if args.json:
-        print(json.dumps(report_to_json(report), indent=2, sort_keys=True))
+        write_json(out, report_to_json(report))
         return
 
     header = (
         f"{'label':10s} {'formula':10s} {'natoms':>6s} {'E/atom (eV)':>14s}  status"
     )
-    print(header)
+    print(header, file=out)
     for candidate in report.candidates:
         energy = (
             f"{candidate.energy_per_atom_ev:14.6f}"
@@ -64,7 +65,8 @@ def run(args: argparse.Namespace) -> None:
         print(
             f"{candidate.label:10s} "
             f"{candidate.structure.composition.reduced_formula:10s} "
-            f"{candidate.natoms:6d} {energy}  {status}{marker}"
+            f"{candidate.natoms:6d} {energy}  {status}{marker}",
+            file=out,
         )
     for warning in report.warnings:
-        print(f"warning: {warning.message}")
+        print(f"warning: {warning.message}", file=out)

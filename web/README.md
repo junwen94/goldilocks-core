@@ -76,12 +76,8 @@ field: its caption switches from "Heuristic default" to
 both features still work, just at a lower tier (LLM/heuristic classification,
 unranked ordering list) — never a failure.
 
-**Known limitation:** the "Run mMACE" button itself does not currently work
-(fails with a signal/threading error — see
-[mMACE setup](../docs/mmace-setup.md#6-start-the-workbench-with-mmace-enabled)
-and [stfc/goldilocks-ml#95](https://github.com/stfc/goldilocks-ml/issues/95)).
-Use `goldilocks magnetic-orderings --rank-with-mmace` from the CLI instead
-until that's fixed upstream.
+"Run mMACE" ranks in a separate backend process, so you can keep editing
+settings while it runs; a ranking can take minutes.
 
 ## Run in Docker
 

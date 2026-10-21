@@ -34,13 +34,17 @@ A `run` (or `explain`) request follows this path:
    runs three phases in a fixed order: `_analysis.analyze` (structure facts),
    `_system.system_advice` (system-wide advisors, including pseudopotential-
    table selection), and `_step.step_advice` (per-step k-point/occupation/
-   resource advisors). `advise()` always returns an `Advice`; it degrades a
-   field to `Unavailable`/`Blocked` rather than raising, for anything short
-   of a malformed structure.
+   resource advisors). `advise()` returns an `Advice` even for an incomplete
+   request: a field it cannot decide, because an input is missing, something
+   is not installed or configured, or the request leaves it open, is
+   `Unavailable`/`Blocked`. A fault raises and fails the request instead: a
+   model that is set up but fails to load or predict, an enumeration error
+   that is not the enumerator's own answer about the structure, or a worker
+   process that dies.
 3. `service.check(advice, *, purpose="scf", relax=None)` calls
-   `checks.check_all(...)`, the one place in the whole system allowed to
-   hard-fail a request. It returns a `CheckReport` whose `.ok`/`.blocking`
-   decide whether `generate()` may proceed.
+   `checks.check_all(...)`, the one place that refuses a request whose
+   decisions are incomplete or inconsistent. It returns a `CheckReport`
+   whose `.ok`/`.blocking` decide whether `generate()` may proceed.
 4. `service.generate(advice, report, *, ctx, purpose, relax)` raises
    `AdviceIncomplete` (an `ExpectedFailure`, see `failures.py`) if
    `report.ok` is false; otherwise it renders one or more `Step`s by calling
@@ -103,8 +107,9 @@ plain typed function call; `Advice` composes the three phases' own
 dataclasses (`analysis`, `system`, `step`) rather than one flat dataclass, so
 no single module needs to import every advisor's types directly. Every
 advisor degrades independently (`Resolved`/`Unavailable`/`Blocked`, see
-`resolution.py`) instead of raising; only `checks.py` decides whether a
-request may proceed to `generate()`.
+`resolution.py`) when it cannot decide its field, and lets a fault
+propagate; only `checks.py` decides whether a request may proceed to
+`generate()`.
 
 ## Find the code to change
 
@@ -183,11 +188,13 @@ The `default` asset profile also installs four ML models
 pseudopotential table. `analysis/is_metal.py`, `analysis/is_magnetic.py`, and
 `advisors/k_sampling.py` all call through `ml.predict` (`predict()` for the
 two classifiers, `predict_k_distance()` for `qrf-kpoints`), which resolves
-the registered asset via `AssetStore` and loads it through
-`goldilocks_ml.inference.load_model()`; each caller falls back to its own
-heuristic tier only when the model asset is not installed, fails checksum
-verification, or `goldilocks-ml` itself is not importable (see
-`ml/predict.py`).
+the registered asset via `AssetStore` and loads it once per process through
+`goldilocks_ml.inference.load_model()`. Each caller falls back to its next
+tier only when the model is not set up: its asset is not installed or fails
+checksum verification, or, for `is_magnetic`, the mMACE backbone
+(`GOLDILOCKS_MACE_BACKBONE`) is not configured or `mace`, `e3nn` or
+`sphericart` is not installed. Any other error loading or running a model
+fails the request (see `ml/predict.py`).
 
 Independent assets install concurrently with at most eight workers. Results
 retain profile order; each asset retains its own lock, checksum verification,
@@ -267,9 +274,30 @@ call the same handler functions. HTTP's `POST /run` returns a JSON summary by
 default, or ZIP bytes when the request body sets `respond_with: "archive"`.
 Workbench reads file hashes and sizes from the ZIP's `goldilocks.json`.
 
+Documents are strict JSON. HTTP's `/explain`, `/magnetic-orderings` and `/run`
+bodies, CLI `--json` output and `goldilocks.json` raise on a non-finite float
+instead of writing `Infinity`, `NaN` or a silent `null`. Records therefore
+never hold one: a bound or value with no finite number is `None` (for example
+the upper end of the Gamma-only mesh's `k_distance_interval`), and the
+override models reject `inf` and `nan`. MCP's text content, which pydantic
+serializes and would write as `Infinity`, depends on the same rule.
+
 There is no per-transport service object to own. `server/readiness.py`'s
 `AssetReadiness` caches asset-availability checks (used by `GET /ready`)
 across requests within one running process.
+
+Requests run concurrently on threads (FastAPI's threadpool, MCP's
+`asyncio.to_thread`), so no request may change process-wide state such as the
+working directory. pymatgen's enumlib caller `chdir`s the whole process, so
+magnetic-ordering enumeration runs on one long-lived worker process
+(`worker_process.py`), one call at a time, in a private temporary directory
+(`advisors/magnetic_enumeration.py`). mace sets torch's default dtype for the
+whole process, which breaks float32 models built on other threads, so the
+server and CLI processes never import it: `is_magnetic` predictions run on a
+second long-lived worker (`ml/mace_process.py`), and each mMACE ordering
+ranking runs in a fresh process, one ranking at a time
+(`advisors/magnetic_ordering_ml.py`). The Workbench static root is resolved to
+an absolute path once, when the app is created.
 
 Workbench keeps the editable draft and reviewed response in its browser store.
 Editing a draft marks the existing result out of date and prevents downloading

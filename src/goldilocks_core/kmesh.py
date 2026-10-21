@@ -1,5 +1,5 @@
-"""k-point mesh ladder math, ported verbatim from goldilocks-data's
-``kmesh.py`` (v2 epic 6, #6), replacing v1's ``kmesh/`` package (renamed to
+"""k-point mesh ladder math, ported from goldilocks-data's ``kmesh.py``
+(v2 epic 6, #6), replacing v1's ``kmesh/`` package (renamed to
 ``legacy_kmesh/`` to free this name -- see that package's own docstring).
 
 **Why replace rather than reuse v1's own ladder.** v1's
@@ -21,12 +21,24 @@ given probe distance to an integer mesh), which stays internally
 consistent precisely because the candidate list itself is never
 truncated.
 
-**Two quantities v1's ladder never computed**, both added here:
-``n_reduced_kpoints`` (the symmetry-irreducible k-point count, via
-pymatgen's ``SpacegroupAnalyzer`` -- memory and runtime scale with this,
-not the raw ``nk1*nk2*nk3`` product, so v1 lacking it systematically
-overestimated memory) and ``k_pra`` (k-points-per-reciprocal-atom, a
-cross-structure-comparable sampling-density metric).
+**``k_pra``**, which v1's ladder never computed, is added here:
+k-points per reciprocal atom, a cross-structure-comparable sampling-density
+metric.
+
+**No symmetry reduction.** goldilocks-data's ``KMeshEntry`` also carries
+``n_reduced_kpoints``, from one ``SpacegroupAnalyzer.get_ir_reciprocal_mesh``
+call per rung. Core's does not: nothing in core reads a rung's reduced
+count, and reducing every rung made one ladder build take seconds on a
+low-symmetry or small cell (#155). The ladder is arithmetic on the
+reciprocal lattice, and ``kindex`` is defined exactly as in
+goldilocks-data. ``advisors/n_irr_k.py`` is the one place a mesh is
+reduced: the mesh a step actually uses.
+
+**Rung 1's open bound is ``None``.** goldilocks-data stores the upper
+k-distance bound of rung 1, the Gamma-only mesh, as ``math.inf``. Core
+stores ``None``: strict JSON has no infinity, and the ``inf`` in a
+Gamma-only k_sampling record made ``/run`` fail and wrote ``Infinity``
+into ``goldilocks.json`` (#137).
 
 **Naming: no ``k_spacing``.** v1 conflated two different reciprocal-length
 conventions -- the solid-state (2*pi) convention (here, ``k_distance``,
@@ -35,27 +47,17 @@ convention (here, ``k_line_density``) -- into one ambiguous ``k_spacing``
 name. This module uses only ``k_distance``/``k_line_density``; the name
 ``k_spacing`` does not appear anywhere in v2.
 
-**Not guarded against a missing pymatgen.** goldilocks-data's own source
-was checked directly before this port (2026-09-13): it no longer wraps
-the ``SpacegroupAnalyzer`` import in a ``try/except ImportError`` that
-silently substitutes the *full* (non-reduced) mesh size -- a design-doc
-finding (goldilocks-core-design.md:1698-1721) that predates this
-particular read of the source and has since been fixed upstream. Nothing
-needed re-fixing on port; pymatgen is a required dependency of core
-regardless, so no such fallback belongs here either way -- a silently
-wrong ``n_reduced_kpoints`` (a cubic cell reduces by up to 48x) is far
-more dangerous than a raised error, since core uses this number to size
-memory and choose ``npool``.
-
-**Not ported**: goldilocks-data's own ``kindex_points`` helper, which
-builds ``goldilocks_data.sweeps.models.SweepPoint`` objects for its own
+**Not ported**: ``n_reduced_kpoints`` (above), and goldilocks-data's own
+``kindex_points`` helper, which builds
+``goldilocks_data.sweeps.models.SweepPoint`` objects for its own
 sweep-generation glue -- core has no such concept and must not take a
 dependency on the ``goldilocks_data`` package. Everything else here is
-the actual k-mesh math, kept behaviourally identical; only the loose
-``Any`` structure type hint is tightened to pymatgen's own ``Structure``
-(core, unlike data, already requires pymatgen unconditionally), and one
-``zip(xs[:-1], xs[1:])`` pairing is rewritten as ``itertools.pairwise``
-to satisfy core's lint config -- both mechanical, behaviour-preserving.
+the actual k-mesh math, kept behaviourally identical apart from rung 1's
+``None`` bound (above); only the loose ``Any`` structure type hint is
+tightened to pymatgen's own ``Structure`` (core, unlike data, already
+requires pymatgen unconditionally), and one ``zip(xs[:-1], xs[1:])``
+pairing is rewritten as ``itertools.pairwise`` to satisfy core's lint
+config -- both mechanical, behaviour-preserving.
 
 The ``is_metal``-based k_distance ceiling (metals >= 0.06 A^-1,
 semiconductors/insulators >= 0.12 A^-1 as a cost safety net) and the
@@ -72,7 +74,6 @@ from dataclasses import dataclass
 from itertools import pairwise
 
 from pymatgen.core import Structure
-from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 MIN_K_DISTANCE = 0.03
 """Resolution floor for the k-mesh ladder, in Angstrom^-1 on the
@@ -84,14 +85,17 @@ means nothing without it."""
 
 @dataclass(frozen=True, slots=True)
 class KMeshEntry:
-    """One gamma-centered k-mesh entry in increasing kindex order."""
+    """One gamma-centered k-mesh entry in increasing kindex order.
+
+    ``k_distance_interval`` is the ``(low, high)`` range of k-distances,
+    in Angstrom^-1, that give ``mesh``. ``high`` is ``None`` only for rung
+    1, the Gamma-only mesh, which every k-distance above ``low`` gives."""
 
     kindex: int
     mesh: tuple[int, int, int]
-    k_distance_interval: tuple[float, float]
+    k_distance_interval: tuple[float, float | None]
     k_line_density_interval: tuple[float, float] | None
     k_pra: float
-    n_reduced_kpoints: int
 
 
 def _reciprocal_lengths(
@@ -160,7 +164,9 @@ def build_gamma_kmesh_entries(
 
     ``kindex`` is 1-based and rung 1 is the Gamma-only ``(1, 1, 1)`` mesh,
     which the first probe always yields because it sits above every
-    ``|b_i|``.
+    ``|b_i|``. Rung 1's interval is open above, so its upper bound is
+    ``None``: a float ``inf`` there cannot be written as strict JSON
+    (#137).
 
     The rung is an ordinal position on this structure's ladder and counts
     nothing. It equals the densest axis count only where the axes step
@@ -179,31 +185,15 @@ def build_gamma_kmesh_entries(
     candidate set -- so it takes a near miss, and it is rare: 36 of the
     20,826 MC3D structures in goldilocks-data's SCF campaign hit it.
 
-    ``structure`` must be a real pymatgen ``Structure``: every rung is
-    reduced by symmetry, and a structure that cannot be analysed raises
-    rather than yielding an unreduced count.
+    Arithmetic only: no rung is reduced by symmetry
+    (``advisors/n_irr_k.py`` reduces the mesh a step uses).
     """
     candidates = generate_candidate_k_distances(structure, min_k_distance)
     if not candidates:
         return []
 
-    # One analyser for the whole ladder: it depends on the structure alone,
-    # and the reduction is by far the most expensive part of building a
-    # deep ladder.
-    #
-    # It is deliberately not guarded. ``n_reduced_kpoints`` and the full
-    # mesh size are both ordinary integers, so a caller cannot tell a
-    # fallback from a real count -- and a cubic cell reduces by up to 48x.
-    # goldilocks-core ports this module to size memory and to choose
-    # ``npool``, where a silently wrong value is far more dangerous than a
-    # raised error.
-    symmetry = SpacegroupAnalyzer(structure)
-
-    intervals = [
-        (
-            k_distance_to_mesh(structure, candidates[0] + 1.0),
-            (candidates[0], math.inf),
-        )
+    intervals: list[tuple[tuple[int, int, int], tuple[float, float | None]]] = [
+        (k_distance_to_mesh(structure, candidates[0] + 1.0), (candidates[0], None))
     ]
     for upper, lower in pairwise(candidates):
         intervals.append(
@@ -227,22 +217,6 @@ def build_gamma_kmesh_entries(
                 k_distance_interval=interval,
                 k_line_density_interval=line_interval,
                 k_pra=float(len(structure) * mesh[0] * mesh[1] * mesh[2]),
-                n_reduced_kpoints=len(
-                    symmetry.get_ir_reciprocal_mesh(mesh=mesh, is_shift=(0, 0, 0))
-                ),
             )
         )
     return entries
-
-
-def entry_payload(entry: KMeshEntry) -> dict[str, object]:
-    """Serialize a k-mesh entry to notebook/API-friendly primitive values."""
-    left, right = entry.k_distance_interval
-    return {
-        "kindex": entry.kindex,
-        "k_mesh": entry.mesh,
-        "k_pra": entry.k_pra,
-        "n_reduced_kpoints": entry.n_reduced_kpoints,
-        "k_dist_left": float(left),
-        "k_dist_right": None if math.isinf(right) else float(right),
-    }

@@ -13,15 +13,37 @@ native ``async def`` test function.
 from __future__ import annotations
 
 import asyncio
+import math
 from importlib.metadata import version as package_version
+from typing import Any
 
 import pytest
 
 pytest.importorskip("mcp")
 
 from mcp.server.mcpserver.exceptions import ToolError
+from support import strict_json
 
 from goldilocks_core.server.mcp import create_server
+
+_SILICON_GAMMA_INTERVAL = [round(2 * math.pi / 5.431, 8), None]
+"""Rung 1 of the bundled Si.cif's ladder (cubic, a = 5.431 A): every
+k-distance above |b| = 2 pi / a, with no upper bound."""
+
+
+def _gamma_only_call(server: Any, tool: str, silicon_cif: str) -> Any:
+    return asyncio.run(
+        server.call_tool(
+            tool,
+            {
+                "document": {
+                    "structure_content": silicon_cif,
+                    "hpc": "scarf",
+                    "overrides": {"k_grid": [1, 1, 1]},
+                }
+            },
+        )
+    )
 
 
 class TestServerIdentity:
@@ -166,6 +188,30 @@ class TestToolCalls:
 
         assert result.is_error is False
         assert "relax.in" in result.structured_content["files"]
+
+    def test_explain_tool_answers_a_gamma_only_mesh_with_strict_json(
+        self, silicon_cif: str
+    ) -> None:
+        """The tool's text content carried Infinity for rung 1's open
+        k-distance bound, while its structured content read null (#137)."""
+        result = _gamma_only_call(create_server(), "explain", silicon_cif)
+
+        assert result.is_error is False
+        records = strict_json(result.content[0].text)["records"]
+        interval = records["k_sampling"]["value"]["k_distance_interval"]
+        assert interval == _SILICON_GAMMA_INTERVAL
+        structured = result.structured_content["records"]["k_sampling"]["value"]
+        assert structured["k_distance_interval"] == _SILICON_GAMMA_INTERVAL
+
+    def test_run_tool_answers_a_gamma_only_mesh_with_strict_json(
+        self, silicon_fixture_table, silicon_cif: str
+    ) -> None:
+        result = _gamma_only_call(create_server(), "run", silicon_cif)
+
+        assert result.is_error is False
+        records = strict_json(result.content[0].text)["records"]
+        interval = records["k_sampling"]["value"]["k_distance_interval"]
+        assert interval == _SILICON_GAMMA_INTERVAL
 
     def test_unknown_top_level_argument_raises_tool_error(
         self, silicon_cif: str

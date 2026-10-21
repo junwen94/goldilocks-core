@@ -135,8 +135,8 @@ def advise_dos(
     store: AssetStore | None = None,
     fetch_missing: bool = False,
 ) -> DosAdvice:
-    """Diagnosis for all three of dos's steps, always returning -- same
-    "never aborts as a whole" promise ``advise()`` makes."""
+    """Diagnosis for all three of dos's steps, under the same contract as
+    ``advise()``: an undecided field degrades, a fault raises."""
     overrides = overrides or RunOverrides()
     scf = advise(
         structure,

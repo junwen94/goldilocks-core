@@ -16,7 +16,7 @@ Verified against a real published checkpoint (2026-09-19): for NiO, this
 correctly ranks antiferromagnetic candidates below the ferromagnetic guess,
 matching NiO's real, well-established antiferromagnetic ground state.
 
-Needs ``mace``, ``e3nn``, ``sphericart`` and ``ase`` (manual installs --
+Needs ``mace``, ``e3nn`` and ``sphericart`` (manual installs --
 goldilocks-ml has no extra for these; see its own README's "Use the
 is_magnetic classifier") and an mMACE backbone checkpoint, configured via
 ``GOLDILOCKS_MACE_BACKBONE`` rather than an ``AssetStore``-managed
@@ -25,27 +25,36 @@ either, and PyPI's own upload validation rejects a direct git dependency
 regardless (see goldilocks-ml's own
 ``deposits/magnetism/is_magnetic/mace_mlp/VENDORING_TODO.md``), so
 automating only the checkpoint's distribution would not make this feature
-installable end-to-end on its own. Neither is required at import time of
-*this* file -- only calling :func:`rank_orderings` touches them, so a
-missing one surfaces as :class:`MagneticOrderingMlUnavailable` naming what
-is missing, not a bare ``ImportError`` -- the same pattern
-``goldilocks_ml.models.magnetism._mace_backbone`` itself uses.
+installable end-to-end on its own. A missing one surfaces as
+:class:`MagneticOrderingMlUnavailable` naming what is missing.
+
+mace changes process-wide state (torch's default dtype, ``os.environ``,
+stdout; see ``ml/mace_process.py``), so this process never imports it: each
+ranking relaxes its candidates in a fresh process, and one ranking runs at a
+time, since each process holds torch and the 84 MB backbone (#130).
 """
 
 from __future__ import annotations
 
+import math
 import os
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
+from importlib.util import find_spec
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
+from goldilocks_core.worker_process import run_in_fresh_process
+
 if TYPE_CHECKING:
     from pymatgen.core import Structure
 
 CHECKPOINT_ENV = "GOLDILOCKS_MACE_BACKBONE"
+_MACE_PACKAGES = ("mace", "e3nn", "sphericart")
+_RANKING_SLOT = threading.BoundedSemaphore(1)
 
 
 class MagneticOrderingMlUnavailable(Exception):
@@ -59,11 +68,15 @@ class MagneticOrderingMlUnavailable(Exception):
 
 @dataclass(frozen=True, slots=True)
 class OrderingCandidate:
-    """One candidate's relaxed energy, for reporting alongside the winner."""
+    """One candidate's relaxed energy, for reporting alongside the winner.
+
+    ``energy_per_atom_ev`` is ``None`` when the relaxation ended at a
+    non-finite energy, which ``relax()`` flags INVALID: there is no number
+    to report, and strict JSON could not carry NaN or inf (#137)."""
 
     label: str
     structure: Structure
-    energy_per_atom_ev: float
+    energy_per_atom_ev: float | None
     status: str
 
 
@@ -75,8 +88,12 @@ class OrderingMlResult:
 
 
 def checkpoint_path() -> Path:
-    """Resolve the configured mMACE backbone checkpoint, or say why it
-    is not usable.
+    """Resolve the configured mMACE backbone checkpoint to an absolute path,
+    or say why it is not usable.
+
+    A relative ``GOLDILOCKS_MACE_BACKBONE`` is resolved against the current
+    directory, here: the child processes that load the checkpoint start in
+    the system temporary directory (``worker_process``).
 
     Shared by two callers: this module's own :func:`rank_orderings`, and
     ``ml.predict``'s ``is_magnetic`` classification (its published record
@@ -90,10 +107,29 @@ def checkpoint_path() -> Path:
             "enable mMACE-based magnetism predictions (ordering ranking or "
             "is_magnetic classification)"
         )
-    path = Path(raw)
+    path = Path(raw).expanduser().resolve()
     if not path.is_file():
-        raise MagneticOrderingMlUnavailable(f"{CHECKPOINT_ENV}={path} does not exist")
+        raise MagneticOrderingMlUnavailable(
+            f"{CHECKPOINT_ENV} points at {path}, which does not exist"
+        )
     return path
+
+
+def require_mace_packages() -> None:
+    """Raise :class:`MagneticOrderingMlUnavailable` naming whichever of
+    mace, e3nn and sphericart is not installed.
+
+    Shared by :func:`rank_orderings` and ``ml.predict``'s is_magnetic
+    classification. Looks the top-level packages up with ``find_spec``, which
+    imports none of them: only the child processes that run mMACE import
+    mace."""
+    missing = [name for name in _MACE_PACKAGES if find_spec(name) is None]
+    if missing:
+        raise MagneticOrderingMlUnavailable(
+            f"{', '.join(missing)} not installed: mMACE-based magnetism "
+            "predictions need mace, e3nn and sphericart, installed by hand "
+            "(see docs/mmace-setup.md)"
+        )
 
 
 def _seed_moments(candidate: Structure, limits: dict[str, float]) -> np.ndarray:
@@ -129,35 +165,67 @@ def rank_orderings(
     smaller -- cell than another candidate), so candidates are compared by
     energy *per atom*, never by total energy.
 
-    Raises :class:`MagneticOrderingMlUnavailable` if ``goldilocks-ml`` (with
-    ``mace``/``e3nn``/``sphericart``/``ase`` manually installed) or the
-    checkpoint is not available, always before relaxing any candidate --
-    and also if relaxing a candidate itself fails at runtime (confirmed
-    empirically, 2026-09-21: the pinned mace-torch fork commit
-    goldilocks-ml's own README documents does not implement the
+    The relaxations run in a fresh process; a concurrent call waits for the
+    ranking in progress.
+
+    Raises :class:`MagneticOrderingMlUnavailable` if the checkpoint is not
+    configured or mace, e3nn or sphericart is not installed, before any
+    process starts -- and also if relaxing a candidate itself fails at
+    runtime (confirmed empirically, 2026-09-21: the pinned mace-torch fork
+    commit goldilocks-ml's own README documents does not implement the
     ``use_collinear``/``constrain_magnitude`` keywords
     ``fm_fim_relax.relax`` passes to ``MagneticSCFMACE``, an upstream
     goldilocks-ml/mace-fork version mismatch, not a precondition this
     function can check up front). Either way, the caller sees the same
     "ranking unavailable, degrade to unranked" signal -- this is never a
-    reason to fail the caller's own request, precondition or not.
+    reason to fail the caller's own request, precondition or not. A ranking
+    process that dies raises ``worker_process.WorkerDied``.
     """
     if not candidates:
         raise ValueError("rank_orderings needs at least one candidate")
     checkpoint = checkpoint_path()
-    try:
-        from goldilocks_ml.models.magnetism._mace_backbone import safe_load
-        from goldilocks_ml.models.magnetism.magnetic_moments.fm_fim_relax.relax import (
-            INVALID,
-            domain_limits,
-            relax,
+    require_mace_packages()
+    with _RANKING_SLOT:
+        results = run_in_fresh_process(
+            _relax_candidates, tuple(candidates), checkpoint, device
         )
-    except ImportError as error:
+
+    from goldilocks_ml.models.magnetism.magnetic_moments.fm_fim_relax.relax import (
+        INVALID,
+    )
+
+    # A candidate relax() itself flagged INVALID has an energy that failed
+    # relax.py's own physicality checks (non-finite, |E/atom| past a sane
+    # bound, or a moment past the backbone's learned domain) -- confirmed
+    # empirically (2026-09-21): a diverged relaxation tends to land at an
+    # enormously negative energy (observed: -1.27e9 eV/atom on real Fe bcc
+    # candidates), which would otherwise always "win" a plain min() over
+    # physically reasonable candidates a few eV/atom apart. Never let an
+    # invalid number decide the winner, even though it is still reported
+    # (unfiltered) in ``candidates`` for the caller to see and discard.
+    # Only INVALID candidates can have no energy (None), so every candidate
+    # left has a finite one.
+    reliable = [result for result in results if result.status != INVALID]
+    if not reliable:
         raise MagneticOrderingMlUnavailable(
-            "goldilocks-ml, with mace/e3nn/sphericart/ase manually installed "
-            "(goldilocks-ml has no extra for these), is required for "
-            f"energy-based magnetic ordering selection: {error}"
-        ) from error
+            "every candidate's mMACE relaxation was flagged invalid "
+            "(non-finite or unphysical energy/moments); no reliable energy "
+            "comparison is possible"
+        )
+    winner = min(reliable, key=lambda result: result.energy_per_atom_ev)
+    return OrderingMlResult(winner=winner, candidates=results, model_id=checkpoint.name)
+
+
+def _relax_candidates(
+    candidates: tuple[tuple[str, Structure], ...], checkpoint: Path, device: str
+) -> tuple[OrderingCandidate, ...]:
+    """Ranking-process side of :func:`rank_orderings`: relax every candidate's
+    moments on the backbone at ``checkpoint``, in order."""
+    from goldilocks_ml.models.magnetism._mace_backbone import safe_load
+    from goldilocks_ml.models.magnetism.magnetic_moments.fm_fim_relax.relax import (
+        domain_limits,
+        relax,
+    )
 
     try:
         raw_model = safe_load(checkpoint, device)
@@ -169,11 +237,14 @@ def rank_orderings(
             relaxed = relax(
                 candidate, initial_moments, checkpoint=checkpoint, device=device
             )
+            energy_per_atom = relaxed.energy_ev / len(candidate)
             results.append(
                 OrderingCandidate(
                     label=label,
                     structure=candidate,
-                    energy_per_atom_ev=relaxed.energy_ev / len(candidate),
+                    energy_per_atom_ev=(
+                        energy_per_atom if math.isfinite(energy_per_atom) else None
+                    ),
                     status=relaxed.status,
                 )
             )
@@ -181,24 +252,4 @@ def rank_orderings(
         raise MagneticOrderingMlUnavailable(
             f"mMACE-based magnetic ordering ranking failed to run: {error}"
         ) from error
-
-    # A candidate relax() itself flagged INVALID has an energy that failed
-    # relax.py's own physicality checks (non-finite, |E/atom| past a sane
-    # bound, or a moment past the backbone's learned domain) -- confirmed
-    # empirically (2026-09-21): a diverged relaxation tends to land at an
-    # enormously negative energy (observed: -1.27e9 eV/atom on real Fe bcc
-    # candidates), which would otherwise always "win" a plain min() over
-    # physically reasonable candidates a few eV/atom apart. Never let an
-    # invalid number decide the winner, even though it is still reported
-    # (unfiltered) in ``candidates`` for the caller to see and discard.
-    reliable = [result for result in results if result.status != INVALID]
-    if not reliable:
-        raise MagneticOrderingMlUnavailable(
-            "every candidate's mMACE relaxation was flagged invalid "
-            "(non-finite or unphysical energy/moments); no reliable energy "
-            "comparison is possible"
-        )
-    winner = min(reliable, key=lambda result: result.energy_per_atom_ev)
-    return OrderingMlResult(
-        winner=winner, candidates=tuple(results), model_id=checkpoint.name
-    )
+    return tuple(results)

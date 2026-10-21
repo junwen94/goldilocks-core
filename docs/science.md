@@ -24,10 +24,11 @@ analysis fact:
 Ahead of the heuristic, a published CGCNN classifier (installed by default as
 `models/is-metal-classifier`) can resolve `is_metal` directly from structure;
 `is_metal` only falls back to the heuristic below when that model asset is
-not installed or `goldilocks-ml` is not importable. The heuristic itself
-excludes common anion-forming elements (O, N, S, Se, Te, F, Cl, Br, I, H)
-from the composition, then checks whether every remaining element is a metal
-according to pymatgen. It returns `metal` if so; otherwise it reports that
+not installed or fails verification. If the installed model fails to run,
+the request fails rather than silently using the heuristic. The heuristic
+itself excludes common anion-forming elements (O, N, S, Se, Te, F, Cl, Br, I,
+H) from the composition, then checks whether every remaining element is a
+metal according to pymatgen. It returns `metal` if so; otherwise it reports that
 composition alone can't confirm metallic character, which -- like an actual
 `metal` result -- still defaults to smearing, not fixed occupations, because
 assuming "fixed" on an undetected metal risks silent non-convergence. A
@@ -51,9 +52,10 @@ a mesh can leave energies, forces, or electronic properties unconverged.
 
 Without a grid or distance hint, Goldilocks first asks a published
 machine-learning k-point model (`qrf-kpoints`, installed by default) to
-predict a raw `k_distance` for the structure; only when that model asset is
-not installed or `goldilocks-ml` is not importable does it fall back to
-picking a target k-point spacing heuristically: 0.15 Å⁻¹ if `is_metal`
+predict a raw `k_distance` for the structure (if the installed model fails to
+run, the request fails); only when that model asset is not installed or fails
+verification does it fall back to picking a target k-point spacing
+heuristically: 0.15 Å⁻¹ if `is_metal`
 resolves to `metal`, otherwise 0.30 Å⁻¹ (this also covers the unavailable
 case, since a mesh that is too coarse on an undetected metal risks silent
 under-convergence, while a mesh that is too fine on an actual insulator only
@@ -87,7 +89,8 @@ Spin polarization allows different spin populations, decided by `is_magnetic`
 Once its ML asset is installed, `mace`/`e3nn`/`sphericart` are on hand (a
 manual install -- see the CLI reference), and `GOLDILOCKS_MACE_BACKBONE`
 points at a downloaded mMACE checkpoint, a published mMACE-embedding
-classifier answers directly; the heuristic tier otherwise enables it by
+classifier answers directly (if it then fails to run, the request fails);
+the heuristic tier otherwise enables it by
 default for lanthanides or actinides whenever present, and for transition
 metals only when a guessed oxidation state implies an open d-shell (a
 d-electron count other than 0 or 10 -- a closed or empty d-shell has no
@@ -117,9 +120,13 @@ energies from several actual calculations -- so this only gives one
 reasonable, deterministic starting point (the smallest compensated ordering
 found), for you to run and compare against the ferromagnetic guess yourself.
 This needs the external `enumlib` executables (`enum.x` or `multienum.x`,
-plus `makeStr.py`) on `PATH`; without them, above a site-count ceiling, or if
-no compensated ordering exists for your structure, it degrades to the
-ferromagnetic default with a warning rather than failing.
+plus `makeStr.py`, `makestr.x` or `makeStr.x`) on `PATH`. Without them, above a
+site-count ceiling, when pymatgen cannot enumerate your structure, when enumlib
+runs out of time, or if no compensated ordering exists for your structure, it
+degrades to the ferromagnetic default with a warning; any other enumeration
+error fails the request. Enumeration runs in a separate worker process, inside
+a private scratch directory, so it writes nothing to the current directory and
+concurrent requests cannot disturb each other.
 
 `uv run goldilocks magnetic-orderings` lists every candidate this same
 enumeration finds -- the ferromagnetic guess plus any compensated

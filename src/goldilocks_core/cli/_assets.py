@@ -9,7 +9,7 @@ asset-store errors are already ``ExpectedFailure`` subclasses that
 from __future__ import annotations
 
 import argparse
-import json
+from typing import TextIO
 
 from goldilocks_core.assets.runtime import (
     install as install_assets,
@@ -17,6 +17,7 @@ from goldilocks_core.assets.runtime import (
     verify as verify_assets,
 )
 from goldilocks_core.assets.store import AssetStore
+from goldilocks_core.cli._output import write_json
 from goldilocks_core.examples.structures import structures_path
 
 
@@ -45,13 +46,13 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     path_command.add_argument("--json", action="store_true", help="Print JSON output.")
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: argparse.Namespace, out: TextIO) -> None:
     if args.command == "examples":
         path = str(structures_path())
         if args.json:
-            print(json.dumps({"path": path}, indent=2, sort_keys=True))
+            write_json(out, {"path": path})
             return
-        print(path)
+        print(path, file=out)
         return
 
     store = AssetStore()
@@ -59,7 +60,7 @@ def run(args: argparse.Namespace) -> None:
         # Printed before install/status/verify runs, not after: if a
         # requested asset id doesn't exist, the user still immediately
         # knows where to go looking (design doc: "先打印 asset root").
-        print(f"asset root: {store.root}")
+        print(f"asset root: {store.root}", file=out)
 
     if args.assets_command == "install":
         assets = [
@@ -78,13 +79,7 @@ def run(args: argparse.Namespace) -> None:
         ]
 
     if args.json:
-        print(
-            json.dumps(
-                {"asset_root": str(store.root), "assets": assets},
-                indent=2,
-                sort_keys=True,
-            )
-        )
+        write_json(out, {"asset_root": str(store.root), "assets": assets})
         return
     for asset in assets:
-        print(f"{asset['id']}@{asset['version']}: {asset['state']}")
+        print(f"{asset['id']}@{asset['version']}: {asset['state']}", file=out)

@@ -67,12 +67,12 @@ def _structure_source(document: InlineStructureDocument) -> InlineStructureSourc
 
 
 def _records_document(records: dict[str, FieldState[object]]) -> dict[str, Any]:
-    """Plain ``dict``s, not ``ResolvedField`` instances: some callers
-    (``server/http.py``'s ``/run`` route, wrapping this in ``JSONResponse``
-    directly for its "archive" branch) bypass FastAPI's own pydantic
-    -aware response encoder, which is otherwise what turns a returned
-    model into JSON. Dumping here once makes every caller's output
-    JSON-safe regardless of how it gets serialized downstream."""
+    """Plain ``dict``s, not ``ResolvedField`` instances: ``server/http.py``
+    returns these documents as ``JSONResponse``, which encodes with
+    ``json.dumps`` and knows nothing of pydantic models. ``model_dump()``
+    leaves floats as they are, so the document is strict JSON only because
+    no record holds a non-finite float; ``JSONResponse`` raises on one
+    (#137)."""
     return {
         name: ResolvedField.from_state(state).model_dump()
         for name, state in records.items()

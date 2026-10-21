@@ -2,12 +2,14 @@
 (v2 epic 8, #8).
 
 Two-phase split, per goldilocks-core-design.md's own promise: ``advise()``
-always returns (diagnosis is always available, degrading field-by-field,
-never aborting as a whole); ``generate()`` (``service/_generate.py``)
-hard-fails via ``checks.check_all`` if anything needed is
-``unavailable``/``blocked`` (delivery has preconditions). CLI's
-``explain`` command is exactly ``advise()``; ``run`` is
-``advise()`` -> ``generate()`` -> submission script -> bundle.
+diagnoses field by field and never refuses a request as a whole (a field
+it cannot decide is ``unavailable``/``blocked``, not an exception);
+``generate()`` (``service/_generate.py``) hard-fails via
+``checks.check_all`` if anything needed is ``unavailable``/``blocked``
+(delivery has preconditions). A fault is not an undecided field: it
+propagates out of both. CLI's ``explain`` command is exactly
+``advise()``; ``run`` is ``advise()`` -> ``generate()`` -> submission
+script -> bundle.
 
 Only the single-step task (``scf_single_point`` on Quantum ESPRESSO) is
 wired here -- ``_step.py`` calls the per-step advisors and this module
@@ -44,11 +46,13 @@ def advise(
     store: AssetStore | None = None,
     fetch_missing: bool = False,
 ) -> Advice:
-    """Diagnosis: always returns, per the "diagnosis is always available"
-    promise. Never raises for a scientifically-incomplete request --
-    only a genuinely malformed ``structure`` (already rejected earlier,
-    by ``inputs.structure.normalize_structure``, before this is called)
-    would do that.
+    """Diagnosis: a field that cannot be decided is ``Unavailable`` or
+    ``Blocked``, so a scientifically incomplete request still returns an
+    ``Advice``. A fault raises instead: a model that is set up but fails
+    to load or predict (see ``ml/predict.py``), an enumeration error that
+    is not the enumerator's own answer about the structure (see
+    ``advisors/magnetic_config.py``), or a worker process that dies
+    (``worker_process.WorkerDied``).
 
     ``fetch_missing`` governs only the one real download this pipeline
     can trigger (installing the chosen pseudopotential table) -- P8's

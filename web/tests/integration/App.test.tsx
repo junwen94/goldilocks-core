@@ -498,6 +498,48 @@ describe("Goldilocks Workbench", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows the Gamma-only rung's interval as open above", async () => {
+    // Rung 1 (the Gamma-only mesh) has no upper k-distance bound; the
+    // record carries it as null (#137).
+    const user = userEvent.setup();
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [
+      Promise.resolve({
+        records: {
+          ...explainResult.records,
+          k_sampling: {
+            status: "resolved",
+            value: {
+              mesh: [1, 1, 1],
+              shift: [0, 0, 0],
+              k_distance: null,
+              k_distance_interval: [0.687, null],
+              k_index: 1,
+              warnings: [],
+            },
+            source: "human",
+          },
+        },
+        warnings: [],
+      }),
+    ];
+    const { container } = renderApp(core);
+
+    await openStructure(user, container);
+    await screen.findByRole("button", { name: "Download (.zip)" });
+
+    const calculation = advisorsPanel();
+    await user.click(within(calculation).getByText("K sampling"));
+
+    expect(
+      within(calculation).getByText(/Δk ≥ 0\.687 Å⁻¹/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Structure workspace" }),
+    ).toBeInTheDocument();
+  });
+
   it("announces structured scientific warnings returned with a recommendation", async () => {
     const user = userEvent.setup();
     const core = new CoreStub(Promise.resolve(capabilities));

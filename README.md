@@ -83,14 +83,10 @@ magnetic structure (e.g.
 **Analysis** column's "is magnetic" field: its caption switches to
 **"Goldilocks-ML prediction"** once the `ml` tier is live.
 
-Two gotchas worth knowing up front: `uv sync` silently removes the two
+One gotcha worth knowing up front: `uv sync` silently removes the two
 manually-installed packages again (they're not in `uv.lock`) -- re-run the
-`uv pip install` lines above after any `uv sync`; and the Workbench's own
-"Run mMACE" ranking button is currently broken
-([stfc/goldilocks-ml#95](https://github.com/stfc/goldilocks-ml/issues/95)) --
-use `uv run goldilocks magnetic-orderings --rank-with-mmace` from the CLI for
-ranking instead. Checksum verification and full troubleshooting:
-[mMACE setup](docs/mmace-setup.md).
+`uv pip install` lines above after any `uv sync`. Checksum verification and
+full troubleshooting: [mMACE setup](docs/mmace-setup.md).
 
 ### Generate inputs from the command line
 

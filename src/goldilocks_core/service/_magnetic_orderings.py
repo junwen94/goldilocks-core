@@ -16,12 +16,18 @@ generate) this is the first layer of.
 
 Enumeration never needs mMACE (it is
 ``advisors/magnetic_config.enumerate_magnetic_orderings``, the same
-enumlib-backed path the existing heuristic tier already uses) and always
-succeeds in the sense of returning at least the plain ferromagnetic
-candidate. Ranking is opt-in and can fail independently (missing
-``magnetism`` extra, unconfigured checkpoint) without failing the listing
-itself -- a caller who asked for ranking still gets every candidate back,
-just unranked, with a warning naming why.
+enumlib-backed path the existing heuristic tier already uses, run on a
+worker process in a private directory, #136) and returns at least the
+plain ferromagnetic candidate, with a warning naming why when enumlib gives
+no antiferromagnetic one; an enumeration fault (a scratch-directory
+``OSError``, a dead worker) propagates instead of looking like a
+ferromagnetic-only answer. Ranking is opt-in and can fail independently
+(checkpoint not configured, mace/e3nn/sphericart not installed, a library
+error inside the ranking process, or every candidate's relaxation flagged
+invalid) without failing the listing itself -- a caller who asked for
+ranking still gets every candidate back, just unranked, with a warning
+naming why. A ranking process that dies (``worker_process.WorkerDied``,
+#130) propagates.
 """
 
 from __future__ import annotations

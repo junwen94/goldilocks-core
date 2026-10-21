@@ -25,9 +25,14 @@ class HumanInput(BaseModel):
     ``extra="forbid"`` deliberately: a typo'd override field should
     fail loudly at construction, not be silently ignored the way an
     unrecognised dict key would be.
+
+    ``allow_inf_nan=False``: no setting has a meaningful infinite or NaN
+    value, and an override can reach a record, which is serialized as
+    strict JSON (#137). ``--set k_distance=1e999``, a TOML ``inf`` and a
+    JSON ``1e999`` all fail validation here.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class LlmInput(HumanInput):

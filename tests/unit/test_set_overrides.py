@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from goldilocks_core.set_overrides import (
@@ -280,6 +282,25 @@ class TestBuildOverrides:
         the generated input or only surface as a confusing QE-side
         runtime error, instead of a clean InvalidSetting here."""
         with pytest.raises(InvalidSetting):
+            build_overrides({key: value})
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("k_distance", math.inf),
+            # gt=0 alone admits +inf.
+            ("degauss", math.inf),
+            ("tot_magnetization", math.nan),
+            ("starting_magnetization", {"Fe": -math.inf}),
+        ],
+    )
+    def test_non_finite_number_raises_invalid_setting(
+        self, key: str, value: object
+    ) -> None:
+        """No setting has a meaningful infinite or NaN value: --set
+        k_distance=1e999, a TOML inf or a JSON 1e999 must fail here, not
+        reach a record that strict JSON cannot carry (#137)."""
+        with pytest.raises(InvalidSetting, match="finite number"):
             build_overrides({key: value})
 
     def test_empty_assignments_gives_all_defaults(self) -> None:

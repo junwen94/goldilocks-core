@@ -53,13 +53,13 @@ from __future__ import annotations
 import dataclasses
 import io
 import json
-import shutil
 
 import pytest
 from pymatgen.core import Lattice, Structure
 from support import run_cli, sssp_fixture_table_spec
 
 from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
+from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
 from goldilocks_core.advisors.n_irr_k import n_irr_k
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
@@ -222,9 +222,7 @@ class TestScenario3SocOnCerium:
         assert isinstance(advice.system.electron_count, Blocked)
 
 
-_ENUMLIB_MISSING = (
-    shutil.which("enum.x") is None and shutil.which("multienum.x") is None
-)
+_ENUMLIB_MISSING = not enumlib_installed()
 
 
 @pytest.mark.skipif(

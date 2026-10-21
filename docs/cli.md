@@ -73,6 +73,18 @@ an output flag: without `-o/--out` it prints `{"files": [...], "records":
 "kind": "directory"|"archive", "path": "..."}`. `explain --json` prints
 `{"records": {...}, "warnings": [...]}`.
 
+`--json` output and the published `goldilocks.json` are strict JSON: a value
+with no finite number is `null`, never `Infinity` or `NaN`. For example, the
+Gamma-only mesh (`k_index` 1) holds for every k-distance above its lower
+bound, so its `k_distance_interval` is `[low, null]`.
+
+A command writes only its own output to stdout: the `--json` document, or the
+plain-text report without `--json`. Anything else printed while it runs, such
+as the notice `mace` prints when it loads, output from a C extension, or a
+child process's output, goes to stderr, so `--json` output always parses as
+one JSON document. `serve` is the exception: `serve mcp` speaks JSON-RPC on
+stdout itself.
+
 ## Scientific controls
 
 Defaults are Quantum ESPRESSO single-point SCF, PBEsol, and efficiency-tier
@@ -99,8 +111,10 @@ its type, default, and description; a selection of commonly used keys:
 
 Quote `--set` values that contain brackets or braces (e.g. `--set
 'k_grid=[8,8,8]'`) so the shell does not glob-expand them; array and object
-values must be valid JSON. See [Pseudopotentials](pseudopotentials.md) for how
-tables are chosen, pinned, and checked for compatibility.
+values must be valid JSON. Numbers must be finite: `inf`, `nan` and values
+that overflow, such as `1e999`, are rejected as invalid settings. See
+[Pseudopotentials](pseudopotentials.md) for how tables are chosen, pinned, and
+checked for compatibility.
 
 `is_metal`, `is_magnetic`, and `k_distance` (v2 epic 11) each resolve through
 a `human > ml > llm > heuristic` priority: `explain --json`'s
@@ -120,8 +134,13 @@ orderings](#magnetic-orderings) `--rank-with-mmace` flag uses below --
 confirmed empirically (2026-09-21): the published record declares no
 automatic download for its mMACE backbone, so `is_magnetic` reuses
 whichever checkpoint that variable already points at rather than fetching
-a second copy. Missing it degrades to the heuristic tier, never a
-failure. There is still no flag to point `run`/`explain` at a custom
+a second copy. A model that is not set up (its asset not installed or
+failing verification, or for `is_magnetic` the packages or checkpoint
+missing) leaves the value to the next tier. Once a model is set up, an error
+loading or running it fails the command instead of being replaced by the
+heuristic answer. `is_magnetic` runs in a separate worker process, so mMACE
+never changes the torch settings of the command or server that asked for
+it. There is still no flag to point `run`/`explain` at a custom
 model file of your own. `uv run goldilocks models --json` reports every
 model, installed or not, so it also confirms whether one you expect to
 be usable actually is.
@@ -146,8 +165,11 @@ without re-deriving anything.
 mMACE potential energy surface and recommends the lowest energy-per-atom
 one -- needs both a `GOLDILOCKS_MACE_BACKBONE` environment variable
 pointing at a downloaded mMACE checkpoint file, and the same manual
-`mace`/`e3nn`/`sphericart`/`ase` install described above. Missing either
-degrades to an unranked listing with a warning, never a failure.
+`mace`/`e3nn`/`sphericart`/`ase` install described above. Missing either,
+or an error inside the relaxation itself, degrades to an unranked listing
+with a warning. Each ranking runs in its own process, one ranking at a time,
+so a long ranking never holds up `explain` or `run`; a ranking process that
+dies fails the request.
 
 ## Install and check assets
 
@@ -176,7 +198,8 @@ uv run --extra http goldilocks serve http
 ```
 
 The server defaults to **http://127.0.0.1:8000**. `--host` and `--port` change
-the address. `--static-root DIRECTORY` also serves a built Workbench.
+the address. `--static-root DIRECTORY` also serves a built Workbench; a relative
+`DIRECTORY` is resolved against the launch directory once, at startup.
 
 | Endpoint            | Purpose                                                                          |
 | ------------------- | --------------------------------------------------------------------------------- |

@@ -1,11 +1,12 @@
-"""checks: the one place in the whole system allowed to hard-fail.
+"""checks: the one place in the whole system allowed to refuse a request.
 
 New in v2 (v2 epic 6, #6); no v1 precedent. Per
 goldilocks-core-design.md's own summary (line 4007): "``check_all`` is
 the sole gateway for cross-parameter constraints, and also the boundary
 between ``advise`` and ``generate``." Every advisor in this codebase
-degrades field-by-field (``Resolved``/``Unavailable``/``Blocked``) and
-never raises; a runnable input is only refused here, by returning a
+degrades field-by-field (``Resolved``/``Unavailable``/``Blocked``)
+instead of refusing a request, and only a fault (such as a worker process
+that dies) raises; a runnable input is only refused here, by returning a
 non-empty ``CheckReport.blocking`` for a future ``generate()`` to read
 -- not by raising an exception. **By convention, any other ``raise`` in
 generation/advisor code found after this epic should be treated as

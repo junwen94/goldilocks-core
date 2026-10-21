@@ -80,14 +80,16 @@ own import-surface ceiling.
 **`models[]`/`approaches` (v2 epic 11, #11).** ``models[]`` lists every
 model ``ml/registry.toml`` registers (``ml.models.registered_models``),
 whether or not it is actually installed; ``approaches`` (design point
-(1)-b) is the honest "is ml actually usable right now" signal, checked
-per asset via ``AssetStore`` -- a fact/setting's ``ml_target`` only gains
-``"ml"`` once that specific asset resolves. ``is_metal``/``is_magnetic``
-(``ml.models.ML_CLASSIFIER_ROLES``) and ``k_distance`` (QRF95, checked
-separately -- see ``_ml_model_installed``) are wired this way; ``k_index``'s
-own ``ml_target`` names a real, published goldilocks-ml *ladder-rung*
-model that is a distinct thing from QRF95 and is not registered/wired
-yet (#90) -- it stays ``["human", "heuristic"]`` honestly rather than
+(1)-b) is the honest "is ml actually usable right now" signal -- a
+fact/setting's ``ml_target`` only gains ``"ml"`` once
+``ml.predict.model_ready`` passes the checks a prediction makes first: the
+model's asset installed and verified and, for ``is_magnetic``, the mMACE
+backbone configured and the mace packages installed (#130).
+``is_metal``/``is_magnetic`` (``ml.models.ML_CLASSIFIER_ROLES``) and
+``k_distance`` (QRF95) are wired this way; ``k_index``'s own
+``ml_target`` names a real, published goldilocks-ml *ladder-rung* model
+that is a distinct thing from QRF95 and is not registered/wired yet
+(#90) -- it stays ``["human", "heuristic"]`` honestly rather than
 claiming support that would raise on every real call.
 """
 
@@ -106,6 +108,7 @@ from goldilocks_core.analysis.is_magnetic import Magnetism
 from goldilocks_core.analysis.is_metal import Metallicity
 from goldilocks_core.assets.pseudopotentials.registry import load_tables
 from goldilocks_core.inputs.hpc import list_hpc_profiles, load_hpc_profile
+from goldilocks_core.ml.predict import model_ready
 from goldilocks_core.service import (
     AnalysisOverrides,
     KpointsOverrides,
@@ -139,50 +142,20 @@ _PROGRAM = "pw.x"
 def _approaches(ml_target: str | None) -> list[str]:
     """Design point (1)-b: ``ml_target`` is a static declaration;
     ``approaches`` is what's *actually* usable right now, computed as
-    ``["human"] + (["ml"] if that target has an installed model) +
+    ``["human"] + (["ml"] if that target's model would run) +
     ["heuristic"]``. v2 epic 11 (#11): ``is_metal``/``is_magnetic`` are
     registered, real, ``goldilocks_ml.inference``-loadable classifiers
     (``ml.models.ML_CLASSIFIER_ROLES``), and ``k_distance`` is QRF95
-    (#92) -- ``"ml"`` appears for any of these the moment its asset is
-    actually installed, not merely declared. ``k_index``'s ``ml_target``
-    names a different, not-yet-registered/wired ladder-rung model (#90),
-    so it still has no installed-model check to pass and keeps resolving
-    to ``["human", "heuristic"]`` honestly rather than claiming ml
-    support that would raise ``MlModelUnavailable`` on every real call."""
-    if ml_target is not None and _ml_model_installed(ml_target):
+    (#92) -- ``"ml"`` appears for any of these once
+    ``ml.predict.model_ready`` finds it set up, not merely declared.
+    ``k_index``'s ``ml_target`` names a different, not-yet-registered/wired
+    ladder-rung model (#90), which ``model_ready`` never reports ready, so
+    it keeps resolving to ``["human", "heuristic"]`` honestly rather than
+    claiming ml support that would raise ``MlModelUnavailable`` on every
+    real call."""
+    if ml_target is not None and model_ready(ml_target):
         return ["human", "ml", "heuristic"]
     return ["human", "heuristic"]
-
-
-def _ml_model_installed(ml_target: str) -> bool:
-    """``k_distance`` is checked separately from ``ML_CLASSIFIER_ROLES``
-    (#92): QRF95 predates that table and keeps its own ``QrfKpointsConfig``
-    asset shape (``ml.models.load_default_qrf_config`` -- see that
-    module's docstring for why), not a ``[defaults.k_distance]`` section
-    that table could look up generically."""
-    from goldilocks_core.assets.store import AssetCorrupt, AssetNotInstalled, AssetStore
-    from goldilocks_core.ml.models import (
-        ML_CLASSIFIER_ROLES,
-        load_default_qrf_config,
-        load_ml_classifier,
-    )
-
-    if ml_target == "k_distance":
-        asset = load_default_qrf_config().model_asset
-        if asset is None:
-            return False
-        try:
-            AssetStore().resolve_spec(asset)
-        except (AssetNotInstalled, AssetCorrupt):
-            return False
-        return True
-    if ml_target not in ML_CLASSIFIER_ROLES:
-        return False
-    try:
-        AssetStore().resolve_spec(load_ml_classifier(ml_target).asset)
-    except (AssetNotInstalled, AssetCorrupt):
-        return False
-    return True
 
 
 class Setting(TypedDict, total=False):

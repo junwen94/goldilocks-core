@@ -1,14 +1,13 @@
 """``goldilocks explain``: analysis+advisors only, printing every
-decision and its source (v2 epic 8, #8). Always returns -- per the
-"diagnosis is always available" promise, `service.advise()` never
-raises for a scientifically-incomplete request; only a genuinely
-malformed structure file does.
+decision and its source (v2 epic 8, #8). A scientifically incomplete
+request still prints: ``service.advise()`` marks what it cannot decide
+unavailable or blocked instead of raising.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
+from typing import TextIO
 
 from goldilocks_core.cli._common import (
     add_fetch_missing_argument,
@@ -19,6 +18,7 @@ from goldilocks_core.cli._common import (
     resolve_overrides,
     resolve_structure,
 )
+from goldilocks_core.cli._output import write_json
 from goldilocks_core.service import advise, advise_dos, advise_relax
 
 
@@ -31,7 +31,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     add_fetch_missing_argument(parser)
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: argparse.Namespace, out: TextIO) -> None:
     structure = resolve_structure(args.structure)
     hpc = resolve_hpc(args.hpc)
     overrides = resolve_overrides(args)
@@ -62,16 +62,10 @@ def run(args: argparse.Namespace) -> None:
         )
     records = advice.records()
     if args.json:
-        print(
-            json.dumps(
-                {
-                    "records": records_to_json(records),
-                    "warnings": advice.warnings(),
-                },
-                indent=2,
-                sort_keys=True,
-            )
+        write_json(
+            out,
+            {"records": records_to_json(records), "warnings": advice.warnings()},
         )
         return
     for name, state in sorted(records.items()):
-        print(f"{name}: {format_field_state(state)}")
+        print(f"{name}: {format_field_state(state)}", file=out)
