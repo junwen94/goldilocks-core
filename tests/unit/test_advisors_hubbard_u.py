@@ -84,6 +84,12 @@ def _perovskite(a_site: str, b_site: str) -> Structure:
     )
 
 
+def _fluorite(cation: str) -> Structure:
+    return Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(5.47), [cation, "O"], [[0, 0, 0], [0.25, 0.25, 0.25]]
+    )
+
+
 def _hubbard(structure: Structure, functional: str = "PBEsol", **overrides):
     return hubbard_u(
         structure, needs_correlation(composition(structure)), functional, **overrides
@@ -244,13 +250,98 @@ def test_missing_value_suggestion_keeps_the_elements_that_have_a_u() -> None:
     assert 'u_by_element={"Ni": 6.2, "Cf": <U in eV>}' in message
 
 
-def test_tabulated_u_carries_the_projector_and_starting_guess_warnings() -> None:
-    state = _hubbard(_rock_salt("Ni"))
+_PROJECTOR = "hubbard.projector_mismatch"
+_STARTING_NS = "hubbard.starting_ns_eigenvalue_missing"
+_MISSING_VALUE = "hubbard.u_value_missing"
+_UNUSED = "hubbard.u_by_element_unused"
 
-    assert _codes(state) == (
-        "hubbard.projector_mismatch",
-        "hubbard.starting_ns_eigenvalue_missing",
-    )
+
+@pytest.mark.parametrize(
+    ("structure", "functional", "overrides", "codes"),
+    [
+        pytest.param(
+            _rock_salt("Ni"), "PBEsol", {}, (_PROJECTOR, _STARTING_NS), id="NiO-table"
+        ),
+        pytest.param(
+            _perovskite("La", "Cu"),
+            "PBEsol",
+            {},
+            (_PROJECTOR, _STARTING_NS),
+            id="LaCuO3-table-and-no-u",
+        ),
+        pytest.param(
+            _perovskite("Cf", "Ni"),
+            "PBEsol",
+            {},
+            (_PROJECTOR, _STARTING_NS, _MISSING_VALUE),
+            id="CfNiO3-table-and-missing",
+        ),
+        pytest.param(
+            _rock_salt("Ni", "S"),
+            "PBEsol",
+            {"llm": HubbardULlmInput(needs_correlation=True)},
+            (_PROJECTOR, _STARTING_NS),
+            id="NiS-llm-forced-table",
+        ),
+        pytest.param(
+            _rock_salt("Ru"),
+            "PBEsol",
+            {"human": HubbardUHumanInput(u_by_element={"Ru": 4.0})},
+            (_STARTING_NS,),
+            id="RuO-user",
+        ),
+        pytest.param(
+            _rock_salt("Ni"),
+            "PBEsol",
+            {"human": HubbardUHumanInput(u_by_element={"Ni": 6.2})},
+            (_STARTING_NS,),
+            id="NiO-user-equal-to-table",
+        ),
+        pytest.param(
+            _fluorite("U"),
+            "PBEsol",
+            {"human": HubbardUHumanInput(u_by_element={"U": 4.0})},
+            (_STARTING_NS,),
+            id="UO2-user",
+        ),
+        pytest.param(
+            _rock_salt("Ni"),
+            "PBEsol",
+            {"human": HubbardUHumanInput(u_by_element={"Ni": 6.2, "Fe": 5.0})},
+            (_STARTING_NS, _UNUSED),
+            id="NiO-user-and-absent",
+        ),
+        pytest.param(
+            _rock_salt("Ni"),
+            "PBEsol",
+            {"human": HubbardUHumanInput(u_by_element={"Fe": 5.0})},
+            (_UNUSED,),
+            id="NiO-user-absent-only",
+        ),
+        pytest.param(_rock_salt("Ti"), "PBEsol", {}, (), id="TiO-no-u"),
+        pytest.param(
+            _rock_salt("Cf"), "PBEsol", {}, (_MISSING_VALUE,), id="CfO-missing"
+        ),
+        pytest.param(_rock_salt("Ni"), HYBRID_FUNCTIONAL, {}, (), id="NiO-hybrid"),
+        pytest.param(
+            _rock_salt("Ni"),
+            "PBEsol",
+            {"human": HubbardUHumanInput(needs_correlation=False)},
+            (),
+            id="NiO-human-off",
+        ),
+    ],
+)
+def test_warnings_follow_the_applied_u_values_whichever_branch_set_them(
+    structure: Structure, functional: str, overrides: dict, codes: tuple[str, ...]
+) -> None:
+    """#167: every applied U gets the starting-guess warning, a built-in one
+    also the projector-mismatch warning (a u_by_element value's source is
+    unknown), and a decision without a U gets neither. NiO gets the same
+    ``U Ni-3d 6.2`` card from the table and from u_by_element={"Ni": 6.2}."""
+    state = _hubbard(structure, functional, **overrides)
+
+    assert _codes(state) == codes
 
 
 def test_projector_mismatch_warning_names_the_vasp_derived_values() -> None:

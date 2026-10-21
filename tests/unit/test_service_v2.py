@@ -781,6 +781,40 @@ def test_user_u_by_element_reaches_the_generated_card(hpc, nickel_oxide_store) -
     assert "HUBBARD (ortho-atomic)\n  U  Ni-3d  5\n" in content
 
 
+@pytest.mark.parametrize(
+    ("overrides", "hubbard_codes"),
+    [
+        pytest.param(
+            {},
+            ["hubbard.projector_mismatch", "hubbard.starting_ns_eigenvalue_missing"],
+            id="table",
+        ),
+        pytest.param(
+            {"u_by_element": {"Ni": 6.2}},
+            ["hubbard.starting_ns_eigenvalue_missing"],
+            id="user-equal-to-table",
+        ),
+    ],
+)
+def test_hubbard_warnings_reach_the_top_level_list_for_table_and_user_u(
+    hpc, nickel_oxide_store, overrides, hubbard_codes
+) -> None:
+    """#167: the table and u_by_element={"Ni": 6.2} give NiO the same U, but
+    the user run used to carry no Hubbard warning, so none reached
+    ``Advice.warnings()``."""
+    advice = advise(
+        _rock_salt_nio(),
+        hpc=hpc,
+        overrides=build_overrides(overrides),
+        store=nickel_oxide_store,
+    )
+
+    codes = [
+        item["code"] for item in advice.warnings() if item["category"] == "hubbard"
+    ]
+    assert codes == hubbard_codes
+
+
 def test_pseudo_requirements_reflects_first_pass_spin_orbit(
     silicon, hpc, installed_table
 ) -> None:

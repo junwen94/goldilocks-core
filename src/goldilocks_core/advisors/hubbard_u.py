@@ -6,7 +6,9 @@ that gets +U, either from the built-in table below or from a human
 ``u_by_element`` (which replaces the table). The QE writers render a
 HUBBARD card iff ``u_values`` is non-empty, so every resolved decision is
 renderable: no Hubbard outcome can pass ``checks.check_all`` and then fail
-in a writer (#135). An element without a U is plain DFT.
+in a writer (#135). An element without a U is plain DFT. The decision's
+warnings follow from its entries alone, whichever branch produced them
+(``_decision``, #167).
 
 **When.** The ``needs_correlation`` fact (a transition metal, lanthanide or
 actinide with O or F, Materials Project's screening rule) or a human/LLM
@@ -399,13 +401,16 @@ def _decision(
     unused: tuple[str, ...] = (),
 ) -> HubbardUDecision:
     """Builds every resolved decision, so its warnings follow from its
-    entries: built-in values carry the projector and starting-guess
-    warnings, each element without a published U one
-    ``hubbard.u_value_missing``, and unused ``u_by_element`` keys one
-    ``hubbard.u_by_element_unused``."""
+    entries whichever branch produced them (#167): any applied U carries
+    the starting-guess warning and a built-in one also the projector
+    warning (a ``u_by_element`` value's source is unknown), each element
+    without a published U adds ``hubbard.u_value_missing``, and unused
+    ``u_by_element`` keys add ``hubbard.u_by_element_unused``."""
     warnings: list[Warning] = []
     if any(entry.value_source == "table" for entry in u_values):
-        warnings += [PROJECTOR_MISMATCH_WARNING, STARTING_NS_EIGENVALUE_WARNING]
+        warnings.append(PROJECTOR_MISMATCH_WARNING)
+    if u_values:
+        warnings.append(STARTING_NS_EIGENVALUE_WARNING)
     warnings += [_u_value_missing(symbol, u_values, missing) for symbol in missing]
     if unused:
         warnings.append(_u_by_element_unused(unused, applied=bool(u_values)))

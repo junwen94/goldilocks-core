@@ -186,12 +186,14 @@ one). When no element gets a U, the input has no HUBBARD card.
 These values come from different codes and fits, and none was derived with
 the ortho-atomic projectors the generated input uses: every built-in U
 carries a `hubbard.projector_mismatch` warning that lists the VASP-derived
-values, and a `hubbard.starting_ns_eigenvalue_missing` warning, since +U
-calculations can converge to a metastable occupation matrix and Goldilocks
-supplies no initial guess. U also depends on oxidation state and
-environment, so treat one value per element as a starting point: test your
-property against U, or calibrate it (for example by linear response with
-`hp.x`, which Goldilocks does not set up).
+values. Every applied U, built-in or from `u_by_element`, carries a
+`hubbard.starting_ns_eigenvalue_missing` warning, since +U calculations can
+converge to a metastable occupation matrix and Goldilocks supplies no
+initial guess; a `u_by_element` value gets no projector warning, because
+Goldilocks does not know how it was derived. U also depends on oxidation
+state and environment, so treat one value per element as a starting point:
+test your property against U, or calibrate it (for example by linear
+response with `hp.x`, which Goldilocks does not set up).
 
 `u_by_element` replaces the table: only the listed elements present in the
 structure get +U, e.g. `--set 'u_by_element={"Ti": 4.0}'`, and listed
