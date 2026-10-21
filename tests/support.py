@@ -53,7 +53,7 @@ def default_profile_installed() -> bool:
 
 
 def run_cli(
-    *arguments: str, cwd: Path | None = None
+    *arguments: str, cwd: Path | None = None, timeout: float | None = None
 ) -> subprocess.CompletedProcess[str]:
     """Spawn the real ``goldilocks`` CLI entry point as a subprocess --
     shared by every integration test that exercises argument parsing
@@ -64,6 +64,7 @@ def run_cli(
         check=False,
         capture_output=True,
         text=True,
+        timeout=timeout,
     )
 
 

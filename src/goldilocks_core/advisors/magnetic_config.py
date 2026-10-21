@@ -46,17 +46,20 @@ input `structure` unless a caller explicitly opts in with
 reason SOC stays opt-in below (real cost: this calls out to
 `pymatgen.analysis.magnetism.analyzer.MagneticStructureEnumerator`, which
 shells out to the external `enumlib` executables and can take seconds, not
-milliseconds). Finding which magnetic configuration is the true ground
-state needs comparing several SCF total energies -- explicitly an
-agent-level job in the design doc (goldilocks-core-design.md:2076), not
-something this stateless, single-call heuristic tier can or should attempt.
-What this tier gives instead is a *reasonable, deterministic* compensated
-ordering (the smallest antiferromagnetic candidate the enumerator finds),
-useful as a real starting point for a human/agent to actually run and
-compare against the plain ferromagnetic guess -- degrading back to the FM
-identity pass-through, with a warning naming why, whenever enumlib is
-missing, the structure exceeds a small site-count ceiling, or no
-compensated ordering exists at all. See `_attempt_afm_relabeling` below.
+milliseconds; it runs on a worker process in a private directory, see
+`advisors/magnetic_enumeration.py`, #136). Finding which magnetic
+configuration is the true ground state needs comparing several SCF total
+energies -- explicitly an agent-level job in the design doc
+(goldilocks-core-design.md:2076), not something this stateless, single-call
+heuristic tier can or should attempt. What this tier gives instead is a
+*reasonable, deterministic* compensated ordering (the smallest
+antiferromagnetic candidate the enumerator finds), useful as a real starting
+point for a human/agent to actually run and compare against the plain
+ferromagnetic guess -- degrading back to the FM identity pass-through, with
+a warning naming why, whenever enumlib is missing, the structure exceeds a
+small site-count ceiling, pymatgen cannot enumerate it, enumlib runs out of
+time, or no compensated ordering exists at all. Any other enumeration error
+propagates. See `_afm_candidates_or_reason` below.
 
 SOC stays opt-in, matching v1's own policy: `needs_soc` only ever produces a
 warning recommending it be considered, never enables it automatically --
@@ -96,13 +99,16 @@ package's invention) rather than either guessing a `z_valence` or leaving
 
 from __future__ import annotations
 
-import shutil
 from dataclasses import dataclass
 from typing import Literal
 
-from pymatgen.analysis.magnetism.analyzer import MagneticStructureEnumerator
+from numpy.linalg import LinAlgError
 from pymatgen.core import Structure
 
+from goldilocks_core.advisors.magnetic_enumeration import (
+    enumerate_orderings,
+    enumlib_installed,
+)
 from goldilocks_core.analysis.composition import composition
 from goldilocks_core.analysis.is_magnetic import Magnetism
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
@@ -443,51 +449,52 @@ def _afm_candidates_or_reason(
     """Return every antiferromagnetic-origin candidate pymatgen's own
     ``MagneticStructureEnumerator`` (itself backed by
     ``MagOrderingTransformation``'s symmetry-aware enumeration) finds for
-    ``structure``, or an empty tuple plus the reason it could not try.
+    ``structure``, or an empty tuple plus the reason there is none.
 
     Shared by ``_attempt_afm_relabeling`` (picks the smallest candidate, a
     deterministic starting point) and ``enumerate_magnetic_orderings``
     (lists every candidate, for a caller -- e.g. an mMACE-based energy
-    ranking, #87 -- that wants to compare more than one). The failure modes
-    here are numerous and not fully enumerable up front (missing external
-    executables, enumlib subprocess errors, pymatgen-internal
-    symmetry-analysis failures on an awkward structure) -- consistent with
-    this module's own "never let external-library failure modes become a
-    raise" policy, the broad ``except Exception`` below is deliberate, not
-    a caught-in-passing accident."""
+    ranking, #87 -- that wants to compare more than one). The enumerator
+    runs on a worker process in a private directory
+    (``magnetic_enumeration.enumerate_orderings``, #136).
+
+    Only the enumerator's own answers about the structure become a reason,
+    each with a fixed wording that quotes no exception text: pymatgen's
+    ``ValueError`` (enumlib found no ordering, or the enumerator refused the
+    structure as disordered, non-collinear, non-magnetic or with too many
+    magnetic sites) and enumlib's ``TimeoutError``. Anything else propagates
+    -- an ``OSError`` from a scratch directory, numpy's ``LinAlgError`` (a
+    ``ValueError`` subclass), a dead worker process -- because it is a
+    fault, not an answer about this structure."""
     if len(structure) > _MAX_SITES_FOR_AFM_ENUMERATION:
         return (), (
             f"structure has {len(structure)} sites, over the "
             f"{_MAX_SITES_FOR_AFM_ENUMERATION}-site ceiling this "
             "heuristic enumerates within"
         )
-    if shutil.which("enum.x") is None and shutil.which("multienum.x") is None:
+    if not enumlib_installed():
         return (), (
-            "antiferromagnetic ordering needs the enumlib executables "
-            "(enum.x/multienum.x plus makeStr.py) on PATH and none "
-            "were found"
+            "antiferromagnetic ordering needs the enumlib executables on PATH "
+            "(enum.x or multienum.x, plus makestr.x, makeStr.x or makeStr.py) "
+            "and at least one was not found"
         )
 
     try:
-        enumerator = MagneticStructureEnumerator(
+        orderings = enumerate_orderings(
             structure,
             default_magmoms=dict.fromkeys(magnetic_elements, 5.0),
             strategies=("ferromagnetic", "antiferromagnetic"),
             truncate_by_symmetry=True,
             max_orderings=16,
         )
-    except Exception as error:  # noqa: BLE001 -- see docstring
-        return (), f"AFM enumeration failed ({error})"
+    except LinAlgError:
+        raise
+    except ValueError:
+        return (), "pymatgen could not enumerate magnetic orderings for this structure"
+    except TimeoutError:
+        return (), "enumlib did not finish within its time limit"
 
-    candidates = tuple(
-        candidate
-        for candidate, origin in zip(
-            enumerator.ordered_structures,
-            enumerator.ordered_structure_origins,
-            strict=True,
-        )
-        if origin == "afm"
-    )
+    candidates = tuple(candidate for candidate, origin in orderings if origin == "afm")
     if not candidates:
         return (), "no compensated antiferromagnetic ordering was found"
     return candidates, None
@@ -506,10 +513,10 @@ def enumerate_magnetic_orderings(
     Unlike ``_attempt_afm_relabeling``, this never picks a winner -- it is
     the listing half of #87's "enumerate, then optionally rank with mMACE,
     then generate" split. Returns just the ``"fm"`` entry, with no
-    antiferromagnetic candidates, whenever AFM enumeration is unavailable
-    (oversized structure, missing enumlib, enumeration failure, or no
-    compensated ordering found); this function never raises for those
-    cases, matching this module's existing degrade-not-raise policy.
+    antiferromagnetic candidates, whenever ``_afm_candidates_or_reason``
+    gives a reason (oversized structure, missing enumlib, a structure
+    pymatgen cannot enumerate, enumlib's time limit, or no compensated
+    ordering found); any other enumeration error propagates.
 
     The second return value is ``_afm_candidates_or_reason``'s own reason
     whenever no AFM candidate was found, ``None`` otherwise -- surfaced

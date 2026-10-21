@@ -17,7 +17,9 @@ build lying around either. Whichever is found is mounted at ``/`` --
 same origin as the API, no CORS (v2 epic 12, #12). ``cli/_serve.py``'s
 own ``--static-root`` flag (#59) is the other, CLI-facing way to reach
 the first tier -- the Docker image uses the env var instead since it has
-no CLI invocation to add a flag to.
+no CLI invocation to add a flag to. A relative root is resolved against
+the cwd once, when the app is created, so later requests never depend on
+the process's cwd (#136).
 
 **Strict JSON documents.** ``/explain``, ``/magnetic-orderings`` and
 ``/run`` return a ``JSONResponse`` rather than letting FastAPI serialize
@@ -133,9 +135,14 @@ def _mount_workbench(app: Any, static_root: str | Path | None) -> None:
     # Mounted last, after every API route above: Starlette matches routes
     # in registration order, so the explicit routes still win even though
     # this Mount's prefix ("/") would otherwise swallow everything.
-    # `check_dir` (default True) already fails fast with a RuntimeError if
-    # static_root doesn't exist -- no need to duplicate that check here.
-    app.mount("/", StaticFiles(directory=static_root, html=True), name="workbench")
+    # Resolved once, here: StaticFiles joins a relative directory with
+    # whatever the cwd is on every request (#136). `check_dir` (default
+    # True) still fails fast with a RuntimeError if it doesn't exist.
+    app.mount(
+        "/",
+        StaticFiles(directory=Path(static_root).resolve(), html=True),
+        name="workbench",
+    )
 
 
 def _register_error_handlers(app: Any) -> None:

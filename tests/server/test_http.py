@@ -107,6 +107,29 @@ class TestWorkbenchStaticMount:
 
         assert "Param" in response.text
 
+    def test_a_relative_static_root_keeps_serving_after_the_cwd_changes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#136: ``poe stage`` passes ``--static-root web/dist``; resolving
+        it against whatever the cwd is at request time made every static
+        GET a 404 once something moved the server's cwd."""
+        launch_directory = tmp_path / "launch"
+        (launch_directory / "dist").mkdir(parents=True)
+        (launch_directory / "dist" / "index.html").write_text(
+            "<!doctype html><title>Workbench</title>"
+        )
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(launch_directory)
+        client = TestClient(create_app(static_root="dist"))
+        assert client.get("/").status_code == 200
+
+        monkeypatch.chdir(elsewhere)
+        response = client.get("/")
+
+        assert response.status_code == 200
+        assert "Workbench" in response.text
+
     def test_root_serves_the_bundled_frontend_when_one_ships_with_this_install(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

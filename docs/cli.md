@@ -190,7 +190,8 @@ uv run --extra http goldilocks serve http
 ```
 
 The server defaults to **http://127.0.0.1:8000**. `--host` and `--port` change
-the address. `--static-root DIRECTORY` also serves a built Workbench.
+the address. `--static-root DIRECTORY` also serves a built Workbench; a relative
+`DIRECTORY` is resolved against the launch directory once, at startup.
 
 | Endpoint            | Purpose                                                                          |
 | ------------------- | --------------------------------------------------------------------------------- |

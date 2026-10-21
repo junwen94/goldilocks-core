@@ -117,9 +117,13 @@ energies from several actual calculations -- so this only gives one
 reasonable, deterministic starting point (the smallest compensated ordering
 found), for you to run and compare against the ferromagnetic guess yourself.
 This needs the external `enumlib` executables (`enum.x` or `multienum.x`,
-plus `makeStr.py`) on `PATH`; without them, above a site-count ceiling, or if
-no compensated ordering exists for your structure, it degrades to the
-ferromagnetic default with a warning rather than failing.
+plus `makeStr.py`, `makestr.x` or `makeStr.x`) on `PATH`. Without them, above a
+site-count ceiling, when pymatgen cannot enumerate your structure, when enumlib
+runs out of time, or if no compensated ordering exists for your structure, it
+degrades to the ferromagnetic default with a warning; any other enumeration
+error fails the request. Enumeration runs in a separate worker process, inside
+a private scratch directory, so it writes nothing to the current directory and
+concurrent requests cannot disturb each other.
 
 `uv run goldilocks magnetic-orderings` lists every candidate this same
 enumeration finds -- the ferromagnetic guess plus any compensated

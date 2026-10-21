@@ -1,8 +1,7 @@
 """``goldilocks explain``: analysis+advisors only, printing every
-decision and its source (v2 epic 8, #8). Always returns -- per the
-"diagnosis is always available" promise, `service.advise()` never
-raises for a scientifically-incomplete request; only a genuinely
-malformed structure file does.
+decision and its source (v2 epic 8, #8). A scientifically incomplete
+request still prints: ``service.advise()`` marks what it cannot decide
+unavailable or blocked instead of raising.
 """
 
 from __future__ import annotations

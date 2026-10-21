@@ -72,8 +72,8 @@ def advise_relax(
     store: AssetStore | None = None,
     fetch_missing: bool = False,
 ) -> RelaxAdvice:
-    """Diagnosis, always returning -- same "never aborts as a whole"
-    promise ``advise()`` makes. ``relax_settings`` reads
+    """Diagnosis, under the same contract as ``advise()``: an undecided
+    field degrades, a fault raises. ``relax_settings`` reads
     ``advice.step.kpoints.convergence`` (for ``etot_conv_thr``) and
     ``advice.analysis.symmetry``/``.geometry`` (for vc-relax's
     ``cell_dofree`` hexagonal-2D default) off the very same ``Advice``

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 
 import pytest
 from pymatgen.core import Lattice, Structure
@@ -14,6 +13,7 @@ from support import (
 )
 
 from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
+from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
 from goldilocks_core.advisors.parallelisation import ParallelisationHumanInput
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
@@ -381,7 +381,7 @@ def test_forced_spin_polarization_survives_generation_on_a_labeled_structure(
 
 
 @pytest.mark.skipif(
-    shutil.which("enum.x") is None and shutil.which("multienum.x") is None,
+    not enumlib_installed(),
     reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
 )
 class TestAfmRelabeling:

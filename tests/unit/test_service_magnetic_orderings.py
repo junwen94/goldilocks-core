@@ -17,7 +17,7 @@ _ROCK_SALT_FEO = Structure(
     Lattice.cubic(4.3), ["Fe", "O"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
 )
 
-# Mimics real `MagneticStructureEnumerator` output: two Fe sites carrying
+# Mimics a real `enumerate_orderings` candidate: two Fe sites carrying
 # opposite `Species.spin`, the sign information `_label_by_spin` splits into
 # distinct QE labels (Fe1/Fe2) and `_bundle_inputs` must preserve through a
 # CIF round-trip (see test_afm_overrides_preserve_sublattice_sign below).
@@ -53,14 +53,11 @@ def test_default_listing_is_unranked_and_never_touches_mmace(monkeypatch) -> Non
 def test_ranked_listing_marks_the_lowest_energy_candidate_as_recommended(
     monkeypatch,
 ) -> None:
-    class _OneAfmCandidate:
-        def __init__(self, *_args, **_kwargs) -> None:
-            self.ordered_structures = [_ROCK_SALT_FEO.copy()]
-            self.ordered_structure_origins = ["afm"]
-
-    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/enum.x")
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
-        magnetic_config_module, "MagneticStructureEnumerator", _OneAfmCandidate
+        magnetic_config_module,
+        "enumerate_orderings",
+        lambda *_args, **_kwargs: ((_ROCK_SALT_FEO.copy(), "afm"),),
     )
 
     def fake_rank_orderings(candidates, *, device="cpu"):
@@ -101,15 +98,11 @@ def test_afm_overrides_preserve_sublattice_sign(monkeypatch) -> None:
     (CIF drops `Species.spin`) despite the species labels still looking
     AFM-split. The override must carry both signs, keyed by whatever labels
     the structure_content will actually reload as."""
-
-    class _SpinSplitAfmCandidate:
-        def __init__(self, *_args, **_kwargs) -> None:
-            self.ordered_structures = [_SPIN_SPLIT_AFM_FEO.copy()]
-            self.ordered_structure_origins = ["afm"]
-
-    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/enum.x")
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
-        magnetic_config_module, "MagneticStructureEnumerator", _SpinSplitAfmCandidate
+        magnetic_config_module,
+        "enumerate_orderings",
+        lambda *_args, **_kwargs: ((_SPIN_SPLIT_AFM_FEO.copy(), "afm"),),
     )
 
     report = list_magnetic_orderings(_ROCK_SALT_FEO)

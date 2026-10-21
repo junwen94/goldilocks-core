@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import math
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -22,6 +21,7 @@ import pytest
 from pymatgen.core import Lattice, Structure
 from support import run_cli as _run_cli, strict_json
 
+from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
 from goldilocks_core.capabilities import capabilities
 from goldilocks_core.examples.structures import structure
 
@@ -612,7 +612,7 @@ class TestRunAndExplainAgainstRealAssets:
         )
 
     @pytest.mark.skipif(
-        shutil.which("enum.x") is None and shutil.which("multienum.x") is None,
+        not enumlib_installed(),
         reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
     )
     def test_run_afm_ordering_publishes_without_crashing(
