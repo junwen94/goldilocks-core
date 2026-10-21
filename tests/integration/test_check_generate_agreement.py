@@ -12,6 +12,11 @@ output follows the same decision (#166): ``mixing_fixed_ns`` appears only
 as the user set it, and a nonzero value carries the frozen-occupation
 warning exactly when a card is rendered.
 
+A request no input can express is refused by ``check`` itself, where
+``/explain`` shows it, and never reaches a writer: spin-orbit coupling
+with a ``tot_magnetization``, which pw.x accepts only with nspin=2 (#146).
+Spin-orbit scenarios select a second, fully relativistic table.
+
 Add a scenario here whenever another rule can let ``check`` pass while a
 writer refuses.
 """
@@ -58,6 +63,7 @@ _Z_VALENCES = {
     "Zn": 20.0,
     "Zr": 12.0,
 }
+_FULLY_RELATIVISTIC_Z_VALENCES = {"Fe": 16.0, "Pt": 16.0}
 
 
 def _rock_salt(cation: str, a: float, anion: str = "O") -> Structure:
@@ -96,6 +102,16 @@ def _wurtzite_zno() -> Structure:
         Lattice.hexagonal(3.25, 5.207),
         ["Zn", "O"],
         [[1 / 3, 2 / 3, 0], [1 / 3, 2 / 3, 0.382]],
+    )
+
+
+def _l10_fept() -> Structure:
+    """L1_0 FePt (MC3D mc3d-49510)."""
+    return Structure.from_spacegroup(
+        "P4/mmm",
+        Lattice.tetragonal(2.6855, 3.7210),
+        ["Fe", "Pt"],
+        [[0, 0, 0], [0.5, 0.5, 0.5]],
     )
 
 
@@ -150,6 +166,36 @@ _SCENARIOS = {
         ("U  U-5f  4",),
         {"u_by_element": {"U": 4.0}, "mixing_fixed_ns": 50},
     ),
+    # An explicit spin_polarized=false ignores tot_magnetization, so the
+    # noncollinear input carries none (#146).
+    "FePt spin_orbit_coupling, spin_polarized false, tot_magnetization": _Scenario(
+        _l10_fept,
+        (),
+        {
+            "spin_orbit_coupling": True,
+            "spin_polarized": False,
+            "tot_magnetization": 3.0,
+        },
+    ),
+}
+
+
+@dataclass(frozen=True)
+class _Refusal:
+    structure: Callable[[], Structure]
+    overrides: dict[str, object]
+    reason: str
+    """A phrase of the gate's blocking reason."""
+
+
+_REFUSALS = {
+    # pw.x takes tot_magnetization only with nspin=2, and spin-orbit
+    # coupling runs noncollinear (#146).
+    "FePt spin_orbit_coupling, tot_magnetization": _Refusal(
+        _l10_fept,
+        {"spin_orbit_coupling": True, "tot_magnetization": 3.0},
+        "tot_magnetization",
+    ),
 }
 
 _MULTI_TASK_SCENARIOS = ("NiO", "LaCuO3", "TiO2")
@@ -172,13 +218,19 @@ def _hpc() -> HpcProfile:
 
 @pytest.fixture
 def store(tmp_path, monkeypatch) -> AssetStore:
-    spec, registry_table = sssp_fixture_table_spec(tmp_path / "sources", _Z_VALENCES)
+    tables = (
+        sssp_fixture_table_spec(tmp_path / "scalar", _Z_VALENCES),
+        sssp_fixture_table_spec(
+            tmp_path / "full", _FULLY_RELATIVISTIC_Z_VALENCES, relativistic="full"
+        ),
+    )
     monkeypatch.setattr(
         "goldilocks_core.service._pseudo.load_tables",
-        lambda *a, **kw: {registry_table.id: registry_table},
+        lambda *a, **kw: {table.id: table for _, table in tables},
     )
     installed = AssetStore(tmp_path / "store")
-    installed.install(spec, sssp_preparer(registry_table))
+    for spec, table in tables:
+        installed.install(spec, sssp_preparer(table))
     return installed
 
 
@@ -242,3 +294,20 @@ def test_check_ok_implies_generate_renders_the_expected_hubbard_card(
             assert "hubbard" not in content.lower()
     codes = {warning["code"] for warning in advice.warnings()}
     assert (_FROZEN_NS in codes) is bool(scenario.hubbard and fixed_ns)
+
+
+@pytest.mark.parametrize("name", list(_REFUSALS))
+def test_check_refuses_a_request_no_input_can_express(
+    name: str, store: AssetStore
+) -> None:
+    refusal = _REFUSALS[name]
+    advice = advise(
+        refusal.structure(),
+        hpc=_hpc(),
+        overrides=build_overrides(refusal.overrides),
+        store=store,
+    )
+
+    report = check(advice)
+
+    assert any(refusal.reason in reason for reason in report.blocking), report.blocking

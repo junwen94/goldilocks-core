@@ -47,7 +47,10 @@ def _magnetic(
     spin_polarized: bool,
     tot_magnetization: float | None,
     structure: Structure = _IRON,
+    *,
+    spin_orbit_enabled: bool = False,
 ):
+    angles = {"Fe": 0.0} if spin_polarized and spin_orbit_enabled else None
     facts = MagneticConfigFacts(
         cell=structure,
         ordering=OrderingRecord(requested="fm", applied="fm"),
@@ -55,9 +58,9 @@ def _magnetic(
         magnetic_elements=("Fe",) if spin_polarized else (),
         starting_magnetization={"Fe": 0.1} if spin_polarized else None,
         tot_magnetization=tot_magnetization,
-        spin_orbit_enabled=False,
-        angle1=None,
-        angle2=None,
+        spin_orbit_enabled=spin_orbit_enabled,
+        angle1=angles,
+        angle2=angles,
     )
     return Resolved(facts, Provenance(source="heuristic"))
 
@@ -259,6 +262,52 @@ def test_moment_and_electron_count_with_matching_parity_is_ok() -> None:
     )
 
     assert report.ok
+
+
+def test_a_magnetic_spin_orbit_run_needs_no_moment_or_even_count() -> None:
+    """#146: spin-orbit coupling runs noncollinear, where pw.x sets
+    nspin=4 and lsda=.false. (QE 7.3 PW/src/input.f90:714-736). Its
+    "fixed occupations and lsda need tot_magnetization" stop applies only
+    with lsda (input.f90:764-781), and its fixed occupations fill
+    NINT(nelec) single-electron spinor bands (degspin=1,
+    PW/src/iweights.f90:105-107). With moments, time reversal is broken,
+    so an odd count can fill whole bands and neither rule applies."""
+    report = check_all(
+        occupations=_FIXED,
+        magnetic=_magnetic(True, None, spin_orbit_enabled=True),
+        electron_count=_electron_count(3.0),
+        purpose="scf",
+    )
+
+    assert report.ok, report.blocking
+
+
+def test_a_non_magnetic_spin_orbit_run_needs_an_even_count() -> None:
+    """A spin-orbit run without moments keeps time reversal: every band has
+    a Kramers partner degenerate with it at the time-reversal-invariant
+    k-points (at every k with inversion), so an odd count half-fills a
+    degenerate pair, metallic as without spin-orbit coupling. degspin=1
+    removes the truncation, not the half-filled band."""
+    odd = check_all(
+        occupations=_FIXED,
+        magnetic=_magnetic(False, None, spin_orbit_enabled=True),
+        electron_count=_electron_count(9.0),
+        purpose="scf",
+    )
+    even = check_all(
+        occupations=_FIXED,
+        magnetic=_magnetic(False, None, spin_orbit_enabled=True),
+        electron_count=_electron_count(8.0),
+        purpose="scf",
+    )
+
+    assert odd.blocking == (
+        "occupations='fixed' with a non-spin-polarized system requires an "
+        "even electron count; got nelec=9.0, which likely means an unpaired "
+        "electron -- set spin_polarized=true, or "
+        "occupations=smearing/tetrahedra_opt if this is genuinely metallic.",
+    )
+    assert even.ok, even.blocking
 
 
 def test_moment_parity_check_is_unaffected_when_electron_count_is_missing() -> None:

@@ -26,6 +26,12 @@ _SILICON = Structure(Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25,
 _ROCK_SALT_FEO = Structure(
     Lattice.cubic(4.3), ["Fe", "O"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
 )
+_BCC_IRON = Structure(Lattice.cubic(2.87), ["Fe", "Fe"], [[0, 0, 0], [0.5, 0.5, 0.5]])
+_DIAMOND_SILICON = Structure(
+    Lattice.from_parameters(3.84, 3.84, 3.84, 60, 60, 60),
+    ["Si", "Si"],
+    [[0, 0, 0], [0.25, 0.25, 0.25]],
+)
 
 _ENUMLIB_MISSING = not enumlib_installed()
 
@@ -235,23 +241,78 @@ def test_tot_magnetization_alone_implies_spin_polarized() -> None:
     assert state.value.tot_magnetization == 2.0
 
 
-def test_explicit_spin_polarized_false_wins_over_magnetization_and_warns() -> None:
+@pytest.mark.parametrize(
+    ("spin_orbit_coupling", "spin_mode"), [(False, "none"), (True, "noncollinear")]
+)
+def test_explicit_spin_polarized_false_drops_a_tot_magnetization_and_warns(
+    spin_orbit_coupling: bool, spin_mode: str
+) -> None:
     """An explicit spin_polarized=False is a human override too and must
     win outright over a simultaneously-given tot_magnetization -- but
     silently dropping the latter with zero signal is still wrong, so
-    this warns instead."""
-    state = magnetic_cell(
-        _SILICON,
-        is_magnetic(_SILICON),
-        human=MagneticConfigHumanInput(spin_polarized=False, tot_magnetization=2.0),
+    this warns instead. The ignored value is dropped from the decision,
+    with or without spin-orbit coupling, so it never reaches the writer
+    (#146: pw.x refuses tot_magnetization without nspin=2)."""
+    state = magnetic_decision(
+        _DIAMOND_SILICON,
+        is_magnetic(_DIAMOND_SILICON),
+        human=MagneticConfigHumanInput(
+            spin_polarized=False,
+            tot_magnetization=2.0,
+            spin_orbit_coupling=spin_orbit_coupling,
+        ),
     )
 
     assert state.ok
     assert state.value.spin_polarized is False
+    assert state.value.tot_magnetization is None
+    assert state.value.spin_mode == spin_mode
     assert any(
         warning.code == "magnetic.magnetization_ignored_spin_polarized_false"
         for warning in state.value.warnings
     )
+
+
+def test_spin_orbit_coupling_refuses_a_tot_magnetization() -> None:
+    """#146: spin-orbit coupling makes the run noncollinear (pw.x sets
+    nspin=4, QE 7.3 PW/src/input.f90:718), and pw.x accepts
+    tot_magnetization only with nspin=2 (input.f90:761-762). The request
+    is refused here, where /explain shows it, instead of passing the gate
+    and failing in the writer."""
+    state = magnetic_decision(
+        _BCC_IRON,
+        is_magnetic(_BCC_IRON),
+        human=MagneticConfigHumanInput(spin_orbit_coupling=True, tot_magnetization=2.0),
+    )
+
+    assert isinstance(state, Blocked)
+    assert "tot_magnetization" in state.root_cause()
+    assert "spin_orbit_coupling" in state.root_cause()
+    assert "starting_magnetization" in state.root_cause()
+
+
+@pytest.mark.parametrize(
+    ("structure", "spin_orbit_coupling", "spin_mode"),
+    [
+        (_DIAMOND_SILICON, False, "none"),
+        (_BCC_IRON, False, "collinear"),
+        (_BCC_IRON, True, "noncollinear"),
+        (_DIAMOND_SILICON, True, "noncollinear"),
+    ],
+)
+def test_spin_mode_is_noncollinear_with_spin_orbit_otherwise_follows_spin(
+    structure: Structure, spin_orbit_coupling: bool, spin_mode: str
+) -> None:
+    """The one spin treatment the gate, the occupations advisor, the
+    writer and the job's layout read (#146): spin-orbit coupling is
+    noncollinear whether or not the run is magnetic."""
+    state = magnetic_decision(
+        structure,
+        is_magnetic(structure),
+        human=MagneticConfigHumanInput(spin_orbit_coupling=spin_orbit_coupling),
+    )
+
+    assert state.value.spin_mode == spin_mode
 
 
 def test_giving_both_tot_and_starting_magnetization_does_not_error() -> None:

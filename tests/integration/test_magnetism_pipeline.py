@@ -1,4 +1,4 @@
-"""An applied magnetic ordering is advised, checked and written as one cell.
+"""The magnetic decision is advised, checked and written as one input.
 
 ``magnetic_ordering=afm`` can replace the uploaded cell with a different
 one: rock-salt NiO's 2-atom primitive cell and its 8-atom conventional cell
@@ -14,6 +14,11 @@ The control is the written cell passed in directly, with its spins removed
 own seeds as ``starting_magnetization``, so the writer splits it into the
 same species. Runs on a synthetic SSSP-shaped Ni/O table (z_valence 18 and
 6) with the real enumlib.
+
+Spin-orbit coupling makes a run noncollinear, where pw.x has no
+``tot_magnetization`` and fixed occupations need none (#146). The CrI3
+monolayer (MC2D mc2d-da9644c9) runs on a synthetic fully relativistic Cr/I
+table (z_valence 14 and 7) and needs no enumlib.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
 from goldilocks_core.service import (
     Advice,
+    AdviceIncomplete,
     advise,
     advise_dos,
     advise_relax,
@@ -43,7 +49,7 @@ from goldilocks_core.service import (
 )
 from goldilocks_core.set_overrides import build_overrides
 
-pytestmark = pytest.mark.skipif(
+_needs_enumlib = pytest.mark.skipif(
     not enumlib_installed(),
     reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
 )
@@ -148,6 +154,7 @@ _INPUT_CELLS: dict[str, Callable[[], Structure]] = {
 }
 
 
+@_needs_enumlib
 @pytest.mark.parametrize("task", ["scf", "relax", "dos"])
 @pytest.mark.parametrize("input_cell", list(_INPUT_CELLS))
 def test_every_count_describes_the_written_afm_cell(
@@ -182,6 +189,7 @@ def test_every_count_describes_the_written_afm_cell(
     ]
 
 
+@_needs_enumlib
 def test_nelec_for_the_uploaded_cell_is_refused_once_the_ordering_resizes_it(
     store: AssetStore,
 ) -> None:
@@ -205,3 +213,97 @@ def test_nelec_for_the_uploaded_cell_is_refused_once_the_ordering_resizes_it(
     assert "2-atom" in reason
     assert "4-atom" in reason
     assert reason in report.blocking
+
+
+def _cri3_monolayer() -> Structure:
+    """MC2D's CrI3 monolayer (mc2d-da9644c9), layer group p-31m: a Cr
+    honeycomb between two iodine planes, 18.1 A between layers."""
+    return Structure.from_spacegroup(
+        "P-31m",
+        Lattice.hexagonal(6.971, 18.10),
+        ["Cr", "I"],
+        [[1 / 3, 2 / 3, 0.5], [0.3706, 0.0, 0.5842]],
+    )
+
+
+@pytest.fixture
+def spin_orbit_store(tmp_path, monkeypatch) -> AssetStore:
+    """A fully relativistic Cr/I table, the one a spin-orbit run selects."""
+    spec, registry_table = sssp_fixture_table_spec(
+        tmp_path / "sources", {"Cr": 14.0, "I": 7.0}, relativistic="full"
+    )
+    monkeypatch.setattr(
+        "goldilocks_core.service._pseudo.load_tables",
+        lambda *a, **kw: {registry_table.id: registry_table},
+    )
+    installed = AssetStore(tmp_path / "store")
+    installed.install(spec, sssp_preparer(registry_table))
+    return installed
+
+
+_SPIN_ORBIT_FIXED = {"spin_orbit_coupling": True, "occupations": "fixed"}
+
+
+def test_spin_orbit_with_fixed_occupations_writes_a_noncollinear_deck(
+    spin_orbit_store: AssetStore,
+) -> None:
+    """#146: the gate used to demand an integer tot_magnetization, which
+    the writer then refused. A noncollinear run needs none: pw.x stops on
+    fixed occupations without one only with nspin=2 (QE 7.3
+    PW/src/input.f90:764-781), and QE 7.5 on SCARF ran CrI3 with
+    noncolin, lspinorb, fixed occupations and starting moments alone."""
+    steps, (content,) = _run(
+        "scf", _cri3_monolayer(), _SPIN_ORBIT_FIXED, spin_orbit_store
+    )
+
+    assert steps[0].system.magnetic.value.spin_mode == "noncollinear"
+    assert _keyword(content, "noncolin") == ".true."
+    assert _keyword(content, "lspinorb") == ".true."
+    assert _keyword(content, "occupations") == "'fixed'"
+    # Cr's 5 Bohr magneton seed over its z_valence: a magnetic deck
+    assert float(_keyword(content, "starting_magnetization(1)")) == pytest.approx(
+        5.0 / 14.0
+    )
+    assert _keyword(content, "nspin") is None
+    assert _keyword(content, "tot_magnetization") is None
+
+
+def test_spin_orbit_refuses_tot_magnetization_before_generation(
+    spin_orbit_store: AssetStore,
+) -> None:
+    """#146: pw.x accepts tot_magnetization only with nspin=2
+    (input.f90:761-762). The gate refuses it -- so /explain shows it --
+    and generate() never reaches a writer."""
+    advice = advise(
+        _cri3_monolayer(),
+        hpc=_hpc(),
+        overrides=build_overrides({**_SPIN_ORBIT_FIXED, "tot_magnetization": 6.0}),
+        store=spin_orbit_store,
+    )
+
+    report = check(advice)
+
+    assert any("tot_magnetization" in reason for reason in report.blocking), (
+        report.blocking
+    )
+    with pytest.raises(AdviceIncomplete):
+        generate(advice, report)
+
+
+def test_an_ignored_tot_magnetization_never_reaches_a_spin_orbit_deck(
+    spin_orbit_store: AssetStore,
+) -> None:
+    """#146: an explicit spin_polarized=false ignores tot_magnetization
+    with a warning, and the deck then carries none."""
+    steps, (content,) = _run(
+        "scf",
+        _cri3_monolayer(),
+        {**_SPIN_ORBIT_FIXED, "spin_polarized": False, "tot_magnetization": 6.0},
+        spin_orbit_store,
+    )
+
+    codes = {warning["code"] for warning in steps[0].warnings()}
+    assert "magnetic.magnetization_ignored_spin_polarized_false" in codes
+    assert _keyword(content, "noncolin") == ".true."
+    assert "starting_magnetization" not in content
+    assert _keyword(content, "tot_magnetization") is None

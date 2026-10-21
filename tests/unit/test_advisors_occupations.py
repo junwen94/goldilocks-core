@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import pytest
 from pymatgen.core import Lattice, Structure
 from support import magnetic_decision
 
+from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
 from goldilocks_core.advisors.occupations import (
     OccupationsHumanInput,
     OccupationsLlmInput,
@@ -14,6 +16,7 @@ from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailabl
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
 _SILICON = Structure(Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]])
+_BCC_IRON = Structure(Lattice.cubic(2.87), ["Fe", "Fe"], [[0, 0, 0], [0.5, 0.5, 0.5]])
 
 
 def test_metal_gets_cold_smearing() -> None:
@@ -109,6 +112,27 @@ def test_fixed_occupations_on_a_spin_polarized_system_warns() -> None:
         "integer tot_magnetization" in warning.message
         for warning in state.value.warnings
     )
+
+
+@pytest.mark.parametrize(
+    "human",
+    [
+        # noncollinear: pw.x takes no tot_magnetization there (#146)
+        MagneticConfigHumanInput(spin_orbit_coupling=True),
+        # collinear, with the moment the warning asks for
+        MagneticConfigHumanInput(tot_magnetization=2.0),
+    ],
+    ids=["spin-orbit", "tot_magnetization"],
+)
+def test_fixed_occupations_warn_only_for_a_collinear_run_without_a_moment(
+    human: MagneticConfigHumanInput,
+) -> None:
+    magnetic = magnetic_decision(_BCC_IRON, is_magnetic(_BCC_IRON), human=human)
+
+    state = occupations(Resolved("non_metal", Provenance(source="heuristic")), magnetic)
+
+    assert state.value.occupations == "fixed"
+    assert state.value.warnings == ()
 
 
 def test_fixed_occupations_on_a_non_magnetic_system_has_no_warning() -> None:

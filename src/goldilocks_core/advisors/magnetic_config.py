@@ -40,6 +40,19 @@ enforced constraint -- verified against QE 7.3's `PW/src/input.f90`). Both
 are accepted here as independent, unrelated overrides; this advisor never
 treats supplying both as a blocking error.
 
+**Spin mode (#146).** ``MagneticConfigFacts.spin_mode`` is the spin
+treatment pw.x runs, derived from the two switches: ``noncollinear``
+whenever spin-orbit coupling is on (``noncolin``, which pw.x runs with
+nspin=4 and lsda off, magnetic or not -- QE 7.3 ``PW/src/input.f90:714-736``),
+otherwise ``collinear`` for a spin-polarized run (nspin=2), otherwise
+``none``. The gate, the occupations advisor, the writer and the job's spin
+layout read it. ``tot_magnetization`` belongs to the collinear mode only:
+pw.x stops on it without nspin=2 (``input.f90:761-762``). An explicit
+``spin_polarized=false`` drops a requested one with the ignored warning,
+with or without spin-orbit coupling; otherwise spin-orbit coupling refuses
+it (``Blocked``), since the starting magnetization alone sets a
+noncollinear run's moments.
+
 **Two steps, around pseudopotential selection (#128).** ``magnetic_cell``
 decides what selection depends on, and the simulated cell: spin
 polarization, spin-orbit coupling (selection reads it for the relativistic
@@ -203,6 +216,15 @@ target and falls back to `DEFAULT_MAGNETIZATION_FRACTION`; notably this
 includes Cu/Zn (filled or near-filled d-shell as a neutral element) despite
 both being `is_transition_metal` in `analysis/composition.py`."""
 
+SpinMode = Literal["none", "collinear", "noncollinear"]
+
+_NONCOLLINEAR_TOT_MAGNETIZATION = (
+    "tot_magnetization is not valid with spin_orbit_coupling: a spin-orbit run "
+    "is noncollinear, and pw.x accepts tot_magnetization only for a collinear "
+    "spin-polarized run (nspin=2); drop tot_magnetization and set the moments "
+    "with starting_magnetization, or turn spin_orbit_coupling off."
+)
+
 _MAGNETIZATION_IGNORED_WARNING = Warning(
     code="magnetic.magnetization_ignored_spin_polarized_false",
     level="warning",
@@ -284,7 +306,10 @@ class MagneticCell:
     ``structure.lattice.matrix == cell_in_input_basis @ input.lattice.matrix``.
     That is an integer supercell matrix for a primitive input, but
     fractional when enumeration reduced a conventional input to a smaller
-    cell (determinant 1/2 for rock-salt's 8-atom cell)."""
+    cell (determinant 1/2 for rock-salt's 8-atom cell).
+
+    ``tot_magnetization`` is the human request admitted for this run: set
+    only for a collinear spin-polarized run (module docstring, #146)."""
 
     structure: Structure
     spin_polarized: bool
@@ -292,16 +317,17 @@ class MagneticCell:
     magnetic_elements: tuple[str, ...]
     ordering: OrderingRecord
     cell_in_input_basis: tuple[tuple[float, ...], ...]
+    tot_magnetization: float | None
     warnings: tuple[Warning, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class MagneticConfigFacts:
     """The magnetic decision the writer renders. ``cell``, ``ordering``,
-    ``spin_polarized``, ``magnetic_elements`` and ``spin_orbit_enabled``
-    are copied from the ``MagneticCell`` (``cell`` is the same object as
-    ``MagneticCell.structure``); ``warnings`` are the cell's plus this
-    step's."""
+    ``spin_polarized``, ``magnetic_elements``, ``tot_magnetization`` and
+    ``spin_orbit_enabled`` are copied from the ``MagneticCell`` (``cell``
+    is the same object as ``MagneticCell.structure``); ``warnings`` are
+    the cell's plus this step's."""
 
     cell: Structure
     ordering: OrderingRecord
@@ -313,6 +339,16 @@ class MagneticConfigFacts:
     angle1: dict[str, float] | None
     angle2: dict[str, float] | None
     warnings: tuple[Warning, ...] = ()
+
+    @property
+    def spin_mode(self) -> SpinMode:
+        """``noncollinear`` with spin-orbit coupling, otherwise
+        ``collinear`` when spin-polarized, otherwise ``none`` (module
+        docstring). Derived from the two switches, so it cannot disagree
+        with them; a property, not a field, so records do not carry it."""
+        if self.spin_orbit_enabled:
+            return "noncollinear"
+        return "collinear" if self.spin_polarized else "none"
 
 
 class MagneticConfigHumanInput(HumanInput):
@@ -345,10 +381,12 @@ def magnetic_cell(
     llm: MagneticConfigLlmInput | None = None,
 ) -> FieldState[MagneticCell]:
     """The simulated cell (module docstring): spin polarization,
-    spin-orbit coupling, and ``structure`` with the requested ordering
-    applied -- the one enumeration of a calculation. ``Blocked`` when
-    ``is_magnetic`` is, or when a human ``starting_magnetization`` names a
-    label the cell does not have."""
+    spin-orbit coupling, the admitted ``tot_magnetization``, and
+    ``structure`` with the requested ordering applied -- the one
+    enumeration of a calculation. ``Blocked`` when ``is_magnetic`` is,
+    when a human ``tot_magnetization`` comes with spin-orbit coupling
+    (#146), or when a human ``starting_magnetization`` names a label the
+    cell does not have."""
     human = human or MagneticConfigHumanInput()
     llm = llm or MagneticConfigLlmInput()
 
@@ -359,6 +397,13 @@ def magnetic_cell(
         return Blocked(by=is_magnetic)
 
     spin_polarized, source, warnings = _resolve_spin_polarized(is_magnetic, human, llm)
+    spin_orbit_enabled = human.spin_orbit_coupling is True
+    # A requested moment belongs to a spin-polarized run: an explicit
+    # spin_polarized=false drops it (the warning above). With spin-orbit
+    # coupling the run is noncollinear, where pw.x has none (#146).
+    tot_magnetization = human.tot_magnetization if spin_polarized else None
+    if tot_magnetization is not None and spin_orbit_enabled:
+        return Blocked(by=_NONCOLLINEAR_TOT_MAGNETIZATION)
     magnetic_elements = magnetic_elements_in(structure) if spin_polarized else ()
     requested = human.magnetic_ordering or "fm"
 
@@ -375,12 +420,13 @@ def magnetic_cell(
     facts = MagneticCell(
         structure=cell,
         spin_polarized=spin_polarized,
-        spin_orbit_enabled=human.spin_orbit_coupling is True,
+        spin_orbit_enabled=spin_orbit_enabled,
         magnetic_elements=magnetic_elements,
         ordering=OrderingRecord(
             requested=requested, applied="fm" if cell is structure else "afm"
         ),
         cell_in_input_basis=_cell_in_input_basis(cell, structure),
+        tot_magnetization=tot_magnetization,
         warnings=warnings,
     )
     return Resolved(facts, Provenance(source=source))
@@ -428,7 +474,7 @@ def magnetic_config(
         spin_polarized=facts.spin_polarized,
         magnetic_elements=facts.magnetic_elements,
         starting_magnetization=starting_magnetization,
-        tot_magnetization=human.tot_magnetization,
+        tot_magnetization=facts.tot_magnetization,
         spin_orbit_enabled=facts.spin_orbit_enabled,
         angle1=angle1,
         angle2=angle2,

@@ -156,17 +156,17 @@ class SpinLayout(NamedTuple):
 
 def qe_spin_layout(magnetic: MagneticConfigFacts) -> SpinLayout:
     """The spin layout of the pw.x run the writer renders for
-    ``magnetic`` (``_magnetic_keywords`` in
-    ``generation/quantum_espresso/scf.py``): spin-orbit renders
+    ``magnetic.spin_mode`` (``_magnetic_keywords`` in
+    ``generation/quantum_espresso/scf.py``): ``noncollinear`` renders
     ``noncolin``, which pw.x runs with nspin=4 and two-component spinors,
     magnetic or not (QE 7.3 ``PW/src/input.f90:718``), and with four
     magnetization components only when it renders a starting
     magnetization, which a spin-polarised result always has
-    (``input.f90:1589``, ``set_spin_vars.f90:29-41``); a collinear
-    spin-polarised run renders nspin=2; anything else runs nspin=1."""
-    if magnetic.spin_orbit_enabled:
+    (``input.f90:1589``, ``set_spin_vars.f90:29-41``); ``collinear``
+    renders nspin=2; ``none`` runs nspin=1."""
+    if magnetic.spin_mode == "noncollinear":
         return SpinLayout(4, 2, 4 if magnetic.spin_polarized else 1)
-    if magnetic.spin_polarized:
+    if magnetic.spin_mode == "collinear":
         return SpinLayout(2, 1, 2)
     return SpinLayout(1, 1, 1)
 

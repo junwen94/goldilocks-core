@@ -307,7 +307,7 @@ def test_spin_polarized_starting_magnetization_survives_unclobbered(
     assert "0.0" not in content.split("starting_magnetization")[1].split("\n")[0]
 
 
-def test_tot_magnetization_emitted_only_without_spin_orbit(
+def test_a_collinear_run_renders_nspin_2_with_its_tot_magnetization(
     pseudo_metadata_factory,
 ) -> None:
     structure = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
@@ -321,24 +321,40 @@ def test_tot_magnetization_emitted_only_without_spin_orbit(
 
     content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
 
+    assert "nspin            = 2" in content
+    assert content.count("tot_magnetization") == 1
     assert "tot_magnetization = 2.0" in content
+    assert "noncolin" not in content
 
 
-def test_tot_magnetization_with_spin_orbit_is_rejected(pseudo_metadata_factory) -> None:
+def test_spin_orbit_with_fixed_occupations_renders_without_tot_magnetization(
+    pseudo_metadata_factory,
+) -> None:
+    """#146: a magnetic noncollinear run with fixed occupations needs no
+    tot_magnetization -- pw.x's "fixed occupations and lsda need
+    tot_magnetization" applies only with nspin=2 (QE 7.3
+    PW/src/input.f90:764-781) -- so the deck is noncolin/lspinorb, fixed
+    occupations and starting moments, with neither nspin nor
+    tot_magnetization."""
     structure = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
     magnetic = _magnetic(
         structure,
         spin_polarized=True,
         starting_magnetization={"Fe": 0.6923},
-        tot_magnetization=2.0,
         spin_orbit_enabled=True,
         angle1={"Fe": 0.0},
         angle2={"Fe": 0.0},
     )
     system = _system(structure, pseudo_metadata_factory, magnetic=magnetic)
 
-    with pytest.raises(GenerationError, match="tot_magnetization"):
-        write_qe_scf(system, _step(), _CTX)
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+
+    assert "occupations      = 'fixed'" in content
+    assert "noncolin         = .true." in content
+    assert "lspinorb         = .true." in content
+    assert "starting_magnetization(1) = 0.6923" in content
+    assert "nspin" not in content
+    assert "tot_magnetization" not in content
 
 
 def test_spin_orbit_magnetic_emits_noncolin_lspinorb_and_angles(
@@ -379,7 +395,13 @@ def test_spin_orbit_magnetic_emits_noncolin_lspinorb_and_angles(
     ("spin_polarized", "spin_orbit_enabled", "layout", "rendered", "absent"),
     [
         (False, False, (1, 1, 1), (), ("nspin", "noncolin", "starting_magn")),
-        (True, False, (2, 1, 2), ("nspin            = 2",), ("noncolin",)),
+        (
+            True,
+            False,
+            (2, 1, 2),
+            ("nspin            = 2",),
+            ("noncolin", "tot_magnetization"),
+        ),
         # noncolin makes pw.x run nspin=4 (QE 7.3 PW/src/input.f90:718),
         # with four magnetization components only when a starting
         # magnetization is set (input.f90:1589, set_spin_vars.f90:29-41)

@@ -423,18 +423,17 @@ def _occupations_keywords(step: PwSettings) -> dict[str, object]:
 def _magnetic_keywords(
     system: SystemSettings, species_index: dict[str, int]
 ) -> dict[str, object]:
+    """The keywords of ``magnetic.spin_mode`` (#146): ``noncollinear``
+    writes ``noncolin``/``lspinorb``, ``collinear`` writes ``nspin = 2``
+    and the admitted ``tot_magnetization`` (``magnetic_config`` sets one
+    in no other mode), ``none`` writes neither; then the starting moments
+    and angles, by species label."""
     magnetic = system.magnetic
     keywords: dict[str, object] = {}
-    if magnetic.spin_orbit_enabled:
-        if magnetic.tot_magnetization is not None:
-            raise GenerationError(
-                "tot_magnetization is not valid for a noncolinear (spin-orbit) "
-                "calculation -- QE restricts it to the LSDA/collinear case; "
-                "use starting_magnetization instead"
-            )
+    if magnetic.spin_mode == "noncollinear":
         keywords["noncolin"] = True
         keywords["lspinorb"] = True
-    elif magnetic.spin_polarized:
+    elif magnetic.spin_mode == "collinear":
         keywords["nspin"] = 2
         if magnetic.tot_magnetization is not None:
             keywords["tot_magnetization"] = magnetic.tot_magnetization

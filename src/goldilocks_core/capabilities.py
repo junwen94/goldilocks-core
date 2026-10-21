@@ -237,7 +237,8 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "spin_polarized": {
         "description": (
-            "Force spin-polarized (nspin=2) vs non-spin-polarized calculation."
+            "Force spin polarization on or off: a collinear nspin=2 run, or a "
+            "magnetic noncollinear one with spin_orbit_coupling."
         ),
     },
     "spin_orbit_coupling": {
@@ -248,8 +249,10 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "tot_magnetization": {
         "description": (
-            "Total per-cell magnetization target; not valid together with "
-            "spin_orbit_coupling."
+            "Total per-cell magnetization target of a collinear spin-polarized "
+            "run (nspin=2); refused with spin_orbit_coupling, whose noncollinear "
+            "run takes starting_magnetization instead, and ignored when "
+            "spin_polarized is false."
         ),
     },
     "starting_magnetization": {

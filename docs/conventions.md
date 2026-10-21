@@ -162,4 +162,10 @@ relativistic classification does not match what `spin_orbit_coupling`
 implies makes pseudopotential resolution `Unavailable` (it does not override
 the derived requirement). Fully relativistic files alone do not enable SOC.
 With SOC enabled, QE generation writes `noncolin = .true.` and
-`lspinorb = .true.`; otherwise spin-polarized advice produces `nspin = 2`.
+`lspinorb = .true.`, a noncollinear run whether or not it is magnetic;
+otherwise spin-polarized advice produces a collinear `nspin = 2` run.
+`tot_magnetization` belongs to the collinear run only, since pw.x stops on
+it without `nspin = 2`: it is refused before generation together with
+`spin_orbit_coupling`, and ignored with a warning when `spin_polarized` is
+explicitly false. A noncollinear run with fixed occupations needs no
+`tot_magnetization`; its moments come from `starting_magnetization`.

@@ -51,6 +51,7 @@ def _cell(
             magnetic_elements=(),
             ordering=OrderingRecord(requested=applied, applied=applied),
             cell_in_input_basis=cell_in_input_basis,
+            tot_magnetization=None,
         ),
         Provenance(source="heuristic"),
     )

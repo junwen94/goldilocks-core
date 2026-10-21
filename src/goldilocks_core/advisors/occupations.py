@@ -49,7 +49,8 @@ informational warning when the combination is heading that way, the
 same not-my-call-to-block pattern ``analysis/needs_soc.py`` uses toward
 ``magnetic_config.py``. ``checks.py`` (this epic's other deliverable) is
 where the actual integer check, and the hard fail if it does not hold,
-happens.
+happens. A noncollinear (spin-orbit) run takes no ``tot_magnetization``
+at all, so neither applies to it (#146).
 """
 
 from __future__ import annotations
@@ -183,8 +184,16 @@ def _decision_for(
 def _fixed_decision(
     magnetic: FieldState[MagneticConfigFacts] | None,
 ) -> OccupationsDecision:
+    """``fixed``, warning only where the gate's integer-moment rule has
+    no moment to check: a collinear run without ``tot_magnetization``
+    (a noncollinear run takes none, #146)."""
     warnings: tuple[Warning, ...] = ()
-    if magnetic is not None and magnetic.ok and magnetic.value.spin_polarized:
+    if (
+        magnetic is not None
+        and magnetic.ok
+        and magnetic.value.spin_mode == "collinear"
+        and magnetic.value.tot_magnetization is None
+    ):
         warnings = (FIXED_SPIN_POLARIZED_WARNING,)
     return OccupationsDecision(
         occupations="fixed", smearing_type=None, degauss=None, warnings=warnings
