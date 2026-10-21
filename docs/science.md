@@ -215,6 +215,29 @@ electrons; a monolayer with about 20 Å of vacuum meets it. Under
 `slab` only the in-plane stress is meaningful, so a `vc-relax` must use
 `cell_dofree='2Dxy'` (the default for such a slab) or `'2Dshape'`.
 
+A slab can carry a dipole along its normal only if no symmetry operation
+reverses that normal: an inversion centre, a mirror in the sheet, a two-fold
+axis in the sheet or a rotoinversion axis along the normal cancels it. The
+`symmetry` record lists the lattice vectors whose normal some operation
+reverses as `reversible_axes`. For a polar slab with `periodic` boundaries,
+such as a Janus MoSSe sheet, the images' dipoles add a spurious field across
+the vacuum, and Goldilocks adds the `boundary.dipole_correction_suggested`
+notice. It names Quantum ESPRESSO's dipole correction (`tefield` and
+`dipfield` with `eamp = 0`) along the vacuum axis (`edir`), with the
+sawtooth's drop (`emaxpos`, `eopreg`) in the middle of the vacuum, where QE
+requires it; the `geometry` record's `slab` field locates the vacuum
+(`vacuum_center`, `vacuum_fraction`). The notice offers `isolation='slab'`
+only when the slab meets every precondition of that setting (the `slab`
+field's `fits_2d_truncation`). It does not set the
+correction itself, because pw.x then uses no symmetry and computes no stress.
+The notice and the `geometry` record describe the structure as given. With
+`magnetic_ordering=afm` the cell written can be a supercell that moves the
+vacuum to another lattice vector or doubles the cell across it; the notice's
+`edir`, `emaxpos` and `slab` offer then refer to the input cell, and
+Goldilocks still refuses `slab` on the cell written.
+Symmetric monolayers and bulk crystals get no notice: a bulk layered crystal
+such as graphite classifies as `2d` but has no vacuum.
+
 ## Check Hubbard +U
 
 A Hubbard +U correction counters the self-interaction error that semilocal
@@ -277,6 +300,12 @@ are model predictions. Inspect the actual QE convergence history and adjust
 these settings if needed. Reaching the SCF threshold does not demonstrate
 convergence with respect to k-points or cutoffs.
 
+The density-mixing mode (`mixing_mode`) is `local-TF`, Quantum ESPRESSO's
+screening for highly inhomogeneous densities, for a cell with vacuum along any
+lattice vector (a slab, a wire or a molecule in a box). Every other cell gets
+QE's default `plain`, including bulk layered crystals such as graphite, which
+classify as `2d` but have no vacuum.
+
 Goldilocks writes no `mixing_fixed_ns` for +U inputs unless you set it, so
 pw.x uses its own default of 0 and converges the Hubbard occupation matrix
 together with the density. For the first `mixing_fixed_ns` iterations pw.x
@@ -297,11 +326,19 @@ For `relax` and `vc-relax` tasks, Goldilocks also picks ionic and cell
 relaxation parameters -- `ion_dynamics`, `cell_dofree`, `cell_factor`,
 `forc_conv_thr`, `nstep`, `press`, `press_conv_thr`,
 `trust_radius_ini`/`trust_radius_max`/`trust_radius_min`, `remove_rigid_rot`,
-and `fix_bottom_layers` (fixing the bottom N atomic layers of a 2D slab
-during relaxation; only valid when the structure classifies as 2D). Every
-default is copied verbatim from Quantum ESPRESSO's own documentation, not
-derived from a model. See `goldilocks settings` for each key's group, type,
-and default.
+and `fix_bottom_layers` (fixing the bottom N atomic layers of a slab during
+relaxation). Every default is copied verbatim from Quantum ESPRESSO's own
+documentation, not derived from a model. See `goldilocks settings` for each
+key's group, type, and default.
+
+`fix_bottom_layers` counts atomic layers along the slab's vacuum axis, up from
+the upper edge of the vacuum, so a slab that wraps across the cell boundary
+keeps its true bottom; atoms within 0.5 Å of each other along the normal share
+a layer. Goldilocks refuses the setting unless the cell to be written has
+one vacuum gap, along exactly one lattice vector, and at least N layers. A
+bulk crystal has no bottom layer to fix, even a layered one that classifies
+as `2d`, and nor has a cell holding two slabs, such as a monolayer doubled
+along its normal.
 
 The `vc-relax` default for `cell_dofree` comes from the vacuum, not from
 dimensionality. A cell without vacuum gets `'all'`, so the stacking axis of a

@@ -138,7 +138,29 @@ class TestAdviseRelaxDegradation:
         report = check_relax(advice)
 
         assert not report.ok
-        assert any("2D slab structure" in reason for reason in report.blocking)
+        assert any(
+            reason.startswith("relax.fix_bottom_layers requires a slab")
+            and "the cell to be written has no vacuum" in reason
+            for reason in report.blocking
+        )
+
+    def test_fix_bottom_layers_beyond_the_slab_layers_is_blocked_end_to_end(
+        self,
+    ) -> None:
+        """D16 (#160): the Si(001) slab has 8 atomic layers on the cell
+        the writer renders, so check_relax refuses 9 instead of leaving
+        generate_relax to raise."""
+        overrides = build_overrides({"fix_bottom_layers": 9})
+
+        advice = advise_relax(
+            _silicon_slab(), calculation="relax", hpc=_hpc(), overrides=overrides
+        )
+        report = check_relax(advice)
+
+        assert (
+            "relax.fix_bottom_layers=9 exceeds the 8 atomic layers of the slab to "
+            "be written. Set fix_bottom_layers to at most 8, or unset it."
+        ) in report.blocking
 
 
 class TestGenerateRelaxEndToEnd:

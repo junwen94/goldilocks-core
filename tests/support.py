@@ -37,10 +37,12 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from pymatgen.core import Lattice, Structure
 
+from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.analysis.geometry import GeometryFacts, SlabGeometry
 from goldilocks_core.assets.records import AssetFile, AssetSpec
 from goldilocks_core.assets.runtime import statuses
 from goldilocks_core.assets.store import AssetStore, asset_root
+from goldilocks_core.resolution import Provenance, Resolved
 
 if TYPE_CHECKING:
     from goldilocks_core.analysis.geometry import Dimensionality, LatticeAxis
@@ -324,6 +326,22 @@ def molybdenum_disulfide_monolayer(c: float = 20.0) -> Structure:
     )
 
 
+def janus_molybdenum_sulfide_selenide(c: float = 20.0) -> Structure:
+    """A Janus MoSSe sheet (a = 3.22 A) in the xy plane: the S plane 1.55 A
+    above Mo and the Se plane 1.65 A below, in a cell ``c`` A high along z
+    (20 A by default). No symmetry operation maps c to -c (P3m1), so the
+    sheet carries a dipole along its normal."""
+    return Structure(
+        Lattice.hexagonal(3.22, c),
+        ["Mo", "S", "Se"],
+        [
+            [1 / 3, 2 / 3, 0.5],
+            [2 / 3, 1 / 3, 0.5 + 1.55 / c],
+            [2 / 3, 1 / 3, 0.5 - 1.65 / c],
+        ],
+    )
+
+
 def rotated_about_x(structure: Structure, degrees: float) -> Structure:
     """``structure`` turned rigidly about the Cartesian x axis."""
     angle = np.radians(degrees)
@@ -341,6 +359,18 @@ def rotated_about_x(structure: Structure, degrees: float) -> Structure:
     )
 
 
+def with_vacuum_along(structure: Structure, axis: LatticeAxis) -> Structure:
+    """``structure``, whose vacuum lies along c, with its lattice vectors and
+    fractional coordinates permuted cyclically so that the vacuum vector
+    becomes ``axis``. Atoms keep their Cartesian positions and site order."""
+    order = np.roll([0, 1, 2], {"a": 1, "b": 2, "c": 0}[axis])
+    return Structure(
+        Lattice(structure.lattice.matrix[order]),
+        structure.species,
+        structure.frac_coords[:, order],
+    )
+
+
 def graphene_with_vacuum_along_x() -> Structure:
     """The graphene sheet of ``graphene_monolayer`` in the yz plane: the
     vacuum vector is a = (20, 0, 0) A, and b and c span the sheet."""
@@ -349,6 +379,14 @@ def graphene_with_vacuum_along_x() -> Structure:
         ["C", "C"],
         [[0.5, 0, 0], [0.5, 1 / 3, 2 / 3]],
     )
+
+
+def graphene_with_c_tilted() -> Structure:
+    """``graphene_monolayer`` with c leaning 3 A along x: a and b stay in the
+    xy plane and the vacuum along c is still 20 A."""
+    sheet = graphene_monolayer()
+    a, b, _ = sheet.lattice.matrix
+    return Structure(Lattice([a, b, [3.0, 0, 20.0]]), sheet.species, sheet.frac_coords)
 
 
 def graphene_with_vacuum_along_a() -> Structure:
@@ -431,11 +469,20 @@ def geometry_facts(
     """``GeometryFacts`` for advisor and check tests: 20 A of vacuum along
     each axis in ``vacuum_axes`` and a 2 A gap along the others. With one
     vacuum axis the cell is a slab, in the xy frame when that axis is c and
-    ``ab_in_xy``."""
+    ``ab_in_xy``, with c along z, room for QE's 2D Coulomb truncation in that
+    frame, and its vacuum centred on the cell origin, filling 80% of the
+    cell."""
     slab = None
     if len(vacuum_axes) == 1:
         (axis,) = vacuum_axes
-        slab = SlabGeometry(vacuum_axis=axis, xy_frame=axis == "c" and ab_in_xy)
+        xy_frame = axis == "c" and ab_in_xy
+        slab = SlabGeometry(
+            vacuum_axis=axis,
+            xy_frame=xy_frame,
+            fits_2d_truncation=xy_frame,
+            vacuum_center=0.0,
+            vacuum_fraction=0.8,
+        )
     return GeometryFacts(
         dimensionality=dimensionality,
         low_dimensional=dimensionality != "3d",
@@ -445,3 +492,20 @@ def geometry_facts(
         ),
         slab=slab,
     )
+
+
+def written_cell(structure: Structure) -> Resolved[MagneticConfigFacts]:
+    """A resolved non-magnetic ``MagneticConfigFacts`` whose
+    ``relabeled_structure`` is ``structure``: the cell the writer renders,
+    which the written-cell rules of ``checks.check_all`` read."""
+    facts = MagneticConfigFacts(
+        relabeled_structure=structure,
+        spin_polarized=False,
+        magnetic_elements=(),
+        starting_magnetization=None,
+        tot_magnetization=None,
+        spin_orbit_enabled=False,
+        angle1=None,
+        angle2=None,
+    )
+    return Resolved(facts, Provenance(source="heuristic"))

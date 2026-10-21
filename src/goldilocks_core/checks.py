@@ -92,12 +92,11 @@ from goldilocks_core.advisors.parallelisation import (
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.analysis.geometry import (
-    GeometryFacts,
     LatticeAxis,
     ab_in_xy_plane,
-    c_along_z,
+    slab_layers,
+    two_d_truncation_obstacles,
     vacuum_axes,
-    vacuum_widths,
 )
 from goldilocks_core.functionals import D3BJ_FUNCTIONALS, has_d3bj_parameters
 from goldilocks_core.plan import SCF_LIKE_PURPOSES
@@ -117,21 +116,6 @@ _TWO_D_CELL_DOFREE = frozenset({"2Dxy", "2Dshape", "ibrav+2Dxy", "ibrav+2Dshape"
 """``cell_dofree`` values that move only the x and y components of a and b.
 The 'ibrav+' forms act as the plain ones under the writer's ``ibrav = 0``
 (QE 7.3 Modules/latgen.f90:749-752)."""
-_BOHR_ANGSTROM = 0.529177210903
-"""QE 7.3's bohr radius in A (Modules/constants.f90:38, :111)."""
-_TWO_D_MIN_HEIGHT_ANGSTROM = 21 * _BOHR_ANGSTROM
-"""Lowest cell height along z for QE's 2D Coulomb truncation. pw.x stops when
-half of it is below the last radial-grid point it keeps for a
-pseudopotential (QE 7.3 PW/src/init_vloc.f90:62-65): the first point beyond
-10 bohr, or the one before it when that point's index is even, since msh is
-made odd by rounding down (Modules/read_pseudo.f90:174-186). In the 1138
-SSSP and PseudoDojo files of the registered tables the kept point lies
-within 10.16 bohr, below the 10.5 bohr that 21 bohr allows."""
-_TWO_D_VACUUM_MARGIN_ANGSTROM = 20 * _BOHR_ANGSTROM
-"""QE wants the cell height along z above twice the slab's thickness
-including its electrons, safely estimated as the atomic thickness plus 10
-bohr (QE 7.3 PW/Doc/INPUT_PW.def:1668-1675), so the vacuum must be at least
-20 bohr wider than the atomic thickness."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,7 +147,6 @@ def check_all(
     magnetic: FieldState[MagneticConfigFacts] | None = None,
     electron_count: FieldState[ElectronCountDecision] | None = None,
     relax: FieldState[RelaxOptions | VcRelaxOptions] | None = None,
-    geometry: FieldState[GeometryFacts] | None = None,
     boundary: FieldState[BoundaryFacts] | None = None,
     vdw: FieldState[VdwFacts] | None = None,
     functional: FieldState[str] | None = None,
@@ -177,8 +160,8 @@ def check_all(
     ``field_states`` is every ``FieldState`` a caller has assembled so
     far (from any advisor) -- any that are ``Blocked`` land in
     ``report.blocking`` via ``collect_blocked``. ``occupations``/
-    ``magnetic``/``electron_count``/``relax``/``geometry``/``boundary``/
-    ``vdw``/``functional``/``job``/``parallel``/``nbnd``/``purpose``
+    ``magnetic``/``electron_count``/``relax``/``boundary``/``vdw``/
+    ``functional``/``job``/``parallel``/``nbnd``/``purpose``
     additionally opt into the named cross-parameter rules this module
     implements; passing them here also folds them into the generic
     ``Blocked`` scan, so a caller does not need to repeat them in
@@ -194,7 +177,6 @@ def check_all(
             magnetic,
             electron_count,
             relax,
-            geometry,
             boundary,
             vdw,
             functional,
@@ -217,7 +199,7 @@ def check_all(
         _slab_vc_relax_needs_2d_cell_dofree(boundary, relax),
         _two_d_cell_dofree_needs_xy_frame(relax, magnetic),
         _dispersion_needs_parameterised_functional(vdw, functional),
-        _fix_bottom_layers_requires_2d_geometry(relax, geometry),
+        _fix_bottom_layers_requires_slab(relax, magnetic),
         _npool_must_divide_ntasks(job, parallel),
         _ndiag_grid_must_distribute_bands(job, parallel, nbnd),
     )
@@ -415,38 +397,21 @@ def _slab_needs_room_for_the_2d_truncation(cell: Structure) -> str | None:
     interaction only when every G_z is a multiple of 2 pi / c, so that the
     transform's sin(G_z c/2) term vanishes. It stops when the half height is
     below the pseudopotentials' radial cutoff, and truncates part of the
-    slab's own interaction when the vacuum is too narrow; see
-    ``_TWO_D_MIN_HEIGHT_ANGSTROM`` and ``_TWO_D_VACUUM_MARGIN_ANGSTROM``."""
+    slab's own interaction when the vacuum is too narrow;
+    ``analysis.geometry.two_d_truncation_obstacles`` holds both bounds, and
+    the boundary advisor offers 'slab' only where it finds nothing."""
     found = _xy_frame_obstacles(cell, allowed_vacuum=(("c",),))
     if not found:
-        found = _two_d_cell_obstacles(cell)
+        found = list(two_d_truncation_obstacles(cell))
     if not found:
         return None
     return (
         "isolation='slab' writes Quantum ESPRESSO's 2D Coulomb truncation "
         "(assume_isolated='2D'), which needs vacuum along c only, a and b in the "
-        "Cartesian xy plane, c along z, a cell at least "
-        f"{_TWO_D_MIN_HEIGHT_ANGSTROM:.2f} Å high and vacuum at least "
-        f"{_TWO_D_VACUUM_MARGIN_ANGSTROM:.2f} Å wider than the slab, but the cell "
-        f"to be written has {' and '.join(found)}. Set isolation='periodic'."
+        "Cartesian xy plane, c along z, and room along z for the pseudopotentials "
+        f"and the slab, but the cell to be written has {' and '.join(found)}. "
+        "Set isolation='periodic'."
     )
-
-
-def _two_d_cell_obstacles(cell: Structure) -> list[str]:
-    """What else a slab with its vacuum along c and a, b in the xy plane lacks
-    for the 2D truncation. The cell height is c's z component, and the atomic
-    thickness is that height less the vacuum."""
-    height = float(cell.lattice.matrix[2][2])
-    vacuum = vacuum_widths(cell)[2]
-    thickness = height - vacuum
-    found = []
-    if not c_along_z(cell.lattice):
-        found.append("c off the z axis")
-    if height < _TWO_D_MIN_HEIGHT_ANGSTROM:
-        found.append(f"a height of {height:.2f} Å along z")
-    if vacuum < thickness + _TWO_D_VACUUM_MARGIN_ANGSTROM:
-        found.append(f"{vacuum:.2f} Å of vacuum around a slab {thickness:.2f} Å thick")
-    return found
 
 
 def _vc_relax_forbids_isolated_boundary(
@@ -567,26 +532,43 @@ def _dispersion_needs_parameterised_functional(
     )
 
 
-def _fix_bottom_layers_requires_2d_geometry(
+def _fix_bottom_layers_requires_slab(
     relax: FieldState[RelaxOptions | VcRelaxOptions] | None,
-    geometry: FieldState[GeometryFacts] | None,
+    magnetic: FieldState[MagneticConfigFacts] | None,
 ) -> str | None:
-    """``relax.fix_bottom_layers`` (#44) fixes atoms in a slab's bottom
-    N atomic layers -- meaningless (there is no "bottom" along a
-    stacking direction) unless the structure actually is a 2D slab.
-    Blocked here rather than silently ignored or left to fail deep
-    inside generation's own layer-detection algorithm with a less
-    actionable message."""
-    if relax is None or not relax.ok or relax.value.fix_bottom_layers is None:
+    """``relax.fix_bottom_layers`` (#44) freezes a slab's bottom N atomic
+    layers, which ``analysis.geometry.slab_layers`` counts up from the vacuum
+    of a cell with exactly one vacuum axis. A '2d' rank is no evidence of a
+    slab: bulk graphite ranks '2d' and has no vacuum (#160). Checked with the
+    writer's own layers, on the cell it renders, so a passing check means the
+    writer can apply the count."""
+    if relax is None or magnetic is None or not (relax.ok and magnetic.ok):
         return None
-    if geometry is None or not geometry.ok:
+    count = relax.value.fix_bottom_layers
+    if count is None:
+        return None
+    cell = magnetic.value.relabeled_structure
+    layers = slab_layers(cell)
+    if layers is None:
         return (
-            "relax.fix_bottom_layers requires a 2D slab structure, but "
-            "geometry classification is not available."
+            "relax.fix_bottom_layers requires a slab: it freezes the bottom atomic "
+            "layers counted up from the vacuum, so the cell needs one vacuum gap, "
+            "along exactly one lattice vector, but the cell to be written has "
+            f"{_no_single_slab(cell)}. Unset fix_bottom_layers."
         )
-    if geometry.value.dimensionality != "2d":
+    if count > len(layers):
         return (
-            "relax.fix_bottom_layers requires a 2D slab structure; got "
-            f"dimensionality={geometry.value.dimensionality!r}."
+            f"relax.fix_bottom_layers={count} exceeds the {len(layers)} atomic "
+            "layers of the slab to be written. Set fix_bottom_layers to at most "
+            f"{len(layers)}, or unset it."
         )
     return None
+
+
+def _no_single_slab(cell: Structure) -> str:
+    """Why ``analysis.geometry.slab_layers`` finds no single slab in ``cell``:
+    its vacuum axes, or a second vacuum gap along its one vacuum axis."""
+    axes = vacuum_axes(cell)
+    if len(axes) == 1:
+        return f"more than one vacuum gap along {axes[0]}, so more than one slab"
+    return f"vacuum along {_along(axes)}" if axes else "no vacuum"

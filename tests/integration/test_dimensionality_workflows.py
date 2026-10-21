@@ -3,9 +3,10 @@
 ``advise()``/``check()``/``generate()`` and their relax variants on Si
 cells, with the synthetic SSSP Si table from ``tests/support.py``, so these
 run without installed pseudopotentials (#126, #132, #161). The dispersion
-tests (#141), the graphite vc-relax test (#132) and the isolation gate on
-graphite and a MoS2 monolayer (#161) read only the advice and the check,
-which need no pseudopotentials either.
+tests (#141), the graphite vc-relax test (#132), the isolation gate on
+graphite and a MoS2 monolayer (#161), and the slab-only advice and
+fix_bottom_layers gate (#160) read only the advice and the check, which
+need no pseudopotentials either.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from pymatgen.core import Lattice, Structure
 from pymatgen.core.surface import SlabGenerator
 from support import (
     graphite,
+    janus_molybdenum_sulfide_selenide,
     molybdenum_disulfide_monolayer,
     rotated_about_x,
     sssp_fixture_table_spec,
@@ -327,6 +329,83 @@ def test_a_slab_override_on_bulk_graphite_is_refused() -> None:
     assert "isolation='slab'" in isolation[0]
     assert "the cell to be written has no vacuum" in isolation[0]
     assert "Set isolation='periodic'" in isolation[0]
+
+
+def _dipole_notices(advice) -> list[str]:
+    return [
+        warning["message"]
+        for warning in advice.warnings()
+        if warning["code"] == "boundary.dipole_correction_suggested"
+    ]
+
+
+def test_bulk_graphite_gets_no_slab_advice() -> None:
+    """#160: graphite ranks '2d', which used to bring the slab dipole notice
+    and local-TF mixing, both justified by a vacuum it does not have."""
+    advice = advise(graphite(), hpc=load_hpc_profile("scarf"))
+
+    assert advice.analysis.geometry.value.dimensionality == "2d"
+    assert _dipole_notices(advice) == []
+    assert advice.step.kpoints.convergence.value.mixing_mode == "plain"
+
+
+def test_a_symmetric_monolayer_gets_no_dipole_notice() -> None:
+    advice = advise(molybdenum_disulfide_monolayer(), hpc=load_hpc_profile("scarf"))
+
+    assert _dipole_notices(advice) == []
+    assert advice.step.kpoints.convergence.value.mixing_mode == "local-TF"
+
+
+def test_a_polar_sheet_gets_a_dipole_notice_along_its_vacuum_axis() -> None:
+    """The Janus MoSSe sheet has no operation reversing c: the notice reads
+    the point group of the input structure and its vacuum."""
+    advice = advise(janus_molybdenum_sulfide_selenide(), hpc=load_hpc_profile("scarf"))
+
+    (message,) = _dipole_notices(advice)
+    assert "edir = 3" in message
+    assert advice.analysis.symmetry.value.reversible_axes == ()
+
+
+def test_fix_bottom_layers_on_bulk_graphite_is_refused() -> None:
+    """#160, the issue's reproduction: with fix_bottom_layers=1 the relax of
+    bulk graphite passed the check, and relax.in froze its z = 1/4 sheet."""
+    advice = advise_relax(
+        graphite(),
+        calculation="relax",
+        hpc=load_hpc_profile("scarf"),
+        overrides=build_overrides({"fix_bottom_layers": 1}),
+    )
+
+    report = check_relax(advice)
+
+    layers = [reason for reason in report.blocking if "fix_bottom_layers" in reason]
+    assert len(layers) == 1
+    assert "requires a slab" in layers[0]
+    assert "the cell to be written has no vacuum" in layers[0]
+
+
+def test_a_relax_of_a_slab_fixes_its_bottom_layers(store: AssetStore) -> None:
+    """The Si(001) slab passes the gate, and the writer freezes its two
+    lowest atoms, one per atomic layer."""
+    slab = silicon_001_slab()
+    advice = advise_relax(
+        slab,
+        calculation="relax",
+        hpc=load_hpc_profile("scarf"),
+        overrides=build_overrides({"fix_bottom_layers": 2}),
+        store=store,
+    )
+    report = check_relax(advice)
+    assert report.ok, report.blocking
+
+    content = generate_relax(advice, report)[0].files["relax.in"]
+
+    lines = content.splitlines()
+    start = lines.index("ATOMIC_POSITIONS crystal") + 1
+    rows = lines[start : start + len(slab)]
+    fixed = {i for i, row in enumerate(rows) if row.split()[-3:] == ["0", "0", "0"]}
+    z = slab.cart_coords[:, 2]
+    assert fixed == {int(i) for i in z.argsort()[:2]}
 
 
 def test_the_quantum_espresso_assume_isolated_key_is_not_a_setting() -> None:

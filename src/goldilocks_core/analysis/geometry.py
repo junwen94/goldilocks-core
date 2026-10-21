@@ -1,9 +1,10 @@
 """geometry: dimensionality (3d/2d/1d/molecule) from a bond graph, the
-lattice vectors along which a cell has vacuum, and the frame of a slab.
+lattice vectors along which a cell has vacuum, and the frame and atomic
+layers of a slab.
 
 The dimensionality is Larsen's connectivity rank
 (``pymatgen.analysis.dimensionality.get_dimensionality_larsen``) of
-``bond_graph``, which joins two bonding rules:
+``_bond_graph``, which joins two bonding rules:
 
 - ``JmolNN`` bonds a pair closer than the sum of two fixed, covalent-scale
   radii plus 0.45 A. It replaced v1's ``CrystalNN``, whose fingerprint
@@ -37,11 +38,25 @@ move only the x and y components of a and b and hold c fixed (QE 7.3
 Modules/cell_base.f90:742-749 and :803-808). They keep a slab's shape and
 vacuum only when the vacuum lies along c and a, b lie in the xy plane, the
 frame ``SlabGeometry.xy_frame`` reports. QE's 2D Coulomb truncation assumes
-that frame with c along z as well (PW/src/Coul_cut_2D.f90:72-81). All 15
-monolayers of the batch are in that frame, with c along z, while its fcc, bcc
-and rhombohedral primitive cells have a and b out of the xy plane.
+that frame with c along z as well (PW/src/Coul_cut_2D.f90:72-81), and needs
+room along z for the pseudopotentials and the slab
+(``two_d_truncation_obstacles``); ``SlabGeometry.fits_2d_truncation``
+records whether a slab has all of it. The boundary advisor offers that
+truncation by this flag of the input cell and ``checks.check_all`` accepts it
+by the same test on the written cell, so the two agree unless an
+antiferromagnetic supercell moves the vacuum or doubles the cell across it.
+All 15 monolayers of the batch are in that frame, with c along z, while its
+fcc, bcc and rhombohedral primitive cells have a and b out of the xy plane.
 ``ab_in_xy_plane`` and ``c_along_z`` are the one test of each, with one
 tolerance, so every caller applies the same.
+
+A slab's atomic layers (``slab_layers``) are counted along its vacuum axis
+up from the upper edge of the vacuum, so a slab that straddles the cell
+boundary keeps its bottom layer first (#160). A cell with a second vacuum
+gap along that axis holds two slabs, as a monolayer doubled along its normal
+by an antiferromagnetic supercell does, and has no layers to count.
+``checks.check_all`` and the ``fix_bottom_layers`` writer both read them, on
+the cell the writer renders.
 
 Disordered structures and classifier failures are ``Unavailable``, like
 every other ``analysis/`` fact.
@@ -63,7 +78,8 @@ from goldilocks_core.resolution import FieldState, Provenance, Resolved, Unavail
 Dimensionality = Literal["3d", "2d", "1d", "molecule"]
 LatticeAxis = Literal["a", "b", "c"]
 
-_LATTICE_AXES: tuple[LatticeAxis, LatticeAxis, LatticeAxis] = ("a", "b", "c")
+LATTICE_AXES: tuple[LatticeAxis, LatticeAxis, LatticeAxis] = ("a", "b", "c")
+"""The lattice vectors in order; index i is column i of fractional coordinates."""
 
 _BY_VALUE: dict[int, Dimensionality] = {3: "3d", 2: "2d", 1: "1d", 0: "molecule"}
 
@@ -89,15 +105,49 @@ plane. QE 7.3 applies the same test before its 2D Coulomb cutoff, to lattice
 vectors in units of alat (PW/src/Coul_cut_2D.f90:72-74); alat is |a| for
 CELL_PARAMETERS in angstrom (Modules/cell_base.f90:222)."""
 
+_BOHR_ANGSTROM = 0.529177210903
+"""QE 7.3's bohr radius in A (Modules/constants.f90:38, :111)."""
+
+_TWO_D_MIN_HEIGHT_ANGSTROM = 21 * _BOHR_ANGSTROM
+"""Lowest cell height along z for QE's 2D Coulomb truncation. pw.x stops when
+half of it is below the last radial-grid point it keeps for a
+pseudopotential (QE 7.3 PW/src/init_vloc.f90:62-65): the first point beyond
+10 bohr, or the one before it when that point's index is even, since msh is
+made odd by rounding down (Modules/read_pseudo.f90:174-186). In the 1138
+SSSP and PseudoDojo files of the registered tables the kept point lies
+within 10.16 bohr, below the 10.5 bohr that 21 bohr allows."""
+
+_TWO_D_VACUUM_MARGIN_ANGSTROM = 20 * _BOHR_ANGSTROM
+"""QE wants the cell height along z above twice the slab's thickness
+including its electrons, safely estimated as the atomic thickness plus 10
+bohr (QE 7.3 PW/Doc/INPUT_PW.def:1668-1675), so the vacuum must be at least
+20 bohr wider than the atomic thickness."""
+
+_LAYER_TOLERANCE_ANGSTROM = 0.5
+"""Largest height difference along the slab normal between an atom and the
+next one up for both to count as one atomic layer, the chaining rule of
+``ase.geometry.get_layers`` (whose default tolerance, 0.001 A, splits any
+relaxed layer). A chosen heuristic, not a sourced value: it keeps a buckled
+sheet such as silicene (about 0.45 A) as one layer, and surface rumpling
+after relaxation is usually well under 1 A; worth checking against real
+slabs."""
+
 
 @dataclass(frozen=True, slots=True)
 class SlabGeometry:
     """A cell with exactly one vacuum axis. ``xy_frame``: that axis is c and
     a, b lie in the Cartesian xy plane, the frame QE's 2D cell constraints
-    assume."""
+    assume; ``fits_2d_truncation``: the cell is in that frame and
+    ``two_d_truncation_obstacles`` finds nothing, so QE's 2D Coulomb
+    truncation applies. ``vacuum_center`` (a fractional coordinate in [0, 1))
+    and ``vacuum_fraction`` (a share of the cell) locate the widest atom-free
+    slab along the vacuum axis, both rounded to 0.0001."""
 
     vacuum_axis: LatticeAxis
     xy_frame: bool
+    fits_2d_truncation: bool
+    vacuum_center: float
+    vacuum_fraction: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +164,7 @@ class GeometryFacts:
     slab: SlabGeometry | None
 
 
-def bond_graph(structure: Structure) -> StructureGraph:
+def _bond_graph(structure: Structure) -> StructureGraph:
     """Bond graph of an ordered ``structure``: ``JmolNN``'s bonds plus, for
     every site, a bond to each neighbour closer than
     ``1 + _SHELL_TOLERANCE`` times the site's shortest contact within
@@ -145,7 +195,7 @@ def geometry(structure: Structure) -> FieldState[GeometryFacts]:
             "disordered structures"
         )
     try:
-        dim_value = get_dimensionality_larsen(bond_graph(structure))
+        dim_value = get_dimensionality_larsen(_bond_graph(structure))
     except (ValueError, RuntimeError) as error:
         return Unavailable(reason=f"dimensionality classification failed: {error}")
     dimensionality = _BY_VALUE.get(dim_value)
@@ -161,7 +211,7 @@ def geometry(structure: Structure) -> FieldState[GeometryFacts]:
         low_dimensional=bool(dim_value < 3),
         vacuum_axes=axes,
         vacuum_widths_angstrom=widths,
-        slab=_slab(structure.lattice, axes),
+        slab=_slab(structure, axes),
     )
     return Resolved(facts, Provenance(source="heuristic"))
 
@@ -172,11 +222,10 @@ def vacuum_widths(structure: Structure) -> tuple[float, float, float]:
     vector, wrapped into the cell, times the spacing 1/|b_i| of the planes
     parallel to the other two vectors (b_i is the reciprocal vector)."""
     reciprocal_lengths = structure.lattice.reciprocal_lattice_crystallographic.abc
-    widths = []
-    for axis, reciprocal_length in enumerate(reciprocal_lengths):
-        coordinates = np.sort(np.mod(structure.frac_coords[:, axis], 1.0))
-        gaps = np.diff(coordinates, append=coordinates[0] + 1.0)
-        widths.append(round(float(gaps.max()) / reciprocal_length, 2))
+    widths = [
+        round(_widest_gap(structure.frac_coords[:, axis])[1] / reciprocal_length, 2)
+        for axis, reciprocal_length in enumerate(reciprocal_lengths)
+    ]
     return widths[0], widths[1], widths[2]
 
 
@@ -187,9 +236,36 @@ def vacuum_axes(structure: Structure) -> tuple[LatticeAxis, ...]:
 
 
 def slab_geometry(structure: Structure) -> SlabGeometry | None:
-    """``structure``'s vacuum axis and frame, or ``None`` unless it has
-    exactly one vacuum axis."""
-    return _slab(structure.lattice, vacuum_axes(structure))
+    """``structure``'s vacuum axis, frame and vacuum, or ``None`` unless it
+    has exactly one vacuum axis."""
+    return _slab(structure, vacuum_axes(structure))
+
+
+def slab_layers(structure: Structure) -> tuple[tuple[int, ...], ...] | None:
+    """Site indices of ``structure``'s atomic layers, bottom layer first, or
+    ``None`` unless it is a single slab: exactly one vacuum axis, and no
+    atom-free gap along it wider than ``VACUUM_GAP_ANGSTROM`` besides the
+    widest. Heights run along the slab normal from the upper edge of the
+    widest vacuum; sorted by height, an atom more than
+    ``_LAYER_TOLERANCE_ANGSTROM`` above the previous one starts a new
+    layer."""
+    slab = slab_geometry(structure)
+    if slab is None:
+        return None
+    axis = LATTICE_AXES.index(slab.vacuum_axis)
+    reciprocal_length = structure.lattice.reciprocal_lattice_crystallographic.abc[axis]
+    coordinates = np.mod(structure.frac_coords[:, axis], 1.0)
+    bottom, _ = _widest_gap(coordinates)
+    heights = np.mod(coordinates - bottom, 1.0) / reciprocal_length
+    order = np.argsort(heights, kind="stable")
+    rises = np.diff(heights[order])
+    if np.any(np.round(rises, 2) > VACUUM_GAP_ANGSTROM):
+        return None
+    starts = np.flatnonzero(rises > _LAYER_TOLERANCE_ANGSTROM) + 1
+    return tuple(
+        tuple(sorted(int(index) for index in layer))
+        for layer in np.split(order, starts)
+    )
 
 
 def ab_in_xy_plane(lattice: Lattice) -> bool:
@@ -209,13 +285,57 @@ def c_along_z(lattice: Lattice) -> bool:
     return bool(abs(c[0]) <= limit and abs(c[1]) <= limit)
 
 
-def _slab(lattice: Lattice, axes: tuple[LatticeAxis, ...]) -> SlabGeometry | None:
+def two_d_truncation_obstacles(structure: Structure) -> tuple[str, ...]:
+    """What a cell with its vacuum along c and a, b in the xy plane still
+    lacks for QE's 2D Coulomb truncation, each as a phrase naming the value
+    found: c along z (``c_along_z``), a height along z of at least
+    ``_TWO_D_MIN_HEIGHT_ANGSTROM``, and vacuum along c at least
+    ``_TWO_D_VACUUM_MARGIN_ANGSTROM`` wider than the slab. The height is c's
+    z component and the slab's thickness that height less the vacuum. Empty
+    when the cell has all three."""
+    height = float(structure.lattice.matrix[2][2])
+    vacuum = vacuum_widths(structure)[2]
+    thickness = height - vacuum
+    found = []
+    if not c_along_z(structure.lattice):
+        found.append("c off the z axis")
+    if height < _TWO_D_MIN_HEIGHT_ANGSTROM:
+        found.append(
+            f"a height of {height:.2f} Å along z "
+            f"(at least {_TWO_D_MIN_HEIGHT_ANGSTROM:.2f} Å needed)"
+        )
+    needed = thickness + _TWO_D_VACUUM_MARGIN_ANGSTROM
+    if vacuum < needed:
+        found.append(
+            f"{vacuum:.2f} Å of vacuum around a slab {thickness:.2f} Å thick "
+            f"(at least {needed:.2f} Å needed)"
+        )
+    return tuple(found)
+
+
+def _slab(structure: Structure, axes: tuple[LatticeAxis, ...]) -> SlabGeometry | None:
     if len(axes) != 1:
         return None
     (axis,) = axes
+    xy_frame = axis == "c" and ab_in_xy_plane(structure.lattice)
+    bottom, width = _widest_gap(structure.frac_coords[:, LATTICE_AXES.index(axis)])
     return SlabGeometry(
-        vacuum_axis=axis, xy_frame=axis == "c" and ab_in_xy_plane(lattice)
+        vacuum_axis=axis,
+        xy_frame=xy_frame,
+        fits_2d_truncation=xy_frame and not two_d_truncation_obstacles(structure),
+        vacuum_center=round((bottom - width / 2) % 1.0, 4) % 1.0,
+        vacuum_fraction=round(width, 4),
     )
+
+
+def _widest_gap(coordinates: np.ndarray) -> tuple[float, float]:
+    """The widest gap between consecutive fractional ``coordinates`` along
+    one lattice vector, wrapped into the cell, as (upper edge, width): the
+    upper edge is the wrapped coordinate of the first atom above the gap."""
+    ordered = np.sort(np.mod(coordinates, 1.0))
+    gaps = np.diff(ordered, append=ordered[0] + 1.0)
+    widest = int(np.argmax(gaps))
+    return float(ordered[(widest + 1) % len(ordered)]), float(gaps[widest])
 
 
 def _axes_wider_than_the_gap(
@@ -223,6 +343,6 @@ def _axes_wider_than_the_gap(
 ) -> tuple[LatticeAxis, ...]:
     return tuple(
         axis
-        for axis, width in zip(_LATTICE_AXES, widths, strict=True)
+        for axis, width in zip(LATTICE_AXES, widths, strict=True)
         if width > VACUUM_GAP_ANGSTROM
     )

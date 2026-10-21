@@ -14,18 +14,17 @@ with unvalidated numbers.
 separately):** human-only (``RelaxHumanInput`` only, no ``RelaxLlmInput``
 counterpart) -- like the numerically-sensitive thresholds below, which
 atoms to physically pin during a relaxation is a structural decision,
-not a "which scenario" choice an llm tier should be guessing at.
-``checks.py``'s ``_fix_bottom_layers_requires_2d_geometry`` blocks any
-value other than ``None`` on a non-2D structure; the actual per-atom
-layer detection (bonded-graph orientation + ``ase.geometry.get_layers``)
-happens in ``generation/quantum_espresso/relax.py`` at generation time,
-against ``system.magnetic.relabeled_structure`` -- not here and not in
-``analysis/geometry.py`` -- since that is the exact structure whose site
-order the ``ATOMIC_POSITIONS`` card writer needs index-aligned layer
-data for, and AFM species-splitting (this module's own note above) can
-in principle change site count/order between the phase-1 ``structure``
-this module's own ``geometry`` parameter is computed against and
-generation time's ``relabeled_structure``.
+not a "which scenario" choice an llm tier should be guessing at. The
+layers are ``analysis.geometry.slab_layers``, counted up from the vacuum
+of a cell with exactly one vacuum axis, on
+``system.magnetic.relabeled_structure`` rather than the phase-1
+``structure`` this module's ``geometry`` parameter is computed against:
+that is the structure whose site order the ``ATOMIC_POSITIONS`` card
+needs index-aligned layers for, and AFM species-splitting can change its
+site count and order. ``checks.py``'s ``_fix_bottom_layers_requires_slab``
+refuses any value other than ``None`` unless that cell is a slab with at
+least that many layers (#160); a '2d' rank is not enough, since bulk
+graphite has one and no vacuum.
 
 **``cell_dofree`` comes from the vacuum, not the dimensionality rank
 (#132).** The rank cannot tell a bulk layered crystal from a slab:

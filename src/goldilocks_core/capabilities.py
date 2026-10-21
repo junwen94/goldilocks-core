@@ -394,8 +394,9 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "mixing_mode": {
         "description": (
-            "SCF density-mixing algorithm; heuristic default is local-TF for "
-            "2D/molecule geometries."
+            "SCF density-mixing algorithm; heuristic default is local-TF for a "
+            "cell with vacuum along any lattice vector (a slab, wire or isolated "
+            "system) and plain otherwise, including bulk layered crystals."
         ),
     },
     "mixing_fixed_ns": {
@@ -496,8 +497,11 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "fix_bottom_layers": {
         "description": (
-            "Fix the bottom N atomic layers of a 2D slab (if_pos) during "
-            "relax/vc-relax; requires the structure to classify as 2D."
+            "Fix the bottom N atomic layers of a slab (if_pos) during "
+            "relax/vc-relax, counted up from the vacuum; refused unless the cell "
+            "to be written has one vacuum gap, along exactly one lattice vector, "
+            "and at least N layers (atoms within 0.5 Å along the normal share "
+            "one)."
         ),
     },
     "cell_dofree": {

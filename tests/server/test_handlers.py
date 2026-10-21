@@ -102,7 +102,7 @@ class TestExplain:
             pytest.param(
                 "relax",
                 {"fix_bottom_layers": 2},
-                ["is not installed", "fix_bottom_layers requires a 2D slab"],
+                ["is not installed", "fix_bottom_layers requires a slab"],
                 id="relax",
             ),
             pytest.param(

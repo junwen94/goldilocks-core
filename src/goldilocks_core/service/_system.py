@@ -183,7 +183,10 @@ def system_advice(
             analysis.geometry, functional_value, overrides.vdw, overrides.vdw_llm
         ),
         boundary=boundary(
-            analysis.geometry, overrides.boundary, overrides.boundary_llm
+            analysis.geometry,
+            analysis.symmetry,
+            overrides.boundary,
+            overrides.boundary_llm,
         ),
         hubbard=hubbard_u(
             structure,

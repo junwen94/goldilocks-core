@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 from support import carbon_pair_in_a_box, graphene_monolayer
 
@@ -381,9 +382,9 @@ def test_fix_bottom_layers_fixes_exactly_the_lowest_atoms(
 def test_fix_bottom_layers_finds_the_layers_of_an_ionic_slab(
     pseudo_metadata_factory,
 ) -> None:
-    """NaCl(001): the ionic Na-Cl contacts (2.82 A) lie beyond JmolNN's
-    2.41 A cutoff, so the writer finds the slab's stacking direction only
-    through the nearest-neighbour shell bonds (#125)."""
+    """NaCl(001): each atomic layer holds both Na and Cl, and the bottom one
+    is every atom at the lowest z. The layers follow the vacuum, not bonds,
+    which JmolNN alone misses here (Na-Cl 2.82 A, cutoff 2.41 A, #125)."""
     from pymatgen.core import Lattice, Structure
     from pymatgen.core.surface import SlabGenerator
 
@@ -406,6 +407,34 @@ def test_fix_bottom_layers_finds_the_layers_of_an_ionic_slab(
     assert fixed_indices == {i for i in range(len(slab)) if z[i] < z.min() + 0.1}
 
 
+def test_fix_bottom_layers_counts_up_from_the_vacuum_across_the_cell_boundary(
+    pseudo_metadata_factory,
+) -> None:
+    """#160: shifted by half a cell, the Si(001) slab straddles z = 0, so
+    layers counted from fractional 0 start inside it. Counted up from the
+    upper edge of the vacuum, they are the slab's own: the writer fixes the
+    same atoms as in the centred slab, its two lowest."""
+    from pymatgen.core import Structure
+
+    slab = _silicon_slab()
+    shifted = Structure(
+        slab.lattice,
+        slab.species,
+        np.mod(slab.frac_coords + np.array([0, 0, 0.5]), 1.0),
+    )
+    system = _system(shifted, pseudo_metadata_factory)
+    step = _step(relax=RelaxOptions(fix_bottom_layers=2))
+
+    content = write_qe_relax(system, step, _CTX, "relax")[0].files["relax.in"]
+
+    rows = _atomic_positions_block(content)
+    fixed_indices = {
+        i for i, row in enumerate(rows) if row.split()[-3:] == ["0", "0", "0"]
+    }
+    z = slab.cart_coords[:, 2]
+    assert fixed_indices == {int(i) for i in np.argsort(z)[:2]}
+
+
 def test_fix_bottom_layers_exceeding_detected_layers_raises(
     pseudo_metadata_factory,
 ) -> None:
@@ -418,16 +447,17 @@ def test_fix_bottom_layers_exceeding_detected_layers_raises(
 
 
 def test_fix_bottom_layers_on_a_bulk_structure_raises(
-    silicon_structure, pseudo_metadata_factory
+    diamond_silicon, pseudo_metadata_factory
 ) -> None:
-    """``checks.check_all`` is expected to reject this before generation
-    is ever reached in the real pipeline -- this only confirms the
-    writer itself fails loudly rather than silently mis-fixing atoms if
-    that guard were ever bypassed."""
-    system = _system(silicon_structure, pseudo_metadata_factory)
+    """``checks.check_all`` rejects this before generation in the real
+    pipeline; called directly, the writer fails loudly rather than fixing
+    atoms of a cell with no bottom."""
+    system = _system(diamond_silicon, pseudo_metadata_factory)
     step = _step(relax=RelaxOptions(fix_bottom_layers=1))
 
-    with pytest.raises(GenerationError, match="2D bonded component"):
+    with pytest.raises(
+        GenerationError, match="exactly one lattice vector, but this cell has no vacuum"
+    ):
         write_qe_relax(system, step, _CTX, "relax")
 
 
