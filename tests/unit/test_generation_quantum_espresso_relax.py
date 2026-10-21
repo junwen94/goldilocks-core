@@ -328,6 +328,34 @@ def test_fix_bottom_layers_fixes_exactly_the_lowest_atoms(
     assert max(z[i] for i in fixed_indices) < min(z[i] for i in free_indices)
 
 
+def test_fix_bottom_layers_finds_the_layers_of_an_ionic_slab(
+    pseudo_metadata_factory,
+) -> None:
+    """NaCl(001): the ionic Na-Cl contacts (2.82 A) lie beyond JmolNN's
+    2.41 A cutoff, so the writer finds the slab's stacking direction only
+    through the nearest-neighbour shell bonds (#125)."""
+    from pymatgen.core import Lattice, Structure
+    from pymatgen.core.surface import SlabGenerator
+
+    bulk = Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(5.64), ["Na", "Cl"], [[0, 0, 0], [0.5, 0.5, 0.5]]
+    )
+    slab = SlabGenerator(
+        bulk, (0, 0, 1), min_slab_size=10, min_vacuum_size=12, center_slab=True
+    ).get_slab()
+    system = _system(slab, pseudo_metadata_factory)
+    step = _step(relax=RelaxOptions(fix_bottom_layers=1))
+
+    content = write_qe_relax(system, step, _CTX, "relax")[0].files["relax.in"]
+
+    rows = _atomic_positions_block(content)
+    fixed_indices = {
+        i for i, row in enumerate(rows) if row.split()[-3:] == ["0", "0", "0"]
+    }
+    z = slab.cart_coords[:, 2]
+    assert fixed_indices == {i for i in range(len(slab)) if z[i] < z.min() + 0.1}
+
+
 def test_fix_bottom_layers_exceeding_detected_layers_raises(
     pseudo_metadata_factory,
 ) -> None:

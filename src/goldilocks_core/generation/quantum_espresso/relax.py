@@ -52,12 +52,11 @@ from typing import Literal
 
 from ase.geometry import get_layers
 from pymatgen.analysis.dimensionality import get_structure_components
-from pymatgen.analysis.local_env import JmolNN
 from pymatgen.core import Structure
-from pymatgen.core.graphs import StructureGraph
 from pymatgen.io.ase import AseAtomsAdaptor
 
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
+from goldilocks_core.analysis.geometry import bond_graph
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.namelists import render_namelist
 from goldilocks_core.generation.quantum_espresso.scf import (
@@ -219,18 +218,16 @@ def _bottom_layer_site_indices(structure: Structure, count: int) -> frozenset[in
     the bottom ``count`` atomic layers along the structure's own
     stacking direction.
 
-    Bonding method (``JmolNN``) matches ``analysis/geometry.py``'s own
-    2D classification, so this reaches the same "is it 2D" answer
-    ``checks.py`` already validated against, on a real structure rather
-    than by assumption. A slab can decompose into more than one bonded
-    component along the stacking direction (e.g. van-der-Waals-bonded
-    multilayers, where ``JmolNN`` does not bond across the gap) -- every
-    2D component's own detected orientation is required to agree, since
-    disagreement means genuinely ambiguous stacking this function cannot
-    safely guess at.
+    Bonds come from ``analysis.geometry.bond_graph``, the graph
+    ``geometry()`` ranks for the 2D classification ``checks.py``
+    validated, so the writer and the classifier agree on which atoms are
+    bonded. A slab can decompose into more than one bonded component
+    along the stacking direction (e.g. van-der-Waals-bonded multilayers,
+    which are not bonded across the gap) -- every 2D component's own
+    detected orientation is required to agree, since disagreement means
+    genuinely ambiguous stacking this function cannot safely guess at.
     """
-    bonded = StructureGraph.from_local_env_strategy(structure, JmolNN())
-    components = get_structure_components(bonded, inc_orientation=True)
+    components = get_structure_components(bond_graph(structure), inc_orientation=True)
     orientations = {
         component["orientation"]
         for component in components

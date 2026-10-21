@@ -144,11 +144,20 @@ Becke–Johnson damping. Goldilocks enables it (`use_vdw=True`) for structures
 classified as `molecule`, `1d`, or `2d`, and disables it (`use_vdw=False`) for
 `3d`.
 
-The classification uses pymatgen's JmolNN bonding method plus Larsen's
-connectivity-rank algorithm to assign dimensionality. It is a heuristic, not a
-test of whether a dispersion correction is physically appropriate. Check the
-structure and choose `use_vdw` and `method` accordingly, including for
-molecular crystals classified as `3d`. Disordered structures, and a bonding or
+The classification builds a bond graph and assigns dimensionality with
+Larsen's connectivity-rank algorithm. Two atoms are bonded when they are
+within pymatgen's JmolNN covalent cutoffs, or when one lies in the other's
+nearest-neighbour shell: within 1.1 times that atom's shortest contact,
+searched up to 6 Å. The shell bonds the ionic and metallic contacts that
+covalent cutoffs miss, so rock-salt NaCl and bcc Na classify as `3d`. In
+most molecular crystals and van der Waals layered crystals each atom's
+nearest shell lies inside its own molecule or layer, so they classify as
+`molecule` and `2d`. It is a heuristic, not a test of whether a dispersion
+correction is physically appropriate: a solid held together only by
+dispersion, such as a noble-gas crystal, classifies as `3d`, and so does a
+molecular crystal whose intermolecular contacts fall inside those bonding
+ranges. Check the structure and choose `use_vdw` and `method` accordingly.
+Disordered structures, and a bonding or
 classification failure on an ordered structure, both report that
 dimensionality couldn't be determined (with a reason) rather than raising an
 error or silently guessing -- and the vdW decision itself then becomes

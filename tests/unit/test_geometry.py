@@ -7,9 +7,10 @@ from goldilocks_core.analysis.geometry import geometry
 
 
 def test_geometry_resolves_3d_for_a_bulk_structure() -> None:
-    # A single primitive-cell Si-Si pair is too far apart for JmolNN's
-    # cutoff table to bond at all; a real diamond-cubic cell (8 atoms,
-    # generated from the space group) has genuine nearest-neighbour bonds.
+    # A real diamond-cubic cell (8 atoms, generated from the space group),
+    # whose covalent Si-Si bonds JmolNN's cutoffs already find. A 1-atom
+    # cubic Si cell would rank 3d too, bonded to its own images through
+    # the nearest-neighbour shell, but it is not a real crystal.
     silicon = Structure.from_spacegroup(
         "Fd-3m", Lattice.cubic(5.431), ["Si"], [[0.0, 0.0, 0.0]]
     )

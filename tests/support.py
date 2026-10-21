@@ -33,6 +33,8 @@ import tarfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pymatgen.core import Structure
+
 from goldilocks_core.assets.records import AssetFile, AssetSpec
 from goldilocks_core.assets.runtime import statuses
 from goldilocks_core.assets.store import AssetStore, asset_root
@@ -180,3 +182,70 @@ def sssp_fixture_table_spec(
         default=True,
     )
     return spec, registry_table
+
+
+_MC2D_60196AFB_PHOSPHORENE_CIF = """\
+data_P
+_symmetry_space_group_name_H-M   'P 1'
+_cell_length_a   3.30546570
+_cell_length_b   4.61434267
+_cell_length_c   22.18331037
+_cell_angle_alpha   90.00000000
+_cell_angle_beta   90.00000000
+_cell_angle_gamma   90.00000000
+_symmetry_Int_Tables_number   1
+loop_
+ _symmetry_equiv_pos_site_id
+ _symmetry_equiv_pos_as_xyz
+  1  'x, y, z'
+loop_
+ _atom_site_type_symbol
+ _atom_site_label
+ _atom_site_symmetry_multiplicity
+ _atom_site_fract_x
+ _atom_site_fract_y
+ _atom_site_fract_z
+ _atom_site_occupancy
+  P  P0  1  0.50000000  0.91158132  0.45243739  1
+  P  P1  1  0.50000000  0.08841868  0.54756261  1
+  P  P2  1  1.00000000  0.58841862  0.45243739  1
+  P  P3  1  1.00000000  0.41158138  0.54756261  1
+"""
+
+
+def phosphorene() -> Structure:
+    """Phosphorene monolayer, MC2D mc2d-60196afb: 4 P atoms, P-P bonds of
+    2.22-2.26 A, vacuum along c (22.2 A cell)."""
+    return Structure.from_str(_MC2D_60196AFB_PHOSPHORENE_CIF, fmt="cif")
+
+
+_MC3D_6516_CARBON_PAIR_CIF = """\
+data_0
+
+loop_
+  _atom_site_label
+  _atom_site_fract_x
+  _atom_site_fract_y
+  _atom_site_fract_z
+  _atom_site_type_symbol
+         C1  0.33333333333333337  0.6666666666666667  0.24999999999854772  C
+         C2  0.6666666666666667  0.33333333333333337  0.7500000000014405  C
+_cell_angle_alpha                       90.0
+_cell_angle_beta                        90.0
+_cell_angle_gamma                       119.99999999987348
+_cell_length_a                          10.559999907643
+_cell_length_b                          10.55999990768339
+_cell_length_c                          17.179999849807
+loop_
+  _symmetry_equiv_pos_as_xyz
+         'x, y, z'
+_symmetry_int_tables_number             1
+_symmetry_space_group_name_H-M          'P 1'
+"""
+
+
+def carbon_pair_in_a_box() -> Structure:
+    """MC3D mc3d-6516, an isolated-atom artifact: two C atoms 10.5 A apart
+    in a 10.56 x 10.56 x 17.18 A hexagonal cell, so no atom has a neighbour
+    within 10 A."""
+    return Structure.from_str(_MC3D_6516_CARBON_PAIR_CIF, fmt="cif")
