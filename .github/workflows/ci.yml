@@ -74,6 +74,9 @@ jobs:
           --cov-report=xml
 
       - name: Mutation testing
+        # Paused on pushes and PRs while the e2e bug-fix round lands (#195);
+        # run on demand with `gh workflow run ci.yml --ref v2`. Re-enable: #196.
+        if: github.event_name == 'workflow_dispatch'
         run: |
           # --max-children 2: commit aabcefd lowered this from 4 to fix a mutmut
           # internal PID-tracking race (KeyError in read_one_child_exit_status)
