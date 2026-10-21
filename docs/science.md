@@ -62,12 +62,21 @@ under-convergence, while a mesh that is too fine on an actual insulator only
 costs more compute). There is no "confidence" or prediction-interval field
 in `explain`/`run` output today.
 
-Compare results on denser meshes. For slabs, wires, or molecules in periodic
-cells, check sampling along vacuum directions explicitly; dimensionality advice
-does not by itself set those mesh components to one. Use `k_grid` or
-`k_distance` to override the default. Setting either one only affects
-k-point selection; it does not change the separate `is_metal` heuristic used
-elsewhere (e.g. by occupations).
+Each lattice vector in the `geometry` record's `vacuum_axes` (see
+[boundary conditions and vacuum](#check-boundary-conditions-and-vacuum)) gets
+exactly one k-point, whatever the `k_distance` and its source: electrons do not
+disperse across vacuum, so more k-points there only cost compute. A slab gets
+one k-point across its vacuum, and a molecule in a box only the Γ-point,
+written as a 1×1×1 `K_POINTS automatic` mesh (pw.x rejects `K_POINTS gamma`
+with noncollinear spin or k-point pools). The rule reads the vacuum of the cell
+that is written, not its dimensionality, so a bulk layered crystal such as
+graphite is still sampled along its stacking axis. `k_index` rungs step the
+periodic axes only.
+
+Compare results on denser meshes. Use `k_grid` or `k_distance` to override
+the default; an explicit `k_grid` is written as given, vacuum axes included.
+Setting either one only affects k-point selection; it does not change the
+separate `is_metal` heuristic used elsewhere (e.g. by occupations).
 
 ## Check pseudopotentials and cutoffs
 

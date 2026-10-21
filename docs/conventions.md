@@ -36,7 +36,8 @@ factor (matching AiiDA-QuantumESPRESSO's k-distance convention). For each
 reciprocal vector `b_i`, the grid size is:
 
 ```text
-N_i = max(1, ceil(round(|b_i| / k_distance, 5)))
+N_i = max(1, ceil(round(|b_i| / k_distance, 5)))   along a periodic lattice vector
+N_i = 1                                            along a vacuum axis
 ```
 
 Rounding to five decimal places avoids numerical noise at integer boundaries. A
@@ -47,6 +48,11 @@ wired into `k_distance`'s own heuristic-vs-ml resolution, not into shift
 selection. In Quantum ESPRESSO's `K_POINTS automatic` convention
 this includes Γ (the reciprocal-space origin), even for even-sized meshes; a
 shift flag of `1` means a half-grid shift on that axis.
+
+A vacuum axis is a lattice vector along which the cell has an atom-free slab
+wider than 5 Å (the `geometry` record's `vacuum_axes`), so a slab gets one
+k-point across its vacuum and a molecule in a box the Γ-point alone, for any
+`k_distance` or `k_index`; an explicit `k_grid` is written as given.
 
 ## Defaults
 

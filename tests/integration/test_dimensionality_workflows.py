@@ -2,14 +2,17 @@
 
 ``advise()``/``check()``/``generate()`` and their relax variants on Si
 cells, with the synthetic SSSP Si table from ``tests/support.py``, so these
-run without installed pseudopotentials (#126, #132, #161). The dispersion
-tests (#141), the graphite vc-relax test (#132), the isolation gate on
-graphite and a MoS2 monolayer (#161), and the slab-only advice and
+run without installed pseudopotentials (#126, #132, #159, #161). The
+dispersion tests (#141), the graphite vc-relax test (#132), the isolation
+gate on graphite and a MoS2 monolayer (#161), and the slab-only advice and
 fix_bottom_layers gate (#160) read only the advice and the check, which
 need no pseudopotentials either.
 """
 
 from __future__ import annotations
+
+import json
+import math
 
 import pytest
 from pymatgen.core import Lattice, Structure
@@ -19,12 +22,14 @@ from support import (
     janus_molybdenum_sulfide_selenide,
     molybdenum_disulfide_monolayer,
     rotated_about_x,
+    silicon_dimer_in_a_box,
     sssp_fixture_table_spec,
 )
 
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.inputs.hpc import load_hpc_profile
+from goldilocks_core.resolution import ResolvedField
 from goldilocks_core.service import (
     advise,
     advise_relax,
@@ -48,15 +53,6 @@ def store(tmp_path, monkeypatch) -> AssetStore:
     store = AssetStore(tmp_path / "store")
     store.install(spec, sssp_preparer(registry_table))
     return store
-
-
-def silicon_dimer_in_a_box() -> Structure:
-    """An Si2 dimer (bond 2.25 A, along [111]) in a 12 A cubic box: 10.7 A
-    of vacuum along every lattice vector."""
-    offset = 2.25 / (12.0 * 3**0.5)
-    return Structure(
-        Lattice.cubic(12.0), ["Si", "Si"], [[0, 0, 0], [offset, offset, offset]]
-    )
 
 
 def diamond_silicon() -> Structure:
@@ -104,6 +100,53 @@ def test_an_isolated_molecule_gets_martyna_tuckerman_and_no_stress(
     assert advice.system.boundary.value.isolation == "isolated"
     assert "assume_isolated  = 'martyna-tuckerman'" in content
     assert "tstress" not in content
+
+
+def test_an_isolated_molecule_is_sampled_at_gamma_only(store: AssetStore) -> None:
+    """#159: the k-mesh divided every axis by k_distance, so the dimer ran on
+    a 4x4x4 mesh. With vacuum along a, b and c it gets the Gamma-only mesh,
+    written as a 1x1x1 automatic grid (pw.x refuses ``K_POINTS gamma`` with
+    noncollinear spin or pools), and its records are strict JSON: the Gamma
+    rung's open upper bound is None, not inf (#137)."""
+    advice = advise(
+        silicon_dimer_in_a_box(), hpc=load_hpc_profile("scarf"), store=store
+    )
+    report = check(advice)
+    assert report.ok, report.blocking
+
+    content = generate(advice, report)[0].files["scf.in"]
+
+    assert "K_POINTS automatic\n  1  1  1  0  0  0\n" in content
+    k_sampling = advice.step.kpoints.k_sampling.value
+    assert k_sampling.k_index == 1
+    assert k_sampling.k_distance_interval == (0.0, None)
+    assert advice.step.kpoints.n_irr_k.value == 1
+    json.dumps(
+        {
+            name: ResolvedField.from_state(state).model_dump()
+            for name, state in advice.records().items()
+        },
+        allow_nan=False,
+    )
+
+
+def test_a_slab_is_sampled_once_along_its_vacuum(store: AssetStore) -> None:
+    """#159: the Si(001) slab's vacuum axis c got ceil(|b_3| / k_distance)
+    k-points, 2 at the default 0.15 A^-1. It now gets one, and a and b keep
+    that formula."""
+    slab = silicon_001_slab()
+    advice = advise(slab, hpc=load_hpc_profile("scarf"), store=store)
+    report = check(advice)
+    assert report.ok, report.blocking
+
+    content = generate(advice, report)[0].files["scf.in"]
+
+    k_sampling = advice.step.kpoints.k_sampling.value
+    b_1, b_2, _ = slab.lattice.reciprocal_lattice.abc
+    n_1, n_2 = (math.ceil(length / k_sampling.k_distance) for length in (b_1, b_2))
+    assert k_sampling.mesh == (n_1, n_2, 1)
+    assert k_sampling.k_index is not None
+    assert f"K_POINTS automatic\n  {n_1}  {n_2}  1  0  0  0\n" in content
 
 
 def test_vc_relax_of_an_isolated_molecule_is_refused(store: AssetStore) -> None:

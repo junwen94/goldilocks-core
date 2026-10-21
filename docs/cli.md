@@ -106,7 +106,7 @@ its type, default, and description; a selection of commonly used keys:
 | `functional`                        | Exchange-correlation functional (default `PBEsol`)                    |
 | `pseudo_table_id`                   | Pin a registered pseudopotential table id instead of automatic selection |
 | `k_grid`                            | Explicit Monkhorst-Pack mesh, e.g. `--set 'k_grid=[8,8,8]'`            |
-| `k_distance`                        | Target k-point spacing (heuristic default 0.15 for metals, 0.30 otherwise) |
+| `k_distance`                        | Target k-point spacing along each periodic axis; a vacuum axis always gets one k-point (heuristic default 0.15 for metals, 0.30 otherwise) |
 | `smearing_type`                     | Smearing function when `occupations=smearing` (default `cold`)        |
 | `degauss`                           | Smearing width in Ry (default 0.01)                                   |
 | `spin_polarized`, `spin_orbit_coupling` | Force spin polarization / spin-orbit coupling                     |

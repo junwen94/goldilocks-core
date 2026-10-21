@@ -257,6 +257,17 @@ def carbon_pair_in_a_box() -> Structure:
     return Structure.from_str(_MC3D_6516_CARBON_PAIR_CIF, fmt="cif")
 
 
+def silicon_dimer_in_a_box() -> Structure:
+    """An Si2 dimer (bond 2.25 A, along [111]) in a 12 A cubic box: 10.7 A
+    of vacuum along every lattice vector. Si is the one element of
+    ``sssp_fixture_table_spec``'s default table, so the dimer runs through
+    ``generate()`` without installed pseudopotentials."""
+    offset = 2.25 / (12.0 * 3**0.5)
+    return Structure(
+        Lattice.cubic(12.0), ["Si", "Si"], [[0, 0, 0], [offset, offset, offset]]
+    )
+
+
 def sodium_chloride() -> Structure:
     """Rock salt, Fm-3m, a = 5.64 A: Na-Cl 2.82 A."""
     return Structure.from_spacegroup(

@@ -5,8 +5,22 @@ from itertools import pairwise
 
 import pytest
 from pymatgen.core import Lattice, Structure
+from support import graphene_monolayer
 
 from goldilocks_core.kmesh import build_gamma_kmesh_entries, k_distance_to_mesh
+
+
+def _dense_orthorhombic(a: float, b: float, c: float) -> Structure:
+    """An orthorhombic a x b x c A cell with Si atoms along its body
+    diagonal, at most 4 A apart along each lattice vector: no vector is a
+    vacuum axis (more than 5 A atom-free), so every axis is sampled and the
+    mesh depends on the lattice alone (#159)."""
+    count = math.ceil(max(a, b, c) / 4.0)
+    return Structure(
+        Lattice.orthorhombic(a, b, c),
+        ["Si"] * count,
+        [[index / count] * 3 for index in range(count)],
+    )
 
 
 @pytest.mark.parametrize(
@@ -21,11 +35,7 @@ def test_mesh_is_minimal_grid_that_bounds_solid_state_reciprocal_spacing(
     lengths: tuple[float, float, float],
     spacing: float,
 ) -> None:
-    structure = Structure(
-        Lattice.orthorhombic(*lengths),
-        ["Si"],
-        [[0.0, 0.0, 0.0]],
-    )
+    structure = _dense_orthorhombic(*lengths)
 
     mesh = k_distance_to_mesh(structure, spacing)
     reciprocal_lengths = tuple(2.0 * math.pi / length for length in lengths)
@@ -38,17 +48,21 @@ def test_mesh_is_minimal_grid_that_bounds_solid_state_reciprocal_spacing(
             assert reciprocal_length / (points - 1) > spacing
 
 
-def test_vacuum_axis_never_requests_zero_k_points() -> None:
-    slab = Structure(
-        Lattice.orthorhombic(2.46, 2.46, 40.0),
-        ["C", "C"],
-        [[0.0, 0.0, 0.5], [0.5, 0.5, 0.5]],
-    )
+@pytest.mark.parametrize("k_distance", [0.03, 0.1, 0.2, 0.5, 2.0])
+def test_a_slab_gets_one_k_point_along_its_vacuum_at_any_spacing(
+    k_distance: float,
+) -> None:
+    """A slab's electrons do not disperse across its vacuum, so one k-point
+    samples that axis: pw.x gave the 2H-MoS2 monolayer the same total energy
+    to 1e-8 Ry on 9x9x1 as on 9x9x2, in 0.6 of the time (#159). The graphene
+    sheet's 15 A cell has |b_3| = 2 pi / 15 A = 0.42 A^-1, so
+    ceil(|b_3| / k_distance) would give it 3 k-points at 0.2 A^-1 and 14 at
+    0.03. The sheet's own axes keep the spacing, |b_1| = |b_2| =
+    4 pi / (sqrt(3) a) for the hexagonal lattice."""
+    slab = graphene_monolayer(c=15.0)
+    in_plane = math.ceil(4 * math.pi / (math.sqrt(3) * 2.46) / k_distance)
 
-    mesh = k_distance_to_mesh(slab, 0.2)
-
-    assert mesh[:2] == (13, 13)
-    assert mesh[2] == 1
+    assert k_distance_to_mesh(slab, k_distance) == (in_plane, in_plane, 1)
 
 
 def test_reciprocal_lattice_length_includes_the_2pi_factor() -> None:
@@ -80,12 +94,9 @@ def test_kmesh_ladder_never_has_an_axis_count_jump_larger_than_one() -> None:
     rungs), not just the handful v1's truncation used to stop at. This is a
     genuine v2 correctness improvement over v1's workaround, not a test
     changed to dodge a v2 regression -- see this repo's own goldilocks-data
-    port docstring in ``kmesh.py`` for why the redesign works."""
-    anisotropic = Structure(
-        Lattice.orthorhombic(20.0, 3.0, 3.0),
-        ["Si"],
-        [[0.0, 0.0, 0.0]],
-    )
+    port docstring in ``kmesh.py`` for why the redesign works. Atoms fill
+    the 20 Angstrom axis, so it is periodic, not vacuum (#159)."""
+    anisotropic = _dense_orthorhombic(20.0, 3.0, 3.0)
 
     entries = build_gamma_kmesh_entries(anisotropic)
 

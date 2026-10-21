@@ -346,7 +346,8 @@ _SETTING_META: dict[str, _SettingExtra] = {
         "unit": "1/Angstrom",
         "ml_target": "k_distance",
         "description": (
-            "Target k-point spacing; heuristic default is 0.15 for metals, "
+            "Target k-point spacing along each periodic axis; a vacuum axis "
+            "always gets one k-point. Heuristic default is 0.15 for metals, "
             "0.30 otherwise."
         ),
     },
