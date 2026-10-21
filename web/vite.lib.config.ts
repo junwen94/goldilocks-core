@@ -20,7 +20,7 @@ export default defineConfig({
     // surface at the barrel.
     dts({
       tsconfigPath: "./tsconfig.app.json",
-      rollupTypes: false,
+      bundleTypes: false,
       entryRoot: "src",
       include: ["src/**/*.ts", "src/**/*.tsx"],
       exclude: ["src/**/*.test.ts", "src/**/*.test.tsx"],
@@ -45,7 +45,7 @@ export default defineConfig({
       external: ["react", "react-dom", "react/jsx-runtime"],
       output: {
         assetFileNames: (info) =>
-          info.names?.[0]?.endsWith(".css")
+          info.names[0]?.endsWith(".css")
             ? "goldilocks-workbench.css"
             : "assets/[name]-[hash][extname]",
       },
