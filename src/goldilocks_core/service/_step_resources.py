@@ -39,7 +39,6 @@ from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from goldilocks_core.advisors.hubbard_u import manifold_for
 from goldilocks_core.advisors.job_resources import (
     JobDecision,
     JobHumanInput,
@@ -171,7 +170,7 @@ def _written_species(system: SystemAdvice) -> tuple[Species, ...] | Unavailable:
     if isinstance(projectors, Unavailable):
         return projectors
     ultrasoft = {item.element: item.pseudo_type in ("USPP", "PAW") for item in metadata}
-    hubbard = _hubbard_elements(system)
+    hubbard_l = _hubbard_angular_momenta(system)
     magnetization = magnetic.starting_magnetization or {}
     atoms = Counter(
         (site.specie.symbol, magnetization.get(site.label, 0.0))
@@ -183,27 +182,20 @@ def _written_species(system: SystemAdvice) -> tuple[Species, ...] | Unavailable:
             projectors=projectors[element][0],
             l_max=projectors[element][1],
             ultrasoft=ultrasoft[element],
-            hubbard_l=(
-                _ANGULAR_MOMENTA.index(manifold_for(element)[-1])
-                if element in hubbard
-                else None
-            ),
+            hubbard_l=hubbard_l.get(element),
         )
         for (element, _magnetization), count in atoms.items()
     )
 
 
-def _hubbard_elements(system: SystemAdvice) -> set[str]:
-    """The elements the writer renders a +U line for: only a ``table``
-    plan renders a HUBBARD card, and a split species label (``Fe1``)
-    takes its element's manifold."""
-    hubbard = system.hubbard.value
-    if hubbard.plan != "table":
-        return set()
+def _hubbard_angular_momenta(system: SystemAdvice) -> dict[str, int]:
+    """element -> the angular momentum of its +U manifold, for every
+    element the writer renders a U line for (one per
+    ``HubbardUDecision.u_values`` entry; each species of a split element
+    takes its element's line)."""
     return {
-        label.rstrip("0123456789")
-        for label, u_ev in hubbard.u_by_element.items()
-        if u_ev
+        entry.element: _ANGULAR_MOMENTA.index(entry.manifold[-1])
+        for entry in system.hubbard.value.u_values
     }
 
 

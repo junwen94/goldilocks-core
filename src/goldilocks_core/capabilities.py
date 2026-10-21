@@ -287,15 +287,17 @@ _SETTING_META: dict[str, _SettingExtra] = {
         "key": "hubbard_needs_correlation",
         "description": (
             "Force whether a Hubbard +U correction is applied, overriding even "
-            "a human-set needs_correlation fact -- see the analysis-layer "
-            "needs_correlation fact for the general judgement this escalates past."
+            "a human-set needs_correlation fact: false runs without +U, true "
+            "applies the built-in U table to the structure's d and f elements."
         ),
     },
     "u_by_element": {
         "unit": "eV",
         "description": (
-            "Explicit Dudarev effective-U value per element, overriding the "
-            "built-in table."
+            "Dudarev U_eff in eV (> 0) per element symbol; replaces the built-in "
+            "table, so only listed elements present in the structure get +U. "
+            "La and Ac are rejected: no installed pseudopotential has an "
+            "occupied La 4f or any Ac 5f channel, so pw.x stops on any U for them."
         ),
     },
     "occupations": {

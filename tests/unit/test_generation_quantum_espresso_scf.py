@@ -9,7 +9,7 @@ from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.convergence import ConvergenceDecision
 from goldilocks_core.advisors.cutoffs import CutoffsDecision
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
-from goldilocks_core.advisors.hubbard_u import HubbardUDecision
+from goldilocks_core.advisors.hubbard_u import HubbardU, HubbardUDecision
 from goldilocks_core.advisors.k_sampling import KSamplingDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.nbnd import NbndDecision
@@ -75,7 +75,7 @@ def _system(
         ),
         magnetic=magnetic or _magnetic(structure),
         vdw=vdw or VdwFacts(use_vdw=False, method=None),
-        hubbard=hubbard or HubbardUDecision(plan="not_needed", u_by_element={}),
+        hubbard=hubbard or HubbardUDecision(),
         boundary=boundary or BoundaryFacts(assume_isolated="none"),
     )
 
@@ -578,42 +578,135 @@ def test_explicit_mixing_fixed_ns_is_written(pseudo_metadata_factory) -> None:
     assert "mixing_fixed_ns  = 10" in electrons
 
 
-def test_hubbard_table_plan_renders_the_qe_hubbard_card(
+def _hubbard_card(content: str) -> list[str]:
+    """The HUBBARD card's lines, header first; [] when there is none."""
+    lines = content.splitlines()
+    if "HUBBARD (ortho-atomic)" not in lines:
+        return []
+    start = lines.index("HUBBARD (ortho-atomic)")
+    card = []
+    for line in lines[start:]:
+        if not line.strip():
+            break
+        card.append(line)
+    return card
+
+
+def _nickel_oxide() -> Structure:
+    return Structure(
+        Lattice.from_parameters(2.95, 2.95, 2.95, 60, 60, 60),
+        ["Ni", "O"],
+        [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+    )
+
+
+def test_u_values_render_the_qe_hubbard_card(
     silicon_structure, pseudo_metadata_factory
 ) -> None:
     """QE >= 7.1's onsite U line is species-label-keyed plus its Hubbard
     manifold, not atom-index-keyed -- verified against QE 7.3's own
     Doc/Hubbard_input.tex ("U Mn-3d 5.0") and Modules/read_cards.f90's
-    card_hubbard parsing (#88); this confirms the writer renders exactly
-    that for plan="table", the common package-default-U case."""
+    card_hubbard parsing (#88)."""
     system = _system(
         silicon_structure,
         pseudo_metadata_factory,
-        hubbard=HubbardUDecision(plan="table", u_by_element={"Si": 3.0}),
+        hubbard=HubbardUDecision(u_values=(HubbardU("Si", "3p", 3.0, "human"),)),
     )
 
     content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
 
-    assert "HUBBARD (ortho-atomic)" in content
-    assert "U  Si-3p  3" in content
+    assert _hubbard_card(content) == ["HUBBARD (ortho-atomic)", "  U  Si-3p  3"]
 
 
-def test_hubbard_calibration_needed_plan_still_raises_generation_error(
-    silicon_structure, pseudo_metadata_factory
+def test_no_u_values_render_no_hubbard_card(pseudo_metadata_factory) -> None:
+    """#135: a correlated oxide whose elements get no U (plain DFT) renders
+    no card at all -- QE 7.3 stops on a HUBBARD card without a positive
+    value -- and the writer does not raise."""
+    system = _system(_nickel_oxide(), pseudo_metadata_factory)
+
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+
+    assert "HUBBARD" not in content
+
+
+def test_only_elements_with_a_u_value_get_a_hubbard_line(
+    pseudo_metadata_factory,
 ) -> None:
-    """plan="self_consistent_calibration_needed" needs an hp.x
-    calibration input this codebase has never written (#88) -- real,
-    separate, larger scope than the table-plan card above."""
     system = _system(
-        silicon_structure,
+        _nickel_oxide(),
         pseudo_metadata_factory,
+        hubbard=HubbardUDecision(u_values=(HubbardU("Ni", "3d", 6.2, "table"),)),
+    )
+
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+
+    assert _hubbard_card(content) == ["HUBBARD (ortho-atomic)", "  U  Ni-3d  6.2"]
+
+
+def test_each_species_of_a_split_element_gets_the_element_s_u_line(
+    pseudo_metadata_factory,
+) -> None:
+    """Two Fe sites with opposite starting magnetization become two QE
+    species, Fe1 and Fe2; each needs its own U line, keyed by the label
+    ATOMIC_SPECIES actually uses (#88). Lines follow label order, not site
+    order."""
+    structure = Structure(
+        Lattice.cubic(4.3),
+        ["O", "O", "Fe", "Fe"],
+        [[0.25, 0.25, 0.25], [0.75, 0.75, 0.75], [0, 0, 0], [0.5, 0.5, 0.5]],
+        labels=["O", "O", "Fe_down", "Fe_up"],
+    )
+    magnetic = _magnetic(
+        structure,
+        spin_polarized=True,
+        starting_magnetization={"Fe_up": 0.5, "Fe_down": -0.5},
+    )
+    system = _system(
+        structure,
+        pseudo_metadata_factory,
+        magnetic=magnetic,
         hubbard=HubbardUDecision(
-            plan="self_consistent_calibration_needed", u_by_element={}
+            u_values=(
+                HubbardU("Fe", "3d", 5.3, "table"),
+                HubbardU("O", "2p", 1.5, "human"),
+            )
         ),
     )
 
-    with pytest.raises(GenerationError, match="calibration"):
-        write_qe_scf(system, _step(), _CTX)
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+
+    assert _hubbard_card(content) == [
+        "HUBBARD (ortho-atomic)",
+        "  U  Fe1-3d  5.3",
+        "  U  Fe2-3d  5.3",
+        "  U  O-2p  1.5",
+    ]
+
+
+def test_cif_site_labels_render_one_line_per_qe_species(
+    pseudo_metadata_factory,
+) -> None:
+    """Regression (#88): a CIF-loaded structure numbers every site (V0,
+    Cl1, Cl2); the card must name the species label ATOMIC_SPECIES uses,
+    once, and never a stray label."""
+    loaded = Structure.from_str(
+        Structure(
+            Lattice.cubic(4.0),
+            ["V", "Cl", "Cl"],
+            [[0, 0, 0], [0.5, 0.5, 0], [0, 0.5, 0.5]],
+        ).to(fmt="cif"),
+        fmt="cif",
+    )
+    system = _system(
+        loaded,
+        pseudo_metadata_factory,
+        hubbard=HubbardUDecision(u_values=(HubbardU("V", "3d", 3.25, "table"),)),
+    )
+
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+
+    assert _hubbard_card(content) == ["HUBBARD (ortho-atomic)", "  U  V-3d  3.25"]
+    assert "  V  " in content.split("ATOMIC_SPECIES")[1].split("\n\n")[0]
 
 
 @pytest.mark.parametrize(
@@ -655,7 +748,7 @@ def test_missing_pseudopotential_element_raises_generation_error(
         pseudopotentials=(pseudo_metadata_factory("Na"),),
         magnetic=_magnetic(structure),
         vdw=VdwFacts(use_vdw=False, method=None),
-        hubbard=HubbardUDecision(plan="not_needed", u_by_element={}),
+        hubbard=HubbardUDecision(),
         boundary=BoundaryFacts(assume_isolated="none"),
     )
 
@@ -673,7 +766,7 @@ def test_pseudopotential_functional_mismatch_raises_generation_error(
         pseudopotentials=(pseudo_metadata_factory("Si", functional="LDA"),),
         magnetic=_magnetic(silicon_structure),
         vdw=VdwFacts(use_vdw=False, method=None),
-        hubbard=HubbardUDecision(plan="not_needed", u_by_element={}),
+        hubbard=HubbardUDecision(),
         boundary=BoundaryFacts(assume_isolated="none"),
     )
 
@@ -695,7 +788,7 @@ def test_disordered_structure_is_rejected(pseudo_metadata_factory) -> None:
         pseudopotentials=(pseudo_metadata_factory("Si"), pseudo_metadata_factory("Ge")),
         magnetic=magnetic,
         vdw=VdwFacts(use_vdw=False, method=None),
-        hubbard=HubbardUDecision(plan="not_needed", u_by_element={}),
+        hubbard=HubbardUDecision(),
         boundary=BoundaryFacts(assume_isolated="none"),
     )
 

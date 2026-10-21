@@ -57,6 +57,7 @@ shift flag of `1` means a half-grid shift on that axis.
 | Pseudopotential accuracy tier                 | `efficiency` (only usable tier today, see below)               |
 | SCF threshold / total-energy threshold        | `conv_thr = nat × 0.2e-9` Ry / `etot_conv_thr = nat × 1e-5` Ry |
 | Mixing / iteration limit                      | `mixing_beta 0.4` / `electron_maxstep 80`                      |
+| Hubbard +U (d/f compounds with O or F)        | Built-in Dudarev U_eff table, see [Check Hubbard +U](science.md#check-hubbard-u) |
 | Fixed Hubbard occupations (+U)                | `mixing_fixed_ns` unset (QE's 0)                               |
 | Confirmed metal, or metallicity unconfirmed   | `smearing`, `cold`, `degauss` `0.01` Ry                        |
 | Confirmed non-metal                           | `fixed`, no width                                              |

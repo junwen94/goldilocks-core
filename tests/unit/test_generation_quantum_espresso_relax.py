@@ -6,7 +6,7 @@ from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.convergence import ConvergenceDecision
 from goldilocks_core.advisors.cutoffs import CutoffsDecision
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
-from goldilocks_core.advisors.hubbard_u import HubbardUDecision
+from goldilocks_core.advisors.hubbard_u import HubbardU, HubbardUDecision
 from goldilocks_core.advisors.k_sampling import KSamplingDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.nbnd import NbndDecision
@@ -51,7 +51,7 @@ def _system(
             angle2=None,
         ),
         vdw=VdwFacts(use_vdw=False, method=None),
-        hubbard=hubbard or HubbardUDecision(plan="not_needed", u_by_element={}),
+        hubbard=hubbard or HubbardUDecision(),
         boundary=BoundaryFacts(assume_isolated="none"),
     )
 
@@ -353,36 +353,31 @@ def test_fix_bottom_layers_on_a_bulk_structure_raises(
         write_qe_relax(system, step, _CTX, "relax")
 
 
-def test_hubbard_table_plan_renders_the_qe_hubbard_card(
+def test_u_values_render_the_qe_hubbard_card(
     silicon_structure, pseudo_metadata_factory
 ) -> None:
     """Same HUBBARD-card rendering as write_qe_scf (#88), reused rather
-    than reimplemented -- see scf.py's hubbard_card docstring for why
+    than reimplemented -- see scf.py's hubbard_lines docstring for why
     this is species-label-keyed, not atom-index-keyed."""
     system = _system(
         silicon_structure,
         pseudo_metadata_factory,
-        hubbard=HubbardUDecision(plan="table", u_by_element={"Si": 3.0}),
+        hubbard=HubbardUDecision(u_values=(HubbardU("Si", "3p", 3.0, "human"),)),
     )
     step = _step(relax=RelaxOptions())
 
     content = write_qe_relax(system, step, _CTX, "relax")[0].files["relax.in"]
 
-    assert "HUBBARD (ortho-atomic)" in content
-    assert "U  Si-3p  3" in content
+    assert "HUBBARD (ortho-atomic)\n  U  Si-3p  3\n" in content
 
 
-def test_hubbard_calibration_needed_plan_still_raises_generation_error(
+def test_no_u_values_render_no_hubbard_card(
     silicon_structure, pseudo_metadata_factory
 ) -> None:
-    system = _system(
-        silicon_structure,
-        pseudo_metadata_factory,
-        hubbard=HubbardUDecision(
-            plan="self_consistent_calibration_needed", u_by_element={}
-        ),
-    )
-    step = _step(relax=RelaxOptions())
+    """#135: no U value means plain DFT -- no card, and no raise."""
+    system = _system(silicon_structure, pseudo_metadata_factory)
+    step = _step(relax=VcRelaxOptions())
 
-    with pytest.raises(GenerationError, match="calibration"):
-        write_qe_relax(system, step, _CTX, "relax")
+    content = write_qe_relax(system, step, _CTX, "vc-relax")[0].files["vc-relax.in"]
+
+    assert "HUBBARD" not in content

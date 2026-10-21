@@ -1,76 +1,67 @@
-"""hubbard_u: whether a Hubbard +U correction is needed, and how to get the
-U value, from needs_correlation and composition.
+"""hubbard_u: whether a Hubbard +U correction applies, and which U_eff each
+element gets.
 
-New in v2 (v2 epic 5, #5). Two non-ml fallback plans
-(goldilocks-core-design.md:2610-2613), both represented as `Resolved` outcomes
--- an advisor successfully deciding "use this" or "here is what a human/agent
-needs to do next" is not the same as `Unavailable`, which means the heuristic
-tried and could not tell anything at all:
+A resolved ``HubbardUDecision`` holds one ``HubbardU`` entry per element
+that gets +U, either from the built-in table below or from a human
+``u_by_element`` (which replaces the table). The QE writers render a
+HUBBARD card iff ``u_values`` is non-empty, so every resolved decision is
+renderable: no Hubbard outcome can pass ``checks.check_all`` and then fail
+in a writer (#135). An element without a U is plain DFT.
 
-- **Plan A** -- a small package-default table of commonly-published
-  Dudarev `U_eff` values for 3d transition-metal oxides (Wang et al. 2006 /
-  Materials Project's own long-standing settings). Used when every
-  correlated element in the structure is in this table.
-- **Plan B** -- when an element is not in the table (4d/5d transition
-  metals, lanthanides, actinides, or any 3d element this package does not
-  carry a value for), this produces a `CalibrationRequest` per element
-  instead of guessing: which element, which orbital manifold, and enough
-  detail for the QE-generation layer to eventually render an `hp.x`
-  self-consistent-linear-response input and a README explaining how to run
-  it (runnable via `aiida-hubbard` if the calling agent has AiiDA capability).
-  Rendering that input file is `generation/`'s job (v2 epic 7's "QE
-  generation rewrite"), not this advisor's -- `advisors/` decide settings,
-  they do not write files. This is why `CalibrationRequest` carries
-  structured fields rather than a free-text note: epic 7 needs to consume
-  it, not just display it.
+**When.** The ``needs_correlation`` fact (a transition metal, lanthanide or
+actinide with O or F, Materials Project's screening rule) or a human/LLM
+``needs_correlation`` override decides whether +U applies at all. A hybrid
+functional (``advisors.functional.HYBRID_FUNCTIONAL``) already corrects
+the self-interaction error +U patches, so it always gets no +U
+(goldilocks-core-design.md:2626-2627).
 
-**No `ml` tier, permanently, not "not yet built."** An ENN-based +U predictor
-(Uhrin et al. 2025) was evaluated and rejected in the design doc
-(:2635): it needs an SCF-derived occupation matrix as input, and every
-`advisors/` function in this codebase is a stateless per-call function that
-never has one to give it.
+**Built-in table** (``_U_TABLE``), conventions in short:
 
-**Cross-parameter rule** (:2626-2627): a hybrid functional already handles
-the self-interaction error +U exists to patch, so this returns "not needed"
-whenever `functional` is `advisors.functional.HYBRID_FUNCTIONAL`, regardless
-of what `needs_correlation` says.
+- Each value is a Dudarev U_eff = U - J in eV on one manifold, written as
+  ``U <label>-<manifold> <value>`` under ``HUBBARD (ortho-atomic)``. QE
+  reads a card holding only U values as ``lda_plus_u_kind = 0``, the
+  simplified Dudarev scheme (Modules/read_cards.f90:3046-3048).
+- d block: the Materials Project convention (V, Cr, Mn, Fe, Co, Ni, Mo, W;
+  fits to GGA+U oxide oxidation enthalpies, VASP PAW, PBE) plus Cu 4.0
+  (the Wang et al. 2006 fit, as tabulated by Jain et al. 2011). Ce: 5.0
+  from Loschen et al. 2007 (VASP PAW, PW91). Pr-Yb: Topsakal & Wentzcovitch
+  2014, fitted in QE (atomic projectors) with the Wentzcovitch PAW datasets
+  SSSP ships. Pa
+  (OQMD's qmpy configuration) and U, Np, Pu (OQMD): 4.0 for An(IV) oxides,
+  VASP PAW. Am, Cm: Suzuki et al. 2013 (all-electron LDA+U+SOC, J = 0).
+  Bk: Chen & Kaltsoyannis 2025 (all-electron PBE+U+SOC).
+- None of these was derived with QE's ortho-atomic projectors, so every
+  table value carries ``hubbard.projector_mismatch``. Each is one value per
+  element whatever its oxidation state or environment, fitted on oxides or
+  fluorides (Pr-Yb: nitrides) with PBE, PW91 or LDA, while the default
+  functional here is PBEsol; the SOC-derived actinide values are applied
+  without SOC.
+- ``_NO_U`` elements deliberately get no U (plain DFT, no warning): the
+  other d-block elements (Materials Project convention), La (La3+ is 4f0),
+  Lu (4f14 5d0) and Th (5f0).
+- Every other correlated element (Ac, Cf, Es, Fm, Md, No, Lr; no installed
+  table covers Rf-Cn) has no published U: plain DFT plus a
+  ``hubbard.u_value_missing`` warning naming the element, its manifold and
+  ``u_by_element``.
+- No installed pseudopotential can carry a U on La-4f or Ac-5f
+  (``_NO_HUBBARD_CHANNEL``), so ``u_by_element`` rejects both and Ac's
+  warning says so instead of suggesting a value.
 
-Also implements `expand_hubbard_label`
-(goldilocks-core-design.md:2673-2684, closing
-goldilocks-qe-pw-parameter-audit.md's P0 finding #1): a naive `U Fe-3d 4.6`
-HUBBARD card line is not valid QE input once AFM species-splitting produces
-`Fe1`/`Fe2` in `ATOMIC_SPECIES` -- QE requires the HUBBARD label to match
-`ATOMIC_SPECIES` verbatim. Same-element split species default to the same U
-value unless overridden. `magnetic_config.py`'s `relabeled_structure` ships
-FM-only (identity) for now, so this has no real split species to expand yet
-in this epic -- exercised directly with a manually-split structure in its
-own tests, the same pattern `analysis/needs_soc.py` used for a dependency
-that also has no real failure to trigger it yet.
+Self-consistent calibration (hp.x, #124) is not implemented. Bastonero et
+al., npj Comput. Mater. 11, 183 (2025) (ortho-atomic linear response on
+QE, PBEsol and SSSP 1.3) is the stack-matched benchmark for it.
 
-**Note for epic 7 (QE generation rewrite), re: the aiida-quantumespresso
-hubbard.html tutorial.** QE >= 7.1's actual `HUBBARD` card is not the
-label-keyed `U Fe-3d 4.6` style `expand_hubbard_label` targets above -- it is
-atom-*index*-keyed: ``HUBBARD ortho-atomic`` followed by lines like
-``V Co-3d Co-3d 1 1 5.0`` (``V <manifold_I> <manifold_J> <site_i> <site_j>
-<value>``; onsite U is the degenerate case ``site_i == site_j``). This is
-also the format `hp.x`/`aiida-hubbard` itself emits from a calibration run.
-If epic 7 targets this format, AFM-split *species labels* stop being the
-mechanism for giving symmetry-inequivalent sites of the same element
-different U values -- distinct site indices already do that, with no
-`ATOMIC_SPECIES` relabeling required. Whether to target this format or the
-older label-keyed one is epic 7's decision to make once it exists;
-`expand_hubbard_label` here is not wrong for what it claims to do (expand a
-label-keyed table), it just may not be the table shape the renderer ends up
-needing. Separately, `hp.x` also requires its "Hubbard atoms" to be listed
-first in `ATOMIC_POSITIONS` -- a structure-preprocessing detail for whatever
-in epic 7 renders the calibration input, not a concern of this advisor.
+**No ml tier, permanently.** An ENN-based +U predictor (Uhrin et al. 2025)
+needs an SCF occupation matrix as input, which a stateless advisor never
+has (goldilocks-core-design.md:2635).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Annotated, Literal, NamedTuple
 
+from pydantic import AfterValidator, Field
 from pymatgen.core import Structure
 from pymatgen.core.periodic_table import Element
 
@@ -86,44 +77,145 @@ from goldilocks_core.resolution import (
     blocked_by,
 )
 
-HubbardPlan = Literal["not_needed", "table", "self_consistent_calibration_needed"]
 
-_MP_DUDAREV_U_EFF = {
-    "Co": 3.32,
-    "Cr": 3.7,
-    "Cu": 4.0,
-    "Fe": 5.3,
-    "Mn": 3.9,
-    "Ni": 6.2,
-    "V": 3.25,
+class _TabulatedU(NamedTuple):
+    manifold: str
+    u_eff_ev: float
+    citation: str
+    doi: str
+
+
+_MATERIALS_PROJECT = (
+    "Materials Project; A. Wang et al., Sci. Rep. 11, 15496 (2021), Table S3",
+    "10.1038/s41598-021-94550-5",
+)
+_MATERIALS_PROJECT_RELAX_SET = (
+    "Materials Project MPRelaxSet; A. Jain et al., Phys. Rev. B 84, 045115 (2011)",
+    "10.1103/PhysRevB.84.045115",
+)
+_JAIN_2011 = (
+    "A. Jain et al., Phys. Rev. B 84, 045115 (2011), Table I",
+    "10.1103/PhysRevB.84.045115",
+)
+_LOSCHEN_2007 = (
+    "C. Loschen et al., Phys. Rev. B 75, 035115 (2007)",
+    "10.1103/PhysRevB.75.035115",
+)
+_TOPSAKAL_2014 = (
+    "M. Topsakal and R. M. Wentzcovitch, Comput. Mater. Sci. 95, 263 (2014)",
+    "10.1016/j.commatsci.2014.07.030",
+)
+_QMPY = (
+    "OQMD qmpy configuration (hubbards.yml); S. Kirklin et al., "
+    "npj Comput. Mater. 1, 15010 (2015)",
+    "10.1038/npjcompumats.2015.10",
+)
+_OQMD = (
+    "S. Kirklin et al. (OQMD), npj Comput. Mater. 1, 15010 (2015)",
+    "10.1038/npjcompumats.2015.10",
+)
+_SUZUKI_2013 = (
+    "M.-T. Suzuki et al., Phys. Rev. B 88, 195146 (2013)",
+    "10.1103/PhysRevB.88.195146",
+)
+_CHEN_2025 = (
+    "J.-L. Chen and N. Kaltsoyannis, J. Phys. Chem. C 129, 10313 (2025)",
+    "10.1021/acs.jpcc.5c01663",
+)
+_VASP_PAW_SOURCES = frozenset(
+    {
+        _MATERIALS_PROJECT,
+        _MATERIALS_PROJECT_RELAX_SET,
+        _JAIN_2011,
+        _LOSCHEN_2007,
+        _QMPY,
+        _OQMD,
+    }
+)
+
+_U_TABLE: dict[str, _TabulatedU] = {
+    "V": _TabulatedU("3d", 3.25, *_MATERIALS_PROJECT),
+    "Cr": _TabulatedU("3d", 3.7, *_MATERIALS_PROJECT),
+    "Mn": _TabulatedU("3d", 3.9, *_MATERIALS_PROJECT),
+    "Fe": _TabulatedU("3d", 5.3, *_MATERIALS_PROJECT),
+    "Co": _TabulatedU("3d", 3.32, *_MATERIALS_PROJECT),
+    "Ni": _TabulatedU("3d", 6.2, *_MATERIALS_PROJECT),
+    "Cu": _TabulatedU("3d", 4.0, *_JAIN_2011),
+    "Mo": _TabulatedU("4d", 4.38, *_MATERIALS_PROJECT_RELAX_SET),
+    "W": _TabulatedU("5d", 6.2, *_MATERIALS_PROJECT_RELAX_SET),
+    "Ce": _TabulatedU("4f", 5.0, *_LOSCHEN_2007),
+    "Pr": _TabulatedU("4f", 4.0, *_TOPSAKAL_2014),
+    "Nd": _TabulatedU("4f", 3.1, *_TOPSAKAL_2014),
+    "Pm": _TabulatedU("4f", 3.4, *_TOPSAKAL_2014),
+    "Sm": _TabulatedU("4f", 3.3, *_TOPSAKAL_2014),
+    "Eu": _TabulatedU("4f", 3.0, *_TOPSAKAL_2014),
+    "Gd": _TabulatedU("4f", 4.6, *_TOPSAKAL_2014),
+    "Tb": _TabulatedU("4f", 5.0, *_TOPSAKAL_2014),
+    "Dy": _TabulatedU("4f", 5.0, *_TOPSAKAL_2014),
+    "Ho": _TabulatedU("4f", 4.9, *_TOPSAKAL_2014),
+    "Er": _TabulatedU("4f", 4.2, *_TOPSAKAL_2014),
+    "Tm": _TabulatedU("4f", 4.8, *_TOPSAKAL_2014),
+    "Yb": _TabulatedU("4f", 3.0, *_TOPSAKAL_2014),
+    "Pa": _TabulatedU("5f", 4.0, *_QMPY),
+    "U": _TabulatedU("5f", 4.0, *_OQMD),
+    "Np": _TabulatedU("5f", 4.0, *_OQMD),
+    "Pu": _TabulatedU("5f", 4.0, *_OQMD),
+    "Am": _TabulatedU("5f", 4.0, *_SUZUKI_2013),
+    "Cm": _TabulatedU("5f", 4.0, *_SUZUKI_2013),
+    "Bk": _TabulatedU("5f", 3.54, *_CHEN_2025),
 }
-"""Commonly-published Dudarev U_eff (eV) for 3d transition-metal oxides
-(Wang, Maxisch & Ceder, Phys. Rev. B 73, 195107 (2006); Materials Project's
-own long-standing GGA+U settings). A package default for common cases, not
-an exhaustive or authoritative table -- deliberately narrow rather than
-guessed-at for elements this package has no citation for."""
+"""element -> (manifold, Dudarev U_eff in eV, short citation, DOI); see the
+module docstring for the conventions."""
+
+_NO_U = frozenset(
+    {
+        *("Sc", "Ti", "Zn", "Y", "Zr", "Nb", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd"),
+        *("Hf", "Ta", "Re", "Os", "Ir", "Pt", "Au", "Hg", "La", "Lu", "Th"),
+    }
+)
+"""Correlated elements that deliberately get no U: plain DFT for that
+element, no warning (module docstring)."""
+
+_NO_HUBBARD_CHANNEL = {
+    "La": "no installed La pseudopotential has an occupied 4f channel",
+    "Ac": "no installed Ac pseudopotential has a 5f channel",
+}
+"""Elements whose Hubbard manifold no installed pseudopotential carries, so
+pw.x stops on their U line whatever the value. SSSP's La has 4f occupation
+0 (QE 7.3 PW/src/offset_atom_wfc.f90:104-110: "Hubbard manifold with zero
+occupations is not allowed") and PseudoDojo's has no 4f channel; the only
+Ac file (SSSP) has no 5f channel (PW/src/hubbard.f90:201-206: "Mismatch
+between the requested and available manifolds")."""
 
 _MANIFOLD_BY_BLOCK_AND_ROW = {
     ("d", 4): "3d",
     ("d", 5): "4d",
     ("d", 6): "5d",
+    ("d", 7): "6d",
     ("f", 6): "4f",
     ("f", 7): "5f",
 }
-"""(pymatgen Element.block, Element.row) -> Hubbard manifold label. Row 4
-d-block is 3d (Sc-Zn); row 6/7 f-block is lanthanides/actinides (pymatgen
-classes La itself as both a lanthanide and a transition metal -- its row/
-block still resolve to 4f here, which is what a Hubbard correction on La
-would actually target)."""
+"""(pymatgen Element.block, Element.row) -> the valence d (row - 1) or f
+(row - 2) manifold; s- and p-block elements use their row (O -> 2p).
+pymatgen places La and Ac in the f block (4f, 5f) and Lu and Lr in the d
+block (5d, 6d)."""
+
+_VASP_DERIVED = ", ".join(
+    symbol
+    for symbol, row in _U_TABLE.items()
+    if (row.citation, row.doi) in _VASP_PAW_SOURCES
+)
 
 PROJECTOR_MISMATCH_WARNING = Warning(
     code="hubbard.projector_mismatch",
     level="warning",
     category="hubbard",
     message=(
-        "Materials Project's U values are calibrated for VASP's PAW projectors; "
-        "QE's atomic/ortho-atomic/norm-atomic projectors are not guaranteed to "
-        "give the same effective U for the same physical correction."
+        "No built-in U value was derived with the Quantum ESPRESSO ortho-atomic "
+        "projectors this input uses, so the same U need not give the same "
+        f"correction. VASP-derived (PAW projectors): {_VASP_DERIVED}. The other "
+        "built-in values come from QE atomic-projector or all-electron "
+        "calculations."
     ),
 )
 
@@ -139,47 +231,92 @@ STARTING_NS_EIGENVALUE_WARNING = Warning(
     ),
 )
 """A10 (goldilocks-core-design.md:4465): a real initial guess needs a
-crystal-field/atomic-physics decomposition of the occupation matrix by spin
-channel this package does not attempt -- recorded as an explicit warning
-(the design doc's own instruction to record this into provenance) rather
-than a guessed number, which is the honest answer tri-state exists to
-allow."""
+crystal-field decomposition of the occupation matrix by spin channel, which
+this package does not attempt, so it warns instead of guessing a number."""
 
-WARNING_CATALOGUE = (PROJECTOR_MISMATCH_WARNING, STARTING_NS_EIGENVALUE_WARNING)
+U_VALUE_MISSING_WARNING = Warning(
+    code="hubbard.u_value_missing",
+    level="warning",
+    category="hubbard",
+    message=(
+        "An element that would get +U has no published U value, so it gets "
+        "plain DFT; u_by_element can apply one unless no installed "
+        "pseudopotential carries that element's manifold."
+    ),
+)
+"""Catalogue entry; ``_u_value_missing`` names the element, its manifold
+and the u_by_element setting to use, or why it cannot apply one."""
+
+U_BY_ELEMENT_UNUSED_WARNING = Warning(
+    code="hubbard.u_by_element_unused",
+    level="warning",
+    category="hubbard",
+    message=(
+        "u_by_element names elements this structure does not contain, which "
+        "are ignored."
+    ),
+)
+
+WARNING_CATALOGUE = (
+    PROJECTOR_MISMATCH_WARNING,
+    STARTING_NS_EIGENVALUE_WARNING,
+    U_VALUE_MISSING_WARNING,
+    U_BY_ELEMENT_UNUSED_WARNING,
+)
 """Every warning code this module can emit -- ``capabilities.py``'s
 ``warnings[]`` catalogue aggregates one of these tuples per advisor."""
 
 
 @dataclass(frozen=True, slots=True)
-class CalibrationRequest:
+class HubbardU:
+    """One element's onsite Hubbard U_eff (Dudarev U - J, in eV) on
+    ``manifold``. ``value_source`` is ``"table"`` for a built-in value,
+    whose ``citation`` and ``doi`` name its source, or ``"human"`` for a
+    ``u_by_element`` value (both ``None``)."""
+
     element: str
     manifold: str
-    suggested_method: Literal["hp.x", "aiida-hubbard"] = "hp.x"
-    note: str = (
-        "No package-default U value for this element/manifold. Self-consistent "
-        "linear-response calibration (hp.x, or aiida-hubbard if the agent has "
-        "AiiDA capability) is recommended before publishing a +U calculation."
-    )
+    u_ev: float
+    value_source: Literal["table", "human"]
+    citation: str | None = None
+    doi: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class HubbardUDecision:
-    plan: HubbardPlan
-    u_by_element: dict[str, float]
-    calibration_requests: tuple[CalibrationRequest, ...] = ()
+    """``u_values`` holds one entry per element that gets +U, sorted by
+    element; the QE writers render a HUBBARD card iff it is non-empty."""
+
+    u_values: tuple[HubbardU, ...] = ()
     warnings: tuple[Warning, ...] = ()
+
+
+def _u_by_element_key(symbol: str) -> str:
+    if not Element.is_valid_symbol(symbol):
+        raise ValueError(f"{symbol} is not an element symbol")
+    if symbol in _NO_HUBBARD_CHANNEL:
+        raise ValueError(
+            f"{symbol} cannot take a Hubbard U: {_NO_HUBBARD_CHANNEL[symbol]}, "
+            f"so pw.x stops on any {symbol}-{_manifold(symbol)} U"
+        )
+    return symbol
+
+
+_UByElementKey = Annotated[str, AfterValidator(_u_by_element_key)]
+_PositiveFiniteU = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
 
 class HubbardUHumanInput(HumanInput):
     needs_correlation: bool | None = None
-    u_by_element: dict[str, float] | None = None
+    u_by_element: dict[_UByElementKey, _PositiveFiniteU] | None = None
+    """Dudarev U_eff (eV) per element symbol, finite and > 0 (leave an
+    element out for no U); replaces the built-in table, so only listed
+    elements present in the structure get +U. La and Ac are rejected
+    (``_NO_HUBBARD_CHANNEL``)."""
 
 
 class HubbardULlmInput(LlmInput):
     needs_correlation: bool | None = None
-
-
-_NOT_NEEDED = HubbardUDecision(plan="not_needed", u_by_element={})
 
 
 def hubbard_u(
@@ -189,78 +326,132 @@ def hubbard_u(
     human: HubbardUHumanInput | None = None,
     llm: HubbardULlmInput | None = None,
 ) -> FieldState[HubbardUDecision]:
+    """Resolves in priority order: a hybrid functional (no +U), the human
+    overrides (``needs_correlation=False``, then ``u_by_element``, then
+    ``needs_correlation=True``), the LLM override, then the
+    ``needs_correlation`` fact, which this propagates when it is blocked."""
     human = human or HubbardUHumanInput()
     llm = llm or HubbardULlmInput()
 
     if functional == HYBRID_FUNCTIONAL:
-        return Resolved(_NOT_NEEDED, Provenance(source="heuristic"))
-
+        return Resolved(_decision(), Provenance(source="heuristic"))
     if human.needs_correlation is False:
-        return Resolved(_NOT_NEEDED, Provenance(source="human"))
+        return Resolved(_decision(), Provenance(source="human"))
     if human.u_by_element is not None:
         return Resolved(
-            HubbardUDecision(plan="table", u_by_element=dict(human.u_by_element)),
+            _from_u_by_element(structure, human.u_by_element),
             Provenance(source="human"),
         )
     if human.needs_correlation is True:
-        return _heuristic(structure, source="human")
+        return Resolved(_from_table(structure), Provenance(source="human"))
     if llm.needs_correlation is False:
-        return Resolved(_NOT_NEEDED, Provenance(source="llm"))
+        return Resolved(_decision(), Provenance(source="llm"))
     if llm.needs_correlation is True:
-        return _heuristic(structure, source="llm")
+        return Resolved(_from_table(structure), Provenance(source="llm"))
 
     if not needs_correlation.ok:
         return Blocked(by=blocked_by(needs_correlation))
     if not needs_correlation.value:
-        return Resolved(_NOT_NEEDED, Provenance(source="heuristic"))
-    return _heuristic(structure, source="heuristic")
+        return Resolved(_decision(), Provenance(source="heuristic"))
+    return Resolved(_from_table(structure), Provenance(source="heuristic"))
 
 
-def _heuristic(structure: Structure, *, source: str) -> FieldState[HubbardUDecision]:
-    facts = composition(structure).value
-    correlated_elements = _correlated_elements(facts)
-    if not correlated_elements:
-        # #36 (v2 epic 9, #9): forcing needs_correlation onward with no
-        # correlated element in the structure at all (e.g. plain Si)
-        # used to fall through to plan="table" with an EMPTY
-        # u_by_element plus two Hubbard-specific warnings that make no
-        # sense with no +U term present -- and since write_qe_scf
-        # treats any plan != "not_needed" as a real +U resolution, this
-        # then failed with "a Hubbard +U correction was resolved",
-        # which was factually wrong (nothing was). Matches the other
-        # not_needed short-circuits in hubbard_u() above.
-        return Resolved(_NOT_NEEDED, Provenance(source=source))
-
-    u_by_element: dict[str, float] = {}
-    calibration_requests: list[CalibrationRequest] = []
-    for symbol in correlated_elements:
-        value = _MP_DUDAREV_U_EFF.get(symbol)
-        if value is not None:
-            u_by_element[symbol] = value
-            continue
-        manifold = manifold_for(symbol)
-        calibration_requests.append(
-            CalibrationRequest(element=symbol, manifold=manifold)
-        )
-
-    if calibration_requests:
-        return Resolved(
-            HubbardUDecision(
-                plan="self_consistent_calibration_needed",
-                u_by_element=u_by_element,
-                calibration_requests=tuple(calibration_requests),
-                warnings=(STARTING_NS_EIGENVALUE_WARNING,) if u_by_element else (),
-            ),
-            Provenance(source=source),
-        )
-    return Resolved(
-        HubbardUDecision(
-            plan="table",
-            u_by_element=u_by_element,
-            warnings=(PROJECTOR_MISMATCH_WARNING, STARTING_NS_EIGENVALUE_WARNING),
-        ),
-        Provenance(source=source),
+def _from_table(structure: Structure) -> HubbardUDecision:
+    """The built-in U for every tabulated correlated element. The others
+    get plain DFT: silently for ``_NO_U``, with a warning otherwise. A
+    structure with no correlated element (#36: a forced ``needs_correlation``
+    on plain Si) gets an empty decision."""
+    correlated = _correlated_elements(composition(structure).value)
+    u_values = tuple(_tabulated(symbol) for symbol in correlated if symbol in _U_TABLE)
+    missing = tuple(
+        symbol
+        for symbol in correlated
+        if symbol not in _U_TABLE and symbol not in _NO_U
     )
+    return _decision(u_values, missing=missing)
+
+
+def _tabulated(symbol: str) -> HubbardU:
+    row = _U_TABLE[symbol]
+    return HubbardU(symbol, row.manifold, row.u_eff_ev, "table", row.citation, row.doi)
+
+
+def _from_u_by_element(
+    structure: Structure, u_by_element: dict[str, float]
+) -> HubbardUDecision:
+    """Replace semantics: only listed elements present in ``structure`` get
+    +U; listed elements it does not contain are reported, not refused, so
+    one U table can serve many structures."""
+    present = set(composition(structure).value.elements)
+    u_values = tuple(
+        HubbardU(symbol, _manifold(symbol), u_ev, "human")
+        for symbol, u_ev in sorted(u_by_element.items())
+        if symbol in present
+    )
+    unused = tuple(sorted(set(u_by_element) - present))
+    return _decision(u_values, unused=unused)
+
+
+def _decision(
+    u_values: tuple[HubbardU, ...] = (),
+    *,
+    missing: tuple[str, ...] = (),
+    unused: tuple[str, ...] = (),
+) -> HubbardUDecision:
+    """Builds every resolved decision, so its warnings follow from its
+    entries: built-in values carry the projector and starting-guess
+    warnings, each element without a published U one
+    ``hubbard.u_value_missing``, and unused ``u_by_element`` keys one
+    ``hubbard.u_by_element_unused``."""
+    warnings: list[Warning] = []
+    if any(entry.value_source == "table" for entry in u_values):
+        warnings += [PROJECTOR_MISMATCH_WARNING, STARTING_NS_EIGENVALUE_WARNING]
+    warnings += [_u_value_missing(symbol, u_values, missing) for symbol in missing]
+    if unused:
+        warnings.append(_u_by_element_unused(unused, applied=bool(u_values)))
+    return HubbardUDecision(u_values=u_values, warnings=tuple(warnings))
+
+
+def _u_value_missing(
+    symbol: str, u_values: tuple[HubbardU, ...], missing: tuple[str, ...]
+) -> Warning:
+    """``u_by_element`` replaces the built-in table, so the suggested value
+    keeps every U the decision already applies. It never suggests an
+    element ``u_by_element`` rejects; that element's own warning says why
+    no U can apply."""
+    message = (
+        f"No published Hubbard U value exists for {symbol} ({_manifold(symbol)}), "
+        f"so {symbol} gets plain DFT"
+    )
+    if symbol in _NO_HUBBARD_CHANNEL:
+        message += (
+            f"; {_NO_HUBBARD_CHANNEL[symbol]}, so u_by_element cannot apply one either."
+        )
+    else:
+        suggested = ", ".join(
+            [f'"{entry.element}": {entry.u_ev:g}' for entry in u_values]
+            + [
+                f'"{element}": <U in eV>'
+                for element in missing
+                if element not in _NO_HUBBARD_CHANNEL
+            ]
+        )
+        message += (
+            f". To apply +U, set u_by_element={{{suggested}}}; u_by_element "
+            "replaces the built-in table, so list every element that should "
+            "get +U."
+        )
+    return U_VALUE_MISSING_WARNING.model_copy(update={"message": message})
+
+
+def _u_by_element_unused(unused: tuple[str, ...], *, applied: bool) -> Warning:
+    message = (
+        "u_by_element names elements this structure does not contain, which "
+        f"are ignored: {', '.join(unused)}."
+    )
+    if not applied:
+        message += " No +U is applied."
+    return U_BY_ELEMENT_UNUSED_WARNING.model_copy(update={"message": message})
 
 
 def _correlated_elements(facts: CompositionFacts) -> tuple[str, ...]:
@@ -269,51 +460,12 @@ def _correlated_elements(facts: CompositionFacts) -> tuple[str, ...]:
     )
 
 
-def manifold_for(symbol: str) -> str:
-    """Public (v2 #88): ``generation/quantum_espresso/scf.py``'s
-    ``hubbard_card`` needs the same manifold string this module already
-    computes internally, to render QE >= 7.1's ``U  <label>-<manifold>
-    <value>`` HUBBARD card line -- see that function's own docstring for
-    why that line is species-label-keyed, not atom-index-keyed."""
+def _manifold(symbol: str) -> str:
+    """The Hubbard manifold label of ``symbol``: the table's for a
+    tabulated element, otherwise from its periodic-table block and row."""
+    if symbol in _U_TABLE:
+        return _U_TABLE[symbol].manifold
     element = Element(symbol)
-    manifold = _MANIFOLD_BY_BLOCK_AND_ROW.get((element.block, element.row))
-    return manifold or f"{element.row}{element.block}"
-
-
-def expand_hubbard_label(
-    u_by_element: dict[str, float], relabeled_structure: Structure
-) -> dict[str, float]:
-    """Expand a canonical-element-keyed U table to match
-    ``relabeled_structure``'s actual species labels (e.g. ``Fe`` -> ``Fe1``,
-    ``Fe2`` once AFM splitting produces them), so a HUBBARD card can name a
-    label that genuinely appears in ``ATOMIC_SPECIES``
-    (goldilocks-qe-pw-parameter-audit.md P0 finding #1). Split species default
-    to their canonical element's U value unless the caller already overrode
-    them individually in ``u_by_element``.
-
-    Keyed **only** by ``relabeled_structure``'s real labels -- #88 found
-    (live, against a real structure loaded through ``/run``) that
-    seeding the result from a verbatim copy of ``u_by_element`` leaves a
-    stray canonical-element key behind whenever that bare symbol is not
-    itself a real label, which every CIF/POSCAR-loaded structure's own
-    labels (pymatgen numbers them, e.g. ``V0``/``Cl1``, never a bare
-    symbol) never are -- `hubbard_card`'s label lookup then ``KeyError``s
-    on that stray key. Every unit test here previously built structures
-    with bare, unnumbered labels (no CIF round-trip), which coincidentally
-    made the canonical symbol a real label and hid this.
-    """
-    labels = {site.label for site in relabeled_structure}
-    expanded: dict[str, float] = {}
-    for label in labels:
-        if label in u_by_element:
-            expanded[label] = u_by_element[label]
-            continue
-        canonical = _canonical_element(label)
-        if canonical in u_by_element:
-            expanded[label] = u_by_element[canonical]
-    return expanded
-
-
-def _canonical_element(label: str) -> str:
-    """ "Fe1" -> "Fe": strip a trailing AFM-split-species digit suffix."""
-    return label.rstrip("0123456789")
+    return _MANIFOLD_BY_BLOCK_AND_ROW.get(
+        (element.block, element.row), f"{element.row}{element.block}"
+    )

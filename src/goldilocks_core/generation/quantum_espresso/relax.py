@@ -158,7 +158,7 @@ def write_qe_relax(
     lines.append(cell_parameters(structure))
     lines.append(atomic_positions(structure, _fixed_site_indices(structure, relax)))
     lines.append(k_points(step))
-    lines.extend(hubbard_lines(system, structure, label_to_element))
+    lines.extend(hubbard_lines(system, label_to_element))
     content = "\n".join(lines)
 
     args = ["-npool", str(step.parallel.npool)]

@@ -718,6 +718,69 @@ class TestAfmRelabeling:
         assert advice.system.symmetry_eff.value == advice.analysis.symmetry.value
 
 
+@pytest.fixture
+def nickel_oxide_store(tmp_path, monkeypatch) -> AssetStore:
+    spec, registry_table = _sssp_table_spec(
+        tmp_path / "sources", {"Ni": 18.0, "O": 6.0}
+    )
+    store = AssetStore(tmp_path / "store")
+    store.install(spec, sssp_preparer(registry_table))
+    monkeypatch.setattr(
+        "goldilocks_core.service._pseudo.load_tables",
+        lambda *a, **kw: {registry_table.id: registry_table},
+    )
+    return store
+
+
+def _rock_salt_nio() -> Structure:
+    return Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(4.17), ["Ni", "O"], [[0, 0, 0], [0.5, 0.5, 0.5]]
+    ).get_primitive_structure()
+
+
+def test_hubbard_record_lists_each_applied_u_with_its_source(
+    hpc, nickel_oxide_store
+) -> None:
+    """#135: records.hubbard (explain --json, /explain, goldilocks.json)
+    carries one entry per element that gets +U, with where its value came
+    from, instead of a plan name and a bare element-to-U map."""
+    advice = advise(_rock_salt_nio(), hpc=hpc, store=nickel_oxide_store)
+
+    record = advice.records()["hubbard"]
+    assert record.status == "resolved"
+    (entry,) = record.value["u_values"]
+    assert set(record.value) == {"u_values", "warnings"}
+    assert {key: entry[key] for key in ("element", "manifold", "u_ev")} == {
+        "element": "Ni",
+        "manifold": "3d",
+        "u_ev": 6.2,
+    }
+    assert entry["value_source"] == "table"
+    assert "Materials Project" in entry["citation"]
+    assert entry["doi"] == "10.1038/s41598-021-94550-5"
+    codes = {warning["code"] for warning in advice.warnings()}
+    assert "hubbard.projector_mismatch" in codes
+
+
+def test_user_u_by_element_reaches_the_generated_card(hpc, nickel_oxide_store) -> None:
+    overrides = build_overrides({"u_by_element": {"Ni": 5.0}})
+
+    advice = advise(
+        _rock_salt_nio(), hpc=hpc, overrides=overrides, store=nickel_oxide_store
+    )
+    report = check(advice)
+
+    assert report.ok, report.blocking
+    (entry,) = advice.records()["hubbard"].value["u_values"]
+    assert (entry["value_source"], entry["citation"], entry["doi"]) == (
+        "human",
+        None,
+        None,
+    )
+    content = generate(advice, report)[0].files["scf.in"]
+    assert "HUBBARD (ortho-atomic)\n  U  Ni-3d  5\n" in content
+
+
 def test_pseudo_requirements_reflects_first_pass_spin_orbit(
     silicon, hpc, installed_table
 ) -> None:

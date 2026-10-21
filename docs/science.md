@@ -154,6 +154,56 @@ dimensionality couldn't be determined (with a reason) rather than raising an
 error or silently guessing -- and the vdW decision itself then becomes
 unresolved (blocked), not silently set to `use_vdw=False`.
 
+## Check Hubbard +U
+
+A Hubbard +U correction counters the self-interaction error that semilocal
+functionals make for localized d and f electrons. Goldilocks applies it when
+the `needs_correlation` fact is true -- by default, a compound of a
+transition metal, lanthanide, or actinide with O or F, the Materials Project
+screening rule -- and never with a hybrid functional. Each element in the
+built-in table below then gets its Dudarev U_eff (U - J, in eV) on its 3d,
+4d, 5d, 4f, or 5f shell, written as one `U <species>-<manifold> <value>`
+line per species under `HUBBARD (ortho-atomic)`:
+
+| Source                              | U_eff (eV)                                                                         |
+| ----------------------------------- | ---------------------------------------------------------------------------------- |
+| Materials Project                   | V 3.25, Cr 3.7, Mn 3.9, Fe 5.3, Co 3.32, Ni 6.2, Mo 4.38, W 6.2                     |
+| Wang et al. 2006 / Jain et al. 2011 | Cu 4.0                                                                             |
+| Loschen et al. 2007                 | Ce 5.0                                                                             |
+| Topsakal & Wentzcovitch 2014        | Pr 4.0, Nd 3.1, Pm 3.4, Sm 3.3, Eu 3.0, Gd 4.6, Tb 5.0, Dy 5.0, Ho 4.9, Er 4.2, Tm 4.8, Yb 3.0 |
+| OQMD qmpy configuration (hubbards.yml) | Pa 4.0                                                                          |
+| OQMD (Kirklin et al. 2015)          | U 4.0, Np 4.0, Pu 4.0                                                              |
+| Suzuki et al. 2013                  | Am 4.0, Cm 4.0                                                                     |
+| Chen & Kaltsoyannis 2025            | Bk 3.54                                                                            |
+
+The other d-block elements, La, Lu, and Th get no U and no warning: the
+Materials Project applies none to those d elements, and La3+, Lu3+, and Th4+
+have empty or full shells. Ac, Cf, Es, Fm, Md, No, and Lr have no published
+U; they also get plain DFT, with a `hubbard.u_value_missing` warning that
+names the element and the setting to use (for Ac, why no setting can apply
+one). When no element gets a U, the input has no HUBBARD card.
+
+These values come from different codes and fits, and none was derived with
+the ortho-atomic projectors the generated input uses: every built-in U
+carries a `hubbard.projector_mismatch` warning that lists the VASP-derived
+values, and a `hubbard.starting_ns_eigenvalue_missing` warning, since +U
+calculations can converge to a metastable occupation matrix and Goldilocks
+supplies no initial guess. U also depends on oxidation state and
+environment, so treat one value per element as a starting point: test your
+property against U, or calibrate it (for example by linear response with
+`hp.x`, which Goldilocks does not set up).
+
+`u_by_element` replaces the table: only the listed elements present in the
+structure get +U, e.g. `--set 'u_by_element={"Ti": 4.0}'`, and listed
+elements the structure does not contain are ignored with a
+`hubbard.u_by_element_unused` warning. Keys must be element symbols and
+values finite and positive. La and Ac are rejected: no installed La
+pseudopotential has an occupied 4f channel and the only Ac one has no 5f
+channel, so pw.x stops on any U for them. `hubbard_needs_correlation=false`
+runs without +U. The `hubbard` record in `goldilocks explain --json` and
+`goldilocks.json` lists every applied U with its `value_source` (`table` or
+`human`), citation, and DOI.
+
 ## Check SCF convergence
 
 The SCF energy-convergence threshold (`conv_thr`) and total-energy threshold
