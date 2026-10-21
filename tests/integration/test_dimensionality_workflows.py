@@ -1,15 +1,16 @@
-"""Vacuum-driven decisions through the real service pipeline (#126).
+"""Dimensionality-driven decisions through the real service pipeline.
 
 ``advise()``/``check()``/``generate()`` and their relax variants on Si
 cells, with the synthetic SSSP Si table from ``tests/support.py``, so these
-run without installed pseudopotentials.
+run without installed pseudopotentials (#126). The dispersion tests (#141)
+read only ``advise()``/``check()``, which need no pseudopotentials either.
 """
 
 from __future__ import annotations
 
 import pytest
 from pymatgen.core import Lattice, Structure
-from support import sssp_fixture_table_spec
+from support import graphite, sssp_fixture_table_spec
 
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
@@ -22,6 +23,7 @@ from goldilocks_core.service import (
     generate,
     generate_relax,
 )
+from goldilocks_core.set_overrides import build_overrides
 
 pytestmark = pytest.mark.integration
 
@@ -100,3 +102,34 @@ def test_vc_relax_of_a_bulk_crystal_computes_the_stress(store: AssetStore) -> No
 
     assert "tstress          = .true." in content
     assert "assume_isolated" not in content
+
+
+def test_lda_graphite_gets_no_d3_dispersion_and_a_warning() -> None:
+    """#141: QE's DFT-D3 has no D3(BJ) parameters for LDA, so graphite keeps
+    its default D3 only under a functional that has them."""
+    hpc = load_hpc_profile("scarf")
+    default = advise(graphite(), hpc=hpc)
+    lda = advise(graphite(), hpc=hpc, overrides=build_overrides({"functional": "LDA"}))
+
+    assert default.system.vdw.value.use_vdw is True
+    assert lda.analysis.geometry.value.dimensionality == "2d"
+    assert lda.system.vdw.value.use_vdw is False
+    codes = {warning["code"] for warning in lda.warnings()}
+    assert "vdw.d3bj_unavailable_for_functional" in codes
+    assert not any("use_vdw" in reason for reason in check(lda).blocking)
+
+
+def test_d3_dispersion_with_lda_is_refused_before_generation() -> None:
+    """#141: pw.x would stop at startup with 'functional name unknown'."""
+    advice = advise(
+        graphite(),
+        hpc=load_hpc_profile("scarf"),
+        overrides=build_overrides({"functional": "LDA", "use_vdw": True}),
+    )
+
+    report = check(advice)
+
+    assert advice.system.vdw.source == "human"
+    dispersion = [reason for reason in report.blocking if "use_vdw=false" in reason]
+    assert len(dispersion) == 1
+    assert "'LDA'" in dispersion[0]

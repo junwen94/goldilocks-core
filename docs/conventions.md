@@ -126,7 +126,9 @@ heuristic`; see `goldilocks settings` for each key's actual sources).
 - `use_vdw` explicitly enables or disables dispersion. `method` alone
   changes the method only if dispersion is otherwise enabled; it does not
   enable dispersion for a 3D or unknown structure. Enabled dispersion
-  defaults to `d3bj` if no method is given.
+  defaults to `d3bj` if no method is given. `use_vdw=true` is refused for a
+  functional without D3(BJ) parameters, which is any functional except PBE
+  and PBEsol (LDA included).
 - The single setting `pseudo_table_id` pins an explicit table id instead
   of automatic selection. An explicit table must still satisfy the
   already-decided functional/accuracy/relativistic-treatment/element-coverage

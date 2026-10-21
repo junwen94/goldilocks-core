@@ -88,7 +88,9 @@ from goldilocks_core.advisors.parallelisation import (
     diag_grid_side,
 )
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
+from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.analysis.geometry import GeometryFacts
+from goldilocks_core.functionals import D3BJ_FUNCTIONALS, has_d3bj_parameters
 from goldilocks_core.plan import SCF_LIKE_PURPOSES
 from goldilocks_core.resolution import Blocked, FieldState
 
@@ -135,6 +137,8 @@ def check_all(
     relax: FieldState[RelaxOptions | VcRelaxOptions] | None = None,
     geometry: FieldState[GeometryFacts] | None = None,
     boundary: FieldState[BoundaryFacts] | None = None,
+    vdw: FieldState[VdwFacts] | None = None,
+    functional: FieldState[str] | None = None,
     job: FieldState[JobDecision] | None = None,
     parallel: FieldState[ParallelisationDecision] | None = None,
     nbnd: FieldState[NbndDecision] | None = None,
@@ -146,10 +150,11 @@ def check_all(
     far (from any advisor) -- any that are ``Blocked`` land in
     ``report.blocking`` via ``collect_blocked``. ``occupations``/
     ``magnetic``/``electron_count``/``relax``/``geometry``/``boundary``/
-    ``job``/``parallel``/``nbnd``/``purpose`` additionally opt into the named
-    cross-parameter rules this module implements; passing them here
-    also folds them into the generic ``Blocked`` scan, so a caller does
-    not need to repeat them in ``field_states`` as well.
+    ``vdw``/``functional``/``job``/``parallel``/``nbnd``/``purpose``
+    additionally opt into the named cross-parameter rules this module
+    implements; passing them here also folds them into the generic
+    ``Blocked`` scan, so a caller does not need to repeat them in
+    ``field_states`` as well.
 
     Each rule returns its blocking reason or ``None``; a new rule is one
     more entry in ``rule_reasons``.
@@ -163,6 +168,8 @@ def check_all(
             relax,
             geometry,
             boundary,
+            vdw,
+            functional,
             job,
             parallel,
             nbnd,
@@ -178,6 +185,7 @@ def check_all(
         ),
         _vc_relax_requires_bfgs_ion_dynamics(relax, purpose),
         _vc_relax_forbids_isolated_boundary(boundary, purpose),
+        _dispersion_needs_parameterised_functional(vdw, functional),
         _fix_bottom_layers_requires_2d_geometry(relax, geometry),
         _npool_must_divide_ntasks(job, parallel),
         _ndiag_grid_must_distribute_bands(job, parallel, nbnd),
@@ -349,6 +357,27 @@ def _vc_relax_forbids_isolated_boundary(
         "pw.x computes no stress for an isolated system, so the input cell "
         "would be reported as converged. Use task='relax' for a molecule or "
         "cluster in a box, or set assume_isolated='none' for a periodic structure."
+    )
+
+
+def _dispersion_needs_parameterised_functional(
+    vdw: FieldState[VdwFacts] | None, functional: FieldState[str] | None
+) -> str | None:
+    """D3(BJ), the only dispersion method generated, needs damping
+    parameters for the functional: pw.x passes DFT-D3 the pseudopotentials'
+    short functional name (QE 7.3 PW/src/input.f90:2039-2041) and stops with
+    "functional name unknown" when the table lacks it, as for LDA (#141).
+    ``vdw_method`` never picks D3 for such a functional itself, so this
+    refuses ``use_vdw=True`` from any source."""
+    if vdw is None or functional is None or not (vdw.ok and functional.ok):
+        return None
+    if not vdw.value.use_vdw or has_d3bj_parameters(functional.value):
+        return None
+    return (
+        "use_vdw=true adds D3(BJ) dispersion, but Quantum ESPRESSO's DFT-D3 has "
+        f"no parameters for functional {functional.value!r}, so pw.x would stop "
+        "with 'functional name unknown'. Set use_vdw=false, or choose a "
+        f"functional with D3(BJ) parameters ({', '.join(sorted(D3BJ_FUNCTIONALS))})."
     )
 
 

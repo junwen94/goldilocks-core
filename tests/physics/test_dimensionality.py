@@ -17,6 +17,7 @@ from pymatgen.core import Lattice, Structure
 from support import (
     carbon_dioxide,
     carbon_pair_in_a_box,
+    graphite,
     phosphorene,
     sodium_chloride,
 )
@@ -75,17 +76,6 @@ def lithium_cobalt_oxide() -> Structure:
         Lattice.hexagonal(2.816, 14.05),
         ["Li", "Co", "O"],
         [[0, 0, 0.5], [0, 0, 0], [0, 0, 0.2604]],
-    )
-
-
-def graphite() -> Structure:
-    """Bernal graphite, C on the 2b and 2c sites of P6_3/mmc, a = 2.46 A,
-    c = 6.71 A: C-C 1.42 A in the sheets, 3.36 A between them."""
-    return Structure.from_spacegroup(
-        "P6_3/mmc",
-        Lattice.hexagonal(2.46, 6.71),
-        ["C", "C"],
-        [[0, 0, 0.25], [1 / 3, 2 / 3, 0.25]],
     )
 
 

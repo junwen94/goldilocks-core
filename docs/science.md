@@ -144,6 +144,13 @@ Becke–Johnson damping. Goldilocks enables it (`use_vdw=True`) for structures
 classified as `molecule`, `1d`, or `2d`, and disables it (`use_vdw=False`) for
 `3d`.
 
+D3BJ's damping parameters are fitted per functional, and Quantum ESPRESSO's
+DFT-D3 has them only for PBE and PBEsol. With any other functional, LDA
+included, a low-dimensional structure gets no correction and the warning
+`vdw.d3bj_unavailable_for_functional`, and Goldilocks refuses an explicit
+`use_vdw=true` setting before generating the input. pw.x would otherwise stop
+at startup with "functional name unknown".
+
 The classification builds a bond graph and assigns dimensionality with
 Larsen's connectivity-rank algorithm. Two atoms are bonded when they are
 within pymatgen's JmolNN covalent cutoffs, or when one lies in the other's

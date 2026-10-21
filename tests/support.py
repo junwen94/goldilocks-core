@@ -260,6 +260,17 @@ def sodium_chloride() -> Structure:
     )
 
 
+def graphite() -> Structure:
+    """Bernal graphite, C on the 2b and 2c sites of P6_3/mmc, a = 2.46 A,
+    c = 6.71 A: C-C 1.42 A in the sheets, 3.36 A between them."""
+    return Structure.from_spacegroup(
+        "P6_3/mmc",
+        Lattice.hexagonal(2.46, 6.71),
+        ["C", "C"],
+        [[0, 0, 0.25], [1 / 3, 2 / 3, 0.25]],
+    )
+
+
 def carbon_dioxide() -> Structure:
     """Dry ice, Pa-3, a = 5.62 A: C=O 1.15 A inside each molecule, 3.1 A
     between molecules."""

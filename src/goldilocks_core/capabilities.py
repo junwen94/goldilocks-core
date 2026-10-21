@@ -267,7 +267,10 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "use_vdw": {
         "description": (
-            "Force whether a van der Waals dispersion correction is applied."
+            "Force whether a van der Waals dispersion correction is applied. "
+            "D3(BJ) needs parameters for the functional, which Quantum "
+            "ESPRESSO has only for PBE and PBEsol: with any other functional, "
+            "such as LDA, the default is no correction and true is refused."
         ),
     },
     "method": {

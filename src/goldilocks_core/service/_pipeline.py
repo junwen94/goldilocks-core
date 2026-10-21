@@ -143,9 +143,11 @@ def check(
     ``purpose`` (a non-relax caller never sets
     ``relax.fix_bottom_layers`` in the first place, so the rule is a
     no-op for them). ``boundary`` (#126): read off ``advice`` too, so a
-    vc-relax under Martyna-Tuckerman is refused; ``check_all`` also folds
-    a ``Blocked`` boundary in, which is why ``SystemAdvice.field_states()``
-    leaves it out.
+    vc-relax under Martyna-Tuckerman is refused. ``vdw``/``functional``
+    (#141): read off ``advice`` so D3 dispersion with a functional that has
+    no D3(BJ) parameters is refused. ``check_all`` also folds a ``Blocked``
+    boundary, vdw or functional in, which is why
+    ``SystemAdvice.field_states()`` leaves them out.
     """
     return check_all(
         *advice.field_states(),
@@ -155,6 +157,8 @@ def check(
         relax=relax,
         geometry=advice.analysis.geometry,
         boundary=advice.system.boundary,
+        vdw=advice.system.vdw,
+        functional=advice.system.functional,
         job=advice.step.resources.job,
         parallel=advice.step.resources.parallelisation,
         nbnd=advice.step.kpoints.nbnd,

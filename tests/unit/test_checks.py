@@ -12,6 +12,7 @@ from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.parallelisation import ParallelisationDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
+from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.checks import check_all, collect_blocked
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
@@ -327,6 +328,60 @@ def test_vc_relax_with_a_periodic_boundary_passes() -> None:
 
 def test_blocked_boundary_surfaces_once_via_the_generic_scan() -> None:
     report = check_all(boundary=Blocked(by="geometry undecided"), purpose="vc-relax")
+
+    assert report.blocking == ("geometry undecided",)
+
+
+def _vdw(use_vdw: bool, source: str = "heuristic"):
+    facts = VdwFacts(use_vdw=use_vdw, method="d3bj" if use_vdw else None)
+    return Resolved(facts, Provenance(source=source))
+
+
+def _functional(label: str):
+    return Resolved(label, Provenance(source="human"))
+
+
+def test_d3_dispersion_with_lda_blocks() -> None:
+    """#141: pw.x hands DFT-D3 the pseudopotentials' short functional name
+    (QE 7.3 PW/src/input.f90:2039-2041), and the D3(BJ) table has no LDA
+    entry, so pw.x would stop with 'functional name unknown'."""
+    report = check_all(vdw=_vdw(True, source="human"), functional=_functional("LDA"))
+
+    assert not report.ok
+    assert len(report.blocking) == 1
+    assert "'LDA'" in report.blocking[0]
+    assert "use_vdw=false" in report.blocking[0]
+
+
+def test_d3_dispersion_with_an_unrecognised_functional_blocks() -> None:
+    report = check_all(vdw=_vdw(True, source="llm"), functional=_functional("revPBE"))
+
+    assert not report.ok
+    assert "'revPBE'" in report.blocking[0]
+
+
+def test_d3_dispersion_with_pbe_or_pbesol_passes() -> None:
+    for label in ("PBE", "PBEsol"):
+        report = check_all(vdw=_vdw(True), functional=_functional(label))
+
+        assert report.ok, label
+
+
+def test_no_dispersion_with_lda_passes() -> None:
+    report = check_all(vdw=_vdw(False), functional=_functional("LDA"))
+
+    assert report.ok
+
+
+def test_dispersion_check_is_unaffected_when_either_side_is_missing() -> None:
+    assert check_all(vdw=_vdw(True)).ok
+    assert check_all(functional=_functional("LDA")).ok
+
+
+def test_blocked_vdw_surfaces_once_via_the_generic_scan() -> None:
+    report = check_all(
+        vdw=Blocked(by="geometry undecided"), functional=_functional("LDA")
+    )
 
     assert report.blocking == ("geometry undecided",)
 
