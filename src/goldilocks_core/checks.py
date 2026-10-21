@@ -363,7 +363,7 @@ def _isolation_matches_written_cell(
     renders, whatever the source of ``isolation``."""
     if boundary is None or magnetic is None or not (boundary.ok and magnetic.ok):
         return None
-    cell = magnetic.value.relabeled_structure
+    cell = magnetic.value.cell
     if boundary.value.isolation == "isolated":
         return _isolated_needs_vacuum_along_every_axis(cell)
     if boundary.value.isolation == "slab":
@@ -477,9 +477,7 @@ def _two_d_cell_dofree_needs_xy_frame(
         return None
     if options.cell_dofree not in _TWO_D_CELL_DOFREE:
         return None
-    found = _xy_frame_obstacles(
-        magnetic.value.relabeled_structure, allowed_vacuum=((), ("c",))
-    )
+    found = _xy_frame_obstacles(magnetic.value.cell, allowed_vacuum=((), ("c",)))
     if not found:
         return None
     return (
@@ -547,7 +545,7 @@ def _fix_bottom_layers_requires_slab(
     count = relax.value.fix_bottom_layers
     if count is None:
         return None
-    cell = magnetic.value.relabeled_structure
+    cell = magnetic.value.cell
     layers = slab_layers(cell)
     if layers is None:
         return (

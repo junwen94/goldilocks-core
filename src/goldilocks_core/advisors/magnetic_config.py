@@ -40,8 +40,19 @@ enforced constraint -- verified against QE 7.3's `PW/src/input.f90`). Both
 are accepted here as independent, unrelated overrides; this advisor never
 treats supplying both as a blocking error.
 
-**AFM species-splitting (v2 epic 9, #9)**: `relabeled_structure` equals the
-input `structure` unless a caller explicitly opts in with
+**Two steps, around pseudopotential selection (#128).** ``magnetic_cell``
+decides what selection depends on, and the simulated cell: spin
+polarization, spin-orbit coupling (selection reads it for the relativistic
+requirement), and the magnetic ordering applied to the structure -- the
+only enumlib call. ``magnetic_config`` then sets the starting moments on
+that cell, scaled by the selected pseudopotentials' ``z_valence``. Each
+runs once per calculation (``service/_magnetic.py``), and everything
+downstream -- electron count, bands, k-points, convergence, resources and
+the writer -- reads the one cell object, so no count can describe a
+different cell from the one written.
+
+**AFM species-splitting (v2 epic 9, #9)**: the cell is the input
+`structure` unless a caller explicitly opts in with
 `human.magnetic_ordering="afm"` -- opt-in, not a new default, for the same
 reason SOC stays opt-in below (real cost: this calls out to
 `pymatgen.analysis.magnetism.analyzer.MagneticStructureEnumerator`, which
@@ -53,9 +64,11 @@ energies -- explicitly an agent-level job in the design doc
 (goldilocks-core-design.md:2076), not something this stateless, single-call
 heuristic tier can or should attempt. What this tier gives instead is a
 *reasonable, deterministic* compensated ordering (the smallest
-antiferromagnetic candidate the enumerator finds), useful as a real starting
-point for a human/agent to actually run and compare against the plain
-ferromagnetic guess -- degrading back to the FM identity pass-through, with
+antiferromagnetic candidate the enumerator finds, which can be a different
+cell from the input: NiO's 2-atom primitive cell becomes the 4-atom AFM-II
+cell), useful as a real starting point for a human/agent to actually run
+and compare against the plain ferromagnetic guess -- degrading back to the
+FM identity pass-through, with
 a warning naming why, whenever enumlib is missing, the structure exceeds a
 small site-count ceiling, pymatgen cannot enumerate it, enumlib runs out of
 time, or no compensated ordering exists at all. Any other enumeration error
@@ -88,13 +101,12 @@ Computing the real, calibrated fraction needs `z_valences` (each element's
 count, real UPF files vary, e.g. whether semicore states are included).
 `pseudo_selection.py` picks that pseudopotential, and picking it needs
 `spin_orbit_enabled` from *this* file (for the relativistic requirement) --
-so this cannot import from `pseudo_selection.py` without a cycle. Instead
-`z_valences` is an optional parameter a caller supplies once pseudopotential
-selection has actually happened (no such caller is wired up yet -- v2 epic 8
-reconnects the delivery layers). Without it, every element still gets
-`DEFAULT_MAGNETIZATION_FRACTION` (aiida's own flat default, not this
-package's invention) rather than either guessing a `z_valence` or leaving
-`starting_magnetization` empty -- the latter would silently reopen A2.
+which is why the decision is the two steps above: `magnetic_config` takes
+`z_valences` once selection has happened. Without them (no table installed
+yet), every element still gets `DEFAULT_MAGNETIZATION_FRACTION` (aiida's own
+flat default, not this package's invention) rather than either guessing a
+`z_valence` or leaving `starting_magnetization` empty -- the latter would
+silently reopen A2.
 """
 
 from __future__ import annotations
@@ -102,6 +114,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+import numpy as np
 from numpy.linalg import LinAlgError
 from pymatgen.core import Structure
 
@@ -118,6 +131,7 @@ from goldilocks_core.resolution import (
     Provenance,
     Resolved,
     Warning,
+    blocked_by,
 )
 
 _MAX_SITES_FOR_AFM_ENUMERATION = 16
@@ -199,17 +213,19 @@ _MAGNETIZATION_IGNORED_WARNING = Warning(
     ),
 )
 
-WARNING_CATALOGUE = (
-    Warning(
-        code="magnetic.soc_suggested",
-        level="info",
-        category="magnetic",
-        message=(
-            "heavy, non-s-block elements are present; consider enabling "
-            "spin_orbit_coupling (not enabled automatically -- it changes "
-            "cost and setup)."
-        ),
+_SOC_SUGGESTED_WARNING = Warning(
+    code="magnetic.soc_suggested",
+    level="info",
+    category="magnetic",
+    message=(
+        "heavy, non-s-block elements are present; consider enabling "
+        "spin_orbit_coupling (not enabled automatically -- it changes "
+        "cost and setup)."
     ),
+)
+
+WARNING_CATALOGUE = (
+    _SOC_SUGGESTED_WARNING,
     Warning(
         code="magnetic.metallicity_unknown_defaulted_non_magnetic",
         level="warning",
@@ -231,7 +247,8 @@ WARNING_CATALOGUE = (
         category="magnetic",
         message=(
             "a compensated antiferromagnetic ordering was found and applied; "
-            "relabeled_structure now differs from structure."
+            "the input is written for its cell, which can differ from the "
+            "uploaded one."
         ),
     ),
     _MAGNETIZATION_IGNORED_WARNING,
@@ -244,8 +261,50 @@ this is the generic description, for a caller that has not seen it fire."""
 
 
 @dataclass(frozen=True, slots=True)
+class OrderingRecord:
+    """The magnetic ordering asked for (``"fm"`` when
+    ``magnetic_ordering`` is unset, which behaves the same) and the one
+    applied: ``"afm"`` when an antiferromagnetic candidate replaced the
+    input cell, otherwise ``"fm"`` -- the input cell kept (the FM identity
+    pass-through, as for every spin-unpolarized run)."""
+
+    requested: Literal["fm", "afm"]
+    applied: Literal["fm", "afm"]
+
+
+@dataclass(frozen=True, slots=True)
+class MagneticCell:
+    """The simulated cell and the spin decisions taken before
+    pseudopotential selection (module docstring).
+
+    ``structure`` is the input structure, or the applied antiferromagnetic
+    candidate: possibly a different cell, its sites spin-decorated and
+    labelled by sublattice (``Ni1``/``Ni2``). ``cell_in_input_basis`` is its
+    lattice in the input's basis, rows being lattice vectors:
+    ``structure.lattice.matrix == cell_in_input_basis @ input.lattice.matrix``.
+    That is an integer supercell matrix for a primitive input, but
+    fractional when enumeration reduced a conventional input to a smaller
+    cell (determinant 1/2 for rock-salt's 8-atom cell)."""
+
+    structure: Structure
+    spin_polarized: bool
+    spin_orbit_enabled: bool
+    magnetic_elements: tuple[str, ...]
+    ordering: OrderingRecord
+    cell_in_input_basis: tuple[tuple[float, ...], ...]
+    warnings: tuple[Warning, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class MagneticConfigFacts:
-    relabeled_structure: Structure
+    """The magnetic decision the writer renders. ``cell``, ``ordering``,
+    ``spin_polarized``, ``magnetic_elements`` and ``spin_orbit_enabled``
+    are copied from the ``MagneticCell`` (``cell`` is the same object as
+    ``MagneticCell.structure``); ``warnings`` are the cell's plus this
+    step's."""
+
+    cell: Structure
+    ordering: OrderingRecord
     spin_polarized: bool
     magnetic_elements: tuple[str, ...]
     starting_magnetization: dict[str, float] | None
@@ -279,14 +338,17 @@ class MagneticConfigLlmInput(LlmInput):
     spin_orbit_coupling: bool | None = None
 
 
-def magnetic_config(
+def magnetic_cell(
     structure: Structure,
     is_magnetic: FieldState[Magnetism],
-    needs_soc: FieldState[bool] | None = None,
-    z_valences: dict[str, float] | None = None,
     human: MagneticConfigHumanInput | None = None,
     llm: MagneticConfigLlmInput | None = None,
-) -> FieldState[MagneticConfigFacts]:
+) -> FieldState[MagneticCell]:
+    """The simulated cell (module docstring): spin polarization,
+    spin-orbit coupling, and ``structure`` with the requested ordering
+    applied -- the one enumeration of a calculation. ``Blocked`` when
+    ``is_magnetic`` is, or when a human ``starting_magnetization`` names a
+    label the cell does not have."""
     human = human or MagneticConfigHumanInput()
     llm = llm or MagneticConfigLlmInput()
 
@@ -297,62 +359,91 @@ def magnetic_config(
         return Blocked(by=is_magnetic)
 
     spin_polarized, source, warnings = _resolve_spin_polarized(is_magnetic, human, llm)
-
     magnetic_elements = magnetic_elements_in(structure) if spin_polarized else ()
+    requested = human.magnetic_ordering or "fm"
 
-    relabeled_structure = structure
-    if spin_polarized and human.magnetic_ordering == "afm":
-        relabeled_structure, afm_warnings = _attempt_afm_relabeling(
-            structure, magnetic_elements
-        )
-        warnings = (*warnings, *afm_warnings)
+    cell = structure
+    if spin_polarized and requested == "afm":
+        cell, ordering_warnings = _afm_cell(structure, magnetic_elements)
+        warnings = (*warnings, *ordering_warnings)
+
+    if spin_polarized and human.starting_magnetization is not None:
+        invalid = _invalid_labels(human.starting_magnetization, cell)
+        if invalid:
+            return Blocked(by=invalid)
+
+    facts = MagneticCell(
+        structure=cell,
+        spin_polarized=spin_polarized,
+        spin_orbit_enabled=human.spin_orbit_coupling is True,
+        magnetic_elements=magnetic_elements,
+        ordering=OrderingRecord(
+            requested=requested, applied="fm" if cell is structure else "afm"
+        ),
+        cell_in_input_basis=_cell_in_input_basis(cell, structure),
+        warnings=warnings,
+    )
+    return Resolved(facts, Provenance(source=source))
+
+
+def magnetic_config(
+    cell: FieldState[MagneticCell],
+    needs_soc: FieldState[bool] | None = None,
+    z_valences: dict[str, float] | None = None,
+    human: MagneticConfigHumanInput | None = None,
+) -> FieldState[MagneticConfigFacts]:
+    """The starting moments on ``cell`` -- a human
+    ``starting_magnetization`` (its labels already checked against the cell
+    by ``magnetic_cell``), or the heuristic fractions, scaled by the
+    selected pseudopotentials' ``z_valences`` when known -- with the
+    spin-orbit suggestion and the moment angles. Copies the cell's facts,
+    with the cell's provenance; ``Blocked`` when the cell is not
+    resolved."""
+    human = human or MagneticConfigHumanInput()
+    if not cell.ok:
+        return Blocked(by=blocked_by(cell))
+    facts = cell.value
 
     starting_magnetization = None
-    if spin_polarized:
-        if human.starting_magnetization is not None:
-            invalid = _invalid_labels(human.starting_magnetization, relabeled_structure)
-            if invalid:
-                return Blocked(by=invalid)
-            starting_magnetization = dict(human.starting_magnetization)
-        else:
-            starting_magnetization = _starting_magnetization_by_label(
-                relabeled_structure, z_valences
-            )
-
-    spin_orbit_enabled = human.spin_orbit_coupling is True
-    needs_soc_resolved_true = needs_soc is not None and needs_soc.ok and needs_soc.value
-    if not spin_orbit_enabled and needs_soc_resolved_true:
-        warnings = (
-            *warnings,
-            Warning(
-                code="magnetic.soc_suggested",
-                level="info",
-                category="magnetic",
-                message=(
-                    "heavy, non-s-block elements are present; consider enabling "
-                    "spin_orbit_coupling (not enabled automatically -- it changes "
-                    "cost and setup)."
-                ),
-            ),
+    if facts.spin_polarized:
+        starting_magnetization = (
+            dict(human.starting_magnetization)
+            if human.starting_magnetization is not None
+            else _starting_magnetization_by_label(facts.structure, z_valences)
         )
 
+    warnings = facts.warnings
+    needs_soc_resolved_true = needs_soc is not None and needs_soc.ok and needs_soc.value
+    if not facts.spin_orbit_enabled and needs_soc_resolved_true:
+        warnings = (*warnings, _SOC_SUGGESTED_WARNING)
+
     angle1 = angle2 = None
-    if spin_orbit_enabled and spin_polarized and starting_magnetization is not None:
+    if facts.spin_orbit_enabled and starting_magnetization is not None:
         angle1 = dict.fromkeys(starting_magnetization, 0.0)
         angle2 = dict.fromkeys(starting_magnetization, 0.0)
 
-    facts = MagneticConfigFacts(
-        relabeled_structure=relabeled_structure,
-        spin_polarized=spin_polarized,
-        magnetic_elements=magnetic_elements,
+    config = MagneticConfigFacts(
+        cell=facts.structure,
+        ordering=facts.ordering,
+        spin_polarized=facts.spin_polarized,
+        magnetic_elements=facts.magnetic_elements,
         starting_magnetization=starting_magnetization,
         tot_magnetization=human.tot_magnetization,
-        spin_orbit_enabled=spin_orbit_enabled,
+        spin_orbit_enabled=facts.spin_orbit_enabled,
         angle1=angle1,
         angle2=angle2,
         warnings=warnings,
     )
-    return Resolved(facts, Provenance(source=source))
+    return Resolved(config, cell.provenance)
+
+
+def _cell_in_input_basis(
+    cell: Structure, structure: Structure
+) -> tuple[tuple[float, ...], ...]:
+    """``cell``'s lattice vectors in ``structure``'s basis (rows):
+    ``cell.lattice.matrix == M @ structure.lattice.matrix``."""
+    matrix = np.linalg.solve(structure.lattice.matrix.T, cell.lattice.matrix.T).T
+    return tuple(tuple(float(value) for value in row) for row in matrix)
 
 
 def _resolve_spin_polarized(
@@ -431,7 +522,7 @@ def _fraction_for(symbol: str, z_valences: dict[str, float] | None) -> float:
 
 def afm_unavailable_warning(reason: str) -> Warning:
     """Public (v2 #87): ``service._magnetic_orderings.list_magnetic_orderings``
-    needs the same warning shape ``_attempt_afm_relabeling`` already uses
+    needs the same warning shape ``_afm_cell`` already uses
     below, to explain *why* a listing came back FM-only rather than
     silently looking like every structure has no compensated AFM
     ordering at all."""
@@ -451,7 +542,7 @@ def _afm_candidates_or_reason(
     ``MagOrderingTransformation``'s symmetry-aware enumeration) finds for
     ``structure``, or an empty tuple plus the reason there is none.
 
-    Shared by ``_attempt_afm_relabeling`` (picks the smallest candidate, a
+    Shared by ``_afm_cell`` (picks the smallest candidate, a
     deterministic starting point) and ``enumerate_magnetic_orderings``
     (lists every candidate, for a caller -- e.g. an mMACE-based energy
     ranking, #87 -- that wants to compare more than one). The enumerator
@@ -508,9 +599,9 @@ def enumerate_magnetic_orderings(
     ``"fm"``), plus every antiferromagnetic candidate
     ``_afm_candidates_or_reason`` finds, labeled ``"afm-<n>"`` in
     enumeration order and already relabeled by spin (``_label_by_spin``) so
-    a caller can use any entry directly as a ``relabeled_structure``.
+    a caller can use any entry directly as a simulated cell.
 
-    Unlike ``_attempt_afm_relabeling``, this never picks a winner -- it is
+    Unlike ``_afm_cell``, this never picks a winner -- it is
     the listing half of #87's "enumerate, then optionally rank with mMACE,
     then generate" split. Returns just the ``"fm"`` entry, with no
     antiferromagnetic candidates, whenever ``_afm_candidates_or_reason``
@@ -531,30 +622,31 @@ def enumerate_magnetic_orderings(
     return tuple(candidates), reason
 
 
-def _attempt_afm_relabeling(
+def _afm_cell(
     structure: Structure, magnetic_elements: tuple[str, ...]
 ) -> tuple[Structure, tuple[Warning, ...]]:
-    """Try to find one genuine, compensated two-sublattice antiferromagnetic
-    ordering, degrading to the FM identity pass-through, with a named
-    reason, whenever ``_afm_candidates_or_reason`` cannot produce one."""
+    """The cell of one genuine, compensated two-sublattice antiferromagnetic
+    ordering (the smallest candidate, relabeled by spin), or ``structure``
+    itself -- the FM identity pass-through -- with a warning naming why
+    ``_afm_candidates_or_reason`` could not produce one."""
     candidates, reason = _afm_candidates_or_reason(structure, magnetic_elements)
     if reason is not None:
         return structure, (afm_unavailable_warning(reason),)
 
     winner = min(candidates, key=lambda candidate: candidate.num_sites)
-    relabeled = _label_by_spin(winner)
+    cell = _label_by_spin(winner)
     applied = Warning(
         code="magnetic.afm_ordering_applied",
         level="info",
         category="magnetic",
         message=(
-            f"antiferromagnetic ordering applied: {relabeled.num_sites} sites, "
-            f"{len(set(relabeled.labels))} distinct species (was "
+            f"antiferromagnetic ordering applied: {cell.num_sites} sites, "
+            f"{len(set(cell.labels))} distinct species (was "
             f"{structure.num_sites} sites, {len(set(structure.species))} "
             "species)."
         ),
     )
-    return relabeled, (applied,)
+    return cell, (applied,)
 
 
 def _label_by_spin(candidate: Structure) -> Structure:

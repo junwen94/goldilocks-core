@@ -32,9 +32,10 @@ A `run` (or `explain`) request follows this path:
    `/inspect` route use.
 2. `service.advise(structure, *, code, hpc, overrides, store, fetch_missing)`
    runs three phases in a fixed order: `_analysis.analyze` (structure facts),
-   `_system.system_advice` (system-wide advisors, including pseudopotential-
-   table selection), and `_step.steps_advice` (per-step k-point/occupation
-   advisors, then the task's job and each step's parallelisation).
+   `_system.system_advice` (system-wide advisors, starting with the simulated
+   cell and pseudopotential-table selection), and `_step.steps_advice`
+   (per-step k-point/occupation advisors, then the task's job and each step's
+   parallelisation).
    `advise()` returns an `Advice` even for an incomplete request: a field it
    cannot decide, because an input is missing, something is not installed or
    configured, or the request leaves it open, is `Unavailable`/`Blocked`. A
@@ -104,7 +105,15 @@ Inside `advise()` itself, the three phases are:
   `advisors/` such as `functional.py`, `hubbard_u.py`, `vdw_method.py`,
   `boundary.py`, `magnetic_config.py`) recommends system-wide parameters,
   including pseudopotential-table selection via `advisors/pseudo_selection.py`
-  and `service/_pseudo.py`.
+  and `service/_pseudo.py`. It starts with the simulated cell
+  (`service/_magnetic.py`): `magnetic_config.magnetic_cell` resolves spin
+  polarization and spin-orbit coupling and applies the requested magnetic
+  ordering, the only enumlib call, which can replace the input with a
+  different cell. Table selection then reads the cell's spin-orbit switch,
+  and `magnetic_config.magnetic_config` seeds the cell's moments from the
+  selected z_valence. Everything after that -- the electron count, the step
+  advice, the gate and the writer -- reads that one cell object, so no count
+  describes a cell other than the one written.
 - **Step advice** (`service/_step.py`, split into `service/_step_kpoints.py`
   for occupations/k-mesh/bands/convergence and `service/_step_resources.py`
   for the job/parallelisation, backed by per-step advisors such as

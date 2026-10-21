@@ -39,9 +39,12 @@ class CompositionFacts:
 
 def composition(structure: Structure) -> FieldState[CompositionFacts]:
     """Always resolves: element classification is exact, structure-derived
-    computation with no external dependency and no failure mode."""
+    computation with no external dependency and no failure mode. Each
+    element is listed once, however its sites are decorated (a spin from
+    an applied magnetic ordering, or an oxidation state from a CIF that
+    types Fe2+ and Fe3+ separately)."""
     elements = tuple(
-        sorted(element.symbol for element in structure.composition.elements)
+        sorted({element.symbol for element in structure.composition.elements})
     )
     periodic_elements = tuple(Element(symbol) for symbol in elements)
     facts = CompositionFacts(

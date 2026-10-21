@@ -229,8 +229,10 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "nelec": {
         "description": (
-            "Total valence electron count; otherwise summed from "
-            "pseudopotential z_valence."
+            "Total valence electron count of the uploaded cell (otherwise "
+            "summed from pseudopotential z_valence), written as tot_charge, "
+            "its difference from the neutral count; refused when "
+            "magnetic_ordering writes a cell of another size."
         ),
     },
     "spin_polarized": {

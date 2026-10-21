@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from pymatgen.core import Lattice, Structure
+from support import magnetic_decision
 
-from goldilocks_core.advisors.magnetic_config import magnetic_config
 from goldilocks_core.advisors.occupations import (
     OccupationsHumanInput,
     OccupationsLlmInput,
@@ -100,7 +100,7 @@ def test_llm_can_choose_fixed_over_a_metal_heuristic() -> None:
 
 
 def test_fixed_occupations_on_a_spin_polarized_system_warns() -> None:
-    magnetic = magnetic_config(_IRON, is_magnetic(_IRON))
+    magnetic = magnetic_decision(_IRON, is_magnetic(_IRON))
 
     state = occupations(Resolved("non_metal", Provenance(source="heuristic")), magnetic)
 
@@ -112,7 +112,7 @@ def test_fixed_occupations_on_a_spin_polarized_system_warns() -> None:
 
 
 def test_fixed_occupations_on_a_non_magnetic_system_has_no_warning() -> None:
-    magnetic = magnetic_config(_SILICON, is_magnetic(_SILICON))
+    magnetic = magnetic_decision(_SILICON, is_magnetic(_SILICON))
 
     state = occupations(Resolved("non_metal", Provenance(source="heuristic")), magnetic)
 
@@ -120,7 +120,7 @@ def test_fixed_occupations_on_a_non_magnetic_system_has_no_warning() -> None:
 
 
 def test_smearing_never_gets_the_fixed_spin_warning() -> None:
-    magnetic = magnetic_config(_IRON, is_magnetic(_IRON))
+    magnetic = magnetic_decision(_IRON, is_magnetic(_IRON))
 
     state = occupations(is_metal(_IRON), magnetic)
 

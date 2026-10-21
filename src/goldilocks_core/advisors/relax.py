@@ -17,7 +17,7 @@ atoms to physically pin during a relaxation is a structural decision,
 not a "which scenario" choice an llm tier should be guessing at. The
 layers are ``analysis.geometry.slab_layers``, counted up from the vacuum
 of a cell with exactly one vacuum axis, on
-``system.magnetic.relabeled_structure`` rather than the phase-1
+``system.magnetic.cell`` (the simulated cell) rather than the phase-1
 ``structure`` this module's ``geometry`` parameter is computed against:
 that is the structure whose site order the ``ATOMIC_POSITIONS`` card
 needs index-aligned layers for, and AFM species-splitting can change its

@@ -10,7 +10,10 @@ from goldilocks_core.advisors.cutoffs import CutoffsDecision
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.hubbard_u import HubbardU, HubbardUDecision
 from goldilocks_core.advisors.k_sampling import KSamplingDecision
-from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
+from goldilocks_core.advisors.magnetic_config import (
+    MagneticConfigFacts,
+    OrderingRecord,
+)
 from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.parallelisation import ParallelisationDecision
@@ -38,13 +41,16 @@ def _system(
     return SystemSettings(
         functional=functional,
         cutoffs=CutoffsDecision(ecutwfc_ry=30.0, ecutrho_ry=120.0),
-        electron_count=ElectronCountDecision(nelec=4.0 * len(structure)),
+        electron_count=ElectronCountDecision(
+            nelec=4.0 * len(structure), tot_charge=0.0
+        ),
         pseudopotentials=tuple(
             pseudo_metadata_factory(element, functional=functional, z_valence=4.0)
             for element in elements
         ),
         magnetic=MagneticConfigFacts(
-            relabeled_structure=structure,
+            cell=structure,
+            ordering=OrderingRecord(requested="fm", applied="fm"),
             spin_polarized=False,
             magnetic_elements=(),
             starting_magnetization=None,

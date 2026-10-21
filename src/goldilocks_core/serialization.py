@@ -92,6 +92,15 @@ def _to_jsonable_structure(value: Structure) -> dict:
     return value.as_dict()
 
 
+@to_portable.register(Structure)
+def _to_portable_structure(value: Structure) -> dict:
+    """A structure in a published record is identified by its formula and
+    atom count (e.g. the simulated cell in ``records.magnetic``, #128):
+    enough to see which cell an input was written for, without the full
+    structure document."""
+    return {"formula": value.composition.formula, "nat": len(value)}
+
+
 @to_jsonable.register(np.ndarray)
 def _to_jsonable_ndarray(value: np.ndarray) -> list:
     return value.tolist()

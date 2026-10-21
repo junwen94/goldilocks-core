@@ -69,8 +69,9 @@ which gives each vacuum axis of the structure it is passed
 ladder from the periodic axes alone, so the mesh, the ladder and the
 reverse lookup (``_with_k_index``) agree. A cell with vacuum along all
 three axes is sampled at Gamma only, the one rung of its ladder. The
-caller passes the cell the mesh is for (the AFM-relabelled one in
-``service/_step_kpoints.py``), and the vacuum is read from that cell,
+caller passes the cell the mesh is for (the simulated cell,
+``system.cell``, in ``service/_step_kpoints.py``), and the vacuum is read
+from that cell,
 never from the dimensionality label, which calls bulk graphite '2d'. An
 explicit human ``k_grid`` is kept as given, vacuum axes included.
 

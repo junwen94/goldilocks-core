@@ -19,7 +19,10 @@ from support import (
 from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.job_resources import JobDecision
-from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
+from goldilocks_core.advisors.magnetic_config import (
+    MagneticConfigFacts,
+    OrderingRecord,
+)
 from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.parallelisation import ParallelisationDecision
@@ -46,7 +49,8 @@ def _magnetic(
     structure: Structure = _IRON,
 ):
     facts = MagneticConfigFacts(
-        relabeled_structure=structure,
+        cell=structure,
+        ordering=OrderingRecord(requested="fm", applied="fm"),
         spin_polarized=spin_polarized,
         magnetic_elements=("Fe",) if spin_polarized else (),
         starting_magnetization={"Fe": 0.1} if spin_polarized else None,
@@ -149,7 +153,10 @@ def test_blocked_occupations_surfaces_once_via_the_generic_scan() -> None:
 
 
 def _electron_count(nelec: float):
-    return Resolved(ElectronCountDecision(nelec), Provenance(source="heuristic"))
+    return Resolved(
+        ElectronCountDecision(nelec=nelec, tot_charge=0.0),
+        Provenance(source="heuristic"),
+    )
 
 
 def test_fixed_occupations_non_spin_polarized_odd_electron_count_blocks() -> None:

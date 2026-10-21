@@ -7,7 +7,7 @@ tree is deleted. Each proves the one architectural bet its row names,
 the same reasoning `goldilocks-core-design.md` gives for why an
 scf-only smoke test can't stand in for it: tri-state/poison-object
 propagation across a real dependency chain (scenario 3), the
-``relabeled_structure``/``symmetry_eff`` species-splitting pipeline
+simulated-cell/``symmetry_eff`` species-splitting pipeline
 (scenario 4), and per-program-typed step settings on a real multi-step
 path (scenario 5) have no other standing test that exercises all of
 them together, end to end, through the real ``advise()``/``check()``/
@@ -230,11 +230,11 @@ _ENUMLIB_MISSING = not enumlib_installed()
     reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
 )
 class TestScenario4Afm:
-    """Row 4: ``relabeled_structure`` plumbing + symmetry recompute +
+    """Row 4: simulated-cell plumbing + symmetry recompute +
     k-point propagation. Rock-salt FeO, the design doc's own worked
     example (Fe -> Fe1/Fe2)."""
 
-    def test_relabeled_structure_symmetry_eff_and_n_irr_k(self) -> None:
+    def test_split_cell_symmetry_eff_and_n_irr_k(self) -> None:
         hpc = _hpc()
         rock_salt_feo = Structure(
             Lattice.cubic(4.3), ["Fe", "O"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
@@ -248,7 +248,7 @@ class TestScenario4Afm:
         advice = advise(rock_salt_feo, hpc=hpc, overrides=overrides)
 
         assert advice.system.magnetic.ok
-        relabeled = advice.system.magnetic.value.relabeled_structure
+        relabeled = advice.system.cell.value.structure
         assert len(set(relabeled.species)) > len(set(rock_salt_feo.species))
 
         assert advice.system.symmetry_eff.ok

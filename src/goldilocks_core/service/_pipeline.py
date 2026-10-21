@@ -20,6 +20,10 @@ splits the walltime between them. It returns one ``Advice`` per step,
 all sharing the same analysis, system and job. ``advise()`` is its
 one-scf-step case; ``service/_dos.py`` (scf + nscf) and
 ``service/_relax.py`` (one relax/vc-relax step) call it directly.
+
+The input structure reaches only the analysis and the system phase,
+which turns it into the simulated cell once (``system.cell``,
+``service/_magnetic.py``, #128); every step is advised on that cell.
 """
 
 from __future__ import annotations
@@ -100,12 +104,10 @@ def advise_steps(
     )
     task_job = overrides.step.resources
     advice_by_step = steps_advice(
-        structure, analysis, system, hpc, steps, task_job.job, task_job.job_llm
+        analysis, system, hpc, steps, task_job.job, task_job.job_llm
     )
     return {
-        purpose: Advice(
-            structure=structure, analysis=analysis, system=system, step=step
-        )
+        purpose: Advice(analysis=analysis, system=system, step=step)
         for purpose, step in advice_by_step.items()
     }
 

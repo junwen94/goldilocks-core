@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from pymatgen.core import Structure
 
 from goldilocks_core.resolution import FieldState, Resolved
+from goldilocks_core.serialization import to_portable
 from goldilocks_core.service._analysis import AnalysisFacts, AnalysisOverrides
 from goldilocks_core.service._step import StepAdvice, StepOverrides
 from goldilocks_core.service._system import SystemAdvice, SystemOverrides
@@ -48,7 +49,6 @@ class Advice:
     ``BundleInput.records`` should carry unchanged -- tri-state, not the
     unwrapped values ``SystemSettings``/``PwSettings`` need."""
 
-    structure: Structure
     analysis: AnalysisFacts
     system: SystemAdvice
     step: StepAdvice
@@ -74,15 +74,13 @@ class Advice:
         advisor decisions are plain (non-pydantic) frozen dataclasses --
         ``bundle.py``'s ``ResolvedField``/``bundle_files`` never had to
         serialize one of these to JSON before, since no orchestrator fed
-        it real advisor output until this epic. ``dataclasses.asdict``
-        handles the general case (including nested dataclasses like
-        ``PseudoTable.asset``, and tuples of them like
-        ``pseudopotentials``); the one exception is
-        ``MagneticConfigFacts.relabeled_structure``, a pymatgen
-        ``Structure`` (not JSON-encodable, and -- since v2 epic 9, #9's
-        AFM species-splitting -- no longer even always identical to the
-        input structure already implicit in the bundle), which is
-        dropped rather than converted.
+        it real advisor output until this epic. Dataclasses become dicts
+        field by field (including nested ones like ``PseudoTable.asset``,
+        and tuples of them like ``pseudopotentials``); a pymatgen
+        ``Structure`` -- ``MagneticConfigFacts.cell``, the simulated cell,
+        which can differ from the uploaded structure (#128) -- is
+        published as its formula and atom count (``serialization``'s
+        ``to_portable``).
         """
         merged = {
             **self.analysis.records(),
@@ -120,10 +118,13 @@ def warnings_from_records(
 
 
 def _json_safe_value(value: object) -> object:
+    if isinstance(value, Structure):
+        return to_portable(value)
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        data = dataclasses.asdict(value)
-        data.pop("relabeled_structure", None)
-        return _json_safe_value(data)
+        return {
+            item.name: _json_safe_value(getattr(value, item.name))
+            for item in dataclasses.fields(value)
+        }
     if isinstance(value, BaseModel):
         return value.model_dump()
     if isinstance(value, dict):

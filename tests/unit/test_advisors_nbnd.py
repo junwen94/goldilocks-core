@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from pymatgen.core import Lattice, Structure
+from support import magnetic_decision
 
-from goldilocks_core.advisors.magnetic_config import (
-    MagneticConfigHumanInput,
-    magnetic_config,
-)
+from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
 from goldilocks_core.advisors.nbnd import NbndHumanInput, NbndLlmInput, nbnd
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.analysis.is_magnetic import is_magnetic
@@ -106,7 +104,7 @@ def test_llm_extra_bands_used_when_no_human_override() -> None:
 
 
 def test_spin_polarized_system_gets_an_informational_note() -> None:
-    magnetic = magnetic_config(_IRON, is_magnetic(_IRON))
+    magnetic = magnetic_decision(_IRON, is_magnetic(_IRON))
 
     state = nbnd(16.0, _FIXED, magnetic=magnetic)
 
@@ -116,7 +114,7 @@ def test_spin_polarized_system_gets_an_informational_note() -> None:
 
 
 def test_non_magnetic_system_has_no_spin_note() -> None:
-    magnetic = magnetic_config(_SILICON, is_magnetic(_SILICON))
+    magnetic = magnetic_decision(_SILICON, is_magnetic(_SILICON))
 
     state = nbnd(8.0, _FIXED, magnetic=magnetic)
 
@@ -127,7 +125,7 @@ def test_noncollinear_insulator_uses_the_full_electron_count_not_half() -> None:
     """QE's noncollinear bands hold one electron each (a two-component
     spinor), not two -- doubling the nominal insulator formula relative
     to a comparable collinear run (v2 epic 9, #9)."""
-    magnetic = magnetic_config(
+    magnetic = magnetic_decision(
         _SILICON,
         is_magnetic(_SILICON),
         human=MagneticConfigHumanInput(spin_orbit_coupling=True),
@@ -141,7 +139,7 @@ def test_noncollinear_insulator_uses_the_full_electron_count_not_half() -> None:
 def test_noncollinear_metal_pads_from_the_full_electron_count() -> None:
     # nelec=200 -> valence_bands=200 (noncollinear, not halved);
     # 1.2*200=240 beats 200+4=204.
-    magnetic = magnetic_config(
+    magnetic = magnetic_decision(
         _SILICON,
         is_magnetic(_SILICON),
         human=MagneticConfigHumanInput(spin_orbit_coupling=True),
@@ -153,7 +151,7 @@ def test_noncollinear_metal_pads_from_the_full_electron_count() -> None:
 
 
 def test_noncollinear_gets_its_own_note_not_the_nspin_two_one() -> None:
-    magnetic = magnetic_config(
+    magnetic = magnetic_decision(
         _IRON,
         is_magnetic(_IRON),
         human=MagneticConfigHumanInput(spin_orbit_coupling=True),

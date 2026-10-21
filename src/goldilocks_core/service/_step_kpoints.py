@@ -10,13 +10,17 @@ signature, not a convention invented here): ``occupations`` before
 ``k_sampling`` before ``n_irr_k``; ``nbnd`` needs
 ``system.electron_count``'s *plain* ``nelec`` (already resolved by
 phase 2) so it is ``Blocked`` outright if that failed.
+
+**Every structural input is the simulated cell** (``system.cell``, #128):
+``k_sampling`` and ``n_irr_k`` mesh its reciprocal lattice, and
+``convergence`` scales with its atom count, the same cell
+``system.electron_count`` counted and the writer renders. A blocked cell
+blocks all three; there is no fallback to the input structure.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-from pymatgen.core import Structure
 
 from goldilocks_core.advisors.convergence import (
     ConvergenceDecision,
@@ -86,7 +90,6 @@ class ElectronicStepAdvice:
 
 
 def electronic_step_advice(
-    structure: Structure,
     analysis: AnalysisFacts,
     system: SystemAdvice,
     overrides: KpointsOverrides,
@@ -97,22 +100,9 @@ def electronic_step_advice(
         overrides.occupations,
         overrides.occupations_llm,
     )
-    # Post-relabeling structure when one exists (AFM species-splitting,
-    # v2 epic 9, #9) -- the actual simulated cell, not the pre-magnetic
-    # one ``analysis`` was computed from. Falls back to ``structure``
-    # when ``magnetic`` itself is blocked; k_sampling/n_irr_k do not need
-    # magnetic to succeed, only some structure to work with.
-    kmesh_structure = (
-        system.magnetic.value.relabeled_structure if system.magnetic.ok else structure
+    k_sampling_state, n_irr_k_state, convergence_state = _cell_sampling(
+        analysis, system, occupations_state, overrides
     )
-    k_sampling_state = k_sampling(
-        analysis.is_metal,
-        kmesh_structure,
-        occupations_state,
-        overrides.k_sampling,
-        overrides.k_sampling_llm,
-    )
-    n_irr_k_state = n_irr_k(kmesh_structure, k_sampling_state, overrides.n_irr_k)
 
     if system.electron_count.ok:
         nbnd_state = nbnd(
@@ -126,18 +116,44 @@ def electronic_step_advice(
     else:
         nbnd_state = Blocked(by=blocked_by(system.electron_count))
 
-    convergence_state = convergence(
-        len(structure),
-        hubbard=system.hubbard,
-        geometry=analysis.geometry,
-        human=overrides.convergence,
-        llm=overrides.convergence_llm,
-    )
-
     return ElectronicStepAdvice(
         occupations=occupations_state,
         k_sampling=k_sampling_state,
         n_irr_k=n_irr_k_state,
         nbnd=nbnd_state,
         convergence=convergence_state,
+    )
+
+
+def _cell_sampling(
+    analysis: AnalysisFacts,
+    system: SystemAdvice,
+    occupations_state: FieldState[OccupationsDecision],
+    overrides: KpointsOverrides,
+) -> tuple[
+    FieldState[KSamplingDecision], FieldState[int], FieldState[ConvergenceDecision]
+]:
+    """``k_sampling``, ``n_irr_k`` and ``convergence`` on the simulated
+    cell (module docstring)."""
+    if not system.cell.ok:
+        cause = Blocked(by=blocked_by(system.cell))
+        return cause, cause, cause
+    cell = system.cell.value.structure
+    k_sampling_state = k_sampling(
+        analysis.is_metal,
+        cell,
+        occupations_state,
+        overrides.k_sampling,
+        overrides.k_sampling_llm,
+    )
+    return (
+        k_sampling_state,
+        n_irr_k(cell, k_sampling_state, overrides.n_irr_k),
+        convergence(
+            len(cell),
+            hubbard=system.hubbard,
+            geometry=analysis.geometry,
+            human=overrides.convergence,
+            llm=overrides.convergence_llm,
+        ),
     )

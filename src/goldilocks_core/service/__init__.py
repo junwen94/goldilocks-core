@@ -26,6 +26,9 @@ module into one file. Split by pipeline phase instead, matching
 - ``_analysis.py`` -- structure-only facts (epic 4)
 - ``_pseudo.py`` -- pseudopotential table selection + asset-store
   materialization (the one place this pipeline touches the filesystem)
+- ``_magnetic.py`` -- the simulated cell (spin, spin-orbit coupling and the
+  applied magnetic ordering), decided once, then table selection and the
+  starting moments in the order they depend on each other
 - ``_system.py`` -- system-level advisors (epic 5), mirrors
   ``system_settings.SystemSettings``'s own field list one layer up
 - ``_step.py`` -- per-step advisors (epics 6-7), mirrors

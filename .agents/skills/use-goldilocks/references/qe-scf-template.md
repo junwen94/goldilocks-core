@@ -51,15 +51,18 @@ K_POINTS automatic
 `<species_label>` is the QE species name (e.g. `Fe1`/`Fe2` for an
 AFM-relabeled structure), which is the real element (`Fe`) except when
 `magnetic_ordering="afm"` split one element into several oppositely-spinned
-species. `write_qe_scf` (`generation/quantum_espresso/scf.py`) already
+species. The input is written for the simulated cell
+(`advice.system.cell.value.structure`): the uploaded structure, or the cell
+of the applied antiferromagnetic ordering, which can hold a different number
+of atoms. `write_qe_scf` (`generation/quantum_espresso/scf.py`) already
 handles this distinction -- this template documents what it produces, it is
 not something to reimplement by hand.
 
 ## Mapping from Goldilocks records
 
 ```text
-site_count          -> len(structure)
-species_count       -> len({site.label for site in structure})
+site_count          -> len(advice.system.cell.value.structure)  (the simulated cell)
+species_count       -> len({site.label for site in advice.system.cell.value.structure})
 k-grid              -> advice.step.kpoints.k_sampling.value.mesh
 k-shift             -> advice.step.kpoints.k_sampling.value.shift
 pseudos             -> advice.system.pseudo.metadata.value  (one entry per element)

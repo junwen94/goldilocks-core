@@ -17,9 +17,9 @@ candidate ``ntasks`` rather than reading its output (see
 ``job``/``job_llm`` overrides are task-level; ``npool``/``ndiag`` are
 per step.
 
-**The estimate reads the cell the writer renders**: the magnetic
-decision's ``relabeled_structure`` (an AFM candidate can be a larger
-cell than the input), one species per (element, starting magnetization)
+**The estimate reads the cell the writer renders**: the simulated cell,
+``MagneticConfigFacts.cell`` (an AFM candidate can be a different cell
+from the input, #128), one species per (element, starting magnetization)
 pair as ``canonicalize_system_for_generation`` in
 ``generation/quantum_espresso/scf.py`` splits them, each species'
 projector counts from its pseudopotential's PP_HEADER
@@ -158,7 +158,7 @@ def _written_species(system: SystemAdvice) -> tuple[Species, ...] | Unavailable:
     """The species of the cell the writer renders (module docstring);
     ``Unavailable`` for a disordered cell, which it cannot render."""
     magnetic = system.magnetic.value
-    if not magnetic.relabeled_structure.is_ordered:
+    if not magnetic.cell.is_ordered:
         return Unavailable(
             reason=(
                 "pw.x's memory cannot be estimated for a disordered structure: "
@@ -174,7 +174,7 @@ def _written_species(system: SystemAdvice) -> tuple[Species, ...] | Unavailable:
     magnetization = magnetic.starting_magnetization or {}
     atoms = Counter(
         (site.specie.symbol, magnetization.get(site.label, 0.0))
-        for site in magnetic.relabeled_structure
+        for site in magnetic.cell
     )
     return tuple(
         Species(
@@ -211,7 +211,7 @@ def _job_step(
     magnetic = system.magnetic.value
     layout = qe_spin_layout(magnetic)
     estimate = resource_estimate(
-        magnetic.relabeled_structure.lattice,
+        magnetic.cell.lattice,
         species,
         ecutwfc_ry=system.cutoffs.value.ecutwfc_ry,
         ecutrho_ry=system.cutoffs.value.ecutrho_ry,

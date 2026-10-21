@@ -12,7 +12,10 @@ from goldilocks_core.advisors.cutoffs import CutoffsDecision
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.hubbard_u import HubbardU, HubbardUDecision
 from goldilocks_core.advisors.k_sampling import KSamplingDecision
-from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
+from goldilocks_core.advisors.magnetic_config import (
+    MagneticConfigFacts,
+    OrderingRecord,
+)
 from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.parallelisation import (
@@ -40,7 +43,8 @@ def _magnetic(
     angle2: dict[str, float] | None = None,
 ) -> MagneticConfigFacts:
     return MagneticConfigFacts(
-        relabeled_structure=structure,
+        cell=structure,
+        ordering=OrderingRecord(requested="fm", applied="fm"),
         spin_polarized=spin_polarized,
         magnetic_elements=(),
         starting_magnetization=starting_magnetization,
@@ -65,11 +69,11 @@ def _system(
     return SystemSettings(
         functional=functional,
         cutoffs=CutoffsDecision(ecutwfc_ry=30.0, ecutrho_ry=120.0),
-        # z_valence=4.0 per atom below and nelec=4.0 * len(structure) agree
-        # exactly, so _charge_keywords's derived tot_charge is 0.0 (omitted)
-        # unless a test overrides electron_count itself -- these tests are
-        # about other keywords, not #34's tot_charge translation.
-        electron_count=ElectronCountDecision(nelec=4.0 * len(structure)),
+        # A neutral cell (z_valence=4.0 per atom below): no tot_charge
+        # unless a test overrides electron_count itself.
+        electron_count=ElectronCountDecision(
+            nelec=4.0 * len(structure), tot_charge=0.0
+        ),
         pseudopotentials=tuple(
             pseudo_metadata_factory(element, functional=functional, z_valence=4.0)
             for element in elements
@@ -129,19 +133,16 @@ def _step(
     )
 
 
-def test_nelec_override_translates_to_qe_s_real_tot_charge_keyword(
+def test_tot_charge_is_the_electron_count_decision_s_charge(
     silicon_structure, pseudo_metadata_factory
 ) -> None:
-    """Regression for #34 (v2 epic 9, #9): QE's real &SYSTEM namelist has
-    no ``nelec`` input keyword at all (confirmed against ASE's own
-    ALL_KEYS['pw']['system'] registry -- only ``tot_charge`` exists) --
-    a resolved ``electron_count.nelec`` different from the natural,
-    pseudopotential-summed count must translate to ``tot_charge``, the
-    deviation from neutral, not be dropped or emitted verbatim under a
-    keyword QE would reject."""
+    """QE's &SYSTEM namelist has no ``nelec`` input keyword (ASE's
+    ALL_KEYS['pw']['system'] lists ``tot_charge`` only, #34): a requested
+    count reaches pw.x as the charge the electron-count decision derived,
+    rendered verbatim."""
     system = _system(silicon_structure, pseudo_metadata_factory)
     system = dataclasses.replace(
-        system, electron_count=ElectronCountDecision(nelec=3.0)
+        system, electron_count=ElectronCountDecision(nelec=3.0, tot_charge=1.0)
     )
     step = _step()
 
@@ -151,13 +152,19 @@ def test_nelec_override_translates_to_qe_s_real_tot_charge_keyword(
     assert "nelec" not in content
 
 
-def test_no_tot_charge_keyword_when_nelec_matches_the_natural_count(
-    silicon_structure, pseudo_metadata_factory
+@pytest.mark.parametrize("nelec", [4.0, 3.0, 8.0])
+def test_a_neutral_decision_renders_no_tot_charge_whatever_the_count(
+    silicon_structure, pseudo_metadata_factory, nelec: float
 ) -> None:
-    """The default heuristic path resolves nelec to exactly the natural
-    (pseudopotential-summed) count -- tot_charge would be 0.0 and is
-    pure noise, so it must not appear at all."""
+    """The writer never derives a charge from two electron counts (#128):
+    an AFM cell counted on the uploaded cell turned the difference into
+    tot_charge = 24. Only the decision's own charge is rendered, so a
+    neutral decision renders none, however its count compares with the
+    pseudopotentials' z_valence sum (4.0 here)."""
     system = _system(silicon_structure, pseudo_metadata_factory)
+    system = dataclasses.replace(
+        system, electron_count=ElectronCountDecision(nelec=nelec, tot_charge=0.0)
+    )
     step = _step()
 
     content = write_qe_scf(system, step, _CTX)[0].files["scf.in"]
@@ -783,7 +790,7 @@ def test_missing_pseudopotential_element_raises_generation_error(
     system = SystemSettings(
         functional="PBEsol",
         cutoffs=CutoffsDecision(ecutwfc_ry=30.0, ecutrho_ry=120.0),
-        electron_count=ElectronCountDecision(nelec=8.0),
+        electron_count=ElectronCountDecision(nelec=8.0, tot_charge=0.0),
         pseudopotentials=(pseudo_metadata_factory("Na"),),
         magnetic=_magnetic(structure),
         vdw=VdwFacts(use_vdw=False, method=None),
@@ -801,7 +808,7 @@ def test_pseudopotential_functional_mismatch_raises_generation_error(
     system = SystemSettings(
         functional="PBEsol",
         cutoffs=CutoffsDecision(ecutwfc_ry=30.0, ecutrho_ry=120.0),
-        electron_count=ElectronCountDecision(nelec=4.0),
+        electron_count=ElectronCountDecision(nelec=4.0, tot_charge=0.0),
         pseudopotentials=(pseudo_metadata_factory("Si", functional="LDA"),),
         magnetic=_magnetic(silicon_structure),
         vdw=VdwFacts(use_vdw=False, method=None),
@@ -823,7 +830,7 @@ def test_disordered_structure_is_rejected(pseudo_metadata_factory) -> None:
     system = SystemSettings(
         functional="PBEsol",
         cutoffs=CutoffsDecision(ecutwfc_ry=30.0, ecutrho_ry=120.0),
-        electron_count=ElectronCountDecision(nelec=4.0),
+        electron_count=ElectronCountDecision(nelec=4.0, tot_charge=0.0),
         pseudopotentials=(pseudo_metadata_factory("Si"), pseudo_metadata_factory("Ge")),
         magnetic=magnetic,
         vdw=VdwFacts(use_vdw=False, method=None),

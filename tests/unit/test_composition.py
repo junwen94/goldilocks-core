@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from pymatgen.core import Lattice, Structure
+import pytest
+from pymatgen.core import Lattice, Species, Structure
 
 from goldilocks_core.analysis.composition import composition
 
@@ -37,3 +38,26 @@ def test_composition_always_resolves() -> None:
     assert state.ok
     assert state.status == "resolved"
     assert state.source == "heuristic"
+
+
+@pytest.mark.parametrize(
+    "species",
+    [
+        pytest.param(
+            (Species("Fe", spin=5), Species("Fe", spin=-5), "O", "O"),
+            id="spin-split AFM cell",
+        ),
+        pytest.param(
+            (Species("Fe", 2), Species("Fe", 3), Species("O", -2)),
+            id="oxidation-state CIF types",
+        ),
+    ],
+)
+def test_a_decorated_element_is_listed_once(species) -> None:
+    """Species decorated with a spin (an applied AFM ordering, #128) or an
+    oxidation state (CIFs typing Fe2+ and Fe3+ separately) are still one
+    element."""
+    state = composition(_structure(*species))
+
+    assert state.value.elements == ("Fe", "O")
+    assert state.value.transition_metals == ("Fe",)

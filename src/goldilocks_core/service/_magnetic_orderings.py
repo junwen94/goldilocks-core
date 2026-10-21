@@ -1,8 +1,8 @@
 """list_magnetic_orderings: enumerate, and optionally mMACE-rank, magnetic
 orderings for one structure (v2, #87).
 
-Deliberately not part of ``advise()``/``generate()``: those assume one
-already-decided ``relabeled_structure`` per calculation, but this is a
+Deliberately not part of ``advise()``/``generate()``: those decide one
+simulated cell per calculation (``MagneticCell``), but this is a
 listing capability a caller consults *before* deciding which ordering(s)
 to actually generate input files for -- "give me FM and AFM input files"
 and "let mMACE recommend one" both start here. Each listed candidate
@@ -81,7 +81,7 @@ def candidate_to_json(candidate: MagneticOrderingCandidate) -> dict[str, Any]:
     *this exact* candidate: feed them straight back as a new top-level
     structure + overrides to ``/run`` (or ``generate()`` directly), no
     label lookup or re-enumeration required. This is deliberately a fresh
-    structure input, not a ``relabeled_structure`` override plumbed
+    structure input, not a cell override plumbed
     through ``advise()`` for the *original* structure -- an AFM candidate
     can be a different cell (a `MagneticStructureEnumerator` supercell)
     from the one the caller started with, so it has to run its own

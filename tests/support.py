@@ -37,7 +37,13 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
+from goldilocks_core.advisors.magnetic_config import (
+    MagneticConfigFacts,
+    MagneticConfigHumanInput,
+    OrderingRecord,
+    magnetic_cell,
+    magnetic_config,
+)
 from goldilocks_core.analysis.geometry import GeometryFacts, SlabGeometry
 from goldilocks_core.assets.records import AssetFile, AssetSpec
 from goldilocks_core.assets.runtime import statuses
@@ -46,7 +52,9 @@ from goldilocks_core.resolution import Provenance, Resolved
 
 if TYPE_CHECKING:
     from goldilocks_core.analysis.geometry import Dimensionality, LatticeAxis
+    from goldilocks_core.analysis.is_magnetic import Magnetism
     from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
+    from goldilocks_core.resolution import FieldState
 
 REAL_ASSET_ROOT = asset_root()
 """The real, developer-machine asset root (not the per-test isolated
@@ -74,6 +82,21 @@ def run_cli(
         text=True,
         timeout=timeout,
     )
+
+
+def magnetic_decision(
+    structure: Structure,
+    is_magnetic: FieldState[Magnetism],
+    needs_soc: FieldState[bool] | None = None,
+    z_valences: dict[str, float] | None = None,
+    human: MagneticConfigHumanInput | None = None,
+) -> FieldState[MagneticConfigFacts]:
+    """``magnetic_cell`` then ``magnetic_config``, the two steps
+    ``service/_magnetic.py`` runs around pseudopotential selection -- for
+    advisor-level tests that need one structure's whole magnetic
+    decision (#128)."""
+    cell = magnetic_cell(structure, is_magnetic, human)
+    return magnetic_config(cell, needs_soc, z_valences, human)
 
 
 def strict_json(document: str | bytes) -> Any:
@@ -506,11 +529,12 @@ def geometry_facts(
 
 
 def written_cell(structure: Structure) -> Resolved[MagneticConfigFacts]:
-    """A resolved non-magnetic ``MagneticConfigFacts`` whose
-    ``relabeled_structure`` is ``structure``: the cell the writer renders,
-    which the written-cell rules of ``checks.check_all`` read."""
+    """A resolved non-magnetic ``MagneticConfigFacts`` whose ``cell`` is
+    ``structure``: the cell the writer renders, which the written-cell rules
+    of ``checks.check_all`` read."""
     facts = MagneticConfigFacts(
-        relabeled_structure=structure,
+        cell=structure,
+        ordering=OrderingRecord(requested="fm", applied="fm"),
         spin_polarized=False,
         magnetic_elements=(),
         starting_magnetization=None,

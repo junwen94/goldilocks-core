@@ -128,6 +128,14 @@ magnetic ordering is the true ground state -- that needs comparing total
 energies from several actual calculations -- so this only gives one
 reasonable, deterministic starting point (the smallest compensated ordering
 found), for you to run and compare against the ferromagnetic guess yourself.
+That ordering can need a different cell from the one you uploaded: NiO's
+2-atom primitive cell becomes the 4-atom AFM-II cell, and its 8-atom
+conventional cell is reduced to the same 4-atom one. The input is then
+written for that cell, and everything counted for it (electrons, bands, the
+convergence threshold, k-points and the job's memory) is counted on it;
+`records.magnetic` names it by formula and atom count. A `nelec` you set
+counts the electrons of the cell you uploaded, so it is refused together
+with an ordering that changes the cell's size.
 This needs the external `enumlib` executables (`enum.x` or `multienum.x`,
 plus `makeStr.py`, `makestr.x` or `makeStr.x`) on `PATH`. Without them, above a
 site-count ceiling, when pymatgen cannot enumerate your structure, when enumlib

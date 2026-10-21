@@ -680,7 +680,10 @@ class TestRunAndExplainAgainstRealAssets:
         ``goldilocks run`` with an uncaught ``KeyError`` (write_qe_scf
         looked up QE species labels in a dict keyed by real elements) --
         this reproduces the exact failing case through the real CLI
-        subprocess, not just the writer function in isolation."""
+        subprocess, not just the writer function in isolation.
+
+        The applied AFM cell has 4 sites against the uploaded 2, and the
+        deck is counted on it: neutral, with no ``tot_charge`` (#128)."""
         rock_salt_feo = tmp_path / "FeO.cif"
         Structure(
             Lattice.cubic(4.3), ["Fe", "O"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
@@ -703,6 +706,8 @@ class TestRunAndExplainAgainstRealAssets:
         assert completed.returncode == 0, completed.stderr
         content = (destination / "scf.in").read_text()
         assert "ntyp             = 3" in content
+        assert "nat              = 4" in content
+        assert "tot_charge" not in content
         assert "  Fe1  " in content
         assert "  Fe2  " in content
 

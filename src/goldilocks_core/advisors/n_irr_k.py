@@ -23,7 +23,7 @@ three symmetry-related flags in the design doc's dependency table for
 this step -- ``noinv``, ``no_t_rev``, ``force_symmorphic`` -- are not
 exposed here: pymatgen's own ``get_ir_reciprocal_mesh`` never forwards
 ``noinv`` to spglib at all (a confirmed no-op), and ``no_t_rev``/
-``force_symmorphic`` only matter once ``relabeled_structure`` carries
+``force_symmorphic`` only matter once the simulated cell carries
 real (not FM-identity) magnetic moments, which it does not yet
 (``advisors/magnetic_config.py``). Adding fields for flags that
 currently do nothing would be speculative; add them once the first

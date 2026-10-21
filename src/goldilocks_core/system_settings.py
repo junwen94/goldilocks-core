@@ -25,9 +25,9 @@ over HTTP/MCP -- those get a schema once epic 8 ("reconnect delivery
 layers") needs one.
 
 ``pseudopotentials`` holds the *matched, real* metadata for every
-element in the structure being generated (one entry per element, no
-AFM species-splitting yet -- see ``advisors/magnetic_config.py``'s own
-``relabeled_structure`` note), i.e. ``pseudo_selection.py``'s
+element in the structure being generated (one entry per element, also
+when the simulated cell ``MagneticConfigFacts.cell`` splits an element
+into several species), i.e. ``pseudo_selection.py``'s
 ``select_metadata_for_elements`` output, not a raw selection record.
 """
 

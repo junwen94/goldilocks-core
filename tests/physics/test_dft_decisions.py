@@ -21,14 +21,12 @@ the rendering of it.
 from __future__ import annotations
 
 from pymatgen.core import Lattice, Structure
+from support import magnetic_decision
 
 from goldilocks_core.advisors.convergence import ConvergenceHumanInput, convergence
 from goldilocks_core.advisors.functional import DEFAULT_FUNCTIONAL
 from goldilocks_core.advisors.hubbard_u import hubbard_u
-from goldilocks_core.advisors.magnetic_config import (
-    MagneticConfigHumanInput,
-    magnetic_config,
-)
+from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
 from goldilocks_core.advisors.occupations import occupations
 from goldilocks_core.advisors.pseudo_selection import (
     PseudoRequirements,
@@ -92,7 +90,7 @@ def test_heavy_element_prompts_for_soc_without_silently_enabling_it() -> None:
     iodine = Structure(Lattice.cubic(7.0), ["I"], [[0.0, 0.0, 0.0]])
 
     soc_needed = needs_soc(composition(iodine))
-    magnetism = magnetic_config(iodine, is_magnetic(iodine), soc_needed)
+    magnetism = magnetic_decision(iodine, is_magnetic(iodine), soc_needed)
     requirements = pseudo_requirements(
         "PBEsol", spin_orbit_enabled=magnetism.value.spin_orbit_enabled
     )
@@ -110,7 +108,7 @@ def test_explicit_soc_couples_fully_relativistic_pseudos_to_qe_noncollinear_flag
 ):
     iodine = Structure(Lattice.cubic(7.0), ["I"], [[0.0, 0.0, 0.0]])
 
-    magnetism = magnetic_config(
+    magnetism = magnetic_decision(
         iodine,
         is_magnetic(iodine),
         human=MagneticConfigHumanInput(spin_orbit_coupling=True),
@@ -172,10 +170,11 @@ def test_spin_polarized_structure_gets_a_starting_magnetization() -> None:
     relaxes to the non-magnetic solution while the run reports a normal,
     converged SCF. Fixed in v2 epic 5's advisors/magnetic_config.py; this
     test used to stay xfail against v1's own compute() pipeline (never
-    fixed there), and now exercises magnetic_config() directly instead."""
+    fixed there), and now exercises the magnetic decision (magnetic_cell, then
+    magnetic_config) directly instead."""
     iron = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
 
-    magnetism = magnetic_config(iron, is_magnetic(iron))
+    magnetism = magnetic_decision(iron, is_magnetic(iron))
 
     assert magnetism.value.spin_polarized is True
     assert magnetism.value.starting_magnetization
@@ -191,7 +190,7 @@ def test_soc_does_not_silently_discard_a_magnetic_structures_magnetism() -> None
     v2 epic 5's advisors/magnetic_config.py."""
     iron = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
 
-    magnetism = magnetic_config(
+    magnetism = magnetic_decision(
         iron,
         is_magnetic(iron),
         human=MagneticConfigHumanInput(spin_orbit_coupling=True),
