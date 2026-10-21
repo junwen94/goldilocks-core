@@ -164,6 +164,17 @@ are model predictions. Inspect the actual QE convergence history and adjust
 these settings if needed. Reaching the SCF threshold does not demonstrate
 convergence with respect to k-points or cutoffs.
 
+Goldilocks writes no `mixing_fixed_ns` for +U inputs unless you set it, so
+pw.x uses its own default of 0 and converges the Hubbard occupation matrix
+together with the density. For the first `mixing_fixed_ns` iterations pw.x
+holds that matrix at its starting value, and it can report convergence before
+the window ends. The energy, forces and stress are then those of the starting
+occupations, not a self-consistent DFT+U result, and the stress calculation
+can abort with "non-symmetric stress contribution". Set a nonzero value only
+for a preparatory run whose output seeds a separate run with the occupations
+free. If a +U SCF needs more than `electron_maxstep` iterations, adjust
+`mixing_beta` or `electron_maxstep` rather than freezing the occupations.
+
 ## Check relaxation settings
 
 For `relax` and `vc-relax` tasks, Goldilocks also picks ionic and cell

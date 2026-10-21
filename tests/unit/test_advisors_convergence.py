@@ -64,27 +64,21 @@ def test_unavailable_geometry_keeps_plain_mixing() -> None:
     assert state.value.mixing_mode == "plain"
 
 
-def test_active_hubbard_sets_mixing_fixed_ns() -> None:
-    needs_correlation = Resolved(True, Provenance(source="heuristic"))
-
-    state = convergence(nat=5, needs_correlation=needs_correlation)
-
-    assert state.value.mixing_fixed_ns == 50
-
-
-def test_inactive_hubbard_leaves_mixing_fixed_ns_unset() -> None:
-    needs_correlation = Resolved(False, Provenance(source="heuristic"))
-
-    state = convergence(nat=5, needs_correlation=needs_correlation)
+def test_mixing_fixed_ns_is_unset_by_default() -> None:
+    """#127: pw.x can report convergence while mixing_fixed_ns still holds
+    the Hubbard occupation matrix at its starting value, so nothing sets
+    it by default; unset leaves QE's own default of 0."""
+    state = convergence(nat=5)
 
     assert state.value.mixing_fixed_ns is None
+    assert state.provenance.field_sources["mixing_fixed_ns"] == "heuristic"
 
 
-def test_unavailable_needs_correlation_does_not_block_or_guess() -> None:
-    state = convergence(nat=5, needs_correlation=Unavailable(reason="synthetic"))
+def test_human_mixing_fixed_ns_is_used_as_given() -> None:
+    state = convergence(nat=5, human=ConvergenceHumanInput(mixing_fixed_ns=10))
 
-    assert state.ok
-    assert state.value.mixing_fixed_ns is None
+    assert state.value.mixing_fixed_ns == 10
+    assert state.provenance.field_sources["mixing_fixed_ns"] == "human"
 
 
 def test_human_conv_thr_override_is_used_directly_not_scaled() -> None:

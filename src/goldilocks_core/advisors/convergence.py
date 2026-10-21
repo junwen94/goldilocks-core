@@ -29,15 +29,24 @@ deliberately *not* included -- the design doc's finding names only
 ``2d``/``molecule``, and this module does not extend that without a
 source.
 
-**`mixing_fixed_ns=50` when +U is active**
-(goldilocks-core-design.md:2908, "F5"): an engineering heuristic, not a
-literature-standardized constant -- freezing the occupation-matrix
-mixing for the first N iterations helps a Hubbard-corrected SCF avoid
-oscillating between metastable occupation-matrix solutions early on.
-The design doc's own finding notes a QE-mailing-list two-stage restart
-procedure as the fallback when 50 iterations are not enough, but
-choosing to run that restart is a multi-step workflow decision, not
-something a single stateless call can decide -- out of scope here.
+**No default `mixing_fixed_ns`** (#127; replaces the design doc's "F5"
+default of 50 for every +U input, goldilocks-core-design.md:2908). While
+``iter <= mixing_fixed_ns``, pw.x resets the Hubbard occupation matrix
+ns to its iteration-1 value (QE 7.3 ``PW/src/electrons.f90:815-833``),
+yet it still declares convergence if the density converges inside that
+window: ``mix_rho.f90:162`` has no fixed-ns guard. The freeze restarts
+at every ionic step (``electrons.f90:556``). With ns frozen, the Hubbard
+stress from ``stres_hub`` can have an antisymmetric part, and pw.x
+aborts with "non-symmetric stress contribution"
+(``stres_hub.f90:391-397``) when the symmetry group it found leaves
+that part in place, as the Ci or C2h groups it often finds on
+goldilocks' CIF-frame ``ibrav = 0`` cells do (#140). So the field
+resolves only from a human or LLM value; unset leaves QE's default of
+0 and the writer renders nothing. A frozen-ns start would have to be an
+explicit two-stage plan (a frozen-ns stage with
+``starting_ns_eigenvalue``, then a restart with ns free), which is not
+modelled. Nothing else here depends on whether +U is active, so there
+is no correlation input.
 
 **No `is_metal` input.** It appears in the design doc's own illustrative
 per-step loop snippet, but no source in this codebase specifies a
@@ -46,11 +55,11 @@ for metals) -- unlike `k_sampling`'s deliberately-unused `occupations`
 input, there is no documented future contract this would need to match,
 so it is left out rather than carried as an unjustified placeholder.
 
-``needs_correlation``/``geometry`` are optional: anything other than a
-confirmed ``Resolved`` value (``Unavailable``, ``Blocked``, or simply
-not supplied) just skips the corresponding optional adjustment --
-``conv_thr``/``etot_conv_thr``/``mixing_beta``/``electron_maxstep`` do
-not depend on either, so this module never blocks on them.
+``geometry`` is optional: anything other than a confirmed ``Resolved``
+value (``Unavailable``, ``Blocked``, or simply not supplied) keeps
+``mixing_mode='plain'`` -- ``conv_thr``/``etot_conv_thr``/
+``mixing_beta``/``electron_maxstep`` do not depend on it, so this module
+never blocks on it.
 
 **``Provenance.field_sources``, populated here first.** The one
 ``Provenance`` on this whole ``ConvergenceDecision`` answers "did a
@@ -80,7 +89,6 @@ _DEFAULT_MIXING_BETA = 0.4
 """Matches v1's DEFAULT_MIXING_BETA (advice/parameters.py:17)."""
 _DEFAULT_ELECTRON_MAXSTEP = 80
 """Matches v1's DEFAULT_ELECTRON_MAXSTEP (advice/parameters.py:18)."""
-_HUBBARD_MIXING_FIXED_NS = 50
 _LOCAL_TF_DIMENSIONALITIES = frozenset({"2d", "molecule"})
 
 
@@ -113,7 +121,6 @@ class ConvergenceLlmInput(LlmInput):
 
 def convergence(
     nat: int,
-    needs_correlation: FieldState[bool] | None = None,
     geometry: FieldState[GeometryFacts] | None = None,
     human: ConvergenceHumanInput | None = None,
     llm: ConvergenceLlmInput | None = None,
@@ -121,11 +128,6 @@ def convergence(
     human = human or ConvergenceHumanInput()
     llm = llm or ConvergenceLlmInput()
 
-    hubbard_active = bool(
-        needs_correlation is not None
-        and needs_correlation.ok
-        and needs_correlation.value
-    )
     local_tf = bool(
         geometry is not None
         and geometry.ok
@@ -149,11 +151,7 @@ def convergence(
         mixing_mode=_pick(
             human.mixing_mode, llm.mixing_mode, "local-TF" if local_tf else "plain"
         ),
-        mixing_fixed_ns=_pick(
-            human.mixing_fixed_ns,
-            llm.mixing_fixed_ns,
-            _HUBBARD_MIXING_FIXED_NS if hubbard_active else None,
-        ),
+        mixing_fixed_ns=_pick(human.mixing_fixed_ns, llm.mixing_fixed_ns, None),
     )
     field_sources = {
         "conv_thr": _field_source(human.conv_thr),

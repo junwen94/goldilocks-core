@@ -57,13 +57,15 @@ shift flag of `1` means a half-grid shift on that axis.
 | Pseudopotential accuracy tier                 | `efficiency` (only usable tier today, see below)               |
 | SCF threshold / total-energy threshold        | `conv_thr = nat × 0.2e-9` Ry / `etot_conv_thr = nat × 1e-5` Ry |
 | Mixing / iteration limit                      | `mixing_beta 0.4` / `electron_maxstep 80`                      |
+| Fixed Hubbard occupations (+U)                | `mixing_fixed_ns` unset (QE's 0)                               |
 | Confirmed metal, or metallicity unconfirmed   | `smearing`, `cold`, `degauss` `0.01` Ry                        |
 | Confirmed non-metal                           | `fixed`, no width                                              |
 
 `conv_thr`/`etot_conv_thr` scale with the structure's atom count `nat`, not a
 fixed constant: for Si (`nat=8`) this gives `conv_thr = 1.6e-9` Ry and
 `etot_conv_thr = 8e-5` Ry, matching real `goldilocks explain` output.
-`mixing_beta` and `electron_maxstep` are fixed defaults.
+`mixing_beta` and `electron_maxstep` are fixed defaults. `mixing_fixed_ns` is
+never set by default; see [Check SCF convergence](science.md#check-scf-convergence).
 
 Today `efficiency` is the only usable pseudopotential accuracy tier: there is
 no setting to request `precision`, and pinning a `precision`-tier

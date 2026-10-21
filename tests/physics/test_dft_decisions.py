@@ -38,6 +38,8 @@ from goldilocks_core.analysis.is_metal import is_metal
 from goldilocks_core.analysis.needs_soc import needs_soc
 from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 from goldilocks_core.assets.records import AssetFile, AssetSpec
+from goldilocks_core.inputs.hpc import load_hpc_profile
+from goldilocks_core.service import advise
 
 
 def _table(
@@ -196,3 +198,31 @@ def test_soc_does_not_silently_discard_a_magnetic_structures_magnetism() -> None
     assert magnetism.value.spin_polarized is True
     assert magnetism.value.spin_orbit_enabled is True
     assert magnetism.value.starting_magnetization
+
+
+def test_hubbard_u_input_leaves_the_occupation_matrix_free_to_converge() -> None:
+    """#127: a +U input must not freeze the Hubbard occupation matrix ns.
+    While iter <= mixing_fixed_ns, pw.x resets ns to its iteration-1 value,
+    yet it still declares convergence if the density converges inside that
+    window (QE 7.3 PW/src/electrons.f90:815-833, mix_rho.f90:162), and the
+    freeze restarts at every ionic step (electrons.f90:556).
+
+    pw.x reference (SCARF, QE 7.5): the default bundle for this NiO cell
+    (MC3D mc3d-29856, U Ni-3d 6.2), run as generated with mixing_fixed_ns = 50
+    and again with that line removed. The frozen run converged in 11
+    iterations, all 11 printing "RESET ns to initial values"; its total
+    energy is 19.7 mRy (0.27 eV) per NiO above the free run's, and its
+    pressure is 156.44 kbar against 180.27 kbar. The default LiCoO2 vc-relax
+    bundle (mc3d-75346, U Co-3d 3.32) aborted in stres_hub ("non-symmetric
+    stress contribution") at its second ionic step.
+    """
+    nio = Structure(
+        Lattice.from_parameters(2.89337, 2.89337, 2.89337, 60, 60, 60),
+        ["Ni", "O"],
+        [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+    )
+
+    advice = advise(nio, hpc=load_hpc_profile("scarf"))
+
+    assert advice.analysis.needs_correlation.value is True
+    assert advice.step.kpoints.convergence.value.mixing_fixed_ns is None

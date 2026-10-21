@@ -386,8 +386,12 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "mixing_fixed_ns": {
         "description": (
-            "Initial SCF iterations that freeze Hubbard occupation-matrix "
-            "mixing (+U calculations)."
+            "Number of initial SCF iterations during which pw.x holds the "
+            "Hubbard occupation matrix at its starting value (+U runs only). "
+            "Unset by default (QE's 0). pw.x can report convergence inside "
+            "this window, so energies, forces and stresses from a nonzero "
+            "value are not self-consistent DFT+U results; use it only for a "
+            "preparatory run whose output seeds a separate run with ns free."
         ),
     },
     "partition": {

@@ -548,6 +548,36 @@ def test_smearing_occupations_emit_smearing_type_and_degauss(
     assert "degauss          = 0.01" in content
 
 
+def _diamond_silicon() -> Structure:
+    a = 5.43
+    return Structure(
+        Lattice([[0.0, a / 2, a / 2], [a / 2, 0.0, a / 2], [a / 2, a / 2, 0.0]]),
+        ["Si", "Si"],
+        [[0.0, 0.0, 0.0], [0.25, 0.25, 0.25]],
+    )
+
+
+def test_unset_mixing_fixed_ns_writes_no_keyword(pseudo_metadata_factory) -> None:
+    """#127: unset means QE's own default of 0, so &ELECTRONS carries no
+    mixing_fixed_ns line at all."""
+    system = _system(_diamond_silicon(), pseudo_metadata_factory)
+
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+
+    assert "mixing_fixed_ns" not in content
+
+
+def test_explicit_mixing_fixed_ns_is_written(pseudo_metadata_factory) -> None:
+    system = _system(_diamond_silicon(), pseudo_metadata_factory)
+    convergence = dataclasses.replace(_step().convergence, mixing_fixed_ns=10)
+    step = _step(convergence=convergence)
+
+    content = write_qe_scf(system, step, _CTX)[0].files["scf.in"]
+
+    electrons = content.split("&ELECTRONS")[1].split("\n/\n")[0]
+    assert "mixing_fixed_ns  = 10" in electrons
+
+
 def test_hubbard_table_plan_renders_the_qe_hubbard_card(
     silicon_structure, pseudo_metadata_factory
 ) -> None:
