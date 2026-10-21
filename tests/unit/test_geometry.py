@@ -1,9 +1,24 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 from pymatgen.core import Lattice, Structure
+from support import (
+    carbon_chain,
+    carbon_pair_in_a_box,
+    graphene_monolayer,
+    graphene_with_vacuum_along_a,
+    graphene_with_vacuum_along_x,
+    graphite,
+)
 
-from goldilocks_core.analysis.geometry import geometry, vacuum_axes
+from goldilocks_core.analysis.geometry import (
+    SlabGeometry,
+    ab_in_xy_plane,
+    geometry,
+    slab_geometry,
+    vacuum_axes,
+)
 
 
 def test_geometry_resolves_3d_for_a_bulk_structure() -> None:
@@ -87,6 +102,74 @@ def test_a_gap_counts_as_vacuum_only_beyond_5_angstrom(
     c: float, axes: tuple[str, ...]
 ) -> None:
     assert vacuum_axes(_graphene(c)) == axes
+
+
+def _tilted_monolayer() -> Structure:
+    """The graphene monolayer rotated rigidly by 30 degrees about x, so the
+    sheet and b leave the xy plane while the vacuum stays along c."""
+    angle = np.radians(30.0)
+    rotation = np.array(
+        [
+            [1, 0, 0],
+            [0, np.cos(angle), -np.sin(angle)],
+            [0, np.sin(angle), np.cos(angle)],
+        ]
+    )
+    monolayer = graphene_monolayer()
+    return Structure(
+        Lattice(monolayer.lattice.matrix @ rotation.T),
+        monolayer.species,
+        monolayer.frac_coords,
+    )
+
+
+@pytest.mark.parametrize(
+    ("build", "slab"),
+    [
+        (graphene_monolayer, SlabGeometry(vacuum_axis="c", xy_frame=True)),
+        (graphene_with_vacuum_along_a, SlabGeometry(vacuum_axis="a", xy_frame=False)),
+        (graphene_with_vacuum_along_x, SlabGeometry(vacuum_axis="a", xy_frame=False)),
+        (_tilted_monolayer, SlabGeometry(vacuum_axis="c", xy_frame=False)),
+    ],
+    ids=lambda value: value.__name__.strip("_") if callable(value) else None,
+)
+def test_a_slab_is_in_the_xy_frame_only_with_vacuum_along_c_and_a_b_in_xy(
+    build, slab: SlabGeometry
+) -> None:
+    """QE's 2D cell constraints hold c and the z components of a and b
+    fixed. graphene_with_vacuum_along_x has a and b in the xy plane but its
+    vacuum along a; the tilted monolayer has its vacuum along c but b out of
+    the plane."""
+    structure = build()
+
+    assert slab_geometry(structure) == slab
+    assert geometry(structure).value.slab == slab
+
+
+@pytest.mark.parametrize(
+    "build",
+    [graphite, carbon_chain, carbon_pair_in_a_box],
+    ids=lambda build: build.__name__,
+)
+def test_a_cell_without_exactly_one_vacuum_axis_is_not_a_slab(build) -> None:
+    """Bulk graphite has no vacuum, the chain two vacuum axes, the C pair
+    three."""
+    structure = build()
+
+    assert slab_geometry(structure) is None
+    assert geometry(structure).value.slab is None
+
+
+@pytest.mark.parametrize(("z", "in_plane"), [(0.5e-8, True), (2e-8, False)])
+def test_a_and_b_lie_in_the_xy_plane_to_qe_tolerance(z: float, in_plane: bool) -> None:
+    """QE 7.3 tests |a_z| and |b_z| against 1e-8 in units of alat, which is
+    |a| for CELL_PARAMETERS in angstrom (PW/src/Coul_cut_2D.f90:72-74)."""
+    a = 2.46
+    tilted_a = Lattice([[a, 0, z * a], [-a / 2, a * 3**0.5 / 2, 0], [0, 0, 20]])
+    tilted_b = Lattice([[a, 0, 0], [-a / 2, a * 3**0.5 / 2, z * a], [0, 0, 20]])
+
+    assert ab_in_xy_plane(tilted_a) is in_plane
+    assert ab_in_xy_plane(tilted_b) is in_plane
 
 
 def test_geometry_is_unavailable_for_disordered_structures() -> None:

@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
 import subprocess
 import sys
 import tarfile
@@ -35,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.analysis.geometry import GeometryFacts
+from goldilocks_core.analysis.geometry import GeometryFacts, SlabGeometry
 from goldilocks_core.assets.records import AssetFile, AssetSpec
 from goldilocks_core.assets.runtime import statuses
 from goldilocks_core.assets.store import AssetStore, asset_root
@@ -271,6 +272,70 @@ def graphite() -> Structure:
     )
 
 
+def molybdenum_disulfide() -> Structure:
+    """2H-MoS2, P6_3/mmc, a = 3.16 A, c = 12.29 A: S-Mo-S sheets stacked
+    across a van der Waals gap."""
+    return Structure.from_spacegroup(
+        "P6_3/mmc",
+        Lattice.hexagonal(3.16, 12.29),
+        ["Mo", "S"],
+        [[1 / 3, 2 / 3, 0.25], [1 / 3, 2 / 3, 0.621]],
+    )
+
+
+def rhombohedral_bismuth_selenide() -> Structure:
+    """Bi2Se3 (R-3m, hexagonal a = 4.14 A, c = 28.64 A) in its 5-atom
+    rhombohedral primitive cell, a = 9.84 A and alpha = 24.28 deg, the cell
+    MC3D mc3d-75053 stores. pymatgen puts c along z, so a and b point out
+    of the xy plane."""
+    a, c = 4.14, 28.64
+    length = math.sqrt(a**2 / 3 + c**2 / 9)
+    alpha = math.degrees(math.acos((2 * c**2 - 3 * a**2) / (2 * c**2 + 6 * a**2)))
+    bismuth, selenium = 0.4008, 0.2117
+    return Structure(
+        Lattice.rhombohedral(length, alpha),
+        ["Bi", "Bi", "Se", "Se", "Se"],
+        [[bismuth] * 3, [-bismuth] * 3, [0, 0, 0], [selenium] * 3, [-selenium] * 3],
+    )
+
+
+def graphene_monolayer() -> Structure:
+    """A graphene sheet (C-C 1.42 A) in the xy plane, with 20 A of vacuum
+    along c, which lies along z."""
+    return Structure(
+        Lattice.hexagonal(2.46, 20.0), ["C", "C"], [[0, 0, 0.5], [1 / 3, 2 / 3, 0.5]]
+    )
+
+
+def graphene_with_vacuum_along_x() -> Structure:
+    """The graphene sheet of ``graphene_monolayer`` in the yz plane: the
+    vacuum vector is a = (20, 0, 0) A, and b and c span the sheet."""
+    return Structure(
+        Lattice([[20.0, 0, 0], [0, 2.46, 0], [0, -1.23, 1.23 * math.sqrt(3)]]),
+        ["C", "C"],
+        [[0.5, 0, 0], [0.5, 1 / 3, 2 / 3]],
+    )
+
+
+def graphene_with_vacuum_along_a() -> Structure:
+    """``graphene_monolayer`` with its lattice vectors permuted cyclically:
+    the vacuum vector a = (0, 0, 20) A comes first, and b and c span the
+    sheet in the xy plane."""
+    return Structure(
+        Lattice([[0, 0, 20.0], [2.46, 0, 0], [-1.23, 1.23 * math.sqrt(3), 0]]),
+        ["C", "C"],
+        [[0.5, 0, 0], [0.5, 1 / 3, 2 / 3]],
+    )
+
+
+def carbon_chain() -> Structure:
+    """A carbon chain along c (C-C 1.28 A) with 12 A between chains along a
+    and b: a wire, periodic along c."""
+    return Structure(
+        Lattice.tetragonal(12.0, 2.56), ["C", "C"], [[0.5, 0.5, 0], [0.5, 0.5, 0.5]]
+    )
+
+
 def carbon_dioxide() -> Structure:
     """Dry ice, Pa-3, a = 5.62 A: C=O 1.15 A inside each molecule, 3.1 A
     between molecules."""
@@ -324,10 +389,19 @@ def water_ice() -> Structure:
 
 
 def geometry_facts(
-    dimensionality: Dimensionality, vacuum_axes: tuple[LatticeAxis, ...] = ()
+    dimensionality: Dimensionality,
+    vacuum_axes: tuple[LatticeAxis, ...] = (),
+    *,
+    ab_in_xy: bool = True,
 ) -> GeometryFacts:
     """``GeometryFacts`` for advisor and check tests: 20 A of vacuum along
-    each axis in ``vacuum_axes`` and a 2 A gap along the others."""
+    each axis in ``vacuum_axes`` and a 2 A gap along the others. With one
+    vacuum axis the cell is a slab, in the xy frame when that axis is c and
+    ``ab_in_xy``."""
+    slab = None
+    if len(vacuum_axes) == 1:
+        (axis,) = vacuum_axes
+        slab = SlabGeometry(vacuum_axis=axis, xy_frame=axis == "c" and ab_in_xy)
     return GeometryFacts(
         dimensionality=dimensionality,
         low_dimensional=dimensionality != "3d",
@@ -335,4 +409,5 @@ def geometry_facts(
         vacuum_widths_angstrom=tuple(
             20.0 if axis in vacuum_axes else 2.0 for axis in ("a", "b", "c")
         ),
+        slab=slab,
     )

@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import pytest
 from pymatgen.core import Lattice, Structure
-from support import geometry_facts
+from support import (
+    carbon_chain,
+    geometry_facts,
+    graphene_monolayer,
+    graphene_with_vacuum_along_a,
+    graphene_with_vacuum_along_x,
+    graphite,
+    rhombohedral_bismuth_selenide,
+)
 
 from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
@@ -28,9 +36,13 @@ _SMEARING = Resolved(
 )
 
 
-def _magnetic(spin_polarized: bool, tot_magnetization: float | None):
+def _magnetic(
+    spin_polarized: bool,
+    tot_magnetization: float | None,
+    structure: Structure = _IRON,
+):
     facts = MagneticConfigFacts(
-        relabeled_structure=_IRON,  # not read by any check
+        relabeled_structure=structure,
         spin_polarized=spin_polarized,
         magnetic_elements=("Fe",) if spin_polarized else (),
         starting_magnetization={"Fe": 0.1} if spin_polarized else None,
@@ -330,6 +342,106 @@ def test_blocked_boundary_surfaces_once_via_the_generic_scan() -> None:
     report = check_all(boundary=Blocked(by="geometry undecided"), purpose="vc-relax")
 
     assert report.blocking == ("geometry undecided",)
+
+
+def _vc_relax_with_cell_dofree(cell_dofree: str):
+    return Resolved(VcRelaxOptions(cell_dofree=cell_dofree), Provenance(source="human"))
+
+
+def _written_cell(structure: Structure):
+    return _magnetic(False, None, structure=structure)
+
+
+@pytest.mark.parametrize(
+    "build",
+    [graphene_with_vacuum_along_x, rhombohedral_bismuth_selenide],
+    ids=lambda build: build.__name__,
+)
+def test_a_2d_cell_constraint_outside_the_xy_frame_blocks(build) -> None:
+    """#132: '2Dxy' moves only the x and y components of a and b (QE 7.3
+    Modules/cell_base.f90:803-808). With the vacuum along a it frees the
+    vacuum vector; with a and b out of the xy plane (rhombohedral Bi2Se3) it
+    distorts the cell."""
+    report = check_all(
+        relax=_vc_relax_with_cell_dofree("2Dxy"),
+        magnetic=_written_cell(build()),
+        purpose="vc-relax",
+    )
+
+    assert not report.ok
+    assert len(report.blocking) == 1
+    assert "cell_dofree='2Dxy'" in report.blocking[0]
+    assert "cell_dofree='all'" in report.blocking[0]
+
+
+@pytest.mark.parametrize(
+    ("build", "found"),
+    [
+        (graphene_with_vacuum_along_x, "vacuum along a"),
+        (rhombohedral_bismuth_selenide, "a or b out of the xy plane"),
+        (carbon_chain, "vacuum along a and b"),
+        (graphene_with_vacuum_along_a, "a or b out of the xy plane and vacuum along a"),
+    ],
+    ids=lambda value: value.__name__ if callable(value) else None,
+)
+def test_the_frame_reason_names_what_is_out_of_place(build, found: str) -> None:
+    report = check_all(
+        relax=_vc_relax_with_cell_dofree("2Dxy"),
+        magnetic=_written_cell(build()),
+        purpose="vc-relax",
+    )
+
+    assert f"the cell to be written has {found}." in report.blocking[0]
+
+
+@pytest.mark.parametrize(
+    "cell_dofree", ["2Dxy", "2Dshape", "ibrav+2Dxy", "ibrav+2Dshape"]
+)
+def test_every_2d_cell_constraint_is_checked_against_the_frame(
+    cell_dofree: str,
+) -> None:
+    report = check_all(
+        relax=_vc_relax_with_cell_dofree(cell_dofree),
+        magnetic=_written_cell(rhombohedral_bismuth_selenide()),
+        purpose="vc-relax",
+    )
+
+    assert len(report.blocking) == 1
+    assert f"cell_dofree={cell_dofree!r}" in report.blocking[0]
+
+
+@pytest.mark.parametrize(
+    "build", [graphite, graphene_monolayer], ids=lambda build: build.__name__
+)
+def test_a_2d_cell_constraint_in_the_xy_frame_passes(build) -> None:
+    """Bulk graphite keeps an explicit '2Dxy' (in-plane relaxation at fixed
+    c); the monolayer has its vacuum along c."""
+    report = check_all(
+        relax=_vc_relax_with_cell_dofree("2Dxy"),
+        magnetic=_written_cell(build()),
+        purpose="vc-relax",
+    )
+
+    assert report.ok
+
+
+@pytest.mark.parametrize("cell_dofree", ["all", "shape", "z"])
+def test_other_cell_constraints_are_not_checked_against_the_frame(
+    cell_dofree: str,
+) -> None:
+    report = check_all(
+        relax=_vc_relax_with_cell_dofree(cell_dofree),
+        magnetic=_written_cell(rhombohedral_bismuth_selenide()),
+        purpose="vc-relax",
+    )
+
+    assert report.ok
+
+
+def test_the_frame_check_is_skipped_without_the_written_cell() -> None:
+    report = check_all(relax=_vc_relax_with_cell_dofree("2Dxy"), purpose="vc-relax")
+
+    assert report.ok
 
 
 def _vdw(use_vdw: bool, source: str = "heuristic"):

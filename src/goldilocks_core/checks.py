@@ -89,7 +89,11 @@ from goldilocks_core.advisors.parallelisation import (
 )
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.advisors.vdw_method import VdwFacts
-from goldilocks_core.analysis.geometry import GeometryFacts
+from goldilocks_core.analysis.geometry import (
+    GeometryFacts,
+    ab_in_xy_plane,
+    vacuum_axes,
+)
 from goldilocks_core.functionals import D3BJ_FUNCTIONALS, has_d3bj_parameters
 from goldilocks_core.plan import SCF_LIKE_PURPOSES
 from goldilocks_core.resolution import Blocked, FieldState
@@ -104,6 +108,10 @@ _EVEN_ELECTRON_COUNT_TOLERANCE = 1e-6
 integer despite floating-point noise, without also treating a
 genuinely fractional ``nelec`` (e.g. a disordered/partial-occupancy
 structure) as spuriously even."""
+_TWO_D_CELL_DOFREE = frozenset({"2Dxy", "2Dshape", "ibrav+2Dxy", "ibrav+2Dshape"})
+"""``cell_dofree`` values that move only the x and y components of a and b.
+The 'ibrav+' forms act as the plain ones under the writer's ``ibrav = 0``
+(QE 7.3 Modules/latgen.f90:749-752)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +193,7 @@ def check_all(
         ),
         _vc_relax_requires_bfgs_ion_dynamics(relax, purpose),
         _vc_relax_forbids_isolated_boundary(boundary, purpose),
+        _two_d_cell_dofree_needs_xy_frame(relax, magnetic),
         _dispersion_needs_parameterised_functional(vdw, functional),
         _fix_bottom_layers_requires_2d_geometry(relax, geometry),
         _npool_must_divide_ntasks(job, parallel),
@@ -357,6 +366,42 @@ def _vc_relax_forbids_isolated_boundary(
         "pw.x computes no stress for an isolated system, so the input cell "
         "would be reported as converged. Use task='relax' for a molecule or "
         "cluster in a box, or set assume_isolated='none' for a periodic structure."
+    )
+
+
+def _two_d_cell_dofree_needs_xy_frame(
+    relax: FieldState[RelaxOptions | VcRelaxOptions] | None,
+    magnetic: FieldState[MagneticConfigFacts] | None,
+) -> str | None:
+    """QE's 2D cell constraints move only the x and y components of a and b
+    and hold c fixed, in Cartesian axes (QE 7.3 Modules/cell_base.f90:742-749
+    and :803-808), and BFGS judges convergence on the masked stress. With a
+    or b out of the xy plane they distort any cell, bulk included: SCARF
+    shrank a and b of rhombohedral Bi2Se3 under '2Dxy' while c stayed fixed.
+    With vacuum along a or b they free a vacuum vector and freeze one in the
+    sheet (#132). Checked on the cell the writer renders, whatever the
+    source of ``cell_dofree``."""
+    if relax is None or magnetic is None or not (relax.ok and magnetic.ok):
+        return None
+    options = relax.value
+    if not isinstance(options, VcRelaxOptions):
+        return None
+    if options.cell_dofree not in _TWO_D_CELL_DOFREE:
+        return None
+    cell = magnetic.value.relabeled_structure
+    found = []
+    if not ab_in_xy_plane(cell.lattice):
+        found.append("a or b out of the xy plane")
+    axes = vacuum_axes(cell)
+    if axes not in ((), ("c",)):
+        found.append(f"vacuum along {' and '.join(axes)}")
+    if not found:
+        return None
+    return (
+        f"cell_dofree={options.cell_dofree!r} moves only the x and y components of "
+        "a and b and holds c fixed, so it needs a and b in the Cartesian xy plane "
+        "and any vacuum along c, but the cell to be written has "
+        f"{' and '.join(found)}. Set cell_dofree='all', or reorient the cell."
     )
 
 

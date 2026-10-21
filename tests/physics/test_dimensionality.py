@@ -18,6 +18,7 @@ from support import (
     carbon_dioxide,
     carbon_pair_in_a_box,
     graphite,
+    molybdenum_disulfide,
     phosphorene,
     sodium_chloride,
 )
@@ -76,17 +77,6 @@ def lithium_cobalt_oxide() -> Structure:
         Lattice.hexagonal(2.816, 14.05),
         ["Li", "Co", "O"],
         [[0, 0, 0.5], [0, 0, 0], [0, 0, 0.2604]],
-    )
-
-
-def molybdenum_disulfide() -> Structure:
-    """2H-MoS2, P6_3/mmc, a = 3.16 A, c = 12.29 A: S-Mo-S sheets stacked
-    across a van der Waals gap."""
-    return Structure.from_spacegroup(
-        "P6_3/mmc",
-        Lattice.hexagonal(3.16, 12.29),
-        ["Mo", "S"],
-        [[1 / 3, 2 / 3, 0.25], [1 / 3, 2 / 3, 0.621]],
     )
 
 

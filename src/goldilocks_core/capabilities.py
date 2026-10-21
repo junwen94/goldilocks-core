@@ -497,9 +497,11 @@ _SETTING_META: dict[str, _SettingExtra] = {
     "cell_dofree": {
         "default": "all",
         "description": (
-            "Which cell degrees of freedom vc-relax may move; heuristic "
-            "default is hexagon-aware for 2D structures ('ibrav+2Dxy' vs "
-            "bare '2Dxy')."
+            "Which cell degrees of freedom vc-relax may move. Default 'all'; "
+            "'2Dxy' for a slab with its vacuum along c and a, b in the xy "
+            "plane. A wire or a slab in another orientation has no default. "
+            "'2Dxy' and '2Dshape' are refused unless a and b lie in the xy "
+            "plane and any vacuum lies along c."
         ),
     },
     "press": {

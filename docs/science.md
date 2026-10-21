@@ -281,6 +281,19 @@ default is copied verbatim from Quantum ESPRESSO's own documentation, not
 derived from a model. See `goldilocks settings` for each key's group, type,
 and default.
 
+The `vc-relax` default for `cell_dofree` comes from the vacuum, not from
+dimensionality. A cell without vacuum gets `'all'`, so the stacking axis of a
+bulk layered crystal such as graphite relaxes too. `'2Dxy'` moves only the x
+and y components of a and b and holds c fixed, so a slab gets it only when its
+vacuum lies along c and a and b lie in the Cartesian xy plane. The `geometry`
+record's `slab` field shows the vacuum axis and whether the slab is in that
+frame (`xy_frame`). A wire, or a slab in any other orientation, has no
+default: Goldilocks refuses the `vc-relax` until you set `cell_dofree` or
+reorient the cell. Whatever its source, `'2Dxy'` or `'2Dshape'` is refused
+unless a and b lie in the xy plane and any vacuum lies along c. Otherwise
+pw.x would distort the cell, or move a vacuum vector while holding a vector
+of the sheet fixed.
+
 ## Read the reasons and warnings
 
 Every analysis fact and every advisor decision -- occupations, k-point

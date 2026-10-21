@@ -1,5 +1,5 @@
-"""geometry: dimensionality (3d/2d/1d/molecule) from a bond graph, and the
-lattice vectors along which a cell has vacuum.
+"""geometry: dimensionality (3d/2d/1d/molecule) from a bond graph, the
+lattice vectors along which a cell has vacuum, and the frame of a slab.
 
 The dimensionality is Larsen's connectivity rank
 (``pymatgen.analysis.dimensionality.get_dimensionality_larsen``) of
@@ -31,6 +31,16 @@ monolayer has at least 15.05 A along c, and the isolated C pair of MC3D
 mc3d-6516 has 6.10, 6.10 and 8.59 A. A layer that is not parallel to two
 lattice vectors shows no vacuum, so its cell is treated as periodic.
 
+A cell with exactly one vacuum axis is a slab (``SlabGeometry``). Quantum
+ESPRESSO's 2D cell constraints work in Cartesian axes: '2Dxy' and '2Dshape'
+move only the x and y components of a and b and hold c fixed (QE 7.3
+Modules/cell_base.f90:742-749 and :803-808). They keep a slab's shape and
+vacuum only when the vacuum lies along c and a, b lie in the xy plane, the
+frame ``SlabGeometry.xy_frame`` reports. All 15 monolayers of the batch are
+in that frame, while its fcc, bcc and rhombohedral primitive cells have a
+and b out of the xy plane. ``ab_in_xy_plane`` is the one test of that
+plane, so every caller applies the same tolerance.
+
 Disordered structures and classifier failures are ``Unavailable``, like
 every other ``analysis/`` fact.
 """
@@ -43,7 +53,7 @@ from typing import Literal
 import numpy as np
 from pymatgen.analysis.dimensionality import get_dimensionality_larsen
 from pymatgen.analysis.local_env import JmolNN
-from pymatgen.core import Structure
+from pymatgen.core import Lattice, Structure
 from pymatgen.core.graphs import StructureGraph
 
 from goldilocks_core.resolution import FieldState, Provenance, Resolved, Unavailable
@@ -71,17 +81,35 @@ VACUUM_GAP_ANGSTROM = 5.0
 between the widest gap in a bulk crystal of the batch (3.60 A) and the
 narrowest vacuum of the isolated C pair (6.10 A)."""
 
+_XY_PLANE_TOLERANCE = 1e-8
+"""Largest z component, as a fraction of |a|, of a lattice vector in the xy
+plane. QE 7.3 applies the same test before its 2D Coulomb cutoff, to lattice
+vectors in units of alat (PW/src/Coul_cut_2D.f90:72-74); alat is |a| for
+CELL_PARAMETERS in angstrom (Modules/cell_base.f90:222)."""
+
+
+@dataclass(frozen=True, slots=True)
+class SlabGeometry:
+    """A cell with exactly one vacuum axis. ``xy_frame``: that axis is c and
+    a, b lie in the Cartesian xy plane, the frame QE's 2D cell constraints
+    assume."""
+
+    vacuum_axis: LatticeAxis
+    xy_frame: bool
+
 
 @dataclass(frozen=True, slots=True)
 class GeometryFacts:
     """``vacuum_widths_angstrom`` holds the widest atom-free slab along a, b
     and c, in A rounded to 0.01; ``vacuum_axes`` names those wider than
-    ``VACUUM_GAP_ANGSTROM``, in a, b, c order."""
+    ``VACUUM_GAP_ANGSTROM``, in a, b, c order. ``slab`` is set only when
+    there is exactly one vacuum axis."""
 
     dimensionality: Dimensionality
     low_dimensional: bool
     vacuum_axes: tuple[LatticeAxis, ...]
     vacuum_widths_angstrom: tuple[float, float, float]
+    slab: SlabGeometry | None
 
 
 def bond_graph(structure: Structure) -> StructureGraph:
@@ -125,11 +153,13 @@ def geometry(structure: Structure) -> FieldState[GeometryFacts]:
             f"connectivity rank {dim_value!r}"
         )
     widths = _vacuum_widths(structure)
+    axes = _axes_wider_than_the_gap(widths)
     facts = GeometryFacts(
         dimensionality=dimensionality,
         low_dimensional=bool(dim_value < 3),
-        vacuum_axes=_axes_wider_than_the_gap(widths),
+        vacuum_axes=axes,
         vacuum_widths_angstrom=widths,
+        slab=_slab(structure.lattice, axes),
     )
     return Resolved(facts, Provenance(source="heuristic"))
 
@@ -138,6 +168,29 @@ def vacuum_axes(structure: Structure) -> tuple[LatticeAxis, ...]:
     """The lattice vectors of ``structure`` whose widest atom-free slab is
     wider than ``VACUUM_GAP_ANGSTROM``, in a, b, c order."""
     return _axes_wider_than_the_gap(_vacuum_widths(structure))
+
+
+def slab_geometry(structure: Structure) -> SlabGeometry | None:
+    """``structure``'s vacuum axis and frame, or ``None`` unless it has
+    exactly one vacuum axis."""
+    return _slab(structure.lattice, vacuum_axes(structure))
+
+
+def ab_in_xy_plane(lattice: Lattice) -> bool:
+    """Whether a and b lie in the Cartesian xy plane: their z components are
+    at most ``_XY_PLANE_TOLERANCE`` times |a|."""
+    a, b, _ = lattice.matrix
+    limit = _XY_PLANE_TOLERANCE * float(np.linalg.norm(a))
+    return bool(abs(a[2]) <= limit and abs(b[2]) <= limit)
+
+
+def _slab(lattice: Lattice, axes: tuple[LatticeAxis, ...]) -> SlabGeometry | None:
+    if len(axes) != 1:
+        return None
+    (axis,) = axes
+    return SlabGeometry(
+        vacuum_axis=axis, xy_frame=axis == "c" and ab_in_xy_plane(lattice)
+    )
 
 
 def _vacuum_widths(structure: Structure) -> tuple[float, float, float]:
