@@ -145,7 +145,11 @@ def _warnings(records: dict[str, FieldState[Any]]) -> list[dict[str, object]]:
 def bundle_files(bundle_input: BundleInput) -> tuple[InputArtifact, ...]:
     """Assemble every artifact, plus ``CITATIONS.md``/``README.md``/
     ``goldilocks.json``, hashing as it goes -- the exact bytes returned
-    here are the exact bytes ``publish``/``archive_bytes`` write."""
+    here are the exact bytes ``publish``/``archive_bytes`` write.
+
+    ``goldilocks.json`` is strict JSON: a non-finite float in a record
+    raises ``ValueError`` instead of being written as ``Infinity``/``NaN``,
+    which strict parsers reject (#137)."""
     files: dict[str, tuple[bytes, str]] = {}
     for artifact in bundle_input.artifacts:
         _add(files, artifact["path"], artifact["content"], artifact["role"])
@@ -169,12 +173,8 @@ def bundle_files(bundle_input: BundleInput) -> tuple[InputArtifact, ...]:
             for path, (content, role) in sorted(files.items())
         },
     }
-    _add(
-        files,
-        "goldilocks.json",
-        (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
-        "manifest",
-    )
+    manifest_text = json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False)
+    _add(files, "goldilocks.json", (manifest_text + "\n").encode("utf-8"), "manifest")
     return tuple(
         {"path": path, "role": role, "content": content}
         for path, (content, role) in sorted(files.items())

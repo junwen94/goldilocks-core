@@ -73,6 +73,11 @@ an output flag: without `-o/--out` it prints `{"files": [...], "records":
 "kind": "directory"|"archive", "path": "..."}`. `explain --json` prints
 `{"records": {...}, "warnings": [...]}`.
 
+`--json` output and the published `goldilocks.json` are strict JSON: a value
+with no finite number is `null`, never `Infinity` or `NaN`. For example, the
+Gamma-only mesh (`k_index` 1) holds for every k-distance above its lower
+bound, so its `k_distance_interval` is `[low, null]`.
+
 A command writes only its own output to stdout: the `--json` document, or the
 plain-text report without `--json`. Anything else printed while it runs, such
 as the notice `mace` prints when it loads, output from a C extension, or a
@@ -106,8 +111,10 @@ its type, default, and description; a selection of commonly used keys:
 
 Quote `--set` values that contain brackets or braces (e.g. `--set
 'k_grid=[8,8,8]'`) so the shell does not glob-expand them; array and object
-values must be valid JSON. See [Pseudopotentials](pseudopotentials.md) for how
-tables are chosen, pinned, and checked for compatibility.
+values must be valid JSON. Numbers must be finite: `inf`, `nan` and values
+that overflow, such as `1e999`, are rejected as invalid settings. See
+[Pseudopotentials](pseudopotentials.md) for how tables are chosen, pinned, and
+checked for compatibility.
 
 `is_metal`, `is_magnetic`, and `k_distance` (v2 epic 11) each resolve through
 a `human > ml > llm > heuristic` priority: `explain --json`'s

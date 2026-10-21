@@ -35,5 +35,8 @@ def command_stdout() -> TextIO:
 
 def write_json(out: TextIO, document: object) -> None:
     """Write ``document`` to ``out`` as indented JSON with sorted keys (P2)
-    and a trailing newline."""
-    out.write(json.dumps(document, indent=2, sort_keys=True) + "\n")
+    and a trailing newline.
+
+    Strict JSON: a non-finite float raises ``ValueError`` instead of being
+    written as ``Infinity``/``NaN``, which strict parsers reject (#137)."""
+    out.write(json.dumps(document, indent=2, sort_keys=True, allow_nan=False) + "\n")

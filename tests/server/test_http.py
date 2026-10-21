@@ -8,7 +8,10 @@ and the archive response mode.
 
 from __future__ import annotations
 
+import io
 import json
+import math
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -16,8 +19,14 @@ import pytest
 pytest.importorskip("fastapi")
 
 from fastapi.testclient import TestClient
+from support import strict_json
 
 from goldilocks_core.server.http import create_app
+
+_GAMMA_ONLY = {"k_grid": [1, 1, 1]}
+_SILICON_GAMMA_INTERVAL = [round(2 * math.pi / 5.431, 8), None]
+"""Rung 1 of the bundled Si.cif's ladder (cubic, a = 5.431 A): every
+k-distance above |b| = 2 pi / a, with no upper bound."""
 
 
 @pytest.fixture
@@ -335,6 +344,46 @@ class TestExplain:
 
         assert response.status_code == 422
 
+    def test_a_gamma_only_mesh_answers_with_strict_json(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        """Rung 1's open k-distance bound is null (#137)."""
+        response = client.post(
+            "/explain",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "overrides": _GAMMA_ONLY,
+            },
+        )
+
+        assert response.status_code == 200
+        k_sampling = strict_json(response.text)["records"]["k_sampling"]["value"]
+        assert k_sampling["k_index"] == 1
+        assert k_sampling["k_distance_interval"] == _SILICON_GAMMA_INTERVAL
+
+    def test_a_non_finite_override_is_a_422(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        """The request body parser reads the JSON number 1e999 as inf: an
+        invalid setting, not a k-distance (#137)."""
+        body = json.dumps(
+            {
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "overrides": {"k_distance": "__non_finite__"},
+            }
+        ).replace('"__non_finite__"', "1e999")
+
+        response = client.post(
+            "/explain", content=body, headers={"content-type": "application/json"}
+        )
+
+        assert response.status_code == 422
+        error = response.json()["error"]
+        assert error["kind"] == "invalid_setting"
+        assert "finite number" in error["message"]
+
 
 class TestRun:
     def test_json_mode_lists_the_published_files(
@@ -363,6 +412,45 @@ class TestRun:
 
         assert response.status_code == 200
         assert response.headers["content-type"] == "application/zip"
+
+    def test_json_mode_answers_a_gamma_only_mesh_with_strict_json(
+        self, client: TestClient, silicon_fixture_table, silicon_cif: str
+    ) -> None:
+        """Rung 1's open k-distance bound is null; as inf it made the
+        response encoder raise, so every Gamma-only /run was a 500 (#137)."""
+        response = client.post(
+            "/run",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "overrides": _GAMMA_ONLY,
+            },
+        )
+
+        assert response.status_code == 200
+        records = strict_json(response.text)["records"]
+        interval = records["k_sampling"]["value"]["k_distance_interval"]
+        assert interval == _SILICON_GAMMA_INTERVAL
+
+    def test_archive_manifest_is_strict_json_for_a_gamma_only_mesh(
+        self, client: TestClient, silicon_fixture_table, silicon_cif: str
+    ) -> None:
+        """goldilocks.json carried a bare Infinity token here (#137)."""
+        response = client.post(
+            "/run",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "overrides": _GAMMA_ONLY,
+                "respond_with": "archive",
+            },
+        )
+
+        assert response.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            manifest = strict_json(archive.read("goldilocks.json"))
+        interval = manifest["records"]["k_sampling"]["value"]["k_distance_interval"]
+        assert interval == _SILICON_GAMMA_INTERVAL
 
     def test_dos_task_generates_all_three_steps(
         self, client: TestClient, real_assets, silicon_cif: str

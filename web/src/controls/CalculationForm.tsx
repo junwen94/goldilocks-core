@@ -674,7 +674,9 @@ function renderSetting({
  * Rather than leave that as a silent gap, this shows the honest range
  * the rung covers instead of fabricating a single point estimate (e.g.
  * the interval midpoint) to put in the box itself. Renders nothing once
- * `k_distance` itself has a real value -- the control already shows it. */
+ * `k_distance` itself has a real value -- the control already shows it.
+ * Rung 1, the Gamma-only mesh, has no upper bound (`null`) and reads as
+ * the open interval Δk ≥ low. */
 function KDistanceIntervalNote({
   record,
 }: {
@@ -689,10 +691,14 @@ function KDistanceIntervalNote({
   }
   const interval = decision.k_distance_interval;
   if (!Array.isArray(interval) || interval.length !== 2) return null;
-  const [low, high] = interval as [number, number];
+  const [low, high] = interval as [number, number | null];
+  const range =
+    high === null
+      ? `Δk ≥ ${low.toFixed(3)}`
+      : `Δk ∈ [${low.toFixed(3)}, ${high.toFixed(3)}]`;
   return (
     <Text size="xs" c="dimmed">
-      This rung corresponds to Δk ∈ [{low.toFixed(3)}, {high.toFixed(3)}] Å⁻¹
+      This rung corresponds to {range} Å⁻¹
     </Text>
   );
 }

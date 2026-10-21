@@ -19,6 +19,13 @@ own ``--static-root`` flag (#59) is the other, CLI-facing way to reach
 the first tier -- the Docker image uses the env var instead since it has
 no CLI invocation to add a flag to.
 
+**Strict JSON documents.** ``/explain``, ``/magnetic-orderings`` and
+``/run`` return a ``JSONResponse`` rather than letting FastAPI serialize
+the document: ``JSONResponse`` raises on a non-finite float (a 500),
+where FastAPI's route serializer silently writes it as ``null`` (#137).
+``/explain`` and ``/magnetic-orderings`` keep their ``-> Any``
+annotations, so the OpenAPI schema does not change.
+
 Behind the optional ``[http]`` extra; importing ``goldilocks_core``
 never imports FastAPI (P7).
 """
@@ -86,11 +93,11 @@ def create_app(*, static_root: str | Path | None = None) -> Any:
 
     @app.post("/explain")
     def explain(body: ComputeRequestDocument) -> Any:
-        return _handlers.explain(body)
+        return JSONResponse(_handlers.explain(body))
 
     @app.post("/magnetic-orderings")
     def magnetic_orderings(body: MagneticOrderingsRequestDocument) -> Any:
-        return _handlers.magnetic_orderings(body)
+        return JSONResponse(_handlers.magnetic_orderings(body))
 
     @app.post("/run")
     def run(body: RunRequestDocument) -> Response:

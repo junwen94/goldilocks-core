@@ -3,11 +3,16 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
 import zipfile
 from pathlib import Path
 
 import pytest
+from pymatgen.core import Lattice, Structure
+from support import strict_json
 
+from goldilocks_core.advisors.k_sampling import KSamplingHumanInput, k_sampling
+from goldilocks_core.analysis.is_metal import is_metal
 from goldilocks_core.bundle import (
     ArchiveOutput,
     BundleInput,
@@ -142,6 +147,29 @@ def test_manifest_carries_a_top_level_warnings_array(tmp_path: Path) -> None:
             "category": "job",
             "message": "walltime not specified.",
         }
+    ]
+
+
+def test_manifest_is_strict_json_for_a_gamma_only_mesh() -> None:
+    """A Gamma-only mesh is rung 1 of the k-mesh ladder, whose k-distance
+    interval has no upper bound. goldilocks.json carries that bound as
+    null and parses with a parser that rejects Infinity and NaN (#137)."""
+    iron = Structure.from_spacegroup(
+        "Im-3m", Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]]
+    )
+    gamma_only = k_sampling(
+        is_metal(iron), iron, human=KSamplingHumanInput(k_grid=(1, 1, 1))
+    )
+    bundle_input = _bundle_input(records={"k_sampling": gamma_only})
+
+    files = {item["path"]: item["content"] for item in bundle_files(bundle_input)}
+    manifest = strict_json(files["goldilocks.json"])
+
+    record = manifest["records"]["k_sampling"]
+    assert record["value"]["k_index"] == 1
+    assert record["value"]["k_distance_interval"] == [
+        round(2 * math.pi / 2.87, 8),
+        None,
     ]
 
 

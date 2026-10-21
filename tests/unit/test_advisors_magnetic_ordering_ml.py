@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import math
 import os
 
 import numpy as np
@@ -13,10 +15,27 @@ from goldilocks_core.advisors.magnetic_ordering_ml import (
     checkpoint_path,
     rank_orderings,
 )
+from goldilocks_core.service import (
+    _magnetic_orderings as magnetic_orderings_module,
+    list_magnetic_orderings,
+    report_to_json,
+)
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
 _IRON_PAIR = Structure(
     Lattice.cubic(2.87), ["Fe", "Fe"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
+)
+_BCC_IRON = Structure.from_spacegroup(
+    "Im-3m", Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]]
+)
+# bcc Fe's simplest compensated antiferromagnetic candidate (corner and
+# body-centre spins opposed), labelled the way magnetic_config._label_by_spin
+# labels an enumerated candidate.
+_BCC_IRON_AFM = Structure(
+    Lattice.cubic(2.87),
+    [Species("Fe", spin=1), Species("Fe", spin=-1)],
+    [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+    labels=["Fe1", "Fe2"],
 )
 
 
@@ -146,6 +165,81 @@ def test_rank_orderings_degrades_when_every_candidate_is_invalid(
 
     with pytest.raises(MagneticOrderingMlUnavailable, match="invalid"):
         rank_orderings([("fm", _IRON)])
+
+
+def _stub_a_non_finite_ferromagnetic_relaxation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """relax() returns the ferromagnetic candidate's NaN energy flagged
+    INVALID, as goldilocks-ml does for a non-finite energy, and relaxes the
+    spin-decorated antiferromagnetic candidate to -16.5 eV (-8.25 eV/atom)."""
+    from goldilocks_ml.models.magnetism.magnetic_moments.fm_fim_relax.relax import (
+        INVALID,
+        OK,
+        MomentRelaxationResult,
+    )
+
+    checkpoint = tmp_path / "backbone.model"
+    checkpoint.write_bytes(b"stub")
+    monkeypatch.setenv(CHECKPOINT_ENV, str(checkpoint))
+
+    def fake_relax(structure, initial_moments, *, checkpoint, device):
+        moments = np.zeros((len(structure), 3))
+        if any(getattr(site.specie, "spin", None) for site in structure):
+            return MomentRelaxationResult(moments=moments, energy_ev=-16.5, status=OK)
+        return MomentRelaxationResult(
+            moments=moments, energy_ev=math.nan, status=INVALID
+        )
+
+    _stub_relax_seam(monkeypatch, fake_relax)
+
+
+def test_rank_orderings_reports_no_energy_for_a_non_finite_relaxation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A non-finite relaxed energy is reported as None, not NaN, which
+    strict JSON cannot carry (#137); the candidate stays listed as INVALID
+    and the valid candidate wins."""
+    _stub_a_non_finite_ferromagnetic_relaxation(monkeypatch, tmp_path)
+
+    result = rank_orderings([("fm", _BCC_IRON), ("afm-1", _BCC_IRON_AFM)])
+
+    by_label = {candidate.label: candidate for candidate in result.candidates}
+    assert by_label["fm"].energy_per_atom_ev is None
+    assert by_label["fm"].status == "invalid"
+    assert result.winner.label == "afm-1"
+    assert result.winner.energy_per_atom_ev == -8.25
+
+
+def test_a_ranked_listing_with_a_non_finite_energy_is_strict_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """``magnetic-orderings --rank-with-mmace --json`` and
+    ``/magnetic-orderings`` serialise this document strictly: an INVALID
+    candidate's missing energy is null (#137)."""
+    _stub_a_non_finite_ferromagnetic_relaxation(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        magnetic_orderings_module,
+        "enumerate_magnetic_orderings",
+        lambda structure, magnetic_elements: (
+            (("fm", structure), ("afm-1", _BCC_IRON_AFM)),
+            None,
+        ),
+    )
+
+    report = list_magnetic_orderings(_BCC_IRON, rank_with_mmace=True)
+    document = json.loads(json.dumps(report_to_json(report), allow_nan=False))
+
+    assert document["ranked"] is True
+    assert [
+        (candidate["label"], candidate["energy_per_atom_ev"], candidate["status"])
+        for candidate in document["candidates"]
+    ] == [("fm", None, "invalid"), ("afm-1", -8.25, "ok")]
+    assert [
+        candidate["label"]
+        for candidate in document["candidates"]
+        if candidate["is_recommended"]
+    ] == ["afm-1"]
 
 
 def test_rank_orderings_names_goldilocks_ml_when_it_is_missing(

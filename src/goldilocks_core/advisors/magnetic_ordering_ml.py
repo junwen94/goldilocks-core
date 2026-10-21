@@ -34,6 +34,7 @@ is missing, not a bare ``ImportError`` -- the same pattern
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -59,11 +60,15 @@ class MagneticOrderingMlUnavailable(Exception):
 
 @dataclass(frozen=True, slots=True)
 class OrderingCandidate:
-    """One candidate's relaxed energy, for reporting alongside the winner."""
+    """One candidate's relaxed energy, for reporting alongside the winner.
+
+    ``energy_per_atom_ev`` is ``None`` when the relaxation ended at a
+    non-finite energy, which ``relax()`` flags INVALID: there is no number
+    to report, and strict JSON could not carry NaN or inf (#137)."""
 
     label: str
     structure: Structure
-    energy_per_atom_ev: float
+    energy_per_atom_ev: float | None
     status: str
 
 
@@ -169,11 +174,14 @@ def rank_orderings(
             relaxed = relax(
                 candidate, initial_moments, checkpoint=checkpoint, device=device
             )
+            energy_per_atom = relaxed.energy_ev / len(candidate)
             results.append(
                 OrderingCandidate(
                     label=label,
                     structure=candidate,
-                    energy_per_atom_ev=relaxed.energy_ev / len(candidate),
+                    energy_per_atom_ev=(
+                        energy_per_atom if math.isfinite(energy_per_atom) else None
+                    ),
                     status=relaxed.status,
                 )
             )
@@ -191,6 +199,8 @@ def rank_orderings(
     # physically reasonable candidates a few eV/atom apart. Never let an
     # invalid number decide the winner, even though it is still reported
     # (unfiltered) in ``candidates`` for the caller to see and discard.
+    # Only INVALID candidates can have no energy (None), so every candidate
+    # left has a finite one.
     reliable = [result for result in results if result.status != INVALID]
     if not reliable:
         raise MagneticOrderingMlUnavailable(

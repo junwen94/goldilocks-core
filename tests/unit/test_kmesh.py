@@ -129,6 +129,25 @@ def test_gamma_kmesh_entries_start_with_gamma_mesh() -> None:
     assert entries[0].k_pra == 8.0  # 8 sites in the conventional cell x 1
 
 
+def test_only_the_gamma_rung_is_open_above() -> None:
+    """Rung 1, the Gamma-only mesh, holds for every k-distance above the
+    largest change point, so its interval has no upper bound. The bound is
+    None, not a float: strict JSON has no infinity (#137). Every other rung
+    is bounded on both sides."""
+    silicon = diamond_silicon()
+
+    entries = build_gamma_kmesh_entries(silicon, min_k_distance=0.2)
+
+    assert entries[0].k_distance_interval == (
+        generate_candidate_k_distances(silicon, 0.2)[0],
+        None,
+    )
+    for entry in entries[1:]:
+        low, high = entry.k_distance_interval
+        assert high is not None
+        assert math.isfinite(low) and math.isfinite(high), entry
+
+
 def test_k_distance_to_mesh_uses_solid_state_reciprocal_lengths() -> None:
     # Rutile: |b| = (1.3677, 1.3677, 2.1234) 1/A on the 2*pi reciprocal
     # lattice. ceil(|b_i| / 0.7) is (2, 2, 4). Reading the crystallographic
@@ -211,7 +230,7 @@ def test_kindex_is_contiguous_and_one_based() -> None:
 
 _TINI_LADDER = (
     # kindex, mesh, k_distance_interval, k_line_density_interval, k_pra
-    (1, (1, 1, 1), (2.38413115, math.inf), (3.20461063, 3.95312898), 6.0),
+    (1, (1, 1, 1), (2.38413115, None), (3.20461063, 3.95312898), 6.0),
     (2, (2, 1, 1), (1.48436263, 2.38413115), (3.95312898, 6.349377), 12.0),
     (3, (2, 1, 2), (1.19206558, 1.48436263), (6.349377, 6.5885483), 24.0),
     (4, (3, 1, 2), (0.98033522, 1.19206558), (6.5885483, 9.22396762), 36.0),
@@ -236,7 +255,7 @@ _TINI_LADDER = (
 )
 _GRAPHITE_LADDER = (
     # kindex, mesh, k_distance_interval, k_line_density_interval, k_pra
-    (1, (1, 1, 1), (2.94926726, math.inf), None, 4.0),
+    (1, (1, 1, 1), (2.94926726, None), None, 4.0),
     (2, (2, 2, 1), (1.47463363, 2.94926726), (3.355, 5.32605623), 16.0),
     (3, (3, 3, 1), (0.98308909, 1.47463363), (5.32605623, 7.45647873), 36.0),
     (4, (4, 4, 1), (0.93639125, 0.98308909), (7.45647873, 9.58690122), 64.0),
@@ -257,7 +276,7 @@ _GRAPHITE_LADDER = (
 )
 _DIAMOND_SILICON_LADDER = (
     # kindex, mesh, k_distance_interval, k_line_density_interval, k_pra
-    (1, (1, 1, 1), (1.15712437, math.inf), (2.715, 8.145), 8.0),
+    (1, (1, 1, 1), (1.15712437, None), (2.715, 8.145), 8.0),
     (2, (2, 2, 2), (0.57856218, 1.15712437), (8.145, 13.575), 64.0),
     (3, (3, 3, 3), (0.38570812, 0.57856218), (13.575, 19.005), 216.0),
     (4, (4, 4, 4), (0.28928109, 0.38570812), (19.005, 24.435), 512.0),
@@ -278,9 +297,10 @@ def test_ladder_matches_its_stored_reference(
     structure: Structure, reference: tuple[tuple[object, ...], ...]
 ) -> None:
     """Every field of every rung down to a 0.2 A^-1 floor, as the ladder
-    stood at d254510. ``kindex`` is recorded in published records, so any
-    change here renumbers them. The k-line-density bounds are stored to 8
-    decimals; every other value is exact."""
+    stood at d254510 apart from rung 1's open upper bound, now None
+    instead of inf (#137). ``kindex`` is recorded in published records, so
+    any change here renumbers them. The k-line-density bounds are stored
+    to 8 decimals; every other value is exact."""
     entries = build_gamma_kmesh_entries(structure, min_k_distance=0.2)
 
     assert [astuple(entry) for entry in entries] == [

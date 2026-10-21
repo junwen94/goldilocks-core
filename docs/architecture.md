@@ -267,6 +267,14 @@ call the same handler functions. HTTP's `POST /run` returns a JSON summary by
 default, or ZIP bytes when the request body sets `respond_with: "archive"`.
 Workbench reads file hashes and sizes from the ZIP's `goldilocks.json`.
 
+Documents are strict JSON. HTTP's `/explain`, `/magnetic-orderings` and `/run`
+bodies, CLI `--json` output and `goldilocks.json` raise on a non-finite float
+instead of writing `Infinity`, `NaN` or a silent `null`. Records therefore
+never hold one: a bound or value with no finite number is `None` (for example
+the upper end of the Gamma-only mesh's `k_distance_interval`), and the
+override models reject `inf` and `nan`. MCP's text content, which pydantic
+serializes and would write as `Infinity`, depends on the same rule.
+
 There is no per-transport service object to own. `server/readiness.py`'s
 `AssetReadiness` caches asset-availability checks (used by `GET /ready`)
 across requests within one running process.

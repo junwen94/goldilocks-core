@@ -12,6 +12,7 @@ layer that exercises real argument parsing end to end.
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -19,7 +20,7 @@ from pathlib import Path
 
 import pytest
 from pymatgen.core import Lattice, Structure
-from support import run_cli as _run_cli
+from support import run_cli as _run_cli, strict_json
 
 from goldilocks_core.capabilities import capabilities
 from goldilocks_core.examples.structures import structure
@@ -338,6 +339,36 @@ def test_unknown_hpc_profile_is_an_operator_error() -> None:
 
     assert completed.returncode == 2
     assert "Traceback" not in completed.stderr
+
+
+def test_explain_json_is_strict_json_for_a_gamma_only_mesh() -> None:
+    """Rung 1's open k-distance bound prints as null, never Infinity
+    (#137). Rung 1 of Si.cif's ladder (cubic, a = 5.431 A) is every
+    k-distance above |b| = 2 pi / a. No real assets needed: explain
+    reports every record either way."""
+    silicon = structure("Si.cif")
+
+    completed = _run_cli(
+        "explain", str(silicon), "--hpc", "scarf", "--set", "k_grid=[1,1,1]", "--json"
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    k_sampling = strict_json(completed.stdout)["records"]["k_sampling"]["value"]
+    assert k_sampling["k_index"] == 1
+    assert k_sampling["k_distance_interval"] == [round(2 * math.pi / 5.431, 8), None]
+
+
+def test_a_non_finite_set_value_is_an_operator_error() -> None:
+    """``1e999`` parses as inf: an invalid setting, not a k-distance (#137)."""
+    silicon = structure("Si.cif")
+
+    completed = _run_cli(
+        "explain", str(silicon), "--hpc", "scarf", "--set", "k_distance=1e999"
+    )
+
+    assert completed.returncode == 2
+    assert "Traceback" not in completed.stderr
+    assert "finite number" in completed.stderr
 
 
 def test_blocked_pipeline_reports_deduplicated_reasons_and_exits_nonzero() -> None:

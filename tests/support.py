@@ -31,7 +31,7 @@ import subprocess
 import sys
 import tarfile
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from goldilocks_core.assets.records import AssetFile, AssetSpec
 from goldilocks_core.assets.runtime import statuses
@@ -65,6 +65,18 @@ def run_cli(
         capture_output=True,
         text=True,
     )
+
+
+def strict_json(document: str | bytes) -> Any:
+    """``json.loads`` that rejects the non-standard ``Infinity``,
+    ``-Infinity`` and ``NaN`` tokens Python's ``json.dumps`` writes by
+    default (#137) -- shared by every test that checks a JSON document a
+    transport or the bundle writes."""
+
+    def reject(constant: str) -> None:
+        raise ValueError(f"{constant} is not valid JSON")
+
+    return json.loads(document, parse_constant=reject)
 
 
 SSSP_FIXTURE_UPF = (

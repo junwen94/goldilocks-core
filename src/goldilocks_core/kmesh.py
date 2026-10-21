@@ -34,6 +34,12 @@ reciprocal lattice, and ``kindex`` is defined exactly as in
 goldilocks-data. ``advisors/n_irr_k.py`` is the one place a mesh is
 reduced: the mesh a step actually uses.
 
+**Rung 1's open bound is ``None``.** goldilocks-data stores the upper
+k-distance bound of rung 1, the Gamma-only mesh, as ``math.inf``. Core
+stores ``None``: strict JSON has no infinity, and the ``inf`` in a
+Gamma-only k_sampling record made ``/run`` fail and wrote ``Infinity``
+into ``goldilocks.json`` (#137).
+
 **Naming: no ``k_spacing``.** v1 conflated two different reciprocal-length
 conventions -- the solid-state (2*pi) convention (here, ``k_distance``,
 matching AiiDA-QuantumESPRESSO) and the crystallographic (no 2*pi)
@@ -46,11 +52,12 @@ name. This module uses only ``k_distance``/``k_line_density``; the name
 ``goldilocks_data.sweeps.models.SweepPoint`` objects for its own
 sweep-generation glue -- core has no such concept and must not take a
 dependency on the ``goldilocks_data`` package. Everything else here is
-the actual k-mesh math, kept behaviourally identical; only the loose
-``Any`` structure type hint is tightened to pymatgen's own ``Structure``
-(core, unlike data, already requires pymatgen unconditionally), and one
-``zip(xs[:-1], xs[1:])`` pairing is rewritten as ``itertools.pairwise``
-to satisfy core's lint config -- both mechanical, behaviour-preserving.
+the actual k-mesh math, kept behaviourally identical apart from rung 1's
+``None`` bound (above); only the loose ``Any`` structure type hint is
+tightened to pymatgen's own ``Structure`` (core, unlike data, already
+requires pymatgen unconditionally), and one ``zip(xs[:-1], xs[1:])``
+pairing is rewritten as ``itertools.pairwise`` to satisfy core's lint
+config -- both mechanical, behaviour-preserving.
 
 The ``is_metal``-based k_distance ceiling (metals >= 0.06 A^-1,
 semiconductors/insulators >= 0.12 A^-1 as a cost safety net) and the
@@ -78,11 +85,15 @@ means nothing without it."""
 
 @dataclass(frozen=True, slots=True)
 class KMeshEntry:
-    """One gamma-centered k-mesh entry in increasing kindex order."""
+    """One gamma-centered k-mesh entry in increasing kindex order.
+
+    ``k_distance_interval`` is the ``(low, high)`` range of k-distances,
+    in Angstrom^-1, that give ``mesh``. ``high`` is ``None`` only for rung
+    1, the Gamma-only mesh, which every k-distance above ``low`` gives."""
 
     kindex: int
     mesh: tuple[int, int, int]
-    k_distance_interval: tuple[float, float]
+    k_distance_interval: tuple[float, float | None]
     k_line_density_interval: tuple[float, float] | None
     k_pra: float
 
@@ -153,7 +164,9 @@ def build_gamma_kmesh_entries(
 
     ``kindex`` is 1-based and rung 1 is the Gamma-only ``(1, 1, 1)`` mesh,
     which the first probe always yields because it sits above every
-    ``|b_i|``.
+    ``|b_i|``. Rung 1's interval is open above, so its upper bound is
+    ``None``: a float ``inf`` there cannot be written as strict JSON
+    (#137).
 
     The rung is an ordinal position on this structure's ladder and counts
     nothing. It equals the densest axis count only where the axes step
@@ -179,11 +192,8 @@ def build_gamma_kmesh_entries(
     if not candidates:
         return []
 
-    intervals = [
-        (
-            k_distance_to_mesh(structure, candidates[0] + 1.0),
-            (candidates[0], math.inf),
-        )
+    intervals: list[tuple[tuple[int, int, int], tuple[float, float | None]]] = [
+        (k_distance_to_mesh(structure, candidates[0] + 1.0), (candidates[0], None))
     ]
     for upper, lower in pairwise(candidates):
         intervals.append(

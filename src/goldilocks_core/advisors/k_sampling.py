@@ -144,14 +144,15 @@ class KSamplingDecision:
     land exactly on a rung (expected whenever the mesh came from
     ``k_distance``/ml/heuristic rather than an explicit ``k_index``
     override), not a failure."""
-    k_distance_interval: tuple[float, float] | None = None
+    k_distance_interval: tuple[float, float | None] | None = None
     """The matched rung's own ``KMeshEntry.k_distance_interval``, carried
     alongside ``k_index`` whenever a rung is known. Exists so a caller
     resolving via ``k_index`` -- where ``k_distance`` itself is
     deliberately ``None``, a whole interval maps to one rung, not one
     point -- still has something honest to show instead of nothing at
     all; showing a fabricated single point (e.g. the interval midpoint)
-    would be worse than showing no number."""
+    would be worse than showing no number. The upper bound is ``None``
+    only for rung 1, the Gamma-only mesh, whose interval is open above."""
 
 
 class KSamplingHumanInput(HumanInput):
