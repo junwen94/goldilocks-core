@@ -2,18 +2,23 @@
 
 ``advise()``/``check()``/``generate()`` and their relax variants on Si
 cells, with the synthetic SSSP Si table from ``tests/support.py``, so these
-run without installed pseudopotentials (#126, #132). The dispersion tests
-(#141) and the graphite vc-relax test (#132) read only the advice and the
-check, which need no pseudopotentials either.
+run without installed pseudopotentials (#126, #132, #161). The dispersion
+tests (#141), the graphite vc-relax test (#132) and the isolation gate on
+graphite and a MoS2 monolayer (#161) read only the advice and the check,
+which need no pseudopotentials either.
 """
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 from pymatgen.core import Lattice, Structure
 from pymatgen.core.surface import SlabGenerator
-from support import graphite, sssp_fixture_table_spec
+from support import (
+    graphite,
+    molybdenum_disulfide_monolayer,
+    rotated_about_x,
+    sssp_fixture_table_spec,
+)
 
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
@@ -26,7 +31,7 @@ from goldilocks_core.service import (
     generate,
     generate_relax,
 )
-from goldilocks_core.set_overrides import build_overrides
+from goldilocks_core.set_overrides import InvalidSetting, build_overrides
 
 pytestmark = pytest.mark.integration
 
@@ -70,30 +75,17 @@ def primitive_diamond_silicon() -> Structure:
     )
 
 
-def silicon_001_slab() -> Structure:
-    """A Si(001) slab from pymatgen's SlabGenerator: 8 atoms, 17.65 A of
-    vacuum along c, and a, b in the xy plane."""
+def silicon_001_slab(min_vacuum_size: float = 12) -> Structure:
+    """A Si(001) slab from pymatgen's SlabGenerator: 8 atoms 9.5 A thick,
+    a and b in the xy plane, and vacuum along c, 17.65 A by default and
+    23.08 A for ``min_vacuum_size=18``."""
     slab = SlabGenerator(
-        diamond_silicon(), (0, 0, 1), min_slab_size=8, min_vacuum_size=12
+        diamond_silicon(),
+        (0, 0, 1),
+        min_slab_size=8,
+        min_vacuum_size=min_vacuum_size,
     ).get_slab()
     return Structure.from_sites(slab)
-
-
-def rotated_about_x(structure: Structure, degrees: float) -> Structure:
-    """``structure`` turned rigidly about the Cartesian x axis."""
-    angle = np.radians(degrees)
-    rotation = np.array(
-        [
-            [1, 0, 0],
-            [0, np.cos(angle), -np.sin(angle)],
-            [0, np.sin(angle), np.cos(angle)],
-        ]
-    )
-    return Structure(
-        Lattice(structure.lattice.matrix @ rotation.T),
-        structure.species,
-        structure.frac_coords,
-    )
 
 
 def test_an_isolated_molecule_gets_martyna_tuckerman_and_no_stress(
@@ -107,7 +99,7 @@ def test_an_isolated_molecule_gets_martyna_tuckerman_and_no_stress(
 
     content = generate(advice, report)[0].files["scf.in"]
 
-    assert advice.system.boundary.value.assume_isolated == "martyna-tuckerman"
+    assert advice.system.boundary.value.isolation == "isolated"
     assert "assume_isolated  = 'martyna-tuckerman'" in content
     assert "tstress" not in content
 
@@ -125,7 +117,7 @@ def test_vc_relax_of_an_isolated_molecule_is_refused(store: AssetStore) -> None:
     report = check_relax(advice)
 
     assert len(report.blocking) == 1
-    assert "assume_isolated='martyna-tuckerman'" in report.blocking[0]
+    assert "isolation='isolated'" in report.blocking[0]
     assert "task='relax'" in report.blocking[0]
 
 
@@ -217,6 +209,129 @@ def test_a_2d_cell_constraint_on_a_tilted_bulk_cell_is_refused(
     assert len(report.blocking) == 1
     assert "cell_dofree='2Dxy'" in report.blocking[0]
     assert "xy plane" in report.blocking[0]
+
+
+def test_a_slab_override_writes_the_2d_coulomb_truncation(store: AssetStore) -> None:
+    """#161: isolation='slab' reaches pw.x as assume_isolated='2D'. The
+    Si(001) slab with 23.08 A of vacuum meets QE's preconditions: vacuum
+    only along c, a and b in the xy plane, c above 21 bohr, and vacuum more
+    than 20 bohr wider than the 9.5 A slab."""
+    advice = advise(
+        silicon_001_slab(min_vacuum_size=18),
+        hpc=load_hpc_profile("scarf"),
+        overrides=build_overrides({"isolation": "slab"}),
+        store=store,
+    )
+    report = check(advice)
+    assert report.ok, report.blocking
+
+    content = generate(advice, report)[0].files["scf.in"]
+
+    assert advice.system.boundary.source == "human"
+    assert "assume_isolated  = '2D'" in content
+    assert "tstress          = .true." in content
+
+
+def test_vc_relax_of_a_slab_under_the_2d_truncation_holds_c_fixed(
+    store: AssetStore,
+) -> None:
+    """Under '2D' pw.x computes only the in-plane stress (QE 7.3
+    PW/Doc/INPUT_PW.def:1677-1678), which the slab's default '2Dxy' relaxes."""
+    advice = advise_relax(
+        silicon_001_slab(min_vacuum_size=18),
+        calculation="vc-relax",
+        hpc=load_hpc_profile("scarf"),
+        overrides=build_overrides({"isolation": "slab"}),
+        store=store,
+    )
+    report = check_relax(advice)
+    assert report.ok, report.blocking
+
+    content = generate_relax(advice, report)[0].files["vc-relax.in"]
+
+    assert "assume_isolated  = '2D'" in content
+    assert "tstress          = .true." in content
+    assert "cell_dofree      = '2Dxy'" in content
+
+
+def test_vc_relax_of_a_slab_under_the_2d_truncation_refuses_cell_dofree_all(
+    store: AssetStore,
+) -> None:
+    advice = advise_relax(
+        silicon_001_slab(min_vacuum_size=18),
+        calculation="vc-relax",
+        hpc=load_hpc_profile("scarf"),
+        overrides=build_overrides({"isolation": "slab", "cell_dofree": "all"}),
+        store=store,
+    )
+
+    report = check_relax(advice)
+
+    assert len(report.blocking) == 1
+    assert "cell_dofree='all'" in report.blocking[0]
+    assert "cell_dofree='2Dxy'" in report.blocking[0]
+    assert "isolation='periodic'" in report.blocking[0]
+
+
+def test_a_slab_override_on_a_thick_slab_in_a_short_cell_is_refused(
+    store: AssetStore,
+) -> None:
+    """QE wants the cell taller than twice the slab's thickness including its
+    electrons, the atomic thickness plus 10 bohr (QE 7.3
+    PW/Doc/INPUT_PW.def:1668-1675). The 9.5 A Si(001) slab in a 27.16 A
+    cell would truncate part of its own interaction."""
+    advice = advise(
+        silicon_001_slab(),
+        hpc=load_hpc_profile("scarf"),
+        overrides=build_overrides({"isolation": "slab"}),
+        store=store,
+    )
+
+    report = check(advice)
+
+    assert len(report.blocking) == 1
+    assert "17.65 Å of vacuum around a slab 9.51 Å thick" in report.blocking[0]
+    assert "isolation='periodic'" in report.blocking[0]
+
+
+def test_a_slab_override_on_a_monolayer_passes_the_isolation_gate() -> None:
+    """All 15 MC2D monolayers of the 2026-10-19 batch meet QE's '2D'
+    preconditions; the MoS2 sheet in a 20 A cell stands for them."""
+    advice = advise(
+        molybdenum_disulfide_monolayer(),
+        hpc=load_hpc_profile("scarf"),
+        overrides=build_overrides({"isolation": "slab"}),
+    )
+
+    report = check(advice)
+
+    assert advice.system.magnetic.ok
+    assert advice.system.boundary.source == "human"
+    assert advice.system.boundary.value.isolation == "slab"
+    assert not any("isolation" in reason for reason in report.blocking)
+
+
+def test_a_slab_override_on_bulk_graphite_is_refused() -> None:
+    """Graphite ranks '2d' but has no vacuum: truncating its Coulomb
+    interaction along c would cut real interlayer electrostatics."""
+    advice = advise(
+        graphite(),
+        hpc=load_hpc_profile("scarf"),
+        overrides=build_overrides({"isolation": "slab"}),
+    )
+
+    report = check(advice)
+
+    isolation = [reason for reason in report.blocking if "isolation=" in reason]
+    assert len(isolation) == 1
+    assert "isolation='slab'" in isolation[0]
+    assert "the cell to be written has no vacuum" in isolation[0]
+    assert "Set isolation='periodic'" in isolation[0]
+
+
+def test_the_quantum_espresso_assume_isolated_key_is_not_a_setting() -> None:
+    with pytest.raises(InvalidSetting, match="unknown setting 'assume_isolated'"):
+        build_overrides({"assume_isolated": "none"})
 
 
 def test_lda_graphite_gets_no_d3_dispersion_and_a_warning() -> None:

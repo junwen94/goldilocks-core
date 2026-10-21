@@ -332,6 +332,20 @@ def test_unknown_set_key_is_a_did_you_mean_operator_error() -> None:
     assert "did you mean: ecutwfc_ry" in completed.stderr
 
 
+def test_a_quantum_espresso_isolation_spelling_lists_the_allowed_values() -> None:
+    """#161: isolation takes the code-neutral category; '2D' is what the
+    writer emits for 'slab'."""
+    silicon = structure("Si.cif")
+
+    completed = _run_cli(
+        "explain", str(silicon), "--hpc", "scarf", "--set", "isolation=2D"
+    )
+
+    assert completed.returncode == 2
+    assert "Traceback" not in completed.stderr
+    assert "'periodic', 'slab' or 'isolated'" in completed.stderr
+
+
 def test_unknown_hpc_profile_is_an_operator_error() -> None:
     silicon = structure("Si.cif")
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import numpy as np
 import pytest
 from pymatgen.core import Lattice, Structure
 from support import (
@@ -10,11 +9,13 @@ from support import (
     graphene_with_vacuum_along_a,
     graphene_with_vacuum_along_x,
     graphite,
+    rotated_about_x,
 )
 
 from goldilocks_core.analysis.geometry import (
     SlabGeometry,
     ab_in_xy_plane,
+    c_along_z,
     geometry,
     slab_geometry,
     vacuum_axes,
@@ -107,20 +108,7 @@ def test_a_gap_counts_as_vacuum_only_beyond_5_angstrom(
 def _tilted_monolayer() -> Structure:
     """The graphene monolayer rotated rigidly by 30 degrees about x, so the
     sheet and b leave the xy plane while the vacuum stays along c."""
-    angle = np.radians(30.0)
-    rotation = np.array(
-        [
-            [1, 0, 0],
-            [0, np.cos(angle), -np.sin(angle)],
-            [0, np.sin(angle), np.cos(angle)],
-        ]
-    )
-    monolayer = graphene_monolayer()
-    return Structure(
-        Lattice(monolayer.lattice.matrix @ rotation.T),
-        monolayer.species,
-        monolayer.frac_coords,
-    )
+    return rotated_about_x(graphene_monolayer(), 30.0)
 
 
 @pytest.mark.parametrize(
@@ -170,6 +158,18 @@ def test_a_and_b_lie_in_the_xy_plane_to_qe_tolerance(z: float, in_plane: bool) -
 
     assert ab_in_xy_plane(tilted_a) is in_plane
     assert ab_in_xy_plane(tilted_b) is in_plane
+
+
+@pytest.mark.parametrize(("xy", "along"), [(0.5e-8, True), (2e-8, False)])
+def test_c_lies_along_z_to_the_same_tolerance(xy: float, along: bool) -> None:
+    """c's x and y components, against 1e-8 times |a| like a_z and b_z."""
+    a = 2.46
+    in_plane = [[a, 0, 0], [-a / 2, a * 3**0.5 / 2, 0]]
+    tilted_x = Lattice([*in_plane, [xy * a, 0, 20]])
+    tilted_y = Lattice([*in_plane, [0, xy * a, 20]])
+
+    assert c_along_z(tilted_x) is along
+    assert c_along_z(tilted_y) is along
 
 
 def test_geometry_is_unavailable_for_disordered_structures() -> None:

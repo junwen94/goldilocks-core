@@ -34,6 +34,7 @@ import tarfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.analysis.geometry import GeometryFacts, SlabGeometry
@@ -299,11 +300,44 @@ def rhombohedral_bismuth_selenide() -> Structure:
     )
 
 
-def graphene_monolayer() -> Structure:
-    """A graphene sheet (C-C 1.42 A) in the xy plane, with 20 A of vacuum
-    along c, which lies along z."""
+def graphene_monolayer(c: float = 20.0) -> Structure:
+    """A graphene sheet (C-C 1.42 A) in the xy plane, in a cell ``c`` A high
+    along z (20 A by default), all of it vacuum."""
     return Structure(
-        Lattice.hexagonal(2.46, 20.0), ["C", "C"], [[0, 0, 0.5], [1 / 3, 2 / 3, 0.5]]
+        Lattice.hexagonal(2.46, c), ["C", "C"], [[0, 0, 0.5], [1 / 3, 2 / 3, 0.5]]
+    )
+
+
+def molybdenum_disulfide_monolayer(c: float = 20.0) -> Structure:
+    """One S-Mo-S sheet of ``molybdenum_disulfide`` (a = 3.16 A, S planes
+    3.17 A apart) in the xy plane, in a cell ``c`` A high along z (20 A by
+    default)."""
+    half_thickness = 1.585 / c
+    return Structure(
+        Lattice.hexagonal(3.16, c),
+        ["Mo", "S", "S"],
+        [
+            [1 / 3, 2 / 3, 0.5],
+            [2 / 3, 1 / 3, 0.5 + half_thickness],
+            [2 / 3, 1 / 3, 0.5 - half_thickness],
+        ],
+    )
+
+
+def rotated_about_x(structure: Structure, degrees: float) -> Structure:
+    """``structure`` turned rigidly about the Cartesian x axis."""
+    angle = np.radians(degrees)
+    rotation = np.array(
+        [
+            [1, 0, 0],
+            [0, np.cos(angle), -np.sin(angle)],
+            [0, np.sin(angle), np.cos(angle)],
+        ]
+    )
+    return Structure(
+        Lattice(structure.lattice.matrix @ rotation.T),
+        structure.species,
+        structure.frac_coords,
     )
 
 

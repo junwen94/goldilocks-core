@@ -77,6 +77,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from pymatgen.core import Structure
+
 from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.job_resources import JobDecision
@@ -91,8 +93,11 @@ from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.analysis.geometry import (
     GeometryFacts,
+    LatticeAxis,
     ab_in_xy_plane,
+    c_along_z,
     vacuum_axes,
+    vacuum_widths,
 )
 from goldilocks_core.functionals import D3BJ_FUNCTIONALS, has_d3bj_parameters
 from goldilocks_core.plan import SCF_LIKE_PURPOSES
@@ -112,6 +117,21 @@ _TWO_D_CELL_DOFREE = frozenset({"2Dxy", "2Dshape", "ibrav+2Dxy", "ibrav+2Dshape"
 """``cell_dofree`` values that move only the x and y components of a and b.
 The 'ibrav+' forms act as the plain ones under the writer's ``ibrav = 0``
 (QE 7.3 Modules/latgen.f90:749-752)."""
+_BOHR_ANGSTROM = 0.529177210903
+"""QE 7.3's bohr radius in A (Modules/constants.f90:38, :111)."""
+_TWO_D_MIN_HEIGHT_ANGSTROM = 21 * _BOHR_ANGSTROM
+"""Lowest cell height along z for QE's 2D Coulomb truncation. pw.x stops when
+half of it is below the last radial-grid point it keeps for a
+pseudopotential (QE 7.3 PW/src/init_vloc.f90:62-65): the first point beyond
+10 bohr, or the one before it when that point's index is even, since msh is
+made odd by rounding down (Modules/read_pseudo.f90:174-186). In the 1138
+SSSP and PseudoDojo files of the registered tables the kept point lies
+within 10.16 bohr, below the 10.5 bohr that 21 bohr allows."""
+_TWO_D_VACUUM_MARGIN_ANGSTROM = 20 * _BOHR_ANGSTROM
+"""QE wants the cell height along z above twice the slab's thickness
+including its electrons, safely estimated as the atomic thickness plus 10
+bohr (QE 7.3 PW/Doc/INPUT_PW.def:1668-1675), so the vacuum must be at least
+20 bohr wider than the atomic thickness."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,7 +212,9 @@ def check_all(
             occupations, magnetic, electron_count, purpose
         ),
         _vc_relax_requires_bfgs_ion_dynamics(relax, purpose),
+        _isolation_matches_written_cell(boundary, magnetic),
         _vc_relax_forbids_isolated_boundary(boundary, purpose),
+        _slab_vc_relax_needs_2d_cell_dofree(boundary, relax),
         _two_d_cell_dofree_needs_xy_frame(relax, magnetic),
         _dispersion_needs_parameterised_functional(vdw, functional),
         _fix_bottom_layers_requires_2d_geometry(relax, geometry),
@@ -350,6 +372,83 @@ def _vc_relax_requires_bfgs_ion_dynamics(
     return None
 
 
+def _isolation_matches_written_cell(
+    boundary: FieldState[BoundaryFacts] | None,
+    magnetic: FieldState[MagneticConfigFacts] | None,
+) -> str | None:
+    """'isolated' and 'slab' truncate the Coulomb interaction, which is right
+    only for the vacuum each assumes (#161). Checked on the cell the writer
+    renders, whatever the source of ``isolation``."""
+    if boundary is None or magnetic is None or not (boundary.ok and magnetic.ok):
+        return None
+    cell = magnetic.value.relabeled_structure
+    if boundary.value.isolation == "isolated":
+        return _isolated_needs_vacuum_along_every_axis(cell)
+    if boundary.value.isolation == "slab":
+        return _slab_needs_room_for_the_2d_truncation(cell)
+    return None
+
+
+def _isolated_needs_vacuum_along_every_axis(cell: Structure) -> str | None:
+    """Martyna-Tuckerman treats the system as a molecule or cluster in a 3D
+    supercell (QE 7.3 PW/Doc/INPUT_PW.def:1593-1594); pw.x has no 1D
+    truncation for a wire."""
+    axes = vacuum_axes(cell)
+    if len(axes) == 3:
+        return None
+    found = f"vacuum only along {_along(axes)}" if axes else "no vacuum"
+    return (
+        "isolation='isolated' writes Martyna-Tuckerman (assume_isolated="
+        "'martyna-tuckerman'), which treats the system as a molecule or cluster "
+        "in a box and needs vacuum along a, b and c, but the cell to be written "
+        f"has {found}. Set isolation='periodic'."
+    )
+
+
+def _slab_needs_room_for_the_2d_truncation(cell: Structure) -> str | None:
+    """QE's 2D Coulomb truncation cuts the interaction between charges more
+    than half the cell height apart along z (QE 7.3
+    PW/src/Coul_cut_2D.f90:77-81). It assumes a and b in the xy plane
+    (Coul_cut_2D.f90:72-74, which only prints a warning) and c along z: its
+    cutoff factor 1 - exp(-G_xy c/2) cos(G_z c/2) (Sohier et al., Phys. Rev.
+    B 96, 075448 (2017), Eq. 24) is the Fourier transform of the truncated
+    interaction only when every G_z is a multiple of 2 pi / c, so that the
+    transform's sin(G_z c/2) term vanishes. It stops when the half height is
+    below the pseudopotentials' radial cutoff, and truncates part of the
+    slab's own interaction when the vacuum is too narrow; see
+    ``_TWO_D_MIN_HEIGHT_ANGSTROM`` and ``_TWO_D_VACUUM_MARGIN_ANGSTROM``."""
+    found = _xy_frame_obstacles(cell, allowed_vacuum=(("c",),))
+    if not found:
+        found = _two_d_cell_obstacles(cell)
+    if not found:
+        return None
+    return (
+        "isolation='slab' writes Quantum ESPRESSO's 2D Coulomb truncation "
+        "(assume_isolated='2D'), which needs vacuum along c only, a and b in the "
+        "Cartesian xy plane, c along z, a cell at least "
+        f"{_TWO_D_MIN_HEIGHT_ANGSTROM:.2f} Å high and vacuum at least "
+        f"{_TWO_D_VACUUM_MARGIN_ANGSTROM:.2f} Å wider than the slab, but the cell "
+        f"to be written has {' and '.join(found)}. Set isolation='periodic'."
+    )
+
+
+def _two_d_cell_obstacles(cell: Structure) -> list[str]:
+    """What else a slab with its vacuum along c and a, b in the xy plane lacks
+    for the 2D truncation. The cell height is c's z component, and the atomic
+    thickness is that height less the vacuum."""
+    height = float(cell.lattice.matrix[2][2])
+    vacuum = vacuum_widths(cell)[2]
+    thickness = height - vacuum
+    found = []
+    if not c_along_z(cell.lattice):
+        found.append("c off the z axis")
+    if height < _TWO_D_MIN_HEIGHT_ANGSTROM:
+        found.append(f"a height of {height:.2f} Å along z")
+    if vacuum < thickness + _TWO_D_VACUUM_MARGIN_ANGSTROM:
+        found.append(f"{vacuum:.2f} Å of vacuum around a slab {thickness:.2f} Å thick")
+    return found
+
+
 def _vc_relax_forbids_isolated_boundary(
     boundary: FieldState[BoundaryFacts] | None, purpose: str
 ) -> str | None:
@@ -359,13 +458,38 @@ def _vc_relax_forbids_isolated_boundary(
     the input cell as converged, exiting 0 (#126)."""
     if purpose != "vc-relax" or boundary is None or not boundary.ok:
         return None
-    if boundary.value.assume_isolated != "martyna-tuckerman":
+    if boundary.value.isolation != "isolated":
         return None
     return (
-        "vc-relax cannot relax the cell with assume_isolated='martyna-tuckerman': "
-        "pw.x computes no stress for an isolated system, so the input cell "
-        "would be reported as converged. Use task='relax' for a molecule or "
-        "cluster in a box, or set assume_isolated='none' for a periodic structure."
+        "vc-relax cannot relax the cell with isolation='isolated' "
+        "(Martyna-Tuckerman): pw.x computes no stress for an isolated system, so "
+        "the input cell would be reported as converged. Use task='relax' for a "
+        "molecule or cluster in a box, or set isolation='periodic' for a periodic "
+        "structure."
+    )
+
+
+def _slab_vc_relax_needs_2d_cell_dofree(
+    boundary: FieldState[BoundaryFacts] | None,
+    relax: FieldState[RelaxOptions | VcRelaxOptions] | None,
+) -> str | None:
+    """Under QE's 2D Coulomb truncation only in-plane stresses make sense, and
+    QE asks a vc-relax to use cell_dofree='2Dxy' (QE 7.3
+    PW/Doc/INPUT_PW.def:1677-1678); pw.x itself does not check it. Any value
+    in ``_TWO_D_CELL_DOFREE`` holds c and the z components of a and b."""
+    if boundary is None or relax is None or not (boundary.ok and relax.ok):
+        return None
+    options = relax.value
+    if boundary.value.isolation != "slab" or not isinstance(options, VcRelaxOptions):
+        return None
+    if options.cell_dofree in _TWO_D_CELL_DOFREE:
+        return None
+    return (
+        "vc-relax with isolation='slab' cannot use "
+        f"cell_dofree={options.cell_dofree!r}: under Quantum ESPRESSO's 2D Coulomb "
+        "truncation only the in-plane stress is meaningful, so c and the z "
+        "components of a and b must stay fixed. Set cell_dofree='2Dxy' (or "
+        "'2Dshape'), or isolation='periodic'."
     )
 
 
@@ -388,13 +512,9 @@ def _two_d_cell_dofree_needs_xy_frame(
         return None
     if options.cell_dofree not in _TWO_D_CELL_DOFREE:
         return None
-    cell = magnetic.value.relabeled_structure
-    found = []
-    if not ab_in_xy_plane(cell.lattice):
-        found.append("a or b out of the xy plane")
-    axes = vacuum_axes(cell)
-    if axes not in ((), ("c",)):
-        found.append(f"vacuum along {' and '.join(axes)}")
+    found = _xy_frame_obstacles(
+        magnetic.value.relabeled_structure, allowed_vacuum=((), ("c",))
+    )
     if not found:
         return None
     return (
@@ -403,6 +523,27 @@ def _two_d_cell_dofree_needs_xy_frame(
         "and any vacuum along c, but the cell to be written has "
         f"{' and '.join(found)}. Set cell_dofree='all', or reorient the cell."
     )
+
+
+def _xy_frame_obstacles(
+    cell: Structure, allowed_vacuum: tuple[tuple[LatticeAxis, ...], ...]
+) -> list[str]:
+    """What keeps ``cell`` out of the frame QE's 2D methods assume: a or b out
+    of the Cartesian xy plane, and vacuum axes other than those
+    ``allowed_vacuum`` lists."""
+    found = []
+    if not ab_in_xy_plane(cell.lattice):
+        found.append("a or b out of the xy plane")
+    axes = vacuum_axes(cell)
+    if axes not in allowed_vacuum:
+        found.append(f"vacuum along {_along(axes)}" if axes else "no vacuum")
+    return found
+
+
+def _along(axes: tuple[LatticeAxis, ...]) -> str:
+    """'c', 'a and b' or 'a, b and c'."""
+    *rest, last = axes
+    return f"{', '.join(rest)} and {last}" if rest else last
 
 
 def _dispersion_needs_parameterised_functional(

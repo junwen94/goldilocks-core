@@ -61,7 +61,8 @@ makes that impossible by construction.
   below only decides *whether a keyword applies at all* given an
   already-resolved fact (e.g. ``vdw_corr`` is only meaningful when
   ``vdw.use_vdw`` is true) or *which QE spelling* an already-chosen
-  value maps to (``_QE_VDW_CORR``) -- never which value to choose.
+  value maps to (``_QE_VDW_CORR``, ``_QE_ASSUME_ISOLATED``) -- never which
+  value to choose.
 
 **Hubbard ``HUBBARD`` card (v2 #88).** In QE >= 7.1 only the inter-site
 ``V`` line is atom-index-keyed (QE 7.3 ``Doc/Hubbard_input.tex``,
@@ -101,7 +102,7 @@ from typing import Literal
 from pymatgen.core import Structure
 from pymatgen.core.periodic_table import Element
 
-from goldilocks_core.advisors.boundary import BoundaryFacts
+from goldilocks_core.advisors.boundary import BoundaryFacts, Isolation
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.namelists import render_namelist
 from goldilocks_core.step_settings import PwSettings
@@ -116,6 +117,14 @@ _QE_VDW_CORR: dict[str, tuple[str, int | None]] = {
 method to use was already decided upstream; only its QE spelling is
 resolved here (matches v1's ``_QE_VDW_CORR``, ``generation/qe/scf.py:16-21``,
 restricted to the one method ``VdwMethod`` currently allows)."""
+
+_QE_ASSUME_ISOLATED: dict[Isolation, str] = {
+    "slab": "2D",
+    "isolated": "martyna-tuckerman",
+}
+"""``BoundaryFacts.isolation`` -> QE's ``assume_isolated`` spelling (QE 7.3
+PW/src/input.f90:1332-1359). 'periodic' writes no keyword, QE's default
+'none'."""
 
 _SAFE_FILENAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
 
@@ -340,10 +349,11 @@ def control_keywords(
     step: PwSettings,
     purpose: Literal["scf", "nscf", "relax", "vc-relax"],
 ) -> dict[str, object]:
-    """``&CONTROL`` keywords. ``tstress`` is written only when ``boundary``
-    is not Martyna-Tuckerman: pw.x computes no stress for an isolated
-    system and clears the flag (QE 7.3 PW/src/input.f90:1361-1365), even
-    for vc-relax, where input.f90:646 switches it on."""
+    """``&CONTROL`` keywords. ``tstress`` is written unless ``boundary`` is
+    'isolated': pw.x computes no stress under Martyna-Tuckerman and clears
+    the flag (QE 7.3 PW/src/input.f90:1361-1365), even for vc-relax, where
+    input.f90:646 switches it on. Under '2D', 'slab', it computes the stress
+    in a two-dimensional framework (PW/Doc/INPUT_PW.def:1655-1675)."""
     keywords: dict[str, object] = {
         "calculation": purpose,
         "prefix": ctx.prefix,
@@ -352,7 +362,7 @@ def control_keywords(
         "tprnfor": True,
         "max_seconds": step.max_seconds,
     }
-    if boundary.assume_isolated != "martyna-tuckerman":
+    if boundary.isolation != "isolated":
         keywords["tstress"] = True
     if step.relax is not None:
         # forc_conv_thr/etot_conv_thr/nstep are real &CONTROL keys, not
@@ -394,8 +404,9 @@ def system_keywords(
         keywords["vdw_corr"] = vdw_corr
         if dftd3_version is not None:
             keywords["dftd3_version"] = dftd3_version
-    if system.boundary.assume_isolated != "none":
-        keywords["assume_isolated"] = system.boundary.assume_isolated
+    assume_isolated = _QE_ASSUME_ISOLATED.get(system.boundary.isolation)
+    if assume_isolated is not None:
+        keywords["assume_isolated"] = assume_isolated
     return keywords
 
 

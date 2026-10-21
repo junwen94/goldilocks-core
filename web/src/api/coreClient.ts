@@ -121,7 +121,7 @@ export interface Capabilities {
  * against exactly the failure mode that made this rewrite necessary:
  * a frontend build silently drifting from the backend contract it
  * talks to, discovered only by runtime breakage deep in a form. */
-const SUPPORTED_VOCABULARY_VERSION = "1";
+const SUPPORTED_VOCABULARY_VERSION = "2";
 
 // ---------------------------------------------------------------------
 // POST /inspect -- mirrors inputs/structure.py's `StructureInspection`.

@@ -111,6 +111,7 @@ its type, default, and description; a selection of commonly used keys:
 | `degauss`                           | Smearing width in Ry (default 0.01)                                   |
 | `spin_polarized`, `spin_orbit_coupling` | Force spin polarization / spin-orbit coupling                     |
 | `use_vdw`, `method`                 | Force a dispersion correction; only `d3bj` is implemented, for PBE and PBEsol |
+| `isolation`                         | Electrostatic boundary: `periodic`, `slab` (Quantum ESPRESSO's 2D truncation, `assume_isolated='2D'`) or `isolated` (Martyna-Tuckerman); see [boundary conditions](science.md#check-boundary-conditions-and-vacuum) |
 | `conv_thr`, `mixing_beta`, `electron_maxstep` | SCF energy-convergence threshold, density-mixing factor, max SCF iterations |
 | `u_by_element`                      | Hubbard U_eff per element in eV, replacing the built-in table, e.g. `--set 'u_by_element={"Ti": 4.0}'` |
 | `hubbard_needs_correlation`         | `false` runs without Hubbard +U; `true` applies the built-in U table  |

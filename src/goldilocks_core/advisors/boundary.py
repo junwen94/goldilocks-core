@@ -13,12 +13,17 @@ in this same epic) -- so "dimensionality is a dangling output" was an
 overstatement even before this epic; what was genuinely dangling is
 specifically the boundary-condition settings this file now owns.
 
-Scope decision: `assume_isolated` only, not the full boundary-condition
-picture. The heuristic sets 'martyna-tuckerman' only when
-`GeometryFacts.vacuum_axes` holds all three lattice vectors: QE documents it
-for "a molecule or a cluster in a 3D supercell" (QE 7.3
-PW/Doc/INPUT_PW.def:1593-1594), and pw.x has no 1D truncation. Every other
-cell gets 'none', whatever its bond rank: CO2 dry ice ranks 'molecule' but
+The decision is a code-neutral isolation category, not a Quantum ESPRESSO
+keyword (#161): 'periodic' (no truncation), 'slab' (the Coulomb interaction
+truncated along the slab normal) or 'isolated' (truncated along all three
+lattice vectors). The Quantum ESPRESSO writer maps 'slab' to
+``assume_isolated='2D'`` and 'isolated' to 'martyna-tuckerman', and writes
+nothing for 'periodic'.
+
+The heuristic decides from ``GeometryFacts.vacuum_axes``, not from the bond
+rank. 'isolated' needs vacuum along all three lattice vectors: QE documents
+Martyna-Tuckerman for "a molecule or a cluster in a 3D supercell" (QE 7.3
+PW/Doc/INPUT_PW.def:1593-1594), while CO2 dry ice ranks 'molecule' but
 fills its cell, and Martyna-Tuckerman would replace its periodic Hartree,
 local-potential and Ewald terms with those of an isolated cluster (#126).
 The method is exact only when the density fits in half the cell along every
@@ -26,13 +31,23 @@ axis (Martyna and Tuckerman, J. Chem. Phys. 110, 2810 (1999)), which a gap
 wider than `analysis.geometry.VACUUM_GAP_ANGSTROM` does not guarantee.
 pw.x computes no stress under it (QE 7.3 PW/src/input.f90:1361-1365), so
 generation omits `tstress` and `checks.check_all` refuses a vc-relax.
+Every other cell is 'periodic'. That includes wires, because pw.x has no 1D
+truncation.
 
-A 2D slab's periodic-image problem is normally solved with a dipole
-correction (`tefield`/`dipfield`/`edir`/...) rather than `assume_isolated`,
-and that correction needs to know whether the slab is symmetric --
-information this heuristic-tier fact does not have. That is pitfall A9,
-explicitly deferred (see issue #5's "Deferred from #2" list) rather than
-guessed at here: a '2d' rank gets a warning instead of a guess.
+'slab' is QE's 2D Coulomb truncation (Sohier, Calandra and Mauri, Phys. Rev.
+B 96, 075448 (2017)), which computes energies, forces and in-plane stresses
+in a two-dimensional framework (QE 7.3 PW/Doc/INPUT_PW.def:1655-1678). It
+comes only from a human or llm value: the heuristic keeps a slab 'periodic',
+which is accurate for a neutral, symmetric monolayer with ~20 A of vacuum,
+and no pw.x comparison of '2D' against periodic boundaries exists for the
+bundled monolayers. ``checks.check_all`` refuses 'slab' and 'isolated', from
+any source, on a written cell without the vacuum and frame they need.
+
+A 2D slab's dipole correction (`tefield`/`dipfield`/`edir`/...) needs to
+know whether the slab is symmetric, information this heuristic-tier fact
+does not have. That is pitfall A9, explicitly deferred (see issue #5's
+"Deferred from #2" list) rather than guessed at here: a '2d' rank gets a
+warning instead of a guess.
 """
 
 from __future__ import annotations
@@ -51,7 +66,10 @@ from goldilocks_core.resolution import (
     blocked_by,
 )
 
-AssumeIsolated = Literal["none", "martyna-tuckerman"]
+Isolation = Literal["periodic", "slab", "isolated"]
+"""How the electrostatics treat the cell's periodic images: kept
+('periodic'), cut along the slab normal ('slab') or cut along all three
+lattice vectors ('isolated')."""
 
 DIPOLE_CORRECTION_SUGGESTED = Warning(
     code="boundary.dipole_correction_suggested",
@@ -72,16 +90,16 @@ WARNING_CATALOGUE = (DIPOLE_CORRECTION_SUGGESTED,)
 
 @dataclass(frozen=True, slots=True)
 class BoundaryFacts:
-    assume_isolated: AssumeIsolated
+    isolation: Isolation
     warnings: tuple[Warning, ...] = ()
 
 
 class BoundaryHumanInput(HumanInput):
-    assume_isolated: AssumeIsolated | None = None
+    isolation: Isolation | None = None
 
 
 class BoundaryLlmInput(LlmInput):
-    assume_isolated: AssumeIsolated | None = None
+    isolation: Isolation | None = None
 
 
 def boundary(
@@ -102,15 +120,13 @@ def boundary(
     human = human or BoundaryHumanInput()
     llm = llm or BoundaryLlmInput()
 
-    if human.assume_isolated is not None:
-        return Resolved(
-            BoundaryFacts(human.assume_isolated), Provenance(source="human")
-        )
-    ml_value: AssumeIsolated | None = None  # no ml model wired yet; epic 11's job
+    if human.isolation is not None:
+        return Resolved(BoundaryFacts(human.isolation), Provenance(source="human"))
+    ml_value: Isolation | None = None  # no ml model wired yet; epic 11's job
     if ml_value is not None:
         return Resolved(BoundaryFacts(ml_value), Provenance(source="ml"))
-    if llm.assume_isolated is not None:
-        return Resolved(BoundaryFacts(llm.assume_isolated), Provenance(source="llm"))
+    if llm.isolation is not None:
+        return Resolved(BoundaryFacts(llm.isolation), Provenance(source="llm"))
 
     if not geometry.ok:
         return Blocked(by=blocked_by(geometry))
@@ -120,7 +136,7 @@ def boundary(
 def _heuristic(facts: GeometryFacts) -> FieldState[BoundaryFacts]:
     if len(facts.vacuum_axes) == 3:
         return Resolved(
-            BoundaryFacts("martyna-tuckerman"),
+            BoundaryFacts("isolated"),
             Provenance(
                 source="heuristic",
                 source_note=(
@@ -135,7 +151,7 @@ def _heuristic(facts: GeometryFacts) -> FieldState[BoundaryFacts]:
         # Image interaction of a slab is normally handled by a dipole
         # correction -- deferred (pitfall A9), not guessed at here.
         return Resolved(
-            BoundaryFacts("none", warnings=(DIPOLE_CORRECTION_SUGGESTED,)),
+            BoundaryFacts("periodic", warnings=(DIPOLE_CORRECTION_SUGGESTED,)),
             Provenance(source="heuristic"),
         )
-    return Resolved(BoundaryFacts("none"), Provenance(source="heuristic"))
+    return Resolved(BoundaryFacts("periodic"), Provenance(source="heuristic"))

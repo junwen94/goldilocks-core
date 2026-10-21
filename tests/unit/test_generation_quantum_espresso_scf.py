@@ -4,6 +4,7 @@ import dataclasses
 
 import pytest
 from pymatgen.core import Lattice, Species, Structure
+from support import carbon_pair_in_a_box, graphene_monolayer
 
 from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.convergence import ConvergenceDecision
@@ -76,7 +77,7 @@ def _system(
         magnetic=magnetic or _magnetic(structure),
         vdw=vdw or VdwFacts(use_vdw=False, method=None),
         hubbard=hubbard or HubbardUDecision(),
-        boundary=boundary or BoundaryFacts(assume_isolated="none"),
+        boundary=boundary or BoundaryFacts(isolation="periodic"),
     )
 
 
@@ -517,10 +518,14 @@ def test_vdw_method_translates_to_qe_keyword(
     assert "dftd3_version    = 4" in content
 
 
-def test_periodic_boundary_writes_tstress_and_no_assume_isolated(
-    silicon_structure, pseudo_metadata_factory
+def test_a_periodic_boundary_writes_tstress_and_no_assume_isolated(
+    diamond_silicon, pseudo_metadata_factory
 ) -> None:
-    system = _system(silicon_structure, pseudo_metadata_factory)
+    system = _system(
+        diamond_silicon,
+        pseudo_metadata_factory,
+        boundary=BoundaryFacts(isolation="periodic"),
+    )
 
     content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
 
@@ -528,16 +533,34 @@ def test_periodic_boundary_writes_tstress_and_no_assume_isolated(
     assert "assume_isolated" not in content
 
 
-def test_martyna_tuckerman_boundary_writes_assume_isolated_and_no_tstress(
-    silicon_structure, pseudo_metadata_factory
+def test_a_slab_boundary_writes_the_2d_truncation_and_keeps_tstress(
+    pseudo_metadata_factory,
+) -> None:
+    """#161: 'slab' is QE's 2D Coulomb truncation, which computes energies,
+    forces and stresses in a two-dimensional framework (QE 7.3
+    PW/Doc/INPUT_PW.def:1655-1675)."""
+    system = _system(
+        graphene_monolayer(),
+        pseudo_metadata_factory,
+        boundary=BoundaryFacts(isolation="slab"),
+    )
+
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+
+    assert "assume_isolated  = '2D'" in content
+    assert "tstress          = .true." in content
+
+
+def test_an_isolated_boundary_writes_martyna_tuckerman_and_no_tstress(
+    pseudo_metadata_factory,
 ) -> None:
     """#126: pw.x computes no stress for an isolated system and clears a
     requested tstress (QE 7.3 PW/src/input.f90:1361-1365), so the input
     does not ask for one."""
     system = _system(
-        silicon_structure,
+        carbon_pair_in_a_box(),
         pseudo_metadata_factory,
-        boundary=BoundaryFacts(assume_isolated="martyna-tuckerman"),
+        boundary=BoundaryFacts(isolation="isolated"),
     )
 
     content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
@@ -765,7 +788,7 @@ def test_missing_pseudopotential_element_raises_generation_error(
         magnetic=_magnetic(structure),
         vdw=VdwFacts(use_vdw=False, method=None),
         hubbard=HubbardUDecision(),
-        boundary=BoundaryFacts(assume_isolated="none"),
+        boundary=BoundaryFacts(isolation="periodic"),
     )
 
     with pytest.raises(GenerationError, match="missing"):
@@ -783,7 +806,7 @@ def test_pseudopotential_functional_mismatch_raises_generation_error(
         magnetic=_magnetic(silicon_structure),
         vdw=VdwFacts(use_vdw=False, method=None),
         hubbard=HubbardUDecision(),
-        boundary=BoundaryFacts(assume_isolated="none"),
+        boundary=BoundaryFacts(isolation="periodic"),
     )
 
     with pytest.raises(GenerationError, match="functional mismatch"):
@@ -805,7 +828,7 @@ def test_disordered_structure_is_rejected(pseudo_metadata_factory) -> None:
         magnetic=magnetic,
         vdw=VdwFacts(use_vdw=False, method=None),
         hubbard=HubbardUDecision(),
-        boundary=BoundaryFacts(assume_isolated="none"),
+        boundary=BoundaryFacts(isolation="periodic"),
     )
 
     with pytest.raises(GenerationError, match="disordered"):

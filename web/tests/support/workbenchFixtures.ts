@@ -43,7 +43,7 @@ const pbeTable: PseudopotentialTable = {
 
 export const capabilities: Capabilities = {
   core_version: "1.2.3",
-  vocabulary_version: "1",
+  vocabulary_version: "2",
   codes: [
     {
       id: "quantum_espresso",

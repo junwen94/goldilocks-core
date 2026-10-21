@@ -36,10 +36,12 @@ ESPRESSO's 2D cell constraints work in Cartesian axes: '2Dxy' and '2Dshape'
 move only the x and y components of a and b and hold c fixed (QE 7.3
 Modules/cell_base.f90:742-749 and :803-808). They keep a slab's shape and
 vacuum only when the vacuum lies along c and a, b lie in the xy plane, the
-frame ``SlabGeometry.xy_frame`` reports. All 15 monolayers of the batch are
-in that frame, while its fcc, bcc and rhombohedral primitive cells have a
-and b out of the xy plane. ``ab_in_xy_plane`` is the one test of that
-plane, so every caller applies the same tolerance.
+frame ``SlabGeometry.xy_frame`` reports. QE's 2D Coulomb truncation assumes
+that frame with c along z as well (PW/src/Coul_cut_2D.f90:72-81). All 15
+monolayers of the batch are in that frame, with c along z, while its fcc, bcc
+and rhombohedral primitive cells have a and b out of the xy plane.
+``ab_in_xy_plane`` and ``c_along_z`` are the one test of each, with one
+tolerance, so every caller applies the same.
 
 Disordered structures and classifier failures are ``Unavailable``, like
 every other ``analysis/`` fact.
@@ -152,7 +154,7 @@ def geometry(structure: Structure) -> FieldState[GeometryFacts]:
             reason=f"dimensionality classification returned an unrecognised "
             f"connectivity rank {dim_value!r}"
         )
-    widths = _vacuum_widths(structure)
+    widths = vacuum_widths(structure)
     axes = _axes_wider_than_the_gap(widths)
     facts = GeometryFacts(
         dimensionality=dimensionality,
@@ -164,10 +166,24 @@ def geometry(structure: Structure) -> FieldState[GeometryFacts]:
     return Resolved(facts, Provenance(source="heuristic"))
 
 
+def vacuum_widths(structure: Structure) -> tuple[float, float, float]:
+    """Widest atom-free slab along each lattice vector, in A rounded to 0.01:
+    the largest gap between consecutive fractional coordinates along that
+    vector, wrapped into the cell, times the spacing 1/|b_i| of the planes
+    parallel to the other two vectors (b_i is the reciprocal vector)."""
+    reciprocal_lengths = structure.lattice.reciprocal_lattice_crystallographic.abc
+    widths = []
+    for axis, reciprocal_length in enumerate(reciprocal_lengths):
+        coordinates = np.sort(np.mod(structure.frac_coords[:, axis], 1.0))
+        gaps = np.diff(coordinates, append=coordinates[0] + 1.0)
+        widths.append(round(float(gaps.max()) / reciprocal_length, 2))
+    return widths[0], widths[1], widths[2]
+
+
 def vacuum_axes(structure: Structure) -> tuple[LatticeAxis, ...]:
     """The lattice vectors of ``structure`` whose widest atom-free slab is
     wider than ``VACUUM_GAP_ANGSTROM``, in a, b, c order."""
-    return _axes_wider_than_the_gap(_vacuum_widths(structure))
+    return _axes_wider_than_the_gap(vacuum_widths(structure))
 
 
 def slab_geometry(structure: Structure) -> SlabGeometry | None:
@@ -184,6 +200,15 @@ def ab_in_xy_plane(lattice: Lattice) -> bool:
     return bool(abs(a[2]) <= limit and abs(b[2]) <= limit)
 
 
+def c_along_z(lattice: Lattice) -> bool:
+    """Whether c lies along the Cartesian z axis: its x and y components are
+    at most ``_XY_PLANE_TOLERANCE`` times |a|, the tolerance of
+    ``ab_in_xy_plane``."""
+    a, _, c = lattice.matrix
+    limit = _XY_PLANE_TOLERANCE * float(np.linalg.norm(a))
+    return bool(abs(c[0]) <= limit and abs(c[1]) <= limit)
+
+
 def _slab(lattice: Lattice, axes: tuple[LatticeAxis, ...]) -> SlabGeometry | None:
     if len(axes) != 1:
         return None
@@ -191,20 +216,6 @@ def _slab(lattice: Lattice, axes: tuple[LatticeAxis, ...]) -> SlabGeometry | Non
     return SlabGeometry(
         vacuum_axis=axis, xy_frame=axis == "c" and ab_in_xy_plane(lattice)
     )
-
-
-def _vacuum_widths(structure: Structure) -> tuple[float, float, float]:
-    """Widest atom-free slab along each lattice vector, in A rounded to 0.01:
-    the largest gap between consecutive fractional coordinates along that
-    vector, wrapped into the cell, times the spacing 1/|b_i| of the planes
-    parallel to the other two vectors (b_i is the reciprocal vector)."""
-    reciprocal_lengths = structure.lattice.reciprocal_lattice_crystallographic.abc
-    widths = []
-    for axis, reciprocal_length in enumerate(reciprocal_lengths):
-        coordinates = np.sort(np.mod(structure.frac_coords[:, axis], 1.0))
-        gaps = np.diff(coordinates, append=coordinates[0] + 1.0)
-        widths.append(round(float(gaps.max()) / reciprocal_length, 2))
-    return widths[0], widths[1], widths[2]
 
 
 def _axes_wider_than_the_gap(

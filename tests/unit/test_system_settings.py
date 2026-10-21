@@ -29,7 +29,7 @@ def _system_settings(structure, pseudo_metadata_factory) -> SystemSettings:
         ),
         vdw=VdwFacts(use_vdw=False, method=None),
         hubbard=HubbardUDecision(),
-        boundary=BoundaryFacts(assume_isolated="none"),
+        boundary=BoundaryFacts(isolation="periodic"),
     )
 
 
@@ -45,7 +45,7 @@ def test_system_settings_bundles_every_epic_5_advisor_output(
     assert settings.magnetic.spin_polarized is False
     assert settings.vdw.use_vdw is False
     assert settings.hubbard.u_values == ()
-    assert settings.boundary.assume_isolated == "none"
+    assert settings.boundary.isolation == "periodic"
 
 
 def test_system_settings_is_frozen(silicon_structure, pseudo_metadata_factory) -> None:

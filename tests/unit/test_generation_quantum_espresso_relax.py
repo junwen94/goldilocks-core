@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from support import carbon_pair_in_a_box, graphene_monolayer
 
 from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.convergence import ConvergenceDecision
@@ -53,7 +54,7 @@ def _system(
         ),
         vdw=VdwFacts(use_vdw=False, method=None),
         hubbard=hubbard or HubbardUDecision(),
-        boundary=boundary or BoundaryFacts(assume_isolated="none"),
+        boundary=boundary or BoundaryFacts(isolation="periodic"),
     )
 
 
@@ -180,14 +181,14 @@ def test_vc_relax_of_a_periodic_cell_writes_tstress(
 
 
 def test_relax_under_martyna_tuckerman_writes_no_tstress(
-    silicon_structure, pseudo_metadata_factory
+    pseudo_metadata_factory,
 ) -> None:
     """The relax writer passes the resolved boundary to the shared
     &CONTROL keywords, like write_qe_scf (#126)."""
     system = _system(
-        silicon_structure,
+        carbon_pair_in_a_box(),
         pseudo_metadata_factory,
-        boundary=BoundaryFacts(assume_isolated="martyna-tuckerman"),
+        boundary=BoundaryFacts(isolation="isolated"),
     )
     step = _step(relax=RelaxOptions())
 
@@ -195,6 +196,25 @@ def test_relax_under_martyna_tuckerman_writes_no_tstress(
 
     assert "assume_isolated  = 'martyna-tuckerman'" in content
     assert "tstress" not in content
+
+
+def test_vc_relax_of_a_slab_boundary_writes_the_2d_truncation_and_tstress(
+    pseudo_metadata_factory,
+) -> None:
+    """#161: under '2D' pw.x computes the in-plane stress a '2Dxy' vc-relax
+    needs."""
+    system = _system(
+        graphene_monolayer(),
+        pseudo_metadata_factory,
+        boundary=BoundaryFacts(isolation="slab"),
+    )
+    step = _step(relax=VcRelaxOptions(cell_dofree="2Dxy"))
+
+    content = write_qe_relax(system, step, _CTX, "vc-relax")[0].files["vc-relax.in"]
+
+    assert "assume_isolated  = '2D'" in content
+    assert "tstress          = .true." in content
+    assert "cell_dofree      = '2Dxy'" in content
 
 
 def test_etot_conv_thr_matches_the_resolved_convergence_decision(

@@ -117,7 +117,7 @@ from goldilocks_core.service import (
     SystemOverrides,
 )
 
-VOCABULARY_VERSION = "1"
+VOCABULARY_VERSION = "2"
 """Bump when the settings/facts vocabulary changes in a way other
 ecosystem repos (ml/agent/data) need to know about -- goldilocks-core
 -design.md S4.2's cross-repo validation antidote."""
@@ -279,14 +279,20 @@ _SETTING_META: dict[str, _SettingExtra] = {
             "implemented)."
         ),
     },
-    "assume_isolated": {
+    "isolation": {
         "description": (
-            "Force the electrostatic boundary-condition treatment: "
-            "'martyna-tuckerman' for a molecule or cluster with vacuum along "
-            "all three lattice vectors (the default there; no stress is "
-            "computed, so it is refused for vc-relax), 'none' for any cell "
-            "periodic along at least one axis, including molecular crystals, "
-            "wires and slabs."
+            "How the electrostatics treat periodic images. 'periodic': no "
+            "truncation, the default for any cell periodic along at least one "
+            "lattice vector, including molecular crystals, slabs and wires "
+            "(pw.x has no 1D truncation). 'slab': Quantum ESPRESSO's 2D Coulomb "
+            "truncation (assume_isolated='2D', Sohier et al. 2017), never the "
+            "default; refused unless the vacuum lies along c only, a and b lie "
+            "in the xy plane, c lies along z, the cell is at least 11.11 Å "
+            "(21 bohr) high and the vacuum is at least 10.58 Å (20 bohr) wider "
+            "than the slab, and a vc-relax needs cell_dofree='2Dxy' or '2Dshape'. "
+            "'isolated': Martyna-Tuckerman (assume_isolated='martyna-tuckerman'), "
+            "the default with vacuum along all three lattice vectors and refused "
+            "otherwise; pw.x computes no stress under it, so vc-relax is refused."
         ),
     },
     "needs_correlation": {

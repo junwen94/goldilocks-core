@@ -172,26 +172,48 @@ unresolved (blocked), not silently set to `use_vdw=False`.
 
 ## Check boundary conditions and vacuum
 
-A molecule or cluster in a periodic cell interacts with its own periodic
-images. Quantum ESPRESSO's Martyna-Tuckerman correction
-(`assume_isolated='martyna-tuckerman'`) removes that interaction by treating
-the system as isolated, which is wrong for anything periodic.
+A molecule, cluster or slab in a periodic cell interacts with its own
+periodic images. The `isolation` setting says how the electrostatics treat
+them: `periodic` (no correction), `slab` (the Coulomb interaction truncated
+along the slab normal) or `isolated` (truncated along all three lattice
+vectors). For Quantum ESPRESSO, `slab` writes `assume_isolated='2D'` and
+`isolated` writes `assume_isolated='martyna-tuckerman'`; `periodic` writes
+neither.
 
 Goldilocks decides from vacuum, not from dimensionality. For each lattice
 vector, the `geometry` record reports the widest atom-free slab parallel to
 the other two vectors, measured between atom centres
 (`vacuum_widths_angstrom`), and lists the vectors with more than 5 Å as
-`vacuum_axes`. Only a cell with vacuum along all three lattice vectors gets
-Martyna-Tuckerman by default. Every other cell gets `assume_isolated='none'`,
-including molecular crystals such as CO2 dry ice (classified `molecule`),
-wires and slabs. A layer that is not parallel to two lattice vectors shows no
-vacuum, so its cell is treated as periodic.
+`vacuum_axes`. Only a cell with vacuum along all three lattice vectors is
+`isolated` by default. Every other cell is `periodic`, including molecular
+crystals such as CO2 dry ice (classified `molecule`), slabs and wires: pw.x has
+no 1D truncation for a wire. A layer that is not parallel to two lattice
+vectors shows no vacuum, so its cell is treated as periodic.
 
-The correction is exact only when the electron density lies within half the
-cell along every axis, which 5 Å of vacuum does not guarantee, so check the
-box size. pw.x computes no stress under Martyna-Tuckerman: the input then
-omits `tstress`, and Goldilocks refuses a `vc-relax`. Use `relax` for an
-isolated system, or set `assume_isolated='none'` for a periodic one.
+Martyna-Tuckerman treats the system as a molecule or cluster in a box, so
+Goldilocks refuses `isolation='isolated'` on a cell without vacuum along all
+three lattice vectors, whoever set it. The correction is exact only when the
+electron density lies within half the cell along every axis, which 5 Å of
+vacuum does not guarantee, so check the box size. pw.x computes no stress under
+Martyna-Tuckerman: the input then omits `tstress`, and Goldilocks refuses a
+`vc-relax`. Use `relax` for an isolated system, or set `isolation='periodic'`
+for a periodic one.
+
+`isolation='slab'` is Quantum ESPRESSO's 2D Coulomb truncation (Sohier,
+Calandra and Mauri, Phys. Rev. B 96, 075448 (2017)), which computes energies,
+forces and stresses in a two-dimensional framework. It matters for charged,
+doped or polar slabs; for a neutral, symmetric monolayer with about 20 Å of
+vacuum the periodic default is accurate, and Goldilocks never picks `slab` by
+itself. Set it explicitly. Goldilocks refuses it unless the cell to be written
+meets pw.x's preconditions: vacuum along c only, a and b in the Cartesian xy
+plane, c along z (the only orientation in which pw.x's truncation formula is
+exact), a cell at least 21 bohr (11.11 Å) high (pw.x stops when half the height
+is below the pseudopotentials' 10 bohr radial cutoff), and vacuum at least 20
+bohr (10.58 Å) wider than the slab. The last condition is Quantum ESPRESSO's
+safe estimate of a cell more than twice as high as the slab including its
+electrons; a monolayer with about 20 Å of vacuum meets it. Under
+`slab` only the in-plane stress is meaningful, so a `vc-relax` must use
+`cell_dofree='2Dxy'` (the default for such a slab) or `'2Dshape'`.
 
 ## Check Hubbard +U
 

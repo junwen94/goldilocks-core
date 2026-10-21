@@ -77,13 +77,13 @@ def test_a_cell_periodic_along_any_axis_is_not_treated_as_isolated(
     state = boundary(geometry(build()))
 
     assert state.ok
-    assert state.value.assume_isolated == "none"
+    assert state.value.isolation == "periodic"
 
 
-def test_a_molecule_in_a_box_gets_martyna_tuckerman() -> None:
+def test_a_molecule_in_a_box_is_isolated() -> None:
     state = boundary(geometry(carbon_pair_in_a_box()))
 
-    assert state.value.assume_isolated == "martyna-tuckerman"
+    assert state.value.isolation == "isolated"
 
 
 @pytest.mark.parametrize(
