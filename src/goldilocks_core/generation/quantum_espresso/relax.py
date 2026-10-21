@@ -143,7 +143,7 @@ def write_qe_relax(
     species_index = {label: index + 1 for index, label in enumerate(species_labels)}
 
     keywords: dict[str, object] = {}
-    keywords.update(control_keywords(ctx, step, purpose))
+    keywords.update(control_keywords(ctx, system.boundary, step, purpose))
     keywords.update(
         system_keywords(structure, system, step, len(species_labels), species_index)
     )

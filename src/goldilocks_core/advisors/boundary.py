@@ -14,15 +14,25 @@ overstatement even before this epic; what was genuinely dangling is
 specifically the boundary-condition settings this file now owns.
 
 Scope decision: `assume_isolated` only, not the full boundary-condition
-picture. A 2D slab's periodic-image problem is normally solved with a dipole
+picture. The heuristic sets 'martyna-tuckerman' only when
+`GeometryFacts.vacuum_axes` holds all three lattice vectors: QE documents it
+for "a molecule or a cluster in a 3D supercell" (QE 7.3
+PW/Doc/INPUT_PW.def:1593-1594), and pw.x has no 1D truncation. Every other
+cell gets 'none', whatever its bond rank: CO2 dry ice ranks 'molecule' but
+fills its cell, and Martyna-Tuckerman would replace its periodic Hartree,
+local-potential and Ewald terms with those of an isolated cluster (#126).
+The method is exact only when the density fits in half the cell along every
+axis (Martyna and Tuckerman, J. Chem. Phys. 110, 2810 (1999)), which a gap
+wider than `analysis.geometry.VACUUM_GAP_ANGSTROM` does not guarantee.
+pw.x computes no stress under it (QE 7.3 PW/src/input.f90:1361-1365), so
+generation omits `tstress` and `checks.check_all` refuses a vc-relax.
+
+A 2D slab's periodic-image problem is normally solved with a dipole
 correction (`tefield`/`dipfield`/`edir`/...) rather than `assume_isolated`,
-and that correction needs to know which direction is the vacuum gap and
-whether the slab is symmetric -- information this heuristic-tier fact does
-not have. That is pitfall A9, explicitly deferred (see issue #5's "Deferred
-from #2" list) rather than guessed at here. `assume_isolated` is set only for
-0D (molecule) and 1D (wire) cases, where QE's Martyna-Tuckerman method
-(a real-space Coulomb cutoff, not specific to any one reduced dimension)
-applies directly; 2D gets a warning instead of a guess.
+and that correction needs to know whether the slab is symmetric --
+information this heuristic-tier fact does not have. That is pitfall A9,
+explicitly deferred (see issue #5's "Deferred from #2" list) rather than
+guessed at here: a '2d' rank gets a warning instead of a guess.
 """
 
 from __future__ import annotations
@@ -108,25 +118,24 @@ def boundary(
 
 
 def _heuristic(facts: GeometryFacts) -> FieldState[BoundaryFacts]:
-    if not facts.low_dimensional:
-        return Resolved(BoundaryFacts("none"), Provenance(source="heuristic"))
-
-    if facts.dimensionality in ("molecule", "1d"):
+    if len(facts.vacuum_axes) == 3:
         return Resolved(
             BoundaryFacts("martyna-tuckerman"),
             Provenance(
                 source="heuristic",
                 source_note=(
-                    f"{facts.dimensionality} structure in a periodic cell needs a "
-                    "real-space Coulomb cutoff to avoid spurious interaction "
-                    "with its own periodic images (pitfall A8)."
+                    "vacuum along all three lattice vectors: an isolated system "
+                    "needs a Coulomb cutoff to avoid spurious interaction with "
+                    "its own periodic images (pitfall A8)."
                 ),
             ),
         )
 
-    # 2D slabs: image interaction is normally handled by a dipole correction,
-    # not assume_isolated -- deferred (pitfall A9), not guessed at here.
-    return Resolved(
-        BoundaryFacts("none", warnings=(DIPOLE_CORRECTION_SUGGESTED,)),
-        Provenance(source="heuristic"),
-    )
+    if facts.dimensionality == "2d":
+        # Image interaction of a slab is normally handled by a dipole
+        # correction -- deferred (pitfall A9), not guessed at here.
+        return Resolved(
+            BoundaryFacts("none", warnings=(DIPOLE_CORRECTION_SUGGESTED,)),
+            Provenance(source="heuristic"),
+        )
+    return Resolved(BoundaryFacts("none"), Provenance(source="heuristic"))

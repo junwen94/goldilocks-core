@@ -101,6 +101,7 @@ from typing import Literal
 from pymatgen.core import Structure
 from pymatgen.core.periodic_table import Element
 
+from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.namelists import render_namelist
 from goldilocks_core.step_settings import PwSettings
@@ -263,7 +264,7 @@ def write_qe_scf(
     species_index = {label: index + 1 for index, label in enumerate(species_labels)}
 
     keywords: dict[str, object] = {}
-    keywords.update(control_keywords(ctx, step, purpose))
+    keywords.update(control_keywords(ctx, system.boundary, step, purpose))
     keywords.update(
         system_keywords(structure, system, step, len(species_labels), species_index)
     )
@@ -335,18 +336,24 @@ def validated_pseudo_by_element(
 
 def control_keywords(
     ctx: SharedContext,
+    boundary: BoundaryFacts,
     step: PwSettings,
     purpose: Literal["scf", "nscf", "relax", "vc-relax"],
 ) -> dict[str, object]:
+    """``&CONTROL`` keywords. ``tstress`` is written only when ``boundary``
+    is not Martyna-Tuckerman: pw.x computes no stress for an isolated
+    system and clears the flag (QE 7.3 PW/src/input.f90:1361-1365), even
+    for vc-relax, where input.f90:646 switches it on."""
     keywords: dict[str, object] = {
         "calculation": purpose,
         "prefix": ctx.prefix,
         "outdir": ctx.outdir,
         "pseudo_dir": ctx.pseudo_dir,
         "tprnfor": True,
-        "tstress": True,
         "max_seconds": step.max_seconds,
     }
+    if boundary.assume_isolated != "martyna-tuckerman":
+        keywords["tstress"] = True
     if step.relax is not None:
         # forc_conv_thr/etot_conv_thr/nstep are real &CONTROL keys, not
         # &IONS ones (INPUT_PW.txt, ASE's own ALL_KEYS['pw']['control']

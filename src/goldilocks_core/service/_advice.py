@@ -55,9 +55,9 @@ class Advice:
 
     def field_states(self) -> tuple[FieldState[object], ...]:
         """Every ``FieldState`` except ``occupations``/``magnetic``/
-        ``electron_count``/``nbnd``, which ``checks.check_all`` folds in
-        itself -- see its own docstring on why a caller must not repeat
-        them here."""
+        ``electron_count``/``nbnd``/``boundary``, which ``checks.check_all``
+        folds in itself -- see its own docstring on why a caller must not
+        repeat them here."""
         return (
             self.analysis.field_states()
             + self.system.field_states()

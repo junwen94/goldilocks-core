@@ -33,13 +33,15 @@ import tarfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pymatgen.core import Structure
+from pymatgen.core import Lattice, Structure
 
+from goldilocks_core.analysis.geometry import GeometryFacts
 from goldilocks_core.assets.records import AssetFile, AssetSpec
 from goldilocks_core.assets.runtime import statuses
 from goldilocks_core.assets.store import AssetStore, asset_root
 
 if TYPE_CHECKING:
+    from goldilocks_core.analysis.geometry import Dimensionality, LatticeAxis
     from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 
 REAL_ASSET_ROOT = asset_root()
@@ -249,3 +251,77 @@ def carbon_pair_in_a_box() -> Structure:
     in a 10.56 x 10.56 x 17.18 A hexagonal cell, so no atom has a neighbour
     within 10 A."""
     return Structure.from_str(_MC3D_6516_CARBON_PAIR_CIF, fmt="cif")
+
+
+def sodium_chloride() -> Structure:
+    """Rock salt, Fm-3m, a = 5.64 A: Na-Cl 2.82 A."""
+    return Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(5.64), ["Na", "Cl"], [[0, 0, 0], [0.5, 0.5, 0.5]]
+    )
+
+
+def carbon_dioxide() -> Structure:
+    """Dry ice, Pa-3, a = 5.62 A: C=O 1.15 A inside each molecule, 3.1 A
+    between molecules."""
+    return Structure.from_spacegroup(
+        "Pa-3",
+        Lattice.cubic(5.62),
+        ["C", "O"],
+        [[0, 0, 0], [0.1185, 0.1185, 0.1185]],
+    )
+
+
+_MC3D_4573_WATER_ICE_CIF = """\
+data_0
+
+loop_
+  _atom_site_label
+  _atom_site_fract_x
+  _atom_site_fract_y
+  _atom_site_fract_z
+  _atom_site_type_symbol
+         H1  0.16030715231323672  0.8396928476867637  0.24999999999239195  H
+         H2  0.8396928476867634  0.16030715231323656  0.7499999999923843  H
+         H3  0.005979649911938667  0.00597964991193467  9.715845373787842e-35  H
+         H4  0.9940203500646564  0.9940203500646564  0.5000000000000077  H
+         H5  0.9674206607569137  0.42584589732319206  0.9837891779390359  H
+         H6  0.5741541026767801  0.03257933924305845  0.5162108220609611  H
+         H7  0.032579339228914254  0.5741541026909709  0.4837891779390389  H
+         H8  0.4258458973090057  0.9674206607710624  0.01621082206096412  H
+         O1  0.1612316690525443  0.8410138827825016  0.06589485616831037  O
+         O2  0.1589861172174753  0.8387683309474325  0.43410514383168813  O
+         O3  0.8387683309332875  0.158986117231637  0.5658948561683119  O
+         O4  0.8410138827683481  0.16123166906669772  0.9341051438316957  O
+_cell_angle_alpha                       90.0
+_cell_angle_beta                        90.0
+_cell_angle_gamma                       117.95814914432724
+_cell_length_a                          4.126434642797939
+_cell_length_b                          4.126434642797939
+_cell_length_c                          6.5883867784937
+loop_
+  _symmetry_equiv_pos_as_xyz
+         'x, y, z'
+_symmetry_int_tables_number             1
+_symmetry_space_group_name_H-M          'P 1'
+"""
+
+
+def water_ice() -> Structure:
+    """H2O ice, MC3D mc3d-4573: 4 hydrogen-bonded molecules in a 12-atom
+    cell (shortest O-O 2.43 A), so no atom-free slab is wider than 1.21 A."""
+    return Structure.from_str(_MC3D_4573_WATER_ICE_CIF, fmt="cif")
+
+
+def geometry_facts(
+    dimensionality: Dimensionality, vacuum_axes: tuple[LatticeAxis, ...] = ()
+) -> GeometryFacts:
+    """``GeometryFacts`` for advisor and check tests: 20 A of vacuum along
+    each axis in ``vacuum_axes`` and a 2 A gap along the others."""
+    return GeometryFacts(
+        dimensionality=dimensionality,
+        low_dimensional=dimensionality != "3d",
+        vacuum_axes=vacuum_axes,
+        vacuum_widths_angstrom=tuple(
+            20.0 if axis in vacuum_axes else 2.0 for axis in ("a", "b", "c")
+        ),
+    )

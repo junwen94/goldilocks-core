@@ -8,7 +8,7 @@ Use this only after Goldilocks has already selected the scientific values. The g
   prefix = '<prefix>'
   pseudo_dir = './pseudo'
   outdir = './out'
-  tstress = .true.
+  tstress = .true.                    ! omit when assume_isolated='martyna-tuckerman'
   tprnfor = .true.
 /
 
@@ -24,6 +24,7 @@ Use this only after Goldilocks has already selected the scientific values. The g
   nspin = 2                           ! only for collinear spin-polarized non-SOC
   noncolin = .true.                   ! only when SOC/noncollinear is enabled
   lspinorb = .true.                   ! only when SOC is enabled
+  assume_isolated = 'martyna-tuckerman'  ! only with vacuum along all three lattice vectors
 /
 
 &ELECTRONS

@@ -14,16 +14,14 @@ from collections.abc import Callable
 
 import pytest
 from pymatgen.core import Lattice, Structure
-from support import carbon_pair_in_a_box, phosphorene
+from support import (
+    carbon_dioxide,
+    carbon_pair_in_a_box,
+    phosphorene,
+    sodium_chloride,
+)
 
 from goldilocks_core.analysis.geometry import geometry
-
-
-def sodium_chloride() -> Structure:
-    """Rock salt, Fm-3m, a = 5.64 A: Na-Cl 2.82 A."""
-    return Structure.from_spacegroup(
-        "Fm-3m", Lattice.cubic(5.64), ["Na", "Cl"], [[0, 0, 0], [0.5, 0.5, 0.5]]
-    )
 
 
 def caesium_chloride() -> Structure:
@@ -110,17 +108,6 @@ def bismuth_selenide() -> Structure:
         Lattice.hexagonal(4.14, 28.64),
         ["Bi", "Se", "Se"],
         [[0, 0, 0.4008], [0, 0, 0], [0, 0, 0.2117]],
-    )
-
-
-def carbon_dioxide() -> Structure:
-    """Dry ice, Pa-3, a = 5.62 A: C=O 1.15 A inside each molecule, 3.1 A
-    between molecules."""
-    return Structure.from_spacegroup(
-        "Pa-3",
-        Lattice.cubic(5.62),
-        ["C", "O"],
-        [[0, 0, 0], [0.1185, 0.1185, 0.1185]],
     )
 
 

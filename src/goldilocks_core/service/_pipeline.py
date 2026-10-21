@@ -142,7 +142,10 @@ def check(
     by ``_fix_bottom_layers_requires_2d_geometry`` regardless of
     ``purpose`` (a non-relax caller never sets
     ``relax.fix_bottom_layers`` in the first place, so the rule is a
-    no-op for them).
+    no-op for them). ``boundary`` (#126): read off ``advice`` too, so a
+    vc-relax under Martyna-Tuckerman is refused; ``check_all`` also folds
+    a ``Blocked`` boundary in, which is why ``SystemAdvice.field_states()``
+    leaves it out.
     """
     return check_all(
         *advice.field_states(),
@@ -151,6 +154,7 @@ def check(
         electron_count=advice.system.electron_count,
         relax=relax,
         geometry=advice.analysis.geometry,
+        boundary=advice.system.boundary,
         job=advice.step.resources.job,
         parallel=advice.step.resources.parallelisation,
         nbnd=advice.step.kpoints.nbnd,

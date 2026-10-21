@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from support import geometry_facts
+
 from goldilocks_core.advisors.convergence import convergence
 from goldilocks_core.advisors.relax import (
     RelaxHumanInput,
@@ -8,7 +10,6 @@ from goldilocks_core.advisors.relax import (
     VcRelaxOptions,
     relax_settings,
 )
-from goldilocks_core.analysis.geometry import GeometryFacts
 from goldilocks_core.analysis.symmetry import SymmetryFacts
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
@@ -27,12 +28,7 @@ def _symmetry(crystal_system: str):
 
 
 def _geometry(dimensionality: str):
-    return Resolved(
-        GeometryFacts(
-            dimensionality=dimensionality, low_dimensional=dimensionality != "3d"
-        ),
-        Provenance(source="heuristic"),
-    )
+    return Resolved(geometry_facts(dimensionality), Provenance(source="heuristic"))
 
 
 def test_plain_relax_uses_qe_defaults() -> None:

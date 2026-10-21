@@ -517,9 +517,23 @@ def test_vdw_method_translates_to_qe_keyword(
     assert "dftd3_version    = 4" in content
 
 
-def test_boundary_assume_isolated_emitted_when_not_none(
+def test_periodic_boundary_writes_tstress_and_no_assume_isolated(
     silicon_structure, pseudo_metadata_factory
 ) -> None:
+    system = _system(silicon_structure, pseudo_metadata_factory)
+
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+
+    assert "tstress          = .true." in content
+    assert "assume_isolated" not in content
+
+
+def test_martyna_tuckerman_boundary_writes_assume_isolated_and_no_tstress(
+    silicon_structure, pseudo_metadata_factory
+) -> None:
+    """#126: pw.x computes no stress for an isolated system and clears a
+    requested tstress (QE 7.3 PW/src/input.f90:1361-1365), so the input
+    does not ask for one."""
     system = _system(
         silicon_structure,
         pseudo_metadata_factory,
@@ -529,6 +543,8 @@ def test_boundary_assume_isolated_emitted_when_not_none(
     content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
 
     assert "assume_isolated  = 'martyna-tuckerman'" in content
+    assert "tstress" not in content
+    assert "tprnfor          = .true." in content
 
 
 def test_smearing_occupations_emit_smearing_type_and_degauss(

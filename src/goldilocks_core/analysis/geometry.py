@@ -1,4 +1,5 @@
-"""geometry: dimensionality (3d/2d/1d/molecule) from a bond graph.
+"""geometry: dimensionality (3d/2d/1d/molecule) from a bond graph, and the
+lattice vectors along which a cell has vacuum.
 
 The dimensionality is Larsen's connectivity rank
 (``pymatgen.analysis.dimensionality.get_dimensionality_larsen``) of
@@ -19,6 +20,17 @@ either, so the union can only keep or raise the rank JmolNN alone gives.
 Molecular crystals and van der Waals layers keep their rank because each
 atom's nearest shell lies inside its own molecule or layer.
 
+The rank cannot tell a molecular crystal from a molecule in a box: CO2 dry
+ice ranks 'molecule' but fills its cell (#126). The vacuum fact does not
+depend on bonds. Along each lattice vector it is the width of the widest
+atom-free slab bounded by planes parallel to the other two vectors, measured
+between atom centres. A lattice vector whose width exceeds
+``VACUUM_GAP_ANGSTROM`` is a vacuum axis. In the 84 structures of the
+2026-10-19 batch, no bulk crystal exceeds 3.60 A (graphite, along c), every
+monolayer has at least 15.05 A along c, and the isolated C pair of MC3D
+mc3d-6516 has 6.10, 6.10 and 8.59 A. A layer that is not parallel to two
+lattice vectors shows no vacuum, so its cell is treated as periodic.
+
 Disordered structures and classifier failures are ``Unavailable``, like
 every other ``analysis/`` fact.
 """
@@ -28,6 +40,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+import numpy as np
 from pymatgen.analysis.dimensionality import get_dimensionality_larsen
 from pymatgen.analysis.local_env import JmolNN
 from pymatgen.core import Structure
@@ -36,6 +49,9 @@ from pymatgen.core.graphs import StructureGraph
 from goldilocks_core.resolution import FieldState, Provenance, Resolved, Unavailable
 
 Dimensionality = Literal["3d", "2d", "1d", "molecule"]
+LatticeAxis = Literal["a", "b", "c"]
+
+_LATTICE_AXES: tuple[LatticeAxis, LatticeAxis, LatticeAxis] = ("a", "b", "c")
 
 _BY_VALUE: dict[int, Dimensionality] = {3: "3d", 2: "2d", 1: "1d", 0: "molecule"}
 
@@ -50,11 +66,22 @@ whole shell of the sparsest elemental solid (bcc Cs: shortest contact
 unbonded; ``MinimumDistanceNN``'s 10 A default would bond a lone atom in a
 7-9.5 A box to its own periodic images."""
 
+VACUUM_GAP_ANGSTROM = 5.0
+"""Atom-free slab width above which a lattice vector is a vacuum axis:
+between the widest gap in a bulk crystal of the batch (3.60 A) and the
+narrowest vacuum of the isolated C pair (6.10 A)."""
+
 
 @dataclass(frozen=True, slots=True)
 class GeometryFacts:
+    """``vacuum_widths_angstrom`` holds the widest atom-free slab along a, b
+    and c, in A rounded to 0.01; ``vacuum_axes`` names those wider than
+    ``VACUUM_GAP_ANGSTROM``, in a, b, c order."""
+
     dimensionality: Dimensionality
     low_dimensional: bool
+    vacuum_axes: tuple[LatticeAxis, ...]
+    vacuum_widths_angstrom: tuple[float, float, float]
 
 
 def bond_graph(structure: Structure) -> StructureGraph:
@@ -97,7 +124,41 @@ def geometry(structure: Structure) -> FieldState[GeometryFacts]:
             reason=f"dimensionality classification returned an unrecognised "
             f"connectivity rank {dim_value!r}"
         )
+    widths = _vacuum_widths(structure)
     facts = GeometryFacts(
-        dimensionality=dimensionality, low_dimensional=bool(dim_value < 3)
+        dimensionality=dimensionality,
+        low_dimensional=bool(dim_value < 3),
+        vacuum_axes=_axes_wider_than_the_gap(widths),
+        vacuum_widths_angstrom=widths,
     )
     return Resolved(facts, Provenance(source="heuristic"))
+
+
+def vacuum_axes(structure: Structure) -> tuple[LatticeAxis, ...]:
+    """The lattice vectors of ``structure`` whose widest atom-free slab is
+    wider than ``VACUUM_GAP_ANGSTROM``, in a, b, c order."""
+    return _axes_wider_than_the_gap(_vacuum_widths(structure))
+
+
+def _vacuum_widths(structure: Structure) -> tuple[float, float, float]:
+    """Widest atom-free slab along each lattice vector, in A rounded to 0.01:
+    the largest gap between consecutive fractional coordinates along that
+    vector, wrapped into the cell, times the spacing 1/|b_i| of the planes
+    parallel to the other two vectors (b_i is the reciprocal vector)."""
+    reciprocal_lengths = structure.lattice.reciprocal_lattice_crystallographic.abc
+    widths = []
+    for axis, reciprocal_length in enumerate(reciprocal_lengths):
+        coordinates = np.sort(np.mod(structure.frac_coords[:, axis], 1.0))
+        gaps = np.diff(coordinates, append=coordinates[0] + 1.0)
+        widths.append(round(float(gaps.max()) / reciprocal_length, 2))
+    return widths[0], widths[1], widths[2]
+
+
+def _axes_wider_than_the_gap(
+    widths: tuple[float, float, float],
+) -> tuple[LatticeAxis, ...]:
+    return tuple(
+        axis
+        for axis, width in zip(_LATTICE_AXES, widths, strict=True)
+        if width > VACUUM_GAP_ANGSTROM
+    )

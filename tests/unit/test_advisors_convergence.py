@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from support import geometry_facts
 
 from goldilocks_core.advisors.convergence import (
     ConvergenceHumanInput,
@@ -8,7 +9,6 @@ from goldilocks_core.advisors.convergence import (
     convergence,
 )
 from goldilocks_core.advisors.hubbard_u import HubbardU, HubbardUDecision
-from goldilocks_core.analysis.geometry import GeometryFacts
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
 _FROZEN_NS = "convergence.mixing_fixed_ns_freezes_hubbard_occupations"
@@ -39,7 +39,7 @@ def test_defaults_match_v1s_flat_constants() -> None:
 
 def test_2d_geometry_switches_mixing_mode_to_local_tf() -> None:
     geometry = Resolved(
-        GeometryFacts(dimensionality="2d", low_dimensional=True),
+        geometry_facts("2d"),
         Provenance(source="heuristic"),
     )
 
@@ -50,7 +50,7 @@ def test_2d_geometry_switches_mixing_mode_to_local_tf() -> None:
 
 def test_molecule_geometry_also_switches_mixing_mode() -> None:
     geometry = Resolved(
-        GeometryFacts(dimensionality="molecule", low_dimensional=True),
+        geometry_facts("molecule"),
         Provenance(source="heuristic"),
     )
 
@@ -62,7 +62,7 @@ def test_molecule_geometry_also_switches_mixing_mode() -> None:
 def test_1d_geometry_does_not_switch_mixing_mode() -> None:
     """F26 names only 2d/molecule; 1d is deliberately not extended to."""
     geometry = Resolved(
-        GeometryFacts(dimensionality="1d", low_dimensional=True),
+        geometry_facts("1d"),
         Provenance(source="heuristic"),
     )
 

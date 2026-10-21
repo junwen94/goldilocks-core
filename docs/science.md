@@ -163,6 +163,29 @@ dimensionality couldn't be determined (with a reason) rather than raising an
 error or silently guessing -- and the vdW decision itself then becomes
 unresolved (blocked), not silently set to `use_vdw=False`.
 
+## Check boundary conditions and vacuum
+
+A molecule or cluster in a periodic cell interacts with its own periodic
+images. Quantum ESPRESSO's Martyna-Tuckerman correction
+(`assume_isolated='martyna-tuckerman'`) removes that interaction by treating
+the system as isolated, which is wrong for anything periodic.
+
+Goldilocks decides from vacuum, not from dimensionality. For each lattice
+vector, the `geometry` record reports the widest atom-free slab parallel to
+the other two vectors, measured between atom centres
+(`vacuum_widths_angstrom`), and lists the vectors with more than 5 Å as
+`vacuum_axes`. Only a cell with vacuum along all three lattice vectors gets
+Martyna-Tuckerman by default. Every other cell gets `assume_isolated='none'`,
+including molecular crystals such as CO2 dry ice (classified `molecule`),
+wires and slabs. A layer that is not parallel to two lattice vectors shows no
+vacuum, so its cell is treated as periodic.
+
+The correction is exact only when the electron density lies within half the
+cell along every axis, which 5 Å of vacuum does not guarantee, so check the
+box size. pw.x computes no stress under Martyna-Tuckerman: the input then
+omits `tstress`, and Goldilocks refuses a `vc-relax`. Use `relax` for an
+isolated system, or set `assume_isolated='none'` for a periodic one.
+
 ## Check Hubbard +U
 
 A Hubbard +U correction counters the self-interaction error that semilocal

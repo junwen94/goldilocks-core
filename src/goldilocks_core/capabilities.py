@@ -278,9 +278,12 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "assume_isolated": {
         "description": (
-            "Force the electrostatic boundary-condition treatment for a "
-            "periodic cell (e.g. 'martyna-tuckerman' for an isolated "
-            "molecule/wire); 'none' for the normal fully-periodic case."
+            "Force the electrostatic boundary-condition treatment: "
+            "'martyna-tuckerman' for a molecule or cluster with vacuum along "
+            "all three lattice vectors (the default there; no stress is "
+            "computed, so it is refused for vc-relax), 'none' for any cell "
+            "periodic along at least one axis, including molecular crystals, "
+            "wires and slabs."
         ),
     },
     "needs_correlation": {

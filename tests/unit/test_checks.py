@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import pytest
 from pymatgen.core import Lattice, Structure
+from support import geometry_facts
 
+from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
@@ -10,7 +12,6 @@ from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.parallelisation import ParallelisationDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
-from goldilocks_core.analysis.geometry import GeometryFacts
 from goldilocks_core.checks import check_all, collect_blocked
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
@@ -285,13 +286,53 @@ def test_relax_blocked_field_state_surfaces_via_the_generic_scan() -> None:
     assert report.blocking == ("convergence undecided",)
 
 
-def _geometry(dimensionality: str):
-    return Resolved(
-        GeometryFacts(
-            dimensionality=dimensionality, low_dimensional=dimensionality != "3d"
-        ),
-        Provenance(source="heuristic"),
+def _boundary(assume_isolated: str, source: str = "heuristic"):
+    return Resolved(BoundaryFacts(assume_isolated), Provenance(source=source))
+
+
+def test_vc_relax_with_martyna_tuckerman_blocks() -> None:
+    """#126: pw.x clears tstress for an isolated system (QE 7.3
+    PW/src/input.f90:1361-1365), so BFGS sees a zero cell gradient and
+    reports the input cell as converged."""
+    report = check_all(boundary=_boundary("martyna-tuckerman"), purpose="vc-relax")
+
+    assert not report.ok
+    assert len(report.blocking) == 1
+    assert "assume_isolated='martyna-tuckerman'" in report.blocking[0]
+    assert "task='relax'" in report.blocking[0]
+    assert "assume_isolated='none'" in report.blocking[0]
+
+
+def test_a_human_martyna_tuckerman_override_on_vc_relax_blocks_too() -> None:
+    report = check_all(
+        boundary=_boundary("martyna-tuckerman", source="human"), purpose="vc-relax"
     )
+
+    assert not report.ok
+    assert "task='relax'" in report.blocking[0]
+
+
+def test_martyna_tuckerman_without_a_cell_relaxation_passes() -> None:
+    for purpose in ("scf", "nscf", "relax"):
+        report = check_all(boundary=_boundary("martyna-tuckerman"), purpose=purpose)
+
+        assert report.ok, purpose
+
+
+def test_vc_relax_with_a_periodic_boundary_passes() -> None:
+    report = check_all(boundary=_boundary("none"), purpose="vc-relax")
+
+    assert report.ok
+
+
+def test_blocked_boundary_surfaces_once_via_the_generic_scan() -> None:
+    report = check_all(boundary=Blocked(by="geometry undecided"), purpose="vc-relax")
+
+    assert report.blocking == ("geometry undecided",)
+
+
+def _geometry(dimensionality: str):
+    return Resolved(geometry_facts(dimensionality), Provenance(source="heuristic"))
 
 
 def _relax_with_fix_bottom_layers(count: int | None):

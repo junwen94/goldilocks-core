@@ -77,6 +77,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
@@ -133,6 +134,7 @@ def check_all(
     electron_count: FieldState[ElectronCountDecision] | None = None,
     relax: FieldState[RelaxOptions | VcRelaxOptions] | None = None,
     geometry: FieldState[GeometryFacts] | None = None,
+    boundary: FieldState[BoundaryFacts] | None = None,
     job: FieldState[JobDecision] | None = None,
     parallel: FieldState[ParallelisationDecision] | None = None,
     nbnd: FieldState[NbndDecision] | None = None,
@@ -143,11 +145,14 @@ def check_all(
     ``field_states`` is every ``FieldState`` a caller has assembled so
     far (from any advisor) -- any that are ``Blocked`` land in
     ``report.blocking`` via ``collect_blocked``. ``occupations``/
-    ``magnetic``/``electron_count``/``relax``/``geometry``/``job``/
-    ``parallel``/``nbnd``/``purpose`` additionally opt into the named
+    ``magnetic``/``electron_count``/``relax``/``geometry``/``boundary``/
+    ``job``/``parallel``/``nbnd``/``purpose`` additionally opt into the named
     cross-parameter rules this module implements; passing them here
     also folds them into the generic ``Blocked`` scan, so a caller does
     not need to repeat them in ``field_states`` as well.
+
+    Each rule returns its blocking reason or ``None``; a new rule is one
+    more entry in ``rule_reasons``.
     """
     optional = tuple(
         s
@@ -157,43 +162,32 @@ def check_all(
             electron_count,
             relax,
             geometry,
+            boundary,
             job,
             parallel,
             nbnd,
         )
         if s is not None
     )
-    blocking = list(collect_blocked(*field_states, *optional))
-
-    reason = _fixed_occupations_needs_integer_moment(
-        occupations, magnetic, electron_count, purpose
+    rule_reasons = (
+        _fixed_occupations_needs_integer_moment(
+            occupations, magnetic, electron_count, purpose
+        ),
+        _fixed_occupations_needs_even_electron_count(
+            occupations, magnetic, electron_count, purpose
+        ),
+        _vc_relax_requires_bfgs_ion_dynamics(relax, purpose),
+        _vc_relax_forbids_isolated_boundary(boundary, purpose),
+        _fix_bottom_layers_requires_2d_geometry(relax, geometry),
+        _npool_must_divide_ntasks(job, parallel),
+        _ndiag_grid_must_distribute_bands(job, parallel, nbnd),
     )
-    if reason is not None:
-        blocking.append(reason)
-
-    reason = _fixed_occupations_needs_even_electron_count(
-        occupations, magnetic, electron_count, purpose
+    return CheckReport(
+        blocking=(
+            *collect_blocked(*field_states, *optional),
+            *(reason for reason in rule_reasons if reason is not None),
+        )
     )
-    if reason is not None:
-        blocking.append(reason)
-
-    reason = _vc_relax_requires_bfgs_ion_dynamics(relax, purpose)
-    if reason is not None:
-        blocking.append(reason)
-
-    reason = _fix_bottom_layers_requires_2d_geometry(relax, geometry)
-    if reason is not None:
-        blocking.append(reason)
-
-    reason = _npool_must_divide_ntasks(job, parallel)
-    if reason is not None:
-        blocking.append(reason)
-
-    reason = _ndiag_grid_must_distribute_bands(job, parallel, nbnd)
-    if reason is not None:
-        blocking.append(reason)
-
-    return CheckReport(blocking=tuple(blocking))
 
 
 def _fixed_occupations_needs_integer_moment(
@@ -337,6 +331,25 @@ def _vc_relax_requires_bfgs_ion_dynamics(
             "epic's scope."
         )
     return None
+
+
+def _vc_relax_forbids_isolated_boundary(
+    boundary: FieldState[BoundaryFacts] | None, purpose: str
+) -> str | None:
+    """Under Martyna-Tuckerman, from any source, pw.x clears ``tstress``
+    (QE 7.3 PW/src/input.f90:1361-1365) even though vc-relax had switched
+    it on (input.f90:646): BFGS then sees a zero cell gradient and reports
+    the input cell as converged, exiting 0 (#126)."""
+    if purpose != "vc-relax" or boundary is None or not boundary.ok:
+        return None
+    if boundary.value.assume_isolated != "martyna-tuckerman":
+        return None
+    return (
+        "vc-relax cannot relax the cell with assume_isolated='martyna-tuckerman': "
+        "pw.x computes no stress for an isolated system, so the input cell "
+        "would be reported as converged. Use task='relax' for a molecule or "
+        "cluster in a box, or set assume_isolated='none' for a periodic structure."
+    )
 
 
 def _fix_bottom_layers_requires_2d_geometry(
