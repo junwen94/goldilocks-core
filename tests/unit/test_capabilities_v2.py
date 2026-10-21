@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import typing
+from importlib.machinery import ModuleSpec
 from importlib.metadata import version as package_version
+from types import SimpleNamespace
 
+from goldilocks_core.advisors import magnetic_ordering_ml
 from goldilocks_core.capabilities import (
     SOURCES,
     VOCABULARY_VERSION,
@@ -13,12 +16,23 @@ from goldilocks_core.capabilities import (
     _unwrap_optional,
     capabilities,
 )
+from goldilocks_core.ml import predict as predict_module
 from goldilocks_core.service import (
     KpointsOverrides,
     RelaxOverrides,
     ResourceOverrides,
     SystemOverrides,
 )
+
+
+def _install_every_model(monkeypatch, root) -> None:
+    """Every registered model asset resolves to ``root``, as if installed
+    and verified, without installing anything (CI installs no assets)."""
+    monkeypatch.setattr(
+        predict_module,
+        "AssetStore",
+        lambda: SimpleNamespace(resolve_spec=lambda spec: SimpleNamespace(root=root)),
+    )
 
 
 def _expected_setting_field_count() -> int:
@@ -256,6 +270,35 @@ class TestFacts:
         facts = {f["key"]: f for f in capabilities()["facts"]}
 
         assert facts["is_metal"]["approaches"] == ["human", "ml", "heuristic"]
+
+    def test_is_magnetic_approaches_omit_ml_without_the_mmace_backbone(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """#130: ``approaches`` lists ``ml`` only when ml.predict would run
+        the model. is_magnetic's installed asset alone is not enough: without
+        its mMACE backbone, every prediction falls back to the heuristic."""
+        _install_every_model(monkeypatch, tmp_path)
+        monkeypatch.delenv("GOLDILOCKS_MACE_BACKBONE", raising=False)
+
+        facts = {f["key"]: f for f in capabilities()["facts"]}
+
+        assert facts["is_metal"]["approaches"] == ["human", "ml", "heuristic"]
+        assert facts["is_magnetic"]["approaches"] == ["human", "heuristic"]
+
+    def test_is_magnetic_approaches_gain_ml_once_mmace_is_set_up(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        _install_every_model(monkeypatch, tmp_path)
+        checkpoint = tmp_path / "backbone.model"
+        checkpoint.write_bytes(b"stub")
+        monkeypatch.setenv("GOLDILOCKS_MACE_BACKBONE", str(checkpoint))
+        monkeypatch.setattr(
+            magnetic_ordering_ml, "find_spec", lambda name: ModuleSpec(name, None)
+        )
+
+        facts = {f["key"]: f for f in capabilities()["facts"]}
+
+        assert facts["is_magnetic"]["approaches"] == ["human", "ml", "heuristic"]
 
     def test_all_facts_are_overridable(self) -> None:
         for fact in capabilities()["facts"]:

@@ -48,8 +48,9 @@ def advise(
 ) -> Advice:
     """Diagnosis: a field that cannot be decided is ``Unavailable`` or
     ``Blocked``, so a scientifically incomplete request still returns an
-    ``Advice``. A fault raises instead: an enumeration error that is not
-    the enumerator's own answer about the structure (see
+    ``Advice``. A fault raises instead: a model that is set up but fails
+    to load or predict (see ``ml/predict.py``), an enumeration error that
+    is not the enumerator's own answer about the structure (see
     ``advisors/magnetic_config.py``), or a worker process that dies
     (``worker_process.WorkerDied``).
 

@@ -1,14 +1,26 @@
+"""rank_orderings: mMACE-relaxed energies pick a magnetic ordering (#87).
+
+Each ranking relaxes its candidates in a fresh process, one ranking at a
+time, so mace's process-wide torch settings never reach the caller (#130).
+Tests that stub goldilocks-ml's relaxation run that process's function
+inline, in this process, where the stubs are visible.
+"""
+
 from __future__ import annotations
 
 import importlib.util
 import json
 import math
 import os
+import threading
+import time
+from importlib.machinery import ModuleSpec
 
 import numpy as np
 import pytest
 from pymatgen.core import Lattice, Species, Structure
 
+from goldilocks_core.advisors import magnetic_ordering_ml
 from goldilocks_core.advisors.magnetic_ordering_ml import (
     CHECKPOINT_ENV,
     MagneticOrderingMlUnavailable,
@@ -20,6 +32,7 @@ from goldilocks_core.service import (
     list_magnetic_orderings,
     report_to_json,
 )
+from goldilocks_core.worker_process import WorkerDied
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
 _IRON_PAIR = Structure(
@@ -61,6 +74,18 @@ def test_checkpoint_path_accepts_a_real_file(monkeypatch, tmp_path) -> None:
     assert checkpoint_path() == checkpoint
 
 
+def test_checkpoint_path_resolves_a_relative_path_against_the_cwd(
+    monkeypatch, tmp_path
+) -> None:
+    """The child processes that load the checkpoint start in the system
+    temporary directory, where a relative path names nothing (#130)."""
+    (tmp_path / "backbone.model").write_bytes(b"stub")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(CHECKPOINT_ENV, "backbone.model")
+
+    assert checkpoint_path() == tmp_path / "backbone.model"
+
+
 def test_rank_orderings_needs_at_least_one_candidate(monkeypatch, tmp_path) -> None:
     checkpoint = tmp_path / "backbone.model"
     checkpoint.write_bytes(b"stub")
@@ -81,13 +106,33 @@ def test_rank_orderings_checks_the_checkpoint_before_anything_else(monkeypatch) 
         rank_orderings([("fm", _IRON)])
 
 
-def _stub_relax_seam(monkeypatch: pytest.MonkeyPatch, fake_relax) -> None:
+def _report_mace_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``find_spec`` finds mace, e3nn and sphericart (CI installs none)."""
+    monkeypatch.setattr(
+        magnetic_ordering_ml, "find_spec", lambda name: ModuleSpec(name, None)
+    )
+
+
+def _stub_relax_seam(
+    monkeypatch: pytest.MonkeyPatch, fake_relax
+) -> list[tuple[object, ...]]:
     """Replace goldilocks-ml's own relax/domain_limits/safe_load, so
     rank_orderings()'s winner-selection logic can be exercised without the
     real mace/e3nn/sphericart stack -- these modules import fine without it
     (only calling into them needs it, see their own docstrings), so
     monkeypatching the real functions directly, not injecting fake modules,
-    is enough here."""
+    is enough here.
+
+    The ranking's fresh process runs inline, so the stubs apply; returns the
+    arguments of every process the ranking started."""
+    started: list[tuple[object, ...]] = []
+
+    def run_inline(fn, *args):
+        started.append(args)
+        return fn(*args)
+
+    _report_mace_installed(monkeypatch)
+    monkeypatch.setattr(magnetic_ordering_ml, "run_in_fresh_process", run_inline)
     monkeypatch.setattr(
         "goldilocks_ml.models.magnetism._mace_backbone.safe_load",
         lambda checkpoint, device: object(),
@@ -101,6 +146,7 @@ def _stub_relax_seam(monkeypatch: pytest.MonkeyPatch, fake_relax) -> None:
         "goldilocks_ml.models.magnetism.magnetic_moments.fm_fim_relax.relax.relax",
         fake_relax,
     )
+    return started
 
 
 def test_rank_orderings_never_recommends_a_candidate_relax_flagged_invalid(
@@ -242,17 +288,133 @@ def test_a_ranked_listing_with_a_non_finite_energy_is_strict_json(
     ] == ["afm-1"]
 
 
-def test_rank_orderings_names_goldilocks_ml_when_it_is_missing(
-    monkeypatch, tmp_path
-) -> None:
-    if importlib.util.find_spec("goldilocks_ml") is not None:
-        pytest.skip("goldilocks-ml is installed in this environment")
+def _ok_relaxation(structure, initial_moments, *, checkpoint, device):
+    from goldilocks_ml.models.magnetism.magnetic_moments.fm_fim_relax.relax import (
+        OK,
+        MomentRelaxationResult,
+    )
+
+    return MomentRelaxationResult(
+        moments=np.zeros((len(structure), 3)), energy_ev=-8.0, status=OK
+    )
+
+
+def _configure_checkpoint(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     checkpoint = tmp_path / "backbone.model"
     checkpoint.write_bytes(b"stub")
     monkeypatch.setenv(CHECKPOINT_ENV, str(checkpoint))
 
-    with pytest.raises(MagneticOrderingMlUnavailable, match="goldilocks-ml"):
-        rank_orderings([("fm", _IRON)])
+
+@pytest.mark.parametrize("missing", ["mace", "e3nn", "sphericart"])
+def test_rank_orderings_needs_the_mace_packages_before_starting_a_process(
+    missing: str, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _configure_checkpoint(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        magnetic_ordering_ml,
+        "find_spec",
+        lambda name: None if name == missing else ModuleSpec(name, None),
+    )
+
+    def no_process(fn, *args):
+        raise AssertionError("no ranking process may start without mace")
+
+    monkeypatch.setattr(magnetic_ordering_ml, "run_in_fresh_process", no_process)
+
+    with pytest.raises(
+        MagneticOrderingMlUnavailable, match=f"^{missing} not installed"
+    ):
+        rank_orderings([("fm", _BCC_IRON)])
+
+
+def test_rank_orderings_relaxes_every_candidate_in_one_fresh_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _configure_checkpoint(monkeypatch, tmp_path)
+    started = _stub_relax_seam(monkeypatch, _ok_relaxation)
+    candidates = [("fm", _BCC_IRON), ("afm-1", _BCC_IRON_AFM)]
+
+    rank_orderings(candidates, device="cpu")
+
+    assert started == [(tuple(candidates), tmp_path / "backbone.model", "cpu")]
+
+
+def test_a_relaxation_that_fails_degrades_the_ranking(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A library failure inside the ranking process, such as a mace fork
+    that lacks a keyword goldilocks-ml passes, still degrades to an unranked
+    listing."""
+    _configure_checkpoint(monkeypatch, tmp_path)
+
+    def failing_relax(structure, initial_moments, *, checkpoint, device):
+        raise TypeError("unexpected keyword argument 'use_collinear'")
+
+    _stub_relax_seam(monkeypatch, failing_relax)
+
+    with pytest.raises(MagneticOrderingMlUnavailable, match="use_collinear"):
+        rank_orderings([("fm", _BCC_IRON)])
+
+
+def test_a_ranking_process_that_dies_fails_the_listing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A killed ranking process is not a missing feature: the request fails
+    instead of silently listing the candidates unranked."""
+    _configure_checkpoint(monkeypatch, tmp_path)
+    _report_mace_installed(monkeypatch)
+
+    def killed(fn, *args):
+        raise WorkerDied("worker process exited with code -9")
+
+    monkeypatch.setattr(magnetic_ordering_ml, "run_in_fresh_process", killed)
+    monkeypatch.setattr(
+        magnetic_orderings_module,
+        "enumerate_magnetic_orderings",
+        lambda structure, magnetic_elements: (
+            (("fm", structure), ("afm-1", _BCC_IRON_AFM)),
+            None,
+        ),
+    )
+
+    with pytest.raises(WorkerDied):
+        list_magnetic_orderings(_BCC_IRON, rank_with_mmace=True)
+
+
+def test_rankings_run_one_at_a_time(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Each ranking process holds torch and the 84 MB backbone, so concurrent
+    requests queue for one ranking slot rather than multiplying them."""
+    _configure_checkpoint(monkeypatch, tmp_path)
+    _report_mace_installed(monkeypatch)
+    lock = threading.Lock()
+    running = 0
+    most_at_once = []
+
+    def slow_process(fn, *args):
+        nonlocal running
+        with lock:
+            running += 1
+            most_at_once.append(running)
+        time.sleep(0.2)
+        with lock:
+            running -= 1
+        return (
+            magnetic_ordering_ml.OrderingCandidate(
+                label="fm", structure=_BCC_IRON, energy_per_atom_ev=-8.0, status="ok"
+            ),
+        )
+
+    monkeypatch.setattr(magnetic_ordering_ml, "run_in_fresh_process", slow_process)
+    rankings = [
+        threading.Thread(target=rank_orderings, args=([("fm", _BCC_IRON)],))
+        for _ in range(3)
+    ]
+    for ranking in rankings:
+        ranking.start()
+    for ranking in rankings:
+        ranking.join()
+
+    assert most_at_once == [1, 1, 1]
 
 
 @pytest.mark.skipif(

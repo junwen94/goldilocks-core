@@ -37,9 +37,10 @@ A `run` (or `explain`) request follows this path:
    resource advisors). `advise()` returns an `Advice` even for an incomplete
    request: a field it cannot decide, because an input is missing, something
    is not installed or configured, or the request leaves it open, is
-   `Unavailable`/`Blocked`. A fault raises and fails the request instead: an
-   enumeration error that is not the enumerator's own answer about the
-   structure, or a worker process that dies.
+   `Unavailable`/`Blocked`. A fault raises and fails the request instead: a
+   model that is set up but fails to load or predict, an enumeration error
+   that is not the enumerator's own answer about the structure, or a worker
+   process that dies.
 3. `service.check(advice, *, purpose="scf", relax=None)` calls
    `checks.check_all(...)`, the one place that refuses a request whose
    decisions are incomplete or inconsistent. It returns a `CheckReport`
@@ -187,11 +188,13 @@ The `default` asset profile also installs four ML models
 pseudopotential table. `analysis/is_metal.py`, `analysis/is_magnetic.py`, and
 `advisors/k_sampling.py` all call through `ml.predict` (`predict()` for the
 two classifiers, `predict_k_distance()` for `qrf-kpoints`), which resolves
-the registered asset via `AssetStore` and loads it through
-`goldilocks_ml.inference.load_model()`; each caller falls back to its own
-heuristic tier only when the model asset is not installed, fails checksum
-verification, or `goldilocks-ml` itself is not importable (see
-`ml/predict.py`).
+the registered asset via `AssetStore` and loads it once per process through
+`goldilocks_ml.inference.load_model()`. Each caller falls back to its next
+tier only when the model is not set up: its asset is not installed or fails
+checksum verification, or, for `is_magnetic`, the mMACE backbone
+(`GOLDILOCKS_MACE_BACKBONE`) is not configured or `mace`, `e3nn` or
+`sphericart` is not installed. Any other error loading or running a model
+fails the request (see `ml/predict.py`).
 
 Independent assets install concurrently with at most eight workers. Results
 retain profile order; each asset retains its own lock, checksum verification,
@@ -288,7 +291,12 @@ Requests run concurrently on threads (FastAPI's threadpool, MCP's
 working directory. pymatgen's enumlib caller `chdir`s the whole process, so
 magnetic-ordering enumeration runs on one long-lived worker process
 (`worker_process.py`), one call at a time, in a private temporary directory
-(`advisors/magnetic_enumeration.py`). The Workbench static root is resolved to
+(`advisors/magnetic_enumeration.py`). mace sets torch's default dtype for the
+whole process, which breaks float32 models built on other threads, so the
+server and CLI processes never import it: `is_magnetic` predictions run on a
+second long-lived worker (`ml/mace_process.py`), and each mMACE ordering
+ranking runs in a fresh process, one ranking at a time
+(`advisors/magnetic_ordering_ml.py`). The Workbench static root is resolved to
 an absolute path once, when the app is created.
 
 Workbench keeps the editable draft and reviewed response in its browser store.

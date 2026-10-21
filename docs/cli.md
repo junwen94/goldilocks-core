@@ -134,8 +134,13 @@ orderings](#magnetic-orderings) `--rank-with-mmace` flag uses below --
 confirmed empirically (2026-09-21): the published record declares no
 automatic download for its mMACE backbone, so `is_magnetic` reuses
 whichever checkpoint that variable already points at rather than fetching
-a second copy. Missing it degrades to the heuristic tier, never a
-failure. There is still no flag to point `run`/`explain` at a custom
+a second copy. A model that is not set up (its asset not installed or
+failing verification, or for `is_magnetic` the packages or checkpoint
+missing) leaves the value to the next tier. Once a model is set up, an error
+loading or running it fails the command instead of being replaced by the
+heuristic answer. `is_magnetic` runs in a separate worker process, so mMACE
+never changes the torch settings of the command or server that asked for
+it. There is still no flag to point `run`/`explain` at a custom
 model file of your own. `uv run goldilocks models --json` reports every
 model, installed or not, so it also confirms whether one you expect to
 be usable actually is.
@@ -160,8 +165,11 @@ without re-deriving anything.
 mMACE potential energy surface and recommends the lowest energy-per-atom
 one -- needs both a `GOLDILOCKS_MACE_BACKBONE` environment variable
 pointing at a downloaded mMACE checkpoint file, and the same manual
-`mace`/`e3nn`/`sphericart`/`ase` install described above. Missing either
-degrades to an unranked listing with a warning, never a failure.
+`mace`/`e3nn`/`sphericart`/`ase` install described above. Missing either,
+or an error inside the relaxation itself, degrades to an unranked listing
+with a warning. Each ranking runs in its own process, one ranking at a time,
+so a long ranking never holds up `explain` or `run`; a ranking process that
+dies fails the request.
 
 ## Install and check assets
 
