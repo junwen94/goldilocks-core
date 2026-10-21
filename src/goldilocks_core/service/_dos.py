@@ -184,8 +184,6 @@ def generate_dos(
     scf_steps = generate(advice.scf, ok_report, ctx=shared_ctx)
     nscf_steps = generate(advice.nscf, ok_report, ctx=shared_ctx, purpose="nscf")
     dos_settings_value = DosSettings(
-        size=None,
-        mem_per_proc=None,
         emin=advice.dos.value.emin,
         emax=advice.dos.value.emax,
         delta_e=advice.dos.value.delta_e,

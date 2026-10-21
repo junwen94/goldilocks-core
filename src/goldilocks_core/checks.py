@@ -60,14 +60,16 @@ is now where that decision belongs.
    nbnd, so nbnd > (s-1)^2 rules out both, for every purpose and on
    every profile.
 
-**Everything else in the design doc's "constraint check table"**
-(memory overflow, disordered-structure generation blocking, the
-tri-tier override-conflict rules) needs infrastructure this epic does
-not build -- HPC resource estimates, a real orchestrator assembling
-``system_settings``/``per_step`` -- and is deliberately left as a gap
-for whichever future epic adds it, not attempted here. This module's
-job is to establish *that* single gate exists and works for what is
-checkable today, not to enumerate every rule up front.
+**Everything else in the design doc's "constraint check table"** is
+not a rule here. Memory overflow is a warning, not a block
+(``job.memory_exceeds_node`` in ``advisors/job_resources.py``), like a
+node count above the partition's ceiling: the memory figure is an
+estimate. A disordered structure leaves the job unavailable, since no
+written cell exists to size it for (``service/_step_resources.py``),
+and that blocks through ``parallelisation``. The tri-tier
+override-conflict rules are left as a gap. This module's job is to
+establish *that* single gate exists and works for what is checkable
+today, not to enumerate every rule up front.
 """
 
 from __future__ import annotations
@@ -299,8 +301,8 @@ def _ndiag_grid_must_distribute_bands(
     if not (job.ok and parallel.ok and nbnd.ok) or parallel.value.ndiag is None:
         return None  # already surfaced via collect_blocked, or left to pw.x
     ndiag = parallel.value.ndiag
-    side = diag_grid_side(ndiag, job.value.ntasks // parallel.value.npool)
     bands = nbnd.value.nbnd
+    side = diag_grid_side(ndiag, job.value.ntasks // parallel.value.npool, bands)
     if bands > (side - 1) ** 2:
         return None
     return (

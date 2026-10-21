@@ -27,7 +27,6 @@ from pymatgen.core import Structure
 
 from goldilocks_core.advisors.job_resources import JobHumanInput, JobLlmInput
 from goldilocks_core.advisors.relax import RelaxHumanInput, RelaxLlmInput
-from goldilocks_core.advisors.size import ResourceEstimate
 from goldilocks_core.inputs.hpc import HpcProfile
 from goldilocks_core.resolution import FieldState
 from goldilocks_core.service._analysis import AnalysisFacts
@@ -71,14 +70,6 @@ class StepAdvice:
     kpoints: ElectronicStepAdvice
     resources: ResourceStepAdvice
 
-    @property
-    def resource_estimate(self) -> ResourceEstimate | None:
-        return self.resources.resource_estimate
-
-    @property
-    def mem_per_proc(self) -> float | None:
-        return self.resources.mem_per_proc
-
     def field_states(self) -> tuple[FieldState[object], ...]:
         """Everything except ``occupations``/``nbnd`` --
         ``checks.check_all`` folds those in itself; see
@@ -108,7 +99,6 @@ def steps_advice(
         for purpose, step in steps.items()
     }
     resources = task_resources(
-        structure,
         system,
         electronic,
         hpc,

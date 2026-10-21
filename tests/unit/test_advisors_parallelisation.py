@@ -41,22 +41,24 @@ def _codes(state) -> list[str]:
 @pytest.mark.parametrize(
     ("spin_polarized", "spin_orbit_enabled", "layout", "pairs"),
     [
-        (False, False, (1, 1), 6),
-        (True, False, (2, 1), 12),
-        (False, True, (4, 2), 6),
-        (True, True, (4, 2), 6),
+        (False, False, (1, 1, 1), 6),
+        (True, False, (2, 1, 2), 12),
+        (False, True, (4, 2, 1), 6),
+        (True, True, (4, 2, 4), 6),
     ],
 )
 def test_only_collinear_spin_doubles_the_k_points_pw_x_distributes(
     spin_polarized: bool,
     spin_orbit_enabled: bool,
-    layout: tuple[int, int],
+    layout: tuple[int, int, int],
     pairs: int,
 ) -> None:
     """Regression for #168: pw.x holds every k-point once per spin for
     collinear nspin=2 (QE 7.3 PW/src/setup.f90:617 doubles nkstot), so
     pools share 2 x n_irr_k pairs. Spin-orbit runs are noncollinear
-    (nspin=4, spinors) with one entry per k-point, magnetic or not."""
+    (nspin=4, spinors) with one entry per k-point, magnetic or not; only
+    a magnetic one has four magnetization components (nspin_mag,
+    set_spin_vars.f90:29-41, #148)."""
     magnetic = _magnetic(
         spin_polarized=spin_polarized, spin_orbit_enabled=spin_orbit_enabled
     )
@@ -264,7 +266,29 @@ def test_non_square_note_names_the_grid_capped_by_processes_per_pool() -> None:
 def test_diag_grid_side_matches_laxlib(
     ndiag: int, procs_per_pool: int, side: int
 ) -> None:
-    assert diag_grid_side(ndiag, procs_per_pool) == side
+    assert diag_grid_side(ndiag, procs_per_pool, nbnd=1000) == side
+
+
+@pytest.mark.parametrize(
+    ("nbnd", "procs_per_pool", "side"),
+    [
+        (612, 16, 4),  # nint(6.12) = 6, capped at isqrt(16)
+        (250, 64, 3),  # Fortran nint(2.5) = 3; Python round(2.5) = 2
+        (350, 64, 4),
+        (149, 64, 1),
+        (150, 64, 2),
+        (120, 64, 1),
+        (30, 64, 1),  # nint(0.3) = 0: pw.x keeps a 1x1 grid
+        (612, 1, 1),
+    ],
+)
+def test_unset_ndiag_gives_pw_x_s_own_grid(
+    nbnd: int, procs_per_pool: int, side: int
+) -> None:
+    """Without -ndiag, pw.x takes the largest np <= nint(nbnd/100) with
+    np^2 <= processes per pool, at least 1 (QE 7.3 setup.f90:827-832), so
+    the memory estimate and the ndiag gate share one grid side (#148)."""
+    assert diag_grid_side(None, procs_per_pool, nbnd) == side
 
 
 def test_warning_catalogue_describes_only_the_non_square_note_for_ndiag() -> None:

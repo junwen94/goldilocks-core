@@ -19,7 +19,8 @@ collapsing table selection + requirements-building + installation +
 manifest-loading + per-element narrowing behind ``resolve_pseudopotentials``
 keeps every asset-store-shaped type (``AssetStore``, ``AssetNotInstalled``,
 ``InstalledAsset``, the registry/importers modules) out of ``_system.py``'s
-own import surface entirely.
+own import surface entirely. ``upf_projectors`` reads the selected files'
+own headers for the job's memory estimate (#148), so it lives here too.
 """
 
 from __future__ import annotations
@@ -33,7 +34,10 @@ from goldilocks_core.advisors.pseudo_selection import (
 )
 from goldilocks_core.assets.pseudopotentials.importers import load_installed_table
 from goldilocks_core.assets.pseudopotentials.registry import PseudoTable, load_tables
-from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
+from goldilocks_core.assets.pseudopotentials.upf import (
+    PseudoMetadata,
+    parse_upf_metadata,
+)
 from goldilocks_core.assets.runtime import install as install_assets
 from goldilocks_core.assets.store import AssetNotInstalled, AssetStore
 from goldilocks_core.resolution import (
@@ -141,4 +145,35 @@ def resolve_pseudopotentials(
         table=table_state,
         metadata=select_metadata_for_elements(full_metadata, elements),
         relativistic=relativistic_state,
+    )
+
+
+def upf_projectors(
+    metadata: tuple[PseudoMetadata, ...],
+) -> dict[str, tuple[int, int]] | Unavailable:
+    """``element -> (number_of_proj, l_max)`` from each pseudopotential's
+    own PP_HEADER: pw.x's memory estimate needs them
+    (``advisors/size.py``, #148) and the installed table's manifest does
+    not carry them. ``Unavailable``, naming the file, when a header lacks
+    either as an integer."""
+    projectors: dict[str, tuple[int, int]] = {}
+    for item in metadata:
+        header = parse_upf_metadata(item.filepath).pseudo_info
+        try:
+            count = int(str(header["number_of_proj"]).strip())
+            l_max = int(str(header["l_max"]).strip())
+        except (KeyError, ValueError):
+            return _no_projectors(item)
+        if count < 0 or l_max < (0 if count else -1):
+            return _no_projectors(item)
+        projectors[item.element] = (count, l_max)
+    return projectors
+
+
+def _no_projectors(item: PseudoMetadata) -> Unavailable:
+    return Unavailable(
+        reason=(
+            f"pseudopotential {item.filename} has no valid number_of_proj and "
+            "l_max in its PP_HEADER; pw.x's memory estimate needs both"
+        )
     )

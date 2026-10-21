@@ -5,34 +5,42 @@ resource estimates and an HPC profile.
 New in v2 (v2 epic 7, #7); no v1 precedent. Part of the false
 -circularity fix goldilocks-core-design.md:3176-3195 describes:
 ``resource_estimate`` (``advisors/size.py``) carries zero parallel
-information, so this and ``advisors/parallelisation.py`` can each read
-it (plus the shared ``human``/``llm`` input) independently, with no
-mutual feedback between them -- ``job_resources`` does not read
-``parallelisation``'s output, and ``parallelisation`` only reads this
-module's ``ntasks``, never the reverse.
+information, and ``advisors/parallelisation.py``'s ``parallelisation``
+is a pure function of a job's ``ntasks`` and a step's k-point/spin
+pairs. This module therefore evaluates the layout ``parallelisation``
+will choose for each candidate ``ntasks`` -- a bounded search, not
+feedback: ``parallelisation`` never reads this module's output, only
+the ``ntasks`` it settles on.
+
+**`nodes` are sized on pw.x's memory per process for the layout that
+will run (#148).** For each candidate node count (``ntasks = nodes x
+cores_per_node``) every step gets the npool/ndiag ``parallelisation``
+gives it, from the user's overrides or its default, and
+``size.memory_estimate`` gives pw.x's "max dynamical RAM per process"
+for that layout. The heuristic takes the smallest node count on which
+the largest step's figure x the tasks on one node x
+``_NODE_SAFETY_FACTOR`` fits the node's memory; the factor covers what
+pw.x's own estimate leaves out (the static footprint of the binary and
+libraries: SCARF MaxRSS ran above pw.x's figure). Memory is never an
+aggregate over the job: every process holds its own share, and every
+pool its own copy of the wavefunctions and density. A user's ``nodes``
+or ``ntasks`` is kept and only warned about
+(``job.memory_exceeds_node``) when it does not fit; the estimate is
++-20% at best. ``JobDecision`` publishes the sizing step's two figures.
 
 **`partition` is resolved with the machine, upstream of nodes/ntasks,
 not a peer of them** (goldilocks-core-design.md:1561-1581): choosing an
 HPC profile fixes the default partition; the heuristic only moves off
-it when the estimated memory envelope will not fit even at the
-profile's node ceiling, at which point it looks for a bigger-memory
-partition in the same profile (and only warns, does not silently
-guess, if none exists -- SCARF's own profile today has no such
-"bigmem"-style escape hatch to fall back to).
+it when no node count up to the partition's ceiling fits, at which
+point it takes the largest-memory partition in the same profile (and
+only warns, does not silently guess, if none exists -- SCARF's own
+profile today has no such "bigmem"-style escape hatch to fall back
+to). Where nothing fits, the job asks for the partition's node ceiling
+and warns.
 
 **One job for all of a task's steps.** The steps run one after another
-in one allocation, so partition and nodes are sized for the largest
-step (``size.envelope`` over every step's estimate), and the steps share
-one walltime.
-
-**`nodes`/`ntasks` are a rough, heuristic-tier sizing, not a
-precision-critical one.** ``resource_estimate``'s ``ram_mb`` is treated
-as the calculation's aggregate memory footprint across however many
-MPI processes it ends up running on (not a strictly single-process
-figure) -- `nodes = ceil(ram_mb / (mem_per_node_gb * 1024)) *
-safety_factor`, then `ntasks = nodes * cores_per_node`. The
-design doc is explicit that the piece which actually needs ml here is
-`walltime`, not this.
+in one allocation, so partition and nodes are sized for the step that
+needs the most memory per process, and the steps share one walltime.
 
 **`walltime` is anchored at the partition's own ceiling, not a
 middling guess** (goldilocks-core-design.md:1337-1394): `size` gives
@@ -71,8 +79,17 @@ from dataclasses import dataclass
 
 from pydantic import Field
 
-from goldilocks_core.advisors.size import ResourceEstimate, envelope
-from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
+from goldilocks_core.advisors.parallelisation import (
+    ParallelisationHumanInput,
+    diag_grid_side,
+    parallelisation,
+)
+from goldilocks_core.advisors.size import (
+    MemoryEstimate,
+    ResourceEstimate,
+    memory_estimate,
+)
+from goldilocks_core.inputs.hpc import HpcProfile, Partition
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import (
     FieldState,
@@ -84,7 +101,7 @@ from goldilocks_core.resolution import (
 
 _NODE_SAFETY_FACTOR = 1.2
 _MAX_SECONDS_FRACTION = 0.95
-_BYTES_PER_GB_IN_MB = 1024
+_MB_PER_GB = 1024
 
 WARNING_CATALOGUE = (
     Warning(
@@ -92,9 +109,9 @@ WARNING_CATALOGUE = (
         level="info",
         category="job",
         message=(
-            "the default partition cannot fit the estimated memory footprint "
-            "even at its node ceiling; a larger-memory partition on the same "
-            "profile was used instead."
+            "pw.x's estimated memory does not fit the default partition at "
+            "any node count up to its ceiling; a larger-memory partition on "
+            "the same profile was used instead."
         ),
     ),
     Warning(
@@ -102,9 +119,19 @@ WARNING_CATALOGUE = (
         level="warning",
         category="job",
         message=(
-            "the estimated memory footprint does not fit the default partition "
-            "even at its node ceiling, and the HPC profile has no larger "
-            "-memory partition to fall back to."
+            "pw.x's estimated memory does not fit the default partition at "
+            "any node count up to its ceiling, and the HPC profile has no "
+            "larger-memory partition to fall back to."
+        ),
+    ),
+    Warning(
+        code="job.memory_exceeds_node",
+        level="warning",
+        category="job",
+        message=(
+            "pw.x's estimated memory per process, times the tasks on one "
+            "node and a 1.2 safety factor, exceeds a node's memory; the job "
+            "is likely to run out of memory."
         ),
     ),
     Warning(
@@ -143,9 +170,21 @@ of each code, for a caller that has not seen it fire."""
 
 
 @dataclass(frozen=True, slots=True)
+class JobStep:
+    """One pw.x step the job must hold: its estimate and the user's
+    npool/ndiag for it, which fix its layout for a given ``ntasks``."""
+
+    estimate: ResourceEstimate
+    parallelisation: ParallelisationHumanInput | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class JobDecision:
     """The task's one job. ``max_seconds_by_step`` maps each pw.x step's
-    purpose to its share of the walltime, in seconds (module docstring)."""
+    purpose to its share of the walltime, in seconds (module docstring).
+    ``memory_per_process_mb``/``memory_total_mb`` are pw.x's estimated
+    memory per process and in total, in MB, for the step that needs the
+    most per process, at this job's layout."""
 
     partition: str
     nodes: int
@@ -153,6 +192,8 @@ class JobDecision:
     ntasks_per_node: int
     walltime_h: float
     max_seconds_by_step: dict[str, int]
+    memory_per_process_mb: float
+    memory_total_mb: float
     account: str | None
     warnings: tuple[Warning, ...] = ()
 
@@ -183,14 +224,15 @@ class JobLlmInput(LlmInput):
 
 
 def job_resources(
-    estimates: Mapping[str, ResourceEstimate],
+    steps: Mapping[str, JobStep],
     hpc: HpcProfile,
     human: JobHumanInput | None = None,
     llm: JobLlmInput | None = None,
 ) -> FieldState[JobDecision]:
     """The job for a task whose pw.x steps run one after another in one
-    allocation; ``estimates`` maps each step's purpose to its estimate.
-    The largest step sizes partition and nodes, and every step gets a
+    allocation; ``steps`` maps each step's purpose to its estimate and
+    npool/ndiag overrides. The step that needs the most memory per
+    process sizes partition and nodes, and every step gets a
     ``max_seconds`` share (module docstring)."""
     human = human or JobHumanInput()
     llm = llm or JobLlmInput()
@@ -203,9 +245,9 @@ def job_resources(
             f"{requested_partition!r}; available: {available}"
         )
 
-    largest = envelope(list(estimates.values()))
-    partition, warnings = _pick_partition(largest, hpc, human, llm)
-    ntasks_per_node = partition.hardware.cores_per_node
+    partition, fitting_nodes, warnings = _pick_partition(steps, hpc, human, llm)
+    hardware = partition.hardware
+    ntasks_per_node = hardware.cores_per_node
 
     if human.nodes is not None:
         nodes = human.nodes
@@ -219,10 +261,10 @@ def job_resources(
         # Deriving nodes from ntasks here keeps the two self-consistent.
         nodes = math.ceil(human.ntasks / ntasks_per_node)
     else:
-        nodes = _nodes_needed(largest, partition.hardware)
+        nodes = fitting_nodes or hardware.max_nodes
     ntasks = human.ntasks if human.ntasks is not None else nodes * ntasks_per_node
 
-    if nodes > partition.hardware.max_nodes:
+    if nodes > hardware.max_nodes:
         warnings.append(
             Warning(
                 code="job.nodes_exceeds_partition_ceiling",
@@ -230,14 +272,17 @@ def job_resources(
                 category="job",
                 message=(
                     f"nodes={nodes} exceeds partition {partition.name!r}'s own "
-                    f"ceiling ({partition.hardware.max_nodes}); the scheduler "
+                    f"ceiling ({hardware.max_nodes}); the scheduler "
                     "will likely refuse this request."
                 ),
             )
         )
 
+    purpose, memory = _largest_step_memory(steps, ntasks)
+    warnings.extend(_memory_warnings(purpose, memory, ntasks, partition))
+
     walltime_h = _pick_walltime(partition, human, llm, warnings)
-    if walltime_h > partition.hardware.max_walltime_h:
+    if walltime_h > hardware.max_walltime_h:
         warnings.append(
             Warning(
                 code="job.walltime_exceeds_partition_ceiling",
@@ -246,7 +291,7 @@ def job_resources(
                 message=(
                     f"walltime_h={walltime_h} exceeds partition "
                     f"{partition.name!r}'s own ceiling "
-                    f"({partition.hardware.max_walltime_h}h); the scheduler "
+                    f"({hardware.max_walltime_h}h); the scheduler "
                     "will likely refuse this request."
                 ),
             )
@@ -258,7 +303,9 @@ def job_resources(
         ntasks=ntasks,
         ntasks_per_node=ntasks_per_node,
         walltime_h=walltime_h,
-        max_seconds_by_step=_max_seconds_by_step(walltime_h, estimates),
+        max_seconds_by_step=_max_seconds_by_step(walltime_h, steps),
+        memory_per_process_mb=round(memory.per_process_mb, 2),
+        memory_total_mb=round(memory.total_mb, 2),
         account=human.account,
         warnings=tuple(warnings),
     )
@@ -267,20 +314,24 @@ def job_resources(
 
 
 def _pick_partition(
-    estimate: ResourceEstimate,
+    steps: Mapping[str, JobStep],
     hpc: HpcProfile,
     human: JobHumanInput,
     llm: JobLlmInput,
-) -> tuple[Partition, list[Warning]]:
+) -> tuple[Partition, int | None, list[Warning]]:
+    """The partition, the smallest node count on which every step fits
+    it (``None`` when none does), and any partition warning."""
     name = human.partition or llm.partition
     if name is not None:
-        return hpc.partition(name), []
+        partition = hpc.partition(name)
+        return partition, _fitting_nodes(steps, partition), []
 
     default = hpc.default_partition()
-    needed_gb = estimate.ram_mb / _BYTES_PER_GB_IN_MB
-    if needed_gb <= default.hardware.mem_per_node_gb * default.hardware.max_nodes:
-        return default, []
+    nodes = _fitting_nodes(steps, default)
+    if nodes is not None:
+        return default, nodes, []
 
+    ceiling = default.hardware.max_nodes
     bigger = [
         partition
         for partition in hpc.partitions.values()
@@ -288,49 +339,117 @@ def _pick_partition(
     ]
     if bigger:
         chosen = max(bigger, key=lambda p: p.hardware.mem_per_node_gb)
-        return chosen, [
+        return (
+            chosen,
+            _fitting_nodes(steps, chosen),
+            [
+                Warning(
+                    code="job.partition_upgraded_for_memory",
+                    level="info",
+                    category="job",
+                    message=(
+                        f"pw.x's estimated memory does not fit default "
+                        f"partition {default.name} at any node count up to "
+                        f"its ceiling of {ceiling}; using {chosen.name} "
+                        "instead."
+                    ),
+                )
+            ],
+        )
+    return (
+        default,
+        None,
+        [
             Warning(
-                code="job.partition_upgraded_for_memory",
-                level="info",
+                code="job.no_larger_partition_available",
+                level="warning",
                 category="job",
                 message=(
-                    f"default partition {default.name!r} cannot fit the estimated "
-                    f"{needed_gb:.0f} GB even at its node ceiling; using "
-                    f"{chosen.name!r} instead."
+                    f"pw.x's estimated memory does not fit partition "
+                    f"{default.name} at any node count up to its ceiling of "
+                    f"{ceiling}, and profile {hpc.name} has no larger-memory "
+                    "partition to fall back to."
                 ),
             )
-        ]
-    return default, [
+        ],
+    )
+
+
+def _fitting_nodes(steps: Mapping[str, JobStep], partition: Partition) -> int | None:
+    """The smallest node count up to the partition's ceiling on which
+    every step's layout fits a node (module docstring)."""
+    hardware = partition.hardware
+    for nodes in range(1, hardware.max_nodes + 1):
+        ntasks = nodes * hardware.cores_per_node
+        _purpose, memory = _largest_step_memory(steps, ntasks)
+        if _node_gb(memory, ntasks, partition) <= hardware.mem_per_node_gb:
+            return nodes
+    return None
+
+
+def _largest_step_memory(
+    steps: Mapping[str, JobStep], ntasks: int
+) -> tuple[str, MemoryEstimate]:
+    """The step that needs the most memory per process on ``ntasks``
+    processes, with its estimate."""
+    memory = {purpose: _step_memory(step, ntasks) for purpose, step in steps.items()}
+    purpose = max(memory, key=lambda name: memory[name].per_process_mb)
+    return purpose, memory[purpose]
+
+
+def _step_memory(step: JobStep, ntasks: int) -> MemoryEstimate:
+    """pw.x's memory for ``step`` on ``ntasks`` processes, with the npool
+    and ndiag ``parallelisation`` gives that layout."""
+    estimate = step.estimate
+    layout = parallelisation(
+        ntasks, estimate.kpoint_spin_pairs, step.parallelisation
+    ).value
+    side = diag_grid_side(layout.ndiag, ntasks // layout.npool, estimate.nbnd)
+    return memory_estimate(estimate, ntasks=ntasks, npool=layout.npool, diag_side=side)
+
+
+def _node_gb(memory: MemoryEstimate, ntasks: int, partition: Partition) -> float:
+    """What the busiest node needs, in GB, with the safety factor."""
+    tasks_on_node = min(ntasks, partition.hardware.cores_per_node)
+    return memory.per_process_mb * tasks_on_node * _NODE_SAFETY_FACTOR / _MB_PER_GB
+
+
+def _memory_warnings(
+    purpose: str, memory: MemoryEstimate, ntasks: int, partition: Partition
+) -> list[Warning]:
+    needed_gb = _node_gb(memory, ntasks, partition)
+    available_gb = partition.hardware.mem_per_node_gb
+    if needed_gb <= available_gb:
+        return []
+    tasks_on_node = min(ntasks, partition.hardware.cores_per_node)
+    return [
         Warning(
-            code="job.no_larger_partition_available",
+            code="job.memory_exceeds_node",
             level="warning",
             category="job",
             message=(
-                f"estimated {needed_gb:.0f} GB does not fit in partition "
-                f"{default.name!r} even at its node ceiling, and profile "
-                f"{hpc.name!r} has no larger-memory partition to fall back to."
+                f"pw.x needs an estimated {memory.per_process_mb:.1f} MB per "
+                f"process for the {purpose} step; {tasks_on_node} tasks per "
+                f"node with the {_NODE_SAFETY_FACTOR} safety factor need "
+                f"{needed_gb:.1f} GB, more than the {available_gb:g} GB of a "
+                f"{partition.name} node. Request more nodes or a "
+                "larger-memory partition."
             ),
         )
     ]
 
 
 def _max_seconds_by_step(
-    walltime_h: float, estimates: Mapping[str, ResourceEstimate]
+    walltime_h: float, steps: Mapping[str, JobStep]
 ) -> dict[str, int]:
     """Each step's share of 95% of the walltime, in proportion to its
     workload and floored, so the shares never sum past it."""
     budget = int(walltime_h * 3600 * _MAX_SECONDS_FRACTION)
-    total = sum(estimate.workload for estimate in estimates.values())
+    total = sum(step.estimate.workload for step in steps.values())
     return {
-        purpose: budget * estimate.workload // total
-        for purpose, estimate in estimates.items()
+        purpose: budget * step.estimate.workload // total
+        for purpose, step in steps.items()
     }
-
-
-def _nodes_needed(estimate: ResourceEstimate, hardware: Hardware) -> int:
-    mem_per_node_mb = hardware.mem_per_node_gb * _BYTES_PER_GB_IN_MB
-    bare = estimate.ram_mb / mem_per_node_mb
-    return max(1, math.ceil(bare * _NODE_SAFETY_FACTOR))
 
 
 def _pick_walltime(

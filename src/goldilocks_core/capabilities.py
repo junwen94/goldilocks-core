@@ -395,8 +395,10 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "nodes": {
         "description": (
-            "Number of compute nodes requested; otherwise sized from the "
-            "estimated memory footprint."
+            "Number of compute nodes requested; otherwise the fewest on which "
+            "pw.x's estimated memory per process, for the layout each step "
+            "runs, times the tasks per node and a 1.2 safety factor fits a "
+            "node."
         ),
     },
     "ntasks": {

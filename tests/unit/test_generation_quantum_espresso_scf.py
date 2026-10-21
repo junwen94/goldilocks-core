@@ -370,23 +370,38 @@ def test_spin_orbit_magnetic_emits_noncolin_lspinorb_and_angles(
 @pytest.mark.parametrize(
     ("spin_polarized", "spin_orbit_enabled", "layout", "rendered", "absent"),
     [
-        (False, False, (1, 1), (), ("nspin", "noncolin")),
-        (True, False, (2, 1), ("nspin            = 2",), ("noncolin",)),
-        # noncolin makes pw.x run nspin=4 (QE 7.3 PW/src/input.f90:718)
-        (False, True, (4, 2), ("noncolin         = .true.",), ("nspin",)),
-        (True, True, (4, 2), ("noncolin         = .true.",), ("nspin",)),
+        (False, False, (1, 1, 1), (), ("nspin", "noncolin", "starting_magn")),
+        (True, False, (2, 1, 2), ("nspin            = 2",), ("noncolin",)),
+        # noncolin makes pw.x run nspin=4 (QE 7.3 PW/src/input.f90:718),
+        # with four magnetization components only when a starting
+        # magnetization is set (input.f90:1589, set_spin_vars.f90:29-41)
+        (
+            False,
+            True,
+            (4, 2, 1),
+            ("noncolin         = .true.",),
+            ("nspin", "starting_magn"),
+        ),
+        (
+            True,
+            True,
+            (4, 2, 4),
+            ("noncolin         = .true.", "starting_magnetization(1)"),
+            ("nspin",),
+        ),
     ],
 )
 def test_qe_spin_layout_matches_the_spin_keywords_the_writer_renders(
     pseudo_metadata_factory,
     spin_polarized: bool,
     spin_orbit_enabled: bool,
-    layout: tuple[int, int],
+    layout: tuple[int, int, int],
     rendered: tuple[str, ...],
     absent: tuple[str, ...],
 ) -> None:
-    """``qe_spin_layout`` sizes pools (#168) for the run this writer
-    describes, so the two must agree on every magnetic configuration."""
+    """``qe_spin_layout`` sizes pools (#168) and pw.x's memory (#148) for
+    the run this writer describes, so the two must agree on every
+    magnetic configuration."""
     feco = Structure(
         Lattice.cubic(2.857), ["Fe", "Co"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
     )

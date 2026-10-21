@@ -110,9 +110,11 @@ Inside `advise()` itself, the three phases are:
   `advisors/convergence.py`, `advisors/cutoffs.py`, `advisors/job_resources.py`,
   `advisors/parallelisation.py`, `advisors/n_irr_k.py`, `advisors/relax.py`)
   recommends per-step parameters. Resources are task-level: one job
-  (`advisors/job_resources.py`) is sized over every step's estimate
-  (`advisors/size.py`) and splits the walltime into per-step `max_seconds`
-  shares, and each step's `npool`/`ndiag` then follow from that job's
+  (`advisors/job_resources.py`) takes the fewest nodes on which pw.x's
+  estimated memory per process fits for the layout every step will run
+  (`advisors/size.py`, a port of pw.x's own memory report), splits the
+  walltime into per-step `max_seconds` shares, and publishes that memory
+  in its record; each step's `npool`/`ndiag` then follow from that job's
   `ntasks`.
 
 There is no generic "stage" or "graph executor" abstraction. Each phase is a
@@ -134,7 +136,7 @@ Paths below are relative to `src/goldilocks_core/` unless stated otherwise.
 | Orchestration       | `service/_pipeline.py`: `advise()`/`check()`, and `advise_steps`, which advises every `pw.x` step of a task with one shared job; `service/_generate.py`: `generate()`, the hard-fail boundary; `service/_dos.py` / `service/_relax.py`: the multi-step and relax task variants; `service/_bundle.py`: submission rendering and bundle assembly; `checks.py`: the sole cross-parameter hard-fail gateway. |
 | Input and discovery | `inputs/structure.py`: structure normalization and inspection; `capabilities.py`: available codes, tasks, settings, pseudopotential tables, HPC profiles, and warnings — reflected from the override dataclasses and advisor warning catalogues, not hand-listed.                                                        |
 | Scientific behavior | `analysis/`: structure facts (`composition.py`, `geometry.py`, `is_magnetic.py`, `is_metal.py`, `needs_correlation.py`, `needs_soc.py`, `symmetry.py`); `advisors/`: the recommendation layer (`boundary.py`, `convergence.py`, `cutoffs.py`, `electron_count.py`, `functional.py`, `hubbard_u.py`, `job_resources.py`, `k_sampling.py`, `magnetic_config.py`, `n_irr_k.py`, `nbnd.py`, `occupations.py`, `parallelisation.py`, `pseudo_selection.py`, `relax.py`, `size.py`, `vdw_method.py`, `dos.py`, `warning_catalogue.py`); top-level `kmesh.py`: k-point mesh ladder math. |
-| Assets              | `assets/`: installation and integrity (`AssetStore`); `ml/models.py`: model declarations (loading plumbing only — no advisor calls it yet, see below); `assets/pseudopotentials/registry.py` and `assets/pseudopotentials/importers.py`: table declarations and provider normalization; `service/_pseudo.py`: the one place in the pipeline that touches the asset store/filesystem, resolving the installed asset, loading its manifest, and narrowing it to a structure's elements. |
+| Assets              | `assets/`: installation and integrity (`AssetStore`); `ml/models.py`: model declarations (loading plumbing only — no advisor calls it yet, see below); `assets/pseudopotentials/registry.py` and `assets/pseudopotentials/importers.py`: table declarations and provider normalization; `service/_pseudo.py`: the one place in the pipeline that touches the asset store/filesystem, resolving the installed asset, loading its manifest, narrowing it to a structure's elements, and reading the selected UPF headers' projector counts for the memory estimate. |
 | Output              | `generation/`: target-code writers (`generation/quantum_espresso/scf.py`, `relax.py`, `dos.py`, `namelists.py`); top-level `bundle.py`: manifest assembly and directory/ZIP publication, replacing v1's separate `input_data.py`/`publication.py`/`serialization.py` roles.                                                                                                                        |
 | Transports          | `cli/core.py`: local commands; `server/documents.py`: request/response pydantic models; `server/_handlers.py`: the one shared request-validation/dispatch implementation both `server/http.py` and `server/mcp.py` call; `server/readiness.py`: cached asset checks.                                                     |
 | Browser             | Repository `web/src/api/`: HTTP client and generated types; `web/src/workspace/`: draft, request, result, and download state.                                                                                                                                                                                              |

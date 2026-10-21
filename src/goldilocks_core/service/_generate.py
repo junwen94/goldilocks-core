@@ -83,8 +83,6 @@ def generate(
     )
     kpoints = advice.step.kpoints
     step_settings = PwSettings(
-        size=advice.step.resource_estimate,
-        mem_per_proc=advice.step.mem_per_proc,
         occupations=kpoints.occupations.value,
         k_sampling=kpoints.k_sampling.value,
         n_irr_k=kpoints.n_irr_k.value if kpoints.n_irr_k.ok else None,

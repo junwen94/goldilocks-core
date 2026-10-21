@@ -10,17 +10,23 @@ task launched dos.x on all 64 tasks, where it aborts on every rank that
 owns no FFT z-plane. Before #129 every step's check read out/pwscf.xml,
 which pw.x writes only after a finished run, and passed on JOB DONE.
 Before #169 the dos task's scf and nscf each got max_seconds = 0.95 x
-the whole walltime, although pw.x counts it from its own start.
+the whole walltime, although pw.x counts it from its own start. Before
+#148 the job record carried no memory figure, and nodes were sized on
+one pool's single copy of the wavefunctions and density.
 """
 
 from __future__ import annotations
+
+import json
 
 import pytest
 from pymatgen.core import Lattice, Structure
 from support import sssp_fixture_table_spec
 
+from goldilocks_core.advisors.size import Species, memory_estimate, resource_estimate
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
+from goldilocks_core.bundle import DirectoryOutput, publish
 from goldilocks_core.inputs.hpc import load_hpc_profile
 from goldilocks_core.service import (
     advise,
@@ -31,6 +37,7 @@ from goldilocks_core.service import (
     generate_dos,
     render_submission,
     render_submission_dos,
+    to_bundle_input,
 )
 from goldilocks_core.set_overrides import build_overrides
 from goldilocks_core.steps import default_shared_context
@@ -230,3 +237,103 @@ def test_dos_task_splits_one_walltime_across_its_pw_x_steps(
     assert f"#SBATCH --ntasks-per-node={job['ntasks_per_node']}" in lines
     assert job["walltime_h"] == 4
     assert "#SBATCH --time=4:00:00" in lines
+
+
+def test_goldilocks_json_publishes_the_memory_the_job_was_sized_on(
+    tmp_path, monkeypatch
+) -> None:
+    """#148: the job record carries pw.x's estimated memory per process
+    and in total for what the bundle renders -- the cell, the fixture
+    UPF's 4 projectors up to l=1, the cutoffs, bands, k-point/spin pairs
+    and mixing mode of its records, and the layout that runs (-npool 16
+    for 65 pairs on 64 tasks) -- the figures the node count was sized on."""
+    store = _installed_store(tmp_path, monkeypatch)
+    hpc = load_hpc_profile("scarf")
+    ctx = default_shared_context()
+    advice = advise(_silicon(), hpc=hpc, store=store)
+    report = check(advice)
+    assert report.ok, report.blocking
+    steps = generate(advice, report, ctx=ctx)
+    script = render_submission(advice, hpc, "quantum_espresso", steps)
+    publish(
+        to_bundle_input(advice, steps, script, ctx), DirectoryOutput(tmp_path / "out")
+    )
+
+    records = json.loads((tmp_path / "out" / "goldilocks.json").read_text())["records"]
+    job = records["job"]["value"]
+    parallel = records["parallelisation"]["value"]
+    cutoffs = records["cutoffs"]["value"]
+    assert records["magnetic"]["value"]["spin_polarized"] is False
+    assert parallel["npool"] == 16
+    assert parallel["ndiag"] is None  # 8 bands: pw.x keeps a 1x1 grid
+    estimate = resource_estimate(
+        _silicon().lattice,
+        (Species(atoms=2, projectors=4, l_max=1, ultrasoft=False),),
+        ecutwfc_ry=cutoffs["ecutwfc_ry"],
+        ecutrho_ry=cutoffs["ecutrho_ry"],
+        nbnd=records["nbnd"]["value"]["nbnd"],
+        n_kpoint_spin=parallel["kpoint_spin_pairs"],
+        nspin=1,
+        npol=1,
+        nspin_mag=1,
+        scf_loop=True,
+        variable_cell=False,
+        local_tf_mixing=records["convergence"]["value"]["mixing_mode"] == "local-TF",
+    )
+    memory = memory_estimate(
+        estimate, ntasks=job["ntasks"], npool=parallel["npool"], diag_side=1
+    )
+    assert job["memory_per_process_mb"] == round(memory.per_process_mb, 2)
+    assert job["memory_total_mb"] == round(memory.total_mb, 2)
+    assert job["nodes"] == 1
+
+
+def test_the_memory_estimate_counts_the_species_the_writer_renders(
+    tmp_path, monkeypatch
+) -> None:
+    """#148: pw.x's memory counts structure factors and qrad tables per
+    species, so the estimate takes scf.in's species -- one per element and
+    starting magnetization -- not one per element: Si0 and Si1 with
+    opposite moments are written as Si1 and Si2."""
+    store = _installed_store(tmp_path, monkeypatch)
+    hpc = load_hpc_profile("scarf")
+    structure = Structure(
+        Lattice.cubic(5.43),
+        ["Si", "Si"],
+        [[0, 0, 0], [0.25, 0.25, 0.25]],
+        labels=["Si0", "Si1"],
+    )
+    overrides = build_overrides(
+        {
+            "spin_polarized": True,
+            "starting_magnetization": {"Si0": 0.5, "Si1": -0.5},
+            "occupations": "smearing",
+        }
+    )
+    advice = advise(structure, hpc=hpc, overrides=overrides, store=store)
+    report = check(advice)
+    assert report.ok, report.blocking
+    (scf,) = generate(advice, report)
+    assert "ntyp             = 2" in scf.files["scf.in"]
+
+    job = advice.step.resources.job.value
+    parallel = advice.step.resources.parallelisation.value
+    one_species = Species(atoms=1, projectors=4, l_max=1, ultrasoft=False)
+    estimate = resource_estimate(
+        structure.lattice,
+        (one_species, one_species),
+        ecutwfc_ry=advice.system.cutoffs.value.ecutwfc_ry,
+        ecutrho_ry=advice.system.cutoffs.value.ecutrho_ry,
+        nbnd=advice.step.kpoints.nbnd.value.nbnd,
+        n_kpoint_spin=parallel.kpoint_spin_pairs,
+        nspin=2,
+        npol=1,
+        nspin_mag=2,
+        scf_loop=True,
+        variable_cell=False,
+        local_tf_mixing=advice.step.kpoints.convergence.value.mixing_mode == "local-TF",
+    )
+    memory = memory_estimate(
+        estimate, ntasks=job.ntasks, npool=parallel.npool, diag_side=1
+    )
+    assert job.memory_per_process_mb == round(memory.per_process_mb, 2)

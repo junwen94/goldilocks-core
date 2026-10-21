@@ -1,7 +1,9 @@
 """parallelisation: npool/ndiag, from a job's ntasks and the step's
 k-point/spin pairs -- the other half of the false-circularity fix
-`advisors/job_resources.py` describes: this reads the job's `ntasks`,
-never the reverse.
+`advisors/job_resources.py` describes: a pure function of `ntasks`, the
+pair count and the user's overrides that never reads a job, so
+`job_resources` evaluates it for each candidate `ntasks` before
+settling on one.
 
 New in v2 (v2 epic 7, #7); no v1 precedent.
 
@@ -27,8 +29,10 @@ named as needing ml (goldilocks-core-design.md:1396-1407).
 **`ndiag` is left to pw.x unless the user sets it (#133).** Without
 `-ndiag`, pw.x (QE >= 7.1) picks the largest square np^2 with
 np <= nint(nbnd/100) that fits the processes per pool, so 1 below 150
-bands (QE 7.3 `PW/src/setup.f90:827-832`). A user `ndiag` runs on an
-s x s grid (`diag_grid_side`) and can stop pw.x: it aborts at startup
+bands (QE 7.3 `PW/src/setup.f90:827-832`). `diag_grid_side` gives the
+grid side for either case, so `checks.py`'s gate and the memory
+estimate (`advisors/size.py`, #148) use one derivation. A user `ndiag`
+runs on an s x s grid and can stop pw.x: it aborts at startup
 when s > nbnd (`Modules/set_para_diag.f90:54-55`), and ScaLAPACK's
 block layout leaves a process column without rows of an n x n subspace
 matrix for some n <= (s-1)^2 (`LAXlib/la_helper.f90:468-481`), which
@@ -60,6 +64,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from pydantic import Field
 
@@ -140,26 +145,37 @@ class ParallelisationHumanInput(HumanInput):
     ndiag: int | None = Field(default=None, gt=0)
 
 
-def qe_spin_layout(magnetic: MagneticConfigFacts) -> tuple[int, int]:
-    """``(nspin, npol)`` of the pw.x run the writer renders for
+class SpinLayout(NamedTuple):
+    """pw.x's density components (``nspin``), spinor components
+    (``npol``) and magnetization components (``nspin_mag``)."""
+
+    nspin: int
+    npol: int
+    nspin_mag: int
+
+
+def qe_spin_layout(magnetic: MagneticConfigFacts) -> SpinLayout:
+    """The spin layout of the pw.x run the writer renders for
     ``magnetic`` (``_magnetic_keywords`` in
     ``generation/quantum_espresso/scf.py``): spin-orbit renders
     ``noncolin``, which pw.x runs with nspin=4 and two-component spinors,
-    magnetic or not (QE 7.3 ``PW/src/input.f90:718``); a collinear
+    magnetic or not (QE 7.3 ``PW/src/input.f90:718``), and with four
+    magnetization components only when it renders a starting
+    magnetization, which a spin-polarised result always has
+    (``input.f90:1589``, ``set_spin_vars.f90:29-41``); a collinear
     spin-polarised run renders nspin=2; anything else runs nspin=1."""
     if magnetic.spin_orbit_enabled:
-        return 4, 2
+        return SpinLayout(4, 2, 4 if magnetic.spin_polarized else 1)
     if magnetic.spin_polarized:
-        return 2, 1
-    return 1, 1
+        return SpinLayout(2, 1, 2)
+    return SpinLayout(1, 1, 1)
 
 
 def kpoint_spin_pairs(n_irr_k: int, magnetic: MagneticConfigFacts) -> int:
     """The k-point/spin pairs pw.x distributes over pools: 2 x
     ``n_irr_k`` for collinear nspin=2, otherwise ``n_irr_k`` (see the
     module docstring)."""
-    nspin, _npol = qe_spin_layout(magnetic)
-    return 2 * n_irr_k if nspin == 2 else n_irr_k
+    return 2 * n_irr_k if qe_spin_layout(magnetic).nspin == 2 else n_irr_k
 
 
 def parallelisation(
@@ -257,12 +273,26 @@ def _load_imbalance_notes(npool: int, n_kpoint_spin: int) -> list[Warning]:
     ]
 
 
-def diag_grid_side(ndiag: int, procs_per_pool: int) -> int:
-    """Side s of the s x s linear-algebra grid pw.x builds for
-    ``-ndiag``: isqrt(min(ndiag, processes per pool)), at least 1 (QE
-    7.3 ``LAXlib/la_helper.f90:125`` and ``:171-176``, ``GRID2D_DIMS``
-    'S' in ``LAXlib/distools.f90:84``). pw.x takes the processes of a
-    band group; without ``-nband`` that is the whole pool."""
+def diag_grid_side(ndiag: int | None, procs_per_pool: int, nbnd: int) -> int:
+    """Side s of the s x s linear-algebra grid pw.x builds for ``nbnd``
+    bands. With ``-ndiag``: isqrt(min(ndiag, processes per pool)), at
+    least 1 (QE 7.3 ``LAXlib/la_helper.f90:125`` and ``:171-176``,
+    ``GRID2D_DIMS`` 'S' in ``LAXlib/distools.f90:84``). pw.x takes the
+    processes of a band group; without ``-nband`` that is the whole
+    pool. Without it (``None``), pw.x's own choice: the largest
+    np <= nint(nbnd/100) with np^2 <= processes per pool, at least 1
+    (``PW/src/setup.f90:827-832``). Fortran's nint rounds halves away
+    from zero, so nbnd=250 gives np=3."""
+    if ndiag is None:
+        largest = (nbnd + 50) // 100  # nint(nbnd/100.) for nbnd >= 0
+        side = next(
+            (np for np in range(largest, 0, -1) if np * np <= procs_per_pool), 1
+        )
+        ndiag = side * side
+    return _grid_side(ndiag, procs_per_pool)
+
+
+def _grid_side(ndiag: int, procs_per_pool: int) -> int:
     return max(1, math.isqrt(min(ndiag, procs_per_pool)))
 
 
@@ -270,7 +300,7 @@ def _ndiag_notes(ndiag: int, procs_per_pool: int) -> list[Warning]:
     root = math.isqrt(ndiag)
     if root * root == ndiag:
         return []
-    side = diag_grid_side(ndiag, procs_per_pool)
+    side = _grid_side(ndiag, procs_per_pool)
     return [
         Warning(
             code="parallelisation.ndiag_not_a_square_integer",

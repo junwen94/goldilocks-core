@@ -47,10 +47,18 @@ def test_pw_settings_holds_every_per_step_advisors_decision() -> None:
 def test_pw_settings_has_no_producer_fields_default_to_none() -> None:
     settings = _pw_settings()
 
-    assert settings.size is None
-    assert settings.mem_per_proc is None
     assert settings.parallel is None
     assert settings.relax is None
+
+
+@pytest.mark.parametrize("settings", [PwSettings, DosSettings, PhSettings])
+@pytest.mark.parametrize("field", ["size", "mem_per_proc"])
+def test_no_step_settings_carry_a_memory_estimate(settings: type, field: str) -> None:
+    """#148: no writer reads a memory estimate; the job record carries
+    pw.x's per-process and total memory instead."""
+    assert field not in {item.name for item in dataclasses.fields(settings)}
+    with pytest.raises(TypeError, match=field):
+        settings(**{field: None})
 
 
 @pytest.mark.parametrize("settings", [PwSettings, DosSettings, PhSettings])

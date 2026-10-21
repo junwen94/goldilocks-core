@@ -42,12 +42,11 @@ class RunOverrides:
 
 @dataclass(frozen=True, slots=True)
 class Advice:
-    """Every ``FieldState`` (plus the two plain, non-tri-state resource
-    values from ``advisors/size.py``, held on ``step``) produced for one
-    structure/code/task request. ``checks.check_all(*advice.field_states(),
-    ...)`` decides whether ``generate()`` may proceed; ``advice.records()``
-    is what ``BundleInput.records`` should carry unchanged -- tri-state,
-    not the unwrapped values ``SystemSettings``/``PwSettings`` need."""
+    """Every ``FieldState`` produced for one structure/code/task request.
+    ``checks.check_all(*advice.field_states(), ...)`` decides whether
+    ``generate()`` may proceed; ``advice.records()`` is what
+    ``BundleInput.records`` should carry unchanged -- tri-state, not the
+    unwrapped values ``SystemSettings``/``PwSettings`` need."""
 
     structure: Structure
     analysis: AnalysisFacts
