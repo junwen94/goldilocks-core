@@ -73,6 +73,13 @@ an output flag: without `-o/--out` it prints `{"files": [...], "records":
 "kind": "directory"|"archive", "path": "..."}`. `explain --json` prints
 `{"records": {...}, "warnings": [...]}`.
 
+A command writes only its own output to stdout: the `--json` document, or the
+plain-text report without `--json`. Anything else printed while it runs, such
+as the notice `mace` prints when it loads, output from a C extension, or a
+child process's output, goes to stderr, so `--json` output always parses as
+one JSON document. `serve` is the exception: `serve mcp` speaks JSON-RPC on
+stdout itself.
+
 ## Scientific controls
 
 Defaults are Quantum ESPRESSO single-point SCF, PBEsol, and efficiency-tier

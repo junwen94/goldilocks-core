@@ -8,9 +8,10 @@ epic 8, #8; populated for real in v2 epic 11, #11). Lists every model
 from __future__ import annotations
 
 import argparse
-import json
+from typing import TextIO
 
 from goldilocks_core.capabilities import capabilities
+from goldilocks_core.cli._output import write_json
 
 
 def add_subparser(subparsers: argparse._SubParsersAction) -> None:
@@ -24,25 +25,25 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument("--json", action="store_true", help="Print JSON output.")
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: argparse.Namespace, out: TextIO) -> None:
     models = capabilities()["models"]
     if args.models_command == "show":
         matches = [model for model in models if model.get("target") == args.target]
         if args.json:
-            print(json.dumps(matches, indent=2, sort_keys=True))
+            write_json(out, matches)
             return
         if not matches:
-            print(f"no installed model for target {args.target!r}")
+            print(f"no installed model for target {args.target!r}", file=out)
             return
         for model in matches:
-            print(model)
+            print(model, file=out)
         return
 
     if args.json:
-        print(json.dumps(models, indent=2, sort_keys=True))
+        write_json(out, models)
         return
     if not models:
-        print("no ml models installed (ml integration lands in a later epic)")
+        print("no ml models installed (ml integration lands in a later epic)", file=out)
         return
     for model in models:
-        print(model)
+        print(model, file=out)

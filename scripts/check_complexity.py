@@ -13,8 +13,8 @@ from pathlib import Path
 PACKAGE = "goldilocks_core"
 ROOT = Path(__file__).resolve().parents[1]
 LIMITS = {
-    "cli.core": (10, 16),
-    "cli._run": (8, 26),
+    "cli.core": (11, 16),  # + cli._output.command_stdout (#183)
+    "cli._run": (9, 27),  # + cli._output.write_json (#183)
     "server.http": (5, 12),
     "server.mcp": (5, 10),
     "service._system": (13, 23),

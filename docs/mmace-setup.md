@@ -102,17 +102,17 @@ current shell.
 A structure loading successfully is not proof the `ml` tier is live — check the `source`
 field explicitly:
 
-`Fe_bcc.cif` (bundled with this repo, and actually magnetic) makes a good check. Note:
-importing `mace` prints a UserWarning and a "cuequivariance ... will be disabled" line to
-stdout before anything else runs, ahead of the JSON `explain --json` prints — harmless, but
-it breaks a naive `json.load(sys.stdin)`. Skip to the first `{`:
+`Fe_bcc.cif` (bundled with this repo, and actually magnetic) makes a good check:
 
 ```bash
 STRUCTURE="$(uv run goldilocks examples path)/Fe_bcc.cif"
 uv run goldilocks explain "$STRUCTURE" --json | python3 -c \
-  "import json,sys; text=sys.stdin.read(); print(json.loads(text[text.index('{'):])['records']['is_magnetic']['source'])"
+  "import json,sys; print(json.load(sys.stdin)['records']['is_magnetic']['source'])"
 # expect: ml   (not: heuristic, or llm)
 ```
+
+Importing `mace` prints a UserWarning and a "cuequivariance ... will be disabled" line. Both
+go to stderr, so they never reach the JSON on stdout.
 
 For ordering ranking, a successful `--rank-with-mmace` run reports a `model_id` and real
 per-candidate energies instead of degrading with a warning:
