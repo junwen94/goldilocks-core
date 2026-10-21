@@ -417,7 +417,10 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "npool": {
         "description": (
-            "Number of k-point parallelization pools; must divide ntasks evenly."
+            "Number of k-point pools passed to pw.x as -npool; must divide "
+            "ntasks. Default: the most pools, up to one per k-point/spin "
+            "pair (two per k-point with collinear spin), that keep the pools "
+            "at least 80% busy."
         ),
     },
     "ndiag": {

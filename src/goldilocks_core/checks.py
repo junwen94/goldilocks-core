@@ -278,7 +278,7 @@ def _npool_must_divide_ntasks(
     job is running, worse than the same "warn, don't block" pattern used
     for e.g. ``nodes``/``walltime_h`` exceeding a partition's ceiling
     (which fail at SLURM *submission*, before any compute is consumed).
-    ``parallelisation()``'s own heuristic default (``_best_npool``)
+    ``parallelisation()``'s own heuristic default (``best_npool``)
     always returns a value that divides ``ntasks`` by construction, so
     this can only ever fire for a human override."""
     if job is None or parallel is None or not job.ok or not parallel.ok:

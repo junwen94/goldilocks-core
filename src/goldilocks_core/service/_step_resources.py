@@ -10,9 +10,11 @@ only ever reads those two fields from phase 3a's output.
 
 The resource envelope needs ``cutoffs``/``nbnd``/``magnetic`` all
 resolved before ``job_resources`` can run, and ``parallelisation`` needs
-``job_resources``'s plain output -- ``job_resources`` never reads
-``parallelisation``, only the reverse, by design (see
-``advisors/parallelisation.py``'s own module note on false circularity).
+``job_resources``'s ``ntasks`` plus the step's k-point/spin pairs
+(``n_irr_k`` and the magnetic decision's spin layout) --
+``job_resources`` never reads ``parallelisation``, only the reverse, by
+design (see ``advisors/parallelisation.py``'s own module note on false
+circularity).
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.parallelisation import (
     ParallelisationDecision,
     ParallelisationHumanInput,
+    kpoint_spin_pairs,
     parallelisation,
 )
 from goldilocks_core.advisors.size import (
@@ -98,9 +101,14 @@ def resource_step_advice(
     mem_per_proc: float | None = None
     parallel_state: FieldState[ParallelisationDecision]
     if job_state.ok:
-        n_irr_k_value = n_irr_k.value if n_irr_k.ok else None
+        # job_state is only ok once magnetic is, so the spin layout is known.
+        pairs = (
+            kpoint_spin_pairs(n_irr_k.value, system.magnetic.value)
+            if n_irr_k.ok
+            else None
+        )
         parallel_state = parallelisation(
-            job_state.value, n_irr_k_value, overrides.parallelisation
+            job_state.value.ntasks, pairs, overrides.parallelisation
         )
         if parallel_state.ok and estimate is not None:
             mem_per_proc = memory_per_process(

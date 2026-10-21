@@ -1,22 +1,28 @@
 """parallelisation: npool/ndiag, from a job's ntasks and the step's
-n_irr_k -- the other half of the false-circularity fix
-`advisors/job_resources.py` describes: this reads `job.ntasks`, never
-the reverse.
+k-point/spin pairs -- the other half of the false-circularity fix
+`advisors/job_resources.py` describes: this reads the job's `ntasks`,
+never the reverse.
 
 New in v2 (v2 epic 7, #7); no v1 precedent.
 
-**Full constraint set** (goldilocks-core-design.md:1487-1493):
-`npool` must divide `ntasks` (a hard MPI-layout requirement -- QE
-itself refuses an `ntasks`/`npool` combination that does not divide
-evenly); `npool` should also divide `n_reduced_kpoints`, or some pools
-sit idle once every k-point has been assigned to a busy pool
-(goldilocks-core-design.md:1490, ":1511-1516" -- this is exactly why
-epic 6's `kmesh.py`/`advisors/n_irr_k.py` port matters here: v1 never
-had a real `n_reduced_kpoints`, so v1's own parallel advice was always
-a guess). This module only enforces the hard constraint and *prefers*
-the soft one; it does not search for a global optimum -- picking the
-actually-fastest layout is explicitly named as needing ml eventually
-(goldilocks-core-design.md:1396-1407).
+**Pools share k-point/spin pairs, not k-points (#168).** A collinear
+nspin=2 run lists every k-point once per spin (QE 7.3
+`PW/src/setup.f90:617` calls `set_kup_and_kdw`, which doubles nkstot,
+`set_kup_and_kdw.f90:42`), so its pools share N = 2 x n_irr_k pairs;
+nspin=1 and noncollinear (spin-orbit) runs share N = n_irr_k.
+`kpoint_spin_pairs` derives N from the spin layout the writer renders
+(`qe_spin_layout`). `divide_et_impera` gives every pool N // npool pairs
+and the first N mod npool pools one more
+(`PW/src/divide_et_impera.f90:49-56`), so the run lasts ceil(N/npool)
+rounds and npool pools offer ceil(N/npool) x npool pair slots.
+
+**Constraints and the default.** `npool` must divide `ntasks`: QE
+refuses any other layout, and `checks.py` blocks it. A pool beyond the
+Nth has nothing to do. `best_npool` takes the largest divisor of
+`ntasks` that is at most N and keeps the pair slots within 25% of N
+(`_POOL_SLOT_TOLERANCE`), trading k-point parallelism against idle
+slots; it does not search for the actually-fastest layout, which is
+named as needing ml (goldilocks-core-design.md:1396-1407).
 
 **`ndiag` is left to pw.x unless the user sets it (#133).** Without
 `-ndiag`, pw.x (QE >= 7.1) picks the largest square np^2 with
@@ -57,7 +63,7 @@ from dataclasses import dataclass
 
 from pydantic import Field
 
-from goldilocks_core.advisors.job_resources import JobDecision
+from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.inputs.overrides import HumanInput
 from goldilocks_core.resolution import FieldState, Provenance, Resolved, Warning
 
@@ -73,8 +79,8 @@ WARNING_CATALOGUE = (
         level="warning",
         category="parallelisation",
         message=(
-            "npool exceeds the number of reduced k-points; at least one pool "
-            "will have no k-point to work on."
+            "npool exceeds the number of k-point/spin pairs pw.x distributes; "
+            "the extra pools will have no k-point to work on."
         ),
     ),
     Warning(
@@ -82,8 +88,8 @@ WARNING_CATALOGUE = (
         level="info",
         category="parallelisation",
         message=(
-            "npool divides ntasks but not the number of reduced k-points "
-            "evenly; some pools will handle one more k-point than others."
+            "npool does not divide the number of k-point/spin pairs evenly; "
+            "the first pools handle one more pair than the rest."
         ),
     ),
     Warning(
@@ -98,9 +104,16 @@ WARNING_CATALOGUE = (
 )
 """Every warning code this module can emit -- ``capabilities.py``'s
 ``warnings[]`` catalogue aggregates one of these tuples per advisor. The
-real, per-occurrence messages (naming the actual npool/ntasks/k-point
+real, per-occurrence messages (naming the actual npool/ntasks/pair
 figures) are built at their call sites below; these are the generic
 descriptions of each code, for a caller that has not seen it fire."""
+
+_POOL_SLOT_TOLERANCE = 1.25
+"""``best_npool`` keeps the ceil(N/npool) x npool pair slots of its pools
+within this factor of the N k-point/spin pairs, so at most a fifth of
+the slots sit idle. One SCARF timing backs it: MnSi B20's 48 pairs on
+64 tasks ran in 39.9 s on 16 pools and 63.5 s on 32 (different node
+generations); a factor of 4/3 or more would pick 32 pools there."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +121,9 @@ class ParallelisationDecision:
     npool: int
     ndiag: int | None
     nimage: int | None = None
+    kpoint_spin_pairs: int | None = None
+    """The k-point/spin pairs pw.x splits over the pools; ``None`` when
+    n_irr_k is unresolved."""
     warnings: tuple[Warning, ...] = ()
 
 
@@ -125,84 +141,124 @@ class ParallelisationHumanInput(HumanInput):
     ndiag: int | None = Field(default=None, gt=0)
 
 
+def qe_spin_layout(magnetic: MagneticConfigFacts) -> tuple[int, int]:
+    """``(nspin, npol)`` of the pw.x run the writer renders for
+    ``magnetic`` (``_magnetic_keywords`` in
+    ``generation/quantum_espresso/scf.py``): spin-orbit renders
+    ``noncolin``, which pw.x runs with nspin=4 and two-component spinors,
+    magnetic or not (QE 7.3 ``PW/src/input.f90:718``); a collinear
+    spin-polarised run renders nspin=2; anything else runs nspin=1."""
+    if magnetic.spin_orbit_enabled:
+        return 4, 2
+    if magnetic.spin_polarized:
+        return 2, 1
+    return 1, 1
+
+
+def kpoint_spin_pairs(n_irr_k: int, magnetic: MagneticConfigFacts) -> int:
+    """The k-point/spin pairs pw.x distributes over pools: 2 x
+    ``n_irr_k`` for collinear nspin=2, otherwise ``n_irr_k`` (see the
+    module docstring)."""
+    nspin, _npol = qe_spin_layout(magnetic)
+    return 2 * n_irr_k if nspin == 2 else n_irr_k
+
+
 def parallelisation(
-    job: JobDecision,
-    n_irr_k: int | None = None,
+    ntasks: int,
+    n_kpoint_spin: int | None,
     human: ParallelisationHumanInput | None = None,
 ) -> FieldState[ParallelisationDecision]:
-    """``npool`` from ``job.ntasks`` and ``n_irr_k`` unless ``human``
-    sets it; ``ndiag`` only from ``human`` (``None`` leaves it to pw.x)."""
+    """``npool`` for ``ntasks`` processes and ``n_kpoint_spin``
+    k-point/spin pairs (``kpoint_spin_pairs``; ``None`` when n_irr_k is
+    unresolved) unless ``human`` sets it; ``ndiag`` only from ``human``
+    (``None`` leaves it to pw.x)."""
     human = human or ParallelisationHumanInput()
 
     if human.npool is not None:
         npool = human.npool
-        warnings: list[Warning] = []
-        if job.ntasks % npool != 0:
-            warnings.append(
-                Warning(
-                    code="parallelisation.npool_does_not_divide_ntasks",
-                    level="warning",
-                    category="parallelisation",
-                    message=(
-                        f"npool={npool} does not divide ntasks={job.ntasks}; QE "
-                        "will refuse this layout."
-                    ),
-                )
-            )
-        if n_irr_k is not None and npool > n_irr_k:
-            warnings.append(
-                Warning(
-                    code="parallelisation.npool_exceeds_kpoints",
-                    level="warning",
-                    category="parallelisation",
-                    message=(
-                        f"npool={npool} exceeds n_reduced_kpoints={n_irr_k}; at "
-                        f"least {npool - n_irr_k} pool(s) will have no k-point "
-                        "to work on."
-                    ),
-                )
-            )
+        warnings = _human_npool_warnings(npool, ntasks, n_kpoint_spin)
         source = "human"
     else:
-        npool, warnings = _best_npool(job.ntasks, n_irr_k)
+        npool = best_npool(ntasks, n_kpoint_spin)
+        warnings = _load_imbalance_notes(npool, n_kpoint_spin)
         source = "heuristic"
 
     if human.ndiag is not None:
         source = "human"
-        warnings.extend(_ndiag_notes(human.ndiag, job.ntasks // npool))
+        warnings.extend(_ndiag_notes(human.ndiag, ntasks // npool))
 
     decision = ParallelisationDecision(
-        npool=npool, ndiag=human.ndiag, warnings=tuple(warnings)
+        npool=npool,
+        ndiag=human.ndiag,
+        kpoint_spin_pairs=n_kpoint_spin,
+        warnings=tuple(warnings),
     )
     return Resolved(decision, Provenance(source=source))
 
 
-def _best_npool(ntasks: int, n_irr_k: int | None) -> tuple[int, list[Warning]]:
-    """The largest divisor of ``ntasks`` that does not exceed ``n_irr_k`` --
-    capping at ``n_irr_k`` is what prevents an idle pool (one with zero
-    k-points to work on) outright; preferring the largest such divisor
-    maximises k-point parallelism. Only when that divisor does not also
-    divide ``n_irr_k`` evenly is there a warning -- that is a milder,
-    unavoidable load *imbalance* (some pools get one more k-point than
-    others), not idling, and is not worth sacrificing parallelism for by
-    falling back to a smaller, evenly-dividing npool such as 1.
-    """
-    if n_irr_k is None:
-        return 1, []
+def best_npool(ntasks: int, n_kpoint_spin: int | None) -> int:
+    """The largest divisor of ``ntasks`` that is at most
+    ``n_kpoint_spin`` (N) and whose ceil(N/npool) x npool pair slots stay
+    within ``_POOL_SLOT_TOLERANCE`` x N; 1 when N is ``None``. npool=1
+    always qualifies."""
+    if n_kpoint_spin is None:
+        return 1
+    return max(
+        npool
+        for npool in range(1, min(ntasks, n_kpoint_spin) + 1)
+        if ntasks % npool == 0
+        and math.ceil(n_kpoint_spin / npool) * npool
+        <= _POOL_SLOT_TOLERANCE * n_kpoint_spin
+    )
 
-    candidates = [d for d in range(1, ntasks + 1) if ntasks % d == 0 and d <= n_irr_k]
-    chosen = max(candidates)  # 1 always qualifies, so candidates is never empty
-    if n_irr_k % chosen == 0:
-        return chosen, []
-    return chosen, [
+
+def _human_npool_warnings(
+    npool: int, ntasks: int, n_kpoint_spin: int | None
+) -> list[Warning]:
+    warnings: list[Warning] = []
+    if ntasks % npool != 0:
+        warnings.append(
+            Warning(
+                code="parallelisation.npool_does_not_divide_ntasks",
+                level="warning",
+                category="parallelisation",
+                message=(
+                    f"npool={npool} does not divide ntasks={ntasks}; QE will "
+                    "refuse this layout."
+                ),
+            )
+        )
+    if n_kpoint_spin is not None and npool > n_kpoint_spin:
+        warnings.append(
+            Warning(
+                code="parallelisation.npool_exceeds_kpoints",
+                level="warning",
+                category="parallelisation",
+                message=(
+                    f"npool={npool} exceeds the {n_kpoint_spin} k-point/spin "
+                    f"pairs pw.x distributes; {npool - n_kpoint_spin} pool(s) "
+                    "will have no k-point to work on."
+                ),
+            )
+        )
+    return warnings
+
+
+def _load_imbalance_notes(npool: int, n_kpoint_spin: int | None) -> list[Warning]:
+    """A note when the first N mod npool pools take one pair more than
+    the rest (``PW/src/divide_et_impera.f90:49-56``)."""
+    if n_kpoint_spin is None or n_kpoint_spin % npool == 0:
+        return []
+    return [
         Warning(
             code="parallelisation.npool_load_imbalance",
             level="info",
             category="parallelisation",
             message=(
-                f"npool={chosen} divides ntasks but not n_reduced_kpoints "
-                f"({n_irr_k}) evenly; some pools will handle one more "
-                "k-point than others."
+                f"npool={npool} does not divide the {n_kpoint_spin} "
+                "k-point/spin pairs evenly; the first "
+                f"{n_kpoint_spin % npool} pool(s) handle one more pair than "
+                "the rest."
             ),
         )
     ]

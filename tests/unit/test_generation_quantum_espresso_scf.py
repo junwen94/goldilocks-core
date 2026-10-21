@@ -15,7 +15,10 @@ from goldilocks_core.advisors.k_sampling import KSamplingDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
-from goldilocks_core.advisors.parallelisation import ParallelisationDecision
+from goldilocks_core.advisors.parallelisation import (
+    ParallelisationDecision,
+    qe_spin_layout,
+)
 from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.scf import write_qe_scf
@@ -323,6 +326,46 @@ def test_spin_orbit_magnetic_emits_noncolin_lspinorb_and_angles(
     # the one combination QE would otherwise refuse to run.
     assert "K_POINTS automatic" in content
     assert "K_POINTS gamma" not in content
+
+
+@pytest.mark.parametrize(
+    ("spin_polarized", "spin_orbit_enabled", "layout", "rendered", "absent"),
+    [
+        (False, False, (1, 1), (), ("nspin", "noncolin")),
+        (True, False, (2, 1), ("nspin            = 2",), ("noncolin",)),
+        # noncolin makes pw.x run nspin=4 (QE 7.3 PW/src/input.f90:718)
+        (False, True, (4, 2), ("noncolin         = .true.",), ("nspin",)),
+        (True, True, (4, 2), ("noncolin         = .true.",), ("nspin",)),
+    ],
+)
+def test_qe_spin_layout_matches_the_spin_keywords_the_writer_renders(
+    pseudo_metadata_factory,
+    spin_polarized: bool,
+    spin_orbit_enabled: bool,
+    layout: tuple[int, int],
+    rendered: tuple[str, ...],
+    absent: tuple[str, ...],
+) -> None:
+    """``qe_spin_layout`` sizes pools (#168) for the run this writer
+    describes, so the two must agree on every magnetic configuration."""
+    feco = Structure(
+        Lattice.cubic(2.857), ["Fe", "Co"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
+    )
+    magnetic = _magnetic(
+        feco,
+        spin_polarized=spin_polarized,
+        starting_magnetization={"Fe": 0.3, "Co": 0.2} if spin_polarized else None,
+        spin_orbit_enabled=spin_orbit_enabled,
+    )
+    system = _system(feco, pseudo_metadata_factory, magnetic=magnetic)
+
+    content = write_qe_scf(system, _step(), _JOB, _CTX)[0].files["scf.in"]
+
+    assert qe_spin_layout(magnetic) == layout
+    for keyword in rendered:
+        assert keyword in content
+    for keyword in absent:
+        assert keyword not in content
 
 
 def test_afm_relabeled_species_reach_atomic_species_and_positions(

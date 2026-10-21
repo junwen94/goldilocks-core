@@ -32,6 +32,7 @@ from goldilocks_core.service import (
     render_submission,
     to_bundle_input,
 )
+from goldilocks_core.set_overrides import build_overrides
 from goldilocks_core.steps import default_shared_context
 
 
@@ -185,6 +186,60 @@ class TestAdviseEndToEnd:
         assert advice.analysis.is_metal.ok
         assert advice.analysis.is_metal.value == "metal"
         assert advice.analysis.is_metal.source == "human"
+
+
+class TestPoolsShareKpointSpinPairs:
+    """#168: pw.x splits k-point/spin pairs over pools, two per k-point
+    with collinear spin. ``k_grid=[3,3,3]`` gives the fixture cell
+    n_irr_k 6, on the test cluster's 64 tasks."""
+
+    @staticmethod
+    def _parallelisation(silicon, hpc, store, **settings):
+        overrides = build_overrides({"k_grid": [3, 3, 3], **settings})
+        advice = advise(silicon, hpc=hpc, overrides=overrides, store=store)
+        assert advice.step.kpoints.n_irr_k.value == 6
+        assert advice.step.resources.job.value.ntasks == 64
+        assert check(advice).ok
+        return advice.step.resources.parallelisation.value
+
+    @staticmethod
+    def _codes(parallel) -> list[str]:
+        return [warning.code for warning in parallel.warnings]
+
+    def test_spin_polarized_run_pools_twelve_pairs_evenly(
+        self, silicon, hpc, installed_table
+    ) -> None:
+        store, _table = installed_table
+
+        parallel = self._parallelisation(silicon, hpc, store, spin_polarized=True)
+
+        assert parallel.npool == 4
+        assert self._codes(parallel) == []
+        assert parallel.kpoint_spin_pairs == 12
+
+    def test_spinless_run_takes_two_pools_for_six_k_points(
+        self, silicon, hpc, installed_table
+    ) -> None:
+        store, _table = installed_table
+
+        parallel = self._parallelisation(silicon, hpc, store)
+
+        assert parallel.npool == 2
+        assert self._codes(parallel) == []
+        assert parallel.kpoint_spin_pairs == 6
+
+    def test_user_npool_within_the_spin_pairs_is_not_called_idle(
+        self, silicon, hpc, installed_table
+    ) -> None:
+        store, _table = installed_table
+
+        parallel = self._parallelisation(
+            silicon, hpc, store, spin_polarized=True, npool=8
+        )
+
+        assert parallel.npool == 8
+        assert self._codes(parallel) == []
+        assert parallel.kpoint_spin_pairs == 12
 
 
 class TestAdviseDegradation:
