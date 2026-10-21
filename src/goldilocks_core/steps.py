@@ -45,6 +45,11 @@ class Step:
     ``-in``; VASP would carry none, per goldilocks-core-design.md:1244-1247)
     so ``submission/slurm.py`` can stay ignorant of which code produced
     the step it is scheduling.
+
+    ``ntasks`` is the step's launch shape: how many MPI tasks its program
+    runs on, with ``None`` meaning every task the job allocates. A writer
+    sets it when its program cannot use the whole allocation (``dos.x``
+    runs on one task).
     """
 
     name: str
@@ -53,6 +58,7 @@ class Step:
     files: dict[str, str] = field(default_factory=dict)
     stdout: str | None = None
     workdir: str | None = None
+    ntasks: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -37,6 +37,14 @@ _SCF_STEP = Step(
     files={"scf.in": "&CONTROL\n/\n"},
     stdout="scf.out",
 )
+_DOS_STEP = Step(
+    name="dos",
+    executable="dos.x",
+    args=("-in", "dos.in"),
+    files={"dos.in": "&DOS\n/\n"},
+    stdout="dos.out",
+    ntasks=1,
+)
 
 
 def test_renders_sbatch_directives_from_job_decision() -> None:
@@ -82,6 +90,53 @@ def test_step_launch_line_never_interprets_code_specific_args() -> None:
     script = render_slurm_script(_HPC, _JOB, "quantum_espresso", _CTX, [_SCF_STEP])
 
     assert "srun pw.x -npool 4 -in scf.in > scf.out" in script
+
+
+def test_a_step_that_declares_ntasks_runs_on_that_many_tasks() -> None:
+    """#134: dos.x on all 64 tasks aborts wherever a rank owns no FFT
+    plane; the pw.x step keeps the whole allocation."""
+    script = render_slurm_script(
+        _HPC, _JOB, "quantum_espresso", _CTX, [_SCF_STEP, _DOS_STEP]
+    )
+
+    lines = script.splitlines()
+    assert "#SBATCH --ntasks=64" in lines
+    assert "srun pw.x -npool 4 -in scf.in > scf.out" in lines
+    assert "srun --nodes=1 --ntasks=1 dos.x -in dos.in > dos.out" in lines
+
+
+@pytest.mark.parametrize("ntasks, nodes", [(1, 1), (64, 1), (65, 2)])
+def test_a_reduced_step_spans_only_the_nodes_its_tasks_fill(
+    ntasks: int, nodes: int
+) -> None:
+    job = replace(_JOB, nodes=2, ntasks=128)
+    step = replace(_DOS_STEP, ntasks=ntasks)
+
+    script = render_slurm_script(_HPC, job, "quantum_espresso", _CTX, [step])
+
+    expected = f"srun --nodes={nodes} --ntasks={ntasks} dos.x -in dos.in > dos.out"
+    assert expected in script.splitlines()
+
+
+def test_a_reduced_step_keeps_the_launchers_own_srun_options() -> None:
+    hpc = replace(_HPC, launcher="srun --mpi=pmix")
+
+    script = render_slurm_script(hpc, _JOB, "quantum_espresso", _CTX, [_DOS_STEP])
+
+    expected = "srun --mpi=pmix --nodes=1 --ntasks=1 dos.x -in dos.in > dos.out"
+    assert expected in script.splitlines()
+
+
+def test_a_reduced_step_on_a_non_srun_launcher_is_refused() -> None:
+    """The per-step flags are srun's; other launchers still run
+    whole-allocation steps."""
+    hpc = replace(_HPC, name="other", launcher="mpirun")
+
+    whole = render_slurm_script(hpc, _JOB, "quantum_espresso", _CTX, [_SCF_STEP])
+    assert "mpirun pw.x -npool 4 -in scf.in > scf.out" in whole.splitlines()
+
+    with pytest.raises(SubmissionError, match=r"dos sets ntasks=1.*other.*mpirun"):
+        render_slurm_script(hpc, _JOB, "quantum_espresso", _CTX, [_SCF_STEP, _DOS_STEP])
 
 
 def test_every_step_is_followed_by_an_exit_status_check() -> None:

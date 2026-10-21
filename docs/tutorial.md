@@ -165,7 +165,9 @@ if dos_report.ok:
 nscf step's own fields under an `nscf_`-prefixed name, and the DOS decision
 itself under `"dos"`. The submission script uses the scf step's resource
 decision, since `pw.x`'s scf pass is normally the dominant cost and `dos.x`
-is fast.
+is fast. Both `pw.x` steps run on the whole allocation; `dos.x` runs on one
+task of it (`srun --nodes=1 --ntasks=1`), because every extra task would
+repeat the whole DOS and `dos.x` aborts when a task owns no FFT plane.
 
 See [Recommendations](science.md) to interpret other settings, or
 [Architecture](architecture.md) to extend the computation workflow.

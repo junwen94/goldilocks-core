@@ -14,10 +14,21 @@ docstring: "no k_sampling/n_irr_k/nbnd/convergence of its own"; the same
 reasoning extends one level up to the system-level facts ``pw.x``
 needs and ``dos.x`` does not).
 
-**No parallelisation args**, unlike ``write_qe_scf``'s ``-npool``:
-``DosSettings`` carries no ``ParallelisationDecision`` field at all
-(``step_settings.py``), so there is nothing to translate into a flag
-here -- not an oversight, a reflection of that type's own shape.
+**One MPI task** (``Step.ntasks=1``) whatever the allocation, and no
+``-npool``. ``dos.x`` gains nothing from more tasks and cannot tolerate
+many (QE 7.3):
+
+- it refuses pools (``PP/src/dos.f90:108-109``);
+- every rank recomputes the whole DOS and only the I/O rank writes it
+  (``PP/src/dos.f90:218-230``);
+- ``read_file_new`` builds slab FFT descriptors unless ``-pd`` is given
+  (``PW/src/data_structure.f90:74-77``), and ``FFTXlib/src/
+  fft_types.f90:620-622`` aborts when a rank owns no z-plane. ``pw.x``
+  avoids that abort only by switching to pencil decomposition in
+  ``PW/src/setup.f90:802``, which ``dos.x`` never runs.
+
+``-pd .true.`` would avoid the abort, but every rank would still repeat
+the whole computation.
 """
 
 from __future__ import annotations
@@ -55,5 +66,6 @@ def write_qe_dos(step: DosSettings, ctx: SharedContext) -> list[Step]:
             args=("-in", "dos.in"),
             files={"dos.in": content},
             stdout="dos.out",
+            ntasks=1,
         )
     ]

@@ -6,14 +6,26 @@ comes from -- goldilocks-core-design.md:1297-1310's own signpost,
 translated:
 
     nodes / ntasks / walltime / partition  <- advisors/job_resources.py
+                                               (the allocation)
     npool / ndiag / nimage                 <- advisors/parallelisation.py
                                                (already baked into Step.args)
-    which programs run, in what order      <- generation/<code>/<task>.py's
-                                               produced Step sequence
+    which programs run, in what order,     <- generation/<code>/<task>.py's
+    and on how many tasks                      produced Step sequence
+                                               (Step.ntasks)
     module load / launcher / partition
     defaults                               <- inputs/profiles/<machine>.toml
 
-This file only lays out SBATCH syntax and formatting.
+This file only lays out SBATCH and launch-line syntax.
+
+**The job sets the allocation; each step sets its own launch shape.**
+A step with ``Step.ntasks=None`` runs on the whole allocation through
+the bare profile launcher -- the task count ``pw.x``'s ``-npool``/
+``-ndiag`` are computed for. A step that declares ``ntasks=N`` runs as
+``srun --nodes=ceil(N / ntasks_per_node) --ntasks=N``, so no step
+inherits an allocation its program cannot use (``dos.x`` runs on one
+task; see ``generation/quantum_espresso/dos.py``). Those flags are
+srun's: such a step on a profile whose launcher is not ``srun`` raises
+``SubmissionError`` rather than guessing another launcher's syntax.
 
 **Scheduler-only, not code-aware, except for one lookup.**
 goldilocks-core-design.md:1249-1259: code-specific parallel flags
@@ -65,6 +77,8 @@ is deferred to whichever future task-writer (``nscf``/``bands``/
 
 from __future__ import annotations
 
+import math
+
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.inputs.hpc import HpcProfile
 from goldilocks_core.steps import SharedContext, Step
@@ -114,7 +128,7 @@ def render_slurm_script(
     lines += [f"module load {module}" for module in hpc.modules.get(code, ())]
     lines += ["", _CHECK_FUNCTION.rstrip("\n")]
     for step in steps:
-        lines += ["", *_step_lines(hpc, ctx, step)]
+        lines += ["", *_step_lines(hpc, job, ctx, step)]
     return "\n".join(lines) + "\n"
 
 
@@ -138,11 +152,13 @@ def _format_walltime(hours: float) -> str:
     return f"{whole_hours}:{minutes:02d}:{seconds:02d}"
 
 
-def _step_lines(hpc: HpcProfile, ctx: SharedContext, step: Step) -> list[str]:
+def _step_lines(
+    hpc: HpcProfile, job: JobDecision, ctx: SharedContext, step: Step
+) -> list[str]:
     lines = [f"# {step.name}"]
     if step.workdir is not None:
         lines.append(f'cd "{step.workdir}"')
-    command = " ".join([hpc.launcher, step.executable, *step.args])
+    command = " ".join([*_launcher(hpc, job, step), step.executable, *step.args])
     if step.stdout is not None:
         command += f" > {step.stdout}"
     lines.append(command)
@@ -151,3 +167,20 @@ def _step_lines(hpc: HpcProfile, ctx: SharedContext, step: Step) -> list[str]:
         f'goldilocks_check_exit_status "{step.name}" "{step.stdout}" "{xml_file}"'
     )
     return lines
+
+
+def _launcher(hpc: HpcProfile, job: JobDecision, step: Step) -> list[str]:
+    """The launch words before ``step``'s executable: the profile launcher
+    alone for a whole-allocation step, plus srun's ``--nodes``/``--ntasks``
+    for a step that declares its own ``ntasks``. Raises ``SubmissionError``
+    when such a step meets a launcher that is not srun."""
+    if step.ntasks is None:
+        return [hpc.launcher]
+    if hpc.launcher.split()[:1] != ["srun"]:
+        raise SubmissionError(
+            f"step {step.name} sets ntasks={step.ntasks}, but hpc profile "
+            f"{hpc.name} launches with {hpc.launcher}; a per-step task count "
+            "is rendered only for srun"
+        )
+    nodes = math.ceil(step.ntasks / job.ntasks_per_node)
+    return [hpc.launcher, f"--nodes={nodes}", f"--ntasks={step.ntasks}"]

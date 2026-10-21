@@ -21,6 +21,13 @@ def test_step_defaults_to_no_args_and_empty_files() -> None:
     assert step.workdir is None
 
 
+def test_step_defaults_to_the_whole_allocation() -> None:
+    """``ntasks=None``: the program runs on every task the job allocates."""
+    step = Step(name="scf", executable="pw.x")
+
+    assert step.ntasks is None
+
+
 def test_step_carries_code_specific_args_opaquely() -> None:
     step = Step(
         name="scf",

@@ -161,6 +161,9 @@ per `generation/quantum_espresso/scf.py`'s own governing invariant,
 "generation never makes a scientific choice, only translation and
 formatting." The writers today cover all four tasks: `write_qe_scf`,
 `write_qe_relax`, and a DOS writer (`generation/quantum_espresso/dos.py`).
+A writer sets `Step.ntasks` when its program cannot use the whole allocation
+(the DOS writer sets 1); `submission/slurm.py` then launches that step on that
+many tasks instead of every task the job allocates.
 
 ### Add a model or pseudopotential table
 

@@ -5,7 +5,9 @@ The fixture cell is two Si atoms in a 5.43 A cubic cell: nbnd 8 on the
 isolated asset root (no ML tier), n_irr_k 1 with ``k_grid=[1,1,1]`` and
 6 with ``k_grid=[3,3,3]``. Before #133 SCARF rendered those as
 ``-npool 1 -ndiag 64`` and ``-npool 4 -ndiag 16``: the H2O/N2-box and
-C2-box layouts that stopped or hung pw.x on SCARF.
+C2-box layouts that stopped or hung pw.x on SCARF. Before #134 the dos
+task launched dos.x on all 64 tasks, where it aborts on every rank that
+owns no FFT z-plane.
 """
 
 from __future__ import annotations
@@ -17,8 +19,17 @@ from support import sssp_fixture_table_spec
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.inputs.hpc import load_hpc_profile
-from goldilocks_core.service import advise, check, generate
+from goldilocks_core.service import (
+    advise,
+    advise_dos,
+    check,
+    check_dos,
+    generate,
+    generate_dos,
+    render_submission_dos,
+)
 from goldilocks_core.set_overrides import build_overrides
+from goldilocks_core.steps import default_shared_context
 
 
 def _installed_store(tmp_path, monkeypatch) -> AssetStore:
@@ -82,3 +93,22 @@ def test_user_ndiag_that_holds_nbnd_reaches_pw_x(tmp_path, monkeypatch) -> None:
     assert report.ok, report.blocking
     (scf,) = generate(advice, report)
     assert scf.args[scf.args.index("-ndiag") + 1] == "4"
+
+
+def test_dos_task_runs_dos_x_on_one_task(tmp_path, monkeypatch) -> None:
+    store = _installed_store(tmp_path, monkeypatch)
+    hpc = load_hpc_profile("scarf")
+    ctx = default_shared_context()
+
+    advice = advise_dos(_silicon(), hpc=hpc, store=store)
+    report = check_dos(advice)
+    assert report.ok, report.blocking
+    steps = generate_dos(advice, report, ctx=ctx)
+    script = render_submission_dos(advice, hpc, "quantum_espresso", ctx, steps)
+
+    lines = script.splitlines()
+    assert "#SBATCH --ntasks=64" in lines
+    assert "srun --nodes=1 --ntasks=1 dos.x -in dos.in > dos.out" in lines
+    pw_lines = [line for line in lines if " pw.x " in line]
+    assert len(pw_lines) == 2
+    assert all(line.startswith("srun pw.x -npool ") for line in pw_lines)
