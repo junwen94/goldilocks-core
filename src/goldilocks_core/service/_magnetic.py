@@ -13,7 +13,9 @@ These decisions depend on one another in a fixed order:
    selected pseudopotentials' z_valence.
 
 ``symmetry_eff`` is the cell's own symmetry, counted on those species as
-pw.x counts it. Every later decision -- the
+pw.x counts it, and ``geometry_eff`` the uploaded structure's geometry with
+the cell's own vacuum, which the boundary advisor's dipole notice and
+'slab' offer describe (#144). Every later decision -- the
 electron count, bands, k-points, convergence, resources, the gate and the
 writer -- reads the same cell object (``MagneticCell.structure``), and the
 input structure stops here: no count can describe a cell other than the
@@ -34,9 +36,10 @@ from goldilocks_core.advisors.magnetic_config import (
     magnetic_cell,
     magnetic_config,
 )
+from goldilocks_core.analysis.geometry import GeometryFacts, with_vacuum_of
 from goldilocks_core.analysis.symmetry import SymmetryFacts, symmetry
 from goldilocks_core.assets.store import AssetStore
-from goldilocks_core.resolution import Blocked, FieldState, blocked_by
+from goldilocks_core.resolution import Blocked, FieldState, Resolved, blocked_by
 from goldilocks_core.service._analysis import AnalysisFacts
 from goldilocks_core.service._pseudo import PseudoAdvice, resolve_pseudopotentials
 from goldilocks_core.service._system_overrides import SystemOverrides
@@ -45,11 +48,14 @@ from goldilocks_core.service._system_overrides import SystemOverrides
 @dataclass(frozen=True, slots=True)
 class MagneticAdvice:
     """The decisions above, in order; ``system_advice`` copies them onto
-    ``SystemAdvice``."""
+    ``SystemAdvice``. ``geometry_eff`` is the uploaded structure's geometry
+    with the cell's vacuum facts (``analysis.geometry.with_vacuum_of``),
+    which the boundary advisor reads (#144)."""
 
     functional: FieldState[str]
     cell: FieldState[MagneticCell]
     symmetry_eff: FieldState[SymmetryFacts]
+    geometry_eff: FieldState[GeometryFacts]
     pseudo: PseudoAdvice
     magnetic: FieldState[MagneticConfigFacts]
 
@@ -78,17 +84,29 @@ def magnetic_advice(
             fetch_missing=fetch_missing,
         )
         symmetry_eff = symmetry(cell.value.structure)
+        geometry_eff = _cell_geometry(analysis.geometry, cell.value.structure)
     else:
         cause = Blocked(by=blocked_by(cell))
         pseudo = PseudoAdvice(table=cause, metadata=cause, relativistic=cause)
-        symmetry_eff = cause
+        symmetry_eff = geometry_eff = cause
     return MagneticAdvice(
         functional=functional_state,
         cell=cell,
         symmetry_eff=symmetry_eff,
+        geometry_eff=geometry_eff,
         pseudo=pseudo,
         magnetic=_seeded(cell, pseudo, analysis, overrides),
     )
+
+
+def _cell_geometry(
+    geometry: FieldState[GeometryFacts], cell: Structure
+) -> FieldState[GeometryFacts]:
+    """``geometry`` with the vacuum facts of ``cell``; an unresolved
+    ``geometry`` as it is."""
+    if not geometry.ok:
+        return geometry
+    return Resolved(with_vacuum_of(geometry.value, cell), geometry.provenance)
 
 
 def _seeded(

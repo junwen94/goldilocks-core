@@ -268,14 +268,17 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "magnetic_ordering": {
         "description": (
-            "Opt in to a compensated antiferromagnetic ordering instead of the "
+            "Opt in to an antiferromagnetic ordering instead of the "
             "ferromagnetic default ('fm' or unset), over the sites that carry "
             "a local d or f moment: 'afm' applies the first candidate the "
-            "magnetic-orderings listing gives, 'afm-<n>' the listed candidate "
-            "of that label. Any value, 'fm' included, turns spin polarization "
-            "on unless spin_polarized is false, which ignores it with a "
-            "warning. 'afm' degrades to ferromagnetic with a warning if there "
-            "is no candidate; an 'afm-<n>' that is not listed is refused."
+            "magnetic-orderings listing gives (the smallest cell, then the "
+            "most symmetric), 'afm-<n>' the listed candidate of that label; "
+            "records.magnetic names the criterion and the other candidates of "
+            "that size. A slab, wire or boxed molecule gets only candidates "
+            "that keep its vacuum vectors. Any value, 'fm' included, turns spin "
+            "polarization on unless spin_polarized is false, which ignores it "
+            "with a warning. 'afm' degrades to ferromagnetic with a warning if "
+            "there is no candidate; an 'afm-<n>' that is not listed is refused."
         ),
     },
     "moment_direction": {

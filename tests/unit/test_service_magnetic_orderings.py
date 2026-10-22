@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 
+import numpy as np
 import pytest
 from pymatgen.core import Lattice, Species, Structure
 
@@ -16,6 +17,7 @@ from goldilocks_core.advisors.magnetic_ordering_ml import (
     OrderingCandidate,
     OrderingMlResult,
 )
+from goldilocks_core.analysis.is_magnetic import is_magnetic
 from goldilocks_core.resolution import Provenance, Resolved
 from goldilocks_core.service import _magnetic_orderings as magnetic_orderings_module
 from goldilocks_core.service._magnetic_orderings import (
@@ -291,3 +293,61 @@ def test_listing_a_closed_shell_structure_is_fm_alone_without_a_warning(
 
     assert [candidate.label for candidate in report.candidates] == ["fm"]
     assert report.warnings == ()
+
+
+def _gdi2_monolayer() -> Structure:
+    """A 2H GdI2 sheet like MC2D's monolayer (aedf368b) in the xy plane of a
+    cell 19.94 A high along z, 15.98 A of it vacuum."""
+    return Structure(
+        Lattice.hexagonal(4.357, 19.94),
+        ["Gd", "I", "I"],
+        [[1 / 3, 2 / 3, 0.0], [2 / 3, 1 / 3, 0.0993], [2 / 3, 1 / 3, -0.0993]],
+    )
+
+
+@_needs_enumlib
+def test_a_monolayer_is_listed_with_the_cells_its_labels_write() -> None:
+    """#144: the listing and a run keep the same orderings of the
+    monolayer, those that keep its vacuum vector c, and number them alike:
+    each label writes the listed cell, one sheet with the input's c."""
+    gdi2 = _gdi2_monolayer()
+
+    report = list_magnetic_orderings(gdi2)
+
+    afm = [candidate for candidate in report.candidates if candidate.label != "fm"]
+    assert [candidate.natoms for candidate in afm] == [6, 12, 12]
+    assert report.warnings == ()
+    for candidate in afm:
+        written = magnetic_cell(
+            gdi2, is_magnetic(gdi2), MagneticConfigHumanInput(**candidate.overrides)
+        ).value.structure
+        assert np.allclose(written.lattice.matrix, candidate.structure.lattice.matrix)
+        assert np.array_equal(written.lattice.matrix[2], gdi2.lattice.matrix[2])
+
+
+def test_a_monolayer_whose_orderings_all_cross_its_vacuum_lists_fm_with_why(
+    monkeypatch,
+) -> None:
+    """#144: a listing of only 'fm' for a magnetic sheet says that every
+    ordering found repeats it across its vacuum."""
+    gdi2 = _gdi2_monolayer()
+    a, b, c = gdi2.lattice.matrix
+    doubled = Structure(
+        Lattice([a, b, 2 * c]),
+        [Species("Gd", spin=5.0), "I", "I", Species("Gd", spin=-5.0), "I", "I"],
+        [*gdi2.cart_coords, *(gdi2.cart_coords + c)],
+        coords_are_cartesian=True,
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        magnetic_config_module,
+        "enumerate_orderings",
+        lambda *_args, **_kwargs: ((doubled, "afm"),),
+    )
+
+    report = list_magnetic_orderings(gdi2)
+
+    assert [candidate.label for candidate in report.candidates] == ["fm"]
+    [warning] = report.warnings
+    assert warning.code == "magnetic.afm_ordering_unavailable"
+    assert "across its vacuum along c" in warning.message

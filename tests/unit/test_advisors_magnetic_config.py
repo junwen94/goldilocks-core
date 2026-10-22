@@ -21,6 +21,7 @@ from goldilocks_core.advisors.magnetic_config import (
     magnetic_config,
 )
 from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
+from goldilocks_core.analysis.geometry import slab_geometry, slab_layers, vacuum_axes
 from goldilocks_core.analysis.is_magnetic import is_magnetic
 from goldilocks_core.analysis.local_moments import local_moments
 from goldilocks_core.analysis.symmetry import symmetry
@@ -587,7 +588,7 @@ def test_the_cell_is_the_input_structure_by_default() -> None:
     assert _same_sites(state.value.structure, _IRON)
     assert _spins(state.value.structure, "Fe") == {1.0}
     assert state.value.ordering == OrderingRecord(
-        requested="fm", applied="fm", compensated=False
+        requested=None, applied="fm", compensated=False
     )
     assert np.allclose(state.value.cell_in_input_basis, np.eye(3))
 
@@ -647,7 +648,11 @@ def test_an_applied_ordering_is_the_cell_with_its_basis_in_the_input(
     assert len(cell.structure) == 4
     assert sorted({site.label for site in cell.structure}) == ["Ni1", "Ni2", "O"]
     assert cell.ordering == OrderingRecord(
-        requested="afm", applied="afm-1", compensated=True
+        requested="afm",
+        applied="afm-1",
+        compensated=True,
+        criterion="smallest_cell",
+        alternatives=(),
     )
     assert np.allclose(cell.cell_in_input_basis, np.diag([1.0, 1.0, 2.0]))
     assert np.allclose(
@@ -786,7 +791,11 @@ def test_a_ferrimagnetic_candidate_with_balanced_spins_is_not_compensated() -> N
     assert sorted(iron_spins) == [-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]
     assert ferrimagnet.ordering.compensated is False
     assert nio.ordering == OrderingRecord(
-        requested="afm", applied="afm-1", compensated=True
+        requested="afm",
+        applied="afm-1",
+        compensated=True,
+        criterion="smallest_cell",
+        alternatives=("afm-2",),
     )
 
 
@@ -832,13 +841,25 @@ def test_afm_applies_the_first_listed_candidate_and_records_its_label(
     afm, first, second = cell("afm"), cell("afm-1"), cell("afm-2")
 
     assert afm.ordering == OrderingRecord(
-        requested="afm", applied="afm-1", compensated=True
+        requested="afm",
+        applied="afm-1",
+        compensated=True,
+        criterion="smallest_cell",
+        alternatives=(),
     )
     assert first.ordering == OrderingRecord(
-        requested="afm-1", applied="afm-1", compensated=True
+        requested="afm-1",
+        applied="afm-1",
+        compensated=True,
+        criterion="requested",
+        alternatives=(),
     )
     assert second.ordering == OrderingRecord(
-        requested="afm-2", applied="afm-2", compensated=True
+        requested="afm-2",
+        applied="afm-2",
+        compensated=True,
+        criterion="requested",
+        alternatives=(),
     )
     assert afm.structure == first.structure
     assert [site.label for site in afm.structure] == [
@@ -1045,7 +1066,11 @@ def test_an_afm_request_turns_spin_polarization_on_whatever_the_classifier_says(
     assert state.source == "human"
     assert state.value.magnetic_elements == ("Ni",)
     assert state.value.ordering == OrderingRecord(
-        requested="afm", applied="afm-1", compensated=True
+        requested="afm",
+        applied="afm-1",
+        compensated=True,
+        criterion="smallest_cell",
+        alternatives=(),
     )
     assert len(state.value.structure) == 4
 
@@ -1165,7 +1190,11 @@ def test_afm_on_a_54_site_supercell_of_a_one_fe_cell_is_applied() -> None:
     state = magnetic_cell(supercell, is_magnetic(supercell), _AFM)
 
     assert state.value.ordering == OrderingRecord(
-        requested="afm", applied="afm-1", compensated=True
+        requested="afm",
+        applied="afm-1",
+        compensated=True,
+        criterion="smallest_cell",
+        alternatives=("afm-2", "afm-3"),
     )
     assert any(
         warning.code == "magnetic.afm_ordering_applied"
@@ -1213,7 +1242,7 @@ def test_afm_enumerates_up_to_eight_magnetic_sites_in_the_primitive_cell(
 
     assert len(enumerated) == 1
     assert warning.message == (
-        "no compensated antiferromagnetic ordering was found; kept ferromagnetic order."
+        "no antiferromagnetic ordering was found; kept ferromagnetic order."
     )
 
 
@@ -1294,12 +1323,16 @@ def test_afm_seeds_the_sublattice_whatever_moments_the_upload_carries() -> None:
     state = magnetic_cell(nio, is_magnetic(nio), _AFM)
 
     assert state.value.ordering == OrderingRecord(
-        requested="afm", applied="afm-1", compensated=True
+        requested="afm",
+        applied="afm-1",
+        compensated=True,
+        criterion="smallest_cell",
+        alternatives=("afm-2",),
     )
     assert _spins(state.value.structure, "Ni") == {1.0, -1.0}
 
 
-def test_afm_ordering_degrades_when_no_compensated_ordering_is_found(
+def test_afm_ordering_degrades_when_no_antiferromagnetic_ordering_is_found(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
@@ -1317,7 +1350,7 @@ def test_afm_ordering_degrades_when_no_compensated_ordering_is_found(
     assert state.value.structure == _IRON
     assert any(
         warning.code == "magnetic.afm_ordering_unavailable"
-        and "no compensated" in warning.message
+        and "no antiferromagnetic ordering was found" in warning.message
         for warning in state.value.warnings
     )
 
@@ -1385,7 +1418,11 @@ def test_afm_orders_the_open_shell_cu_of_la2cuo4_and_never_la() -> None:
     cell = state.value
     assert cell.magnetic_elements == ("Cu",)
     assert cell.ordering == OrderingRecord(
-        requested="afm", applied="afm-1", compensated=True
+        requested="afm",
+        applied="afm-1",
+        compensated=True,
+        criterion="smallest_cell",
+        alternatives=("afm-2", "afm-3"),
     )
     assert _spins(cell.structure, "Cu") == {1.0, -1.0}
     assert _spins(cell.structure, "La") == {0.0}
@@ -1708,3 +1745,433 @@ def test_a_moment_direction_keeps_its_meaning_on_an_applied_ordering(
     assert state.value.angle2 == pytest.approx(
         dict.fromkeys(labels, math.degrees(math.atan2(b[1], b[0])))
     )
+
+
+_NEEDS_ENUMLIB = pytest.mark.skipif(
+    _ENUMLIB_MISSING,
+    reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
+)
+
+
+def _gdi2_monolayer(c: float = 19.94) -> Structure:
+    """A 2H GdI2 sheet like MC2D's monolayer (aedf368b): Gd between two I
+    planes 1.98 A away, in the xy plane of a cell ``c`` A high along z. The
+    default has 15.98 A of vacuum along c; at 7 A the sheets stack into a
+    bulk crystal with a 3.04 A gap, no vacuum."""
+    return Structure(
+        Lattice.hexagonal(4.357, c),
+        ["Gd", "I", "I"],
+        [[1 / 3, 2 / 3, 0.0], [2 / 3, 1 / 3, 1.98 / c], [2 / 3, 1 / 3, -1.98 / c]],
+    )
+
+
+def _holds(cell: Structure, vector: np.ndarray) -> bool:
+    """Whether ``vector`` is a lattice vector of ``cell``."""
+    fractional = cell.lattice.get_fractional_coords(vector)
+    return bool(np.allclose(fractional, np.round(fractional), atol=1e-6))
+
+
+def _with_gd_spins(lattice: np.ndarray, structure: Structure, shifts) -> Structure:
+    """``structure`` repeated at the Cartesian ``shifts`` in a cell of
+    ``lattice`` (rows), its Gd up in the first copy and down in the
+    second, as the enumerator returns a candidate."""
+    species, coords = [], []
+    for shift, spin in zip(shifts, (5.0, -5.0), strict=True):
+        for site in structure:
+            species.append(
+                Species("Gd", spin=spin) if site.specie.symbol == "Gd" else site.specie
+            )
+            coords.append(site.coords + shift)
+    return Structure(Lattice(lattice), species, coords, coords_are_cartesian=True)
+
+
+def _gdi2_candidates() -> dict[str, Structure]:
+    """Hand-built 6-site candidates of ``_gdi2_monolayer()``: doubled
+    across the vacuum (2c, moved to b as enumlib returns it), stacked across
+    it with a and the next sheet up (2a, b, a + c: c is no lattice vector),
+    and doubled in the sheet along b, written with -c as its second vector."""
+    gdi2 = _gdi2_monolayer()
+    a, b, c = gdi2.lattice.matrix
+    return {
+        "across": _with_gd_spins(np.array([b, 2 * c, a]), gdi2, (0 * c, c)),
+        "stacked": _with_gd_spins(np.array([2 * a, b, a + c]), gdi2, (0 * a, a)),
+        "in_plane": _with_gd_spins(np.array([a, -c, 2 * b]), gdi2, (0 * b, b)),
+    }
+
+
+def test_a_monolayer_keeps_only_orderings_whose_lattice_holds_its_vacuum_vector(
+    monkeypatch,
+) -> None:
+    """#144: an ordering of a slab that repeats across its vacuum (2c), or
+    stacks the next sheet up with a shift (a + c, c itself no lattice
+    vector), puts more than one sheet in the written cell. Only the
+    in-plane doubling is listed, as afm-1, and plain afm applies it."""
+    gdi2 = _gdi2_monolayer()
+    built = _gdi2_candidates()
+    monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
+    monkeypatch.setattr(
+        magnetic_config_module,
+        "enumerate_orderings",
+        _enumerating(*((candidate, "afm") for candidate in built.values())),
+    )
+
+    candidates, warning = enumerate_magnetic_orderings(gdi2, local_moments(gdi2))
+    state = magnetic_cell(gdi2, is_magnetic(gdi2), _AFM)
+
+    assert warning is None
+    assert [label for label, _cell in candidates] == ["fm", "afm-1"]
+    in_plane = built["in_plane"]
+    assert np.isclose(candidates[1][1].volume, in_plane.volume)
+    assert _holds(candidates[1][1], 2 * gdi2.lattice.matrix[1])
+    assert state.value.ordering == OrderingRecord(
+        requested="afm",
+        applied="afm-1",
+        compensated=True,
+        criterion="smallest_cell",
+        alternatives=(),
+    )
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [("a", "-c", "2b"), ("2b", "a", "-c"), ("a+c", "2b", "c")],
+    ids=["vacuum-second-and-reversed", "left-handed", "a-tilted-by-the-vacuum"],
+)
+def test_a_kept_ordering_is_written_with_the_input_vacuum_vector_at_its_index(
+    monkeypatch, rows: tuple[str, str, str]
+) -> None:
+    """#144: the slab's later decisions -- vacuum axes, 'slab' isolation and
+    fix_bottom_layers gates, the k-point along the vacuum, the dipole
+    notice -- read the written cell. A kept candidate whose basis has -c
+    second, is left-handed, or tilts a by c, is written with +c third, a
+    and b in the sheet and the input's handedness, its sites where they
+    were, so the cell has the input's vacuum along c."""
+    gdi2 = _gdi2_monolayer()
+    a, b, c = gdi2.lattice.matrix
+    vectors = {"a": a, "2b": 2 * b, "c": c, "-c": -c, "a+c": a + c}
+    candidate = _with_gd_spins(
+        np.array([vectors[row] for row in rows]), gdi2, (0 * b, b)
+    )
+    monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
+    monkeypatch.setattr(
+        magnetic_config_module, "enumerate_orderings", _enumerating((candidate, "afm"))
+    )
+
+    cell = magnetic_cell(gdi2, is_magnetic(gdi2), _AFM).value
+
+    lattice = cell.structure.lattice.matrix
+    assert np.array_equal(lattice[2], gdi2.lattice.matrix[2])
+    assert np.allclose(lattice[:2, 2], 0.0)
+    assert np.linalg.det(lattice) > 0
+    assert np.allclose(cell.cell_in_input_basis[2], (0.0, 0.0, 1.0))
+    assert vacuum_axes(cell.structure) == ("c",)
+    assert slab_geometry(cell.structure) == slab_geometry(gdi2)
+    assert len(slab_layers(cell.structure)) == 3
+
+
+def test_afm_on_a_monolayer_with_no_ordering_in_its_sheet_keeps_ferromagnetic_order(
+    monkeypatch,
+) -> None:
+    """#144: when every ordering found repeats across the vacuum, afm
+    degrades to the ferromagnetic input with a warning saying so, and a
+    label is refused with the same reason."""
+    gdi2 = _gdi2_monolayer()
+    built = _gdi2_candidates()
+    monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
+    monkeypatch.setattr(
+        magnetic_config_module,
+        "enumerate_orderings",
+        _enumerating((built["across"], "afm"), (built["stacked"], "afm")),
+    )
+
+    fallback = magnetic_cell(gdi2, is_magnetic(gdi2), _AFM)
+    refused = magnetic_cell(
+        gdi2, is_magnetic(gdi2), MagneticConfigHumanInput(magnetic_ordering="afm-1")
+    )
+
+    assert _same_sites(fallback.value.structure, gdi2)
+    assert fallback.value.ordering == OrderingRecord(
+        requested="afm", applied="fm", compensated=False
+    )
+    [warning] = _afm_warnings(fallback.value.warnings)
+    assert warning.code == "magnetic.afm_ordering_unavailable"
+    assert "vacuum along c" in warning.message
+    assert isinstance(refused, Blocked)
+    assert "vacuum along c" in refused.root_cause()
+
+
+@_NEEDS_ENUMLIB
+def test_a_monolayer_lists_only_orderings_in_its_sheet() -> None:
+    """#144, the GdI2 monolayer: enumlib's first candidates doubled c (moved
+    to b) or stacked sheets along c + a or c + b, and plain afm applied the
+    doubling, a layer-FM cell whose only antiparallel Gd sat 19.94 A away
+    across the vacuum. Each listed candidate now holds the input c as its
+    third vector, with a and b in the sheet, so it is one slab with the
+    input's vacuum; plain afm applies the 6-site in-plane stripe."""
+    gdi2 = _gdi2_monolayer()
+
+    candidates, warning = enumerate_magnetic_orderings(gdi2, local_moments(gdi2))
+    cell = magnetic_cell(gdi2, is_magnetic(gdi2), _AFM).value
+
+    afm = [(label, listed) for label, listed in candidates if label != "fm"]
+    assert warning is None
+    assert [
+        (label, len(listed), symmetry(listed).value.space_group_symbol)
+        for label, listed in afm
+    ] == [("afm-1", 6, "Pmm2"), ("afm-2", 12, "Pmc2_1"), ("afm-3", 12, "Pmm2")]
+    for _label, listed in afm:
+        assert np.array_equal(listed.lattice.matrix[2], gdi2.lattice.matrix[2])
+        assert np.allclose(listed.lattice.matrix[:2, 2], 0.0)
+        assert vacuum_axes(listed) == ("c",)
+        assert len(slab_layers(listed)) == 3
+    assert cell.ordering == OrderingRecord(
+        requested="afm",
+        applied="afm-1",
+        compensated=True,
+        criterion="smallest_cell",
+        alternatives=(),
+    )
+    assert len(cell.structure) == 6
+    assert np.array_equal(cell.structure.lattice.matrix[2], gdi2.lattice.matrix[2])
+
+
+@_NEEDS_ENUMLIB
+def test_plain_afm_applies_the_smallest_most_symmetric_and_names_the_rest() -> None:
+    """#144: plain afm's criterion is stated and recorded. NiO has two
+    4-site candidates: afm-1, the R-3m AFM-II cell, is applied as the most
+    symmetric, and the P4/mmm one is recorded and named as its same-size
+    alternative."""
+    state = magnetic_cell(_ROCK_SALT_NIO, is_magnetic(_ROCK_SALT_NIO), _AFM)
+    listed = dict(
+        enumerate_magnetic_orderings(_ROCK_SALT_NIO, local_moments(_ROCK_SALT_NIO))[0]
+    )
+
+    assert state.value.ordering == OrderingRecord(
+        requested="afm",
+        applied="afm-1",
+        compensated=True,
+        criterion="smallest_cell",
+        alternatives=("afm-2",),
+    )
+    for label, group in (("afm-1", "R-3m"), ("afm-2", "P4/mmm")):
+        assert len(listed[label]) == 4
+        assert symmetry(listed[label]).value.space_group_symbol == group
+    [notice] = [
+        warning
+        for warning in state.value.warnings
+        if warning.code == "magnetic.afm_ordering_applied"
+    ]
+    assert "afm-1" in notice.message
+    assert "smallest" in notice.message
+    assert "afm-2" in notice.message
+
+
+@_NEEDS_ENUMLIB
+def test_a_bulk_layered_magnet_keeps_its_interlayer_orderings() -> None:
+    """#144 filters on vacuum, not on the '2d' rank: GdI2 sheets stacked
+    3.04 A apart have no vacuum, so orderings across the stacking, such as
+    the doubling along c, are listed as before."""
+    bulk = _gdi2_monolayer(c=7.0)
+
+    candidates, _warning = enumerate_magnetic_orderings(bulk, local_moments(bulk))
+
+    first = dict(candidates)["afm-1"]
+    assert vacuum_axes(bulk) == ()
+    assert len(first) == 6
+    assert symmetry(first).value.space_group_symbol == "P-6m2"
+    assert not _holds(first, bulk.lattice.matrix[2])
+    assert _holds(first, 2 * bulk.lattice.matrix[2])
+
+
+def _mno_chain() -> Structure:
+    """A Mn-O-Mn chain along a, 4.44 A per MnO, in a cell with 14 A of
+    vacuum along b and c: a wire."""
+    return Structure(
+        Lattice.orthorhombic(4.44, 14.0, 14.0),
+        ["Mn", "O"],
+        [[0.0, 0.5, 0.5], [0.5, 0.5, 0.5]],
+    )
+
+
+def _fe2o2_molecule() -> Structure:
+    """A planar Fe2O2 rhombus (Fe-O 1.92 A) in a 12 A box: vacuum along a,
+    b and c, a molecule."""
+    return Structure(
+        Lattice.cubic(12.0),
+        ["Fe", "O", "Fe", "O"],
+        [[0.42, 0.42, 0.5], [0.58, 0.42, 0.5], [0.58, 0.58, 0.5], [0.42, 0.58, 0.5]],
+    )
+
+
+def _with_spins(
+    lattice: np.ndarray, structure: Structure, element: str, shifts
+) -> Structure:
+    """``structure`` repeated at the Cartesian ``shifts`` in a cell of
+    ``lattice`` (rows), its ``element`` up in the first copy and down in
+    the second, as the enumerator returns a candidate."""
+    species, coords = [], []
+    for shift, spin in zip(shifts, (5.0, -5.0), strict=True):
+        for site in structure:
+            species.append(
+                Species(element, spin=spin)
+                if site.specie.symbol == element
+                else site.specie
+            )
+            coords.append(site.coords + shift)
+    return Structure(Lattice(lattice), species, coords, coords_are_cartesian=True)
+
+
+def _alternating_spins(
+    lattice: np.ndarray, structure: Structure, element: str
+) -> Structure:
+    """``structure``'s sites in a cell of ``lattice`` (rows), its
+    ``element`` sites up and down in turn."""
+    spins = iter((5.0, -5.0) * len(structure))
+    species = [
+        Species(element, spin=next(spins))
+        if site.specie.symbol == element
+        else site.specie
+        for site in structure
+    ]
+    return Structure(
+        Lattice(lattice), species, structure.cart_coords, coords_are_cartesian=True
+    )
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [("2a", "b", "c"), ("c", "2a", "-b"), ("2a+b+c", "b+c", "c")],
+    ids=["as-input", "vacuum-vectors-moved-and-reversed", "tilted-by-the-vacuum"],
+)
+def test_a_wire_ordering_is_written_with_both_vacuum_vectors_at_their_indices(
+    monkeypatch, rows: tuple[str, str, str]
+) -> None:
+    """#144, two vacuum axes: a wire's ordering along its axis is kept and
+    written with the input b and c as its second and third vectors and the
+    doubled chain axis perpendicular to them, whichever basis of its
+    lattice the enumerator returned."""
+    chain = _mno_chain()
+    a, b, c = chain.lattice.matrix
+    vectors = {
+        "2a": 2 * a,
+        "b": b,
+        "c": c,
+        "-b": -b,
+        "2a+b+c": 2 * a + b + c,
+        "b+c": b + c,
+    }
+    candidate = _with_spins(
+        np.array([vectors[row] for row in rows]), chain, "Mn", (0 * a, a)
+    )
+    monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
+    monkeypatch.setattr(
+        magnetic_config_module, "enumerate_orderings", _enumerating((candidate, "afm"))
+    )
+
+    cell = magnetic_cell(chain, is_magnetic(chain), _AFM).value
+
+    lattice = cell.structure.lattice.matrix
+    assert cell.ordering.applied == "afm-1"
+    assert np.array_equal(lattice[1:], chain.lattice.matrix[1:])
+    assert np.allclose(lattice[0], 2 * a)
+    assert np.allclose(cell.cell_in_input_basis, np.diag((2.0, 1.0, 1.0)))
+    assert vacuum_axes(cell.structure) == ("b", "c")
+    assert _spins(cell.structure, "Mn") == {1.0, -1.0}
+
+
+def test_a_molecule_keeps_only_orderings_of_its_own_box(monkeypatch) -> None:
+    """#144, three vacuum axes: an ordering of a boxed molecule that
+    doubles the box puts two molecules in the written cell. Only the
+    ordering inside the box is listed, written in the input's own cell
+    even when the enumerator returns that lattice in another basis."""
+    molecule = _fe2o2_molecule()
+    a, b, c = molecule.lattice.matrix
+    inside = _alternating_spins(np.array([b, -c, a]), molecule, "Fe")
+    doubled = _with_spins(np.array([2 * a, b, c]), molecule, "Fe", (0 * a, a))
+    monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
+    monkeypatch.setattr(
+        magnetic_config_module,
+        "enumerate_orderings",
+        _enumerating((doubled, "afm"), (inside, "afm")),
+    )
+
+    candidates, warning = enumerate_magnetic_orderings(
+        molecule, local_moments(molecule)
+    )
+    cell = magnetic_cell(molecule, is_magnetic(molecule), _AFM).value
+
+    assert warning is None
+    assert [label for label, _listed in candidates] == ["fm", "afm-1"]
+    assert np.array_equal(candidates[1][1].lattice.matrix, molecule.lattice.matrix)
+    assert cell.ordering.applied == "afm-1"
+    assert np.array_equal(cell.structure.lattice.matrix, molecule.lattice.matrix)
+    assert np.allclose(cell.cell_in_input_basis, np.eye(3))
+    assert _spins(cell.structure, "Fe") == {1.0, -1.0}
+
+
+def test_a_molecule_whose_every_ordering_doubles_its_box_is_refused_an_afm_label(
+    monkeypatch,
+) -> None:
+    molecule = _fe2o2_molecule()
+    a, b, c = molecule.lattice.matrix
+    doubled = _with_spins(np.array([2 * a, b, c]), molecule, "Fe", (0 * a, a))
+    monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
+    monkeypatch.setattr(
+        magnetic_config_module, "enumerate_orderings", _enumerating((doubled, "afm"))
+    )
+
+    fallback = magnetic_cell(molecule, is_magnetic(molecule), _AFM)
+    refused = magnetic_cell(
+        molecule,
+        is_magnetic(molecule),
+        MagneticConfigHumanInput(magnetic_ordering="afm-1"),
+    )
+
+    assert _same_sites(fallback.value.structure, molecule)
+    assert fallback.value.ordering == OrderingRecord(
+        requested="afm", applied="fm", compensated=False
+    )
+    assert isinstance(refused, Blocked)
+    assert "vacuum along a and b and c" in refused.root_cause()
+
+
+@_NEEDS_ENUMLIB
+def test_a_wire_lists_only_orderings_along_its_axis() -> None:
+    """#144 with real enumlib: every listed ordering of a MnO chain keeps
+    the input b and c, so each is one wire with the input's vacuum, and
+    plain afm applies the 4-site doubling along the chain."""
+    chain = _mno_chain()
+
+    candidates, warning = enumerate_magnetic_orderings(chain, local_moments(chain))
+    cell = magnetic_cell(chain, is_magnetic(chain), _AFM).value
+
+    afm = [(label, listed) for label, listed in candidates if label != "fm"]
+    assert warning is None
+    assert afm
+    for _label, listed in afm:
+        assert np.array_equal(listed.lattice.matrix[1:], chain.lattice.matrix[1:])
+        assert vacuum_axes(listed) == ("b", "c")
+    assert cell.ordering.applied == "afm-1"
+    assert len(cell.structure) == 4
+    assert np.allclose(cell.structure.lattice.matrix[0], 2 * chain.lattice.matrix[0])
+    assert np.array_equal(cell.structure.lattice.matrix[1:], chain.lattice.matrix[1:])
+
+
+@_NEEDS_ENUMLIB
+def test_a_molecule_in_a_box_keeps_its_cell() -> None:
+    """#144 with real enumlib: the Fe2O2 molecule's only listed ordering is
+    the input cell, Fe up and down, and plain afm applies it."""
+    molecule = _fe2o2_molecule()
+
+    candidates, warning = enumerate_magnetic_orderings(
+        molecule, local_moments(molecule)
+    )
+    cell = magnetic_cell(molecule, is_magnetic(molecule), _AFM).value
+
+    assert warning is None
+    assert [label for label, _listed in candidates] == ["fm", "afm-1"]
+    assert np.array_equal(candidates[1][1].lattice.matrix, molecule.lattice.matrix)
+    assert cell.ordering.applied == "afm-1"
+    assert len(cell.structure) == 4
+    assert np.array_equal(cell.structure.lattice.matrix, molecule.lattice.matrix)
+    assert _spins(cell.structure, "Fe") == {1.0, -1.0}

@@ -39,7 +39,10 @@ def _applied_ordering(*, compensated: bool):
     facts = MagneticConfigFacts(
         cell=_BCC_IRON,  # not read by occupations
         ordering=OrderingRecord(
-            requested="afm", applied="afm-1", compensated=compensated
+            requested="afm",
+            applied="afm-1",
+            compensated=compensated,
+            criterion="smallest_cell",
         ),
         spin_polarized=True,
         magnetic_elements=("Fe",),

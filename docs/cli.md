@@ -160,7 +160,7 @@ uv run goldilocks magnetic-orderings structure.cif --json
 uv run goldilocks magnetic-orderings structure.cif --rank-with-mmace
 ```
 
-Lists a ferromagnetic guess plus any compensated antiferromagnetic
+Lists a ferromagnetic guess plus any antiferromagnetic
 candidates `enumlib` finds (see [Check magnetism and spin-orbit
 coupling](science.md#check-magnetism-and-spin-orbit-coupling)) for a
 human or agent to choose among before generating any input file. Each
@@ -173,8 +173,12 @@ uv run goldilocks run structure.cif --hpc scarf --set magnetic_ordering=afm-2
 ```
 
 The run enumerates again, applies the candidate of that label through the
-same steps as `magnetic_ordering=afm` (which applies `afm-1`), and records
-the label in `records.magnetic` next to the cell's formula and atom count.
+same steps as `magnetic_ordering=afm` (which applies `afm-1`, the smallest
+and most symmetric), and records the label in `records.magnetic` next to the
+cell's formula and atom count, with why it was written (`criterion`) and
+the other candidates of its size (`alternatives`). For a slab, wire or
+molecule in a box, only candidates that keep its vacuum vectors are listed
+and applied, so every label writes one slab with the uploaded vacuum.
 
 `--rank-with-mmace` relaxes every candidate's magnetic moments on a frozen
 mMACE potential energy surface and recommends the lowest energy-per-atom

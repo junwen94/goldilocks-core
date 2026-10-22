@@ -197,7 +197,7 @@ k -> -k pairing. Cubic B2 FeCo with moments along [001] keeps 16 of its 48
 operations, so a 10x10x10 mesh has 126 irreducible k-points rather than
 56, and `npool` and the memory estimate follow that count.
 
-Set `magnetic_ordering` to `afm` to opt in to a compensated antiferromagnetic
+Set `magnetic_ordering` to `afm` to opt in to an antiferromagnetic
 ordering instead of the ferromagnetic default, or to the label of one
 candidate `goldilocks magnetic-orderings` lists (`afm-3`). Like
 `tot_magnetization` and
@@ -209,9 +209,9 @@ explicit `spin_polarized` false wins and ignores it with the warning
 which magnetic ordering is the true ground state -- that needs comparing total
 energies from several actual calculations -- so `afm` only gives one
 reasonable, deterministic starting point (`afm-1`, the smallest and most
-symmetric compensated ordering found), for you to run and compare against
+symmetric ordering found), for you to run and compare against
 the ferromagnetic guess yourself. Only the sites the heuristic above says
-carry a local d or f moment are ordered and compensated against each other:
+carry a local d or f moment are ordered, up against down:
 the Cu2+ ions of La2CuO4 but not its La3+ (4f0), the Fe of FePt but not its
 Pt, whose moment Fe induces. Those sites are seeded up and down with the
 calibrated value (5 Bohr magnetons over the pseudopotential's valence for
@@ -222,7 +222,9 @@ ordering is compensated: whether some symmetry operation of its cell maps
 every spin onto an opposite one, so its net moment is zero by construction.
 NiO's AFM-II cell is compensated. Spinel Fe3O4's R-3m candidate is not: it
 has 3 Fe up and 3 down, but both tetrahedral Fe point down, so it is a
-ferrimagnet. A compensated non-metal gets fixed occupations with
+ferrimagnet. Nor is B2 FeCo's `afm-1`, Fe up and Co down in the uploaded
+cell: its starting moments sum to zero, but no symmetry makes the two
+elements' moments cancel. A compensated non-metal gets fixed occupations with
 `tot_magnetization = 0`. Starting magnetizations you set on the applied
 cell decide this in place of the heuristic signs.
 A structure with no such site (closed-shell Si, or solid O2, whose moment
@@ -247,13 +249,33 @@ pymatgen-core, spglib and enumlib versions. They are numbered in one order
 that depends on the cells alone -- smallest first, then most symmetric --
 so a label means the same cell there too; a label
 past the listed candidates is refused.
+`records.magnetic.ordering` says why the cell was written (`criterion`:
+`smallest_cell` for `afm`, `requested` for a label, `identity` when the
+uploaded cell is kept) and lists the other candidates with as many sites
+(`alternatives`); the `magnetic.afm_ordering_applied` notice names them too.
+Smallest-and-most-symmetric is a convention, not a prediction: for Fe2O3 it
+picks the Cr2O3-type order (`afm-1`, R3c), not hematite's own (`afm-3`, R-3),
+so list the candidates and choose among them.
+A slab, a wire or a molecule in a box only gets orderings that keep its
+vacuum: a candidate is kept when its cell can be written with the uploaded
+vacuum vectors (the `geometry` record's `vacuum_axes`) as cell vectors, and
+it is written that way, each vacuum vector where it was and the other
+vectors in the plane of the rest. enumlib also offers cells that repeat the structure across the
+vacuum -- the GdI2 monolayer's first candidate doubled c, every sheet
+ferromagnetic and its only antiparallel Gd 19.94 Å away across the vacuum
+-- and those are dropped, so the monolayer gets the in-plane stripe. The
+written cell then has the uploaded vacuum, and the slab advice and gates
+(one k-point along the vacuum, `isolation`, `fix_bottom_layers`, the
+dipole notice) describe one slab. A bulk van der Waals magnet has no vacuum
+and keeps its interlayer orderings. When every candidate repeats across
+the vacuum, `afm` keeps the ferromagnetic default with a warning saying so.
 This needs the external `enumlib` executables (`enum.x` or `multienum.x`,
 plus `makeStr.py`, `makestr.x` or `makeStr.x`) on `PATH`. Its cost grows with
 the number of moment-bearing sites in your structure's primitive cell, which
 is what enumlib orders, not with the atom count: 28-site LiFePO4 has 4 Fe.
 Without enumlib, with more than 8 such sites, when enumlib finds no ordering
-or a call runs past its 30 s limit, or if no compensated ordering exists for
-your structure, `afm` degrades to the ferromagnetic default with a warning,
+or a call runs past its 30 s limit, or if no antiferromagnetic ordering
+exists for your structure, `afm` degrades to the ferromagnetic default with a warning,
 and an `afm-<n>` label is refused with the same reason; any other enumeration
 error fails the request. Magnetic moments your file carries
 (a magCIF's) are not read; only the seeds above are. Enumeration runs in a
@@ -262,8 +284,8 @@ nothing to the current directory and concurrent requests cannot disturb each
 other.
 
 `uv run goldilocks magnetic-orderings` lists every candidate this same
-enumeration finds -- the ferromagnetic guess plus any compensated
-antiferromagnetic ones, by label -- for you to inspect or generate inputs
+enumeration finds -- the ferromagnetic guess plus any antiferromagnetic
+ones, by label -- for you to inspect or generate inputs
 from with `magnetic_ordering=<label>` on the same structure, optionally
 ranked by relaxing each on a frozen mMACE potential
 energy surface (`--rank-with-mmace`) rather than picking the ferromagnetic
@@ -367,11 +389,9 @@ requires it; the `geometry` record's `slab` field locates the vacuum
 only when the slab meets every precondition of that setting (the `slab`
 field's `fits_2d_truncation`). It does not set the
 correction itself, because pw.x then uses no symmetry and computes no stress.
-The notice and the `geometry` record describe the structure as given. With
-`magnetic_ordering=afm` the cell written can be a supercell that moves the
-vacuum to another lattice vector or doubles the cell across it; the notice's
-`edir`, `emaxpos` and `slab` offer then refer to the input cell, and
-Goldilocks still refuses `slab` on the cell written.
+The notice describes the cell that is written, which an antiferromagnetic
+`magnetic_ordering` writes with the uploaded vacuum (see
+[magnetism](#check-magnetism-and-spin-orbit-coupling)).
 Symmetric monolayers and bulk crystals get no notice: a bulk layered crystal
 such as graphite classifies as `2d` but has no vacuum.
 

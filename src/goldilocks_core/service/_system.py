@@ -13,8 +13,9 @@ follows.
 decides the functional, the simulated cell (``cell``: spin polarization,
 spin-orbit coupling and the applied magnetic ordering), its symmetry
 (``symmetry_eff``), the pseudopotentials and the starting moments, once
-each and in that order. ``electron_count`` counts that cell; ``cutoffs``,
-``vdw``, ``boundary`` and ``hubbard`` read only element-level facts.
+each and in that order. ``electron_count`` counts that cell, and
+``boundary`` reads its vacuum (``MagneticAdvice.geometry_eff``, #144);
+``cutoffs``, ``vdw`` and ``hubbard`` read the uploaded structure's facts.
 ``hubbard_u`` keeps reading the input structure: its decision is keyed by
 element, so it is the same for the cell.
 
@@ -131,7 +132,7 @@ def system_advice(
             analysis.geometry, functional_value, overrides.vdw, overrides.vdw_llm
         ),
         boundary=boundary(
-            analysis.geometry,
+            selection.geometry_eff,
             analysis.symmetry,
             overrides.boundary,
             overrides.boundary_llm,

@@ -32,6 +32,16 @@ integer ``tot_magnetization`` pw.x needs for them on nspin=2, so the gate
 refused the default for LiFePO4 and for NiO classified non-metal (#138).
 Such a run now gets smearing, unless the applied ordering is compensated
 by symmetry: then fixed occupations pin ``tot_magnetization = 0``.
+
+On a slab, plain afm applied a cell repeated across the vacuum: the GdI2
+monolayer doubled along c, its gates refused 'slab' and fix_bottom_layers
+for two sheets, and the dipole notice of a polar Janus VSSe sheet kept the
+uploaded cell's edir and emaxpos for a cell whose vacuum had moved to b.
+Orderings now keep the vacuum vector, and the notice reads the written
+cell (#144). Hematite Fe2O3 is written by its listed label, and the record
+names the label, the criterion and the other candidates of its size. GdI2
+runs on a synthetic Gd/I table (z_valence 18 and 7), Fe2O3 on Fe/O (16
+and 6).
 """
 
 from __future__ import annotations
@@ -39,12 +49,15 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
+import numpy as np
 import pytest
-from pymatgen.core import Lattice, Structure
+from pymatgen.core import Lattice, Species, Structure
 from support import sssp_fixture_table_spec
 
 from goldilocks_core.advisors.magnetic_config import OrderingRecord
 from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
+from goldilocks_core.analysis.geometry import slab_geometry, slab_layers, vacuum_axes
+from goldilocks_core.analysis.symmetry import symmetry
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
@@ -490,7 +503,11 @@ def test_afm_orders_the_four_fe_of_olivine_lifepo4(olivine_store: AssetStore) ->
     assert listing.warnings == ()
     magnetic = advice.system.magnetic.value
     assert magnetic.ordering == OrderingRecord(
-        requested="afm", applied="afm-1", compensated=True
+        requested="afm",
+        applied="afm-1",
+        compensated=True,
+        criterion="smallest_cell",
+        alternatives=("afm-2", "afm-3"),
     )
     assert len(magnetic.cell) == 28
     assert {site.label for site in magnetic.cell} == {"Li", "Fe1", "Fe2", "P", "O"}
@@ -535,7 +552,11 @@ def test_an_afm_request_writes_an_afm_deck_for_a_non_magnetic_classification(
     assert steps[0].analysis.is_magnetic.value == "non_magnetic"
     magnetic = steps[0].system.magnetic.value
     assert magnetic.ordering == OrderingRecord(
-        requested="afm", applied="afm-1", compensated=True
+        requested="afm",
+        applied="afm-1",
+        compensated=True,
+        criterion="smallest_cell",
+        alternatives=("afm-2",),
     )
     assert _keyword(content, "nspin") == "2"
     assert _keyword(content, "nat") == "2"
@@ -595,7 +616,11 @@ def test_a_compensated_afm_insulator_pins_a_zero_moment_on_fixed_occupations(
     magnetic = steps[0].system.magnetic.value
     occupations = steps[0].step.kpoints.occupations.value
     assert magnetic.ordering == OrderingRecord(
-        requested="afm", applied="afm-1", compensated=True
+        requested="afm",
+        applied="afm-1",
+        compensated=True,
+        criterion="smallest_cell",
+        alternatives=("afm-2",),
     )
     assert magnetic.tot_magnetization is None
     assert occupations.occupations == "fixed"
@@ -604,3 +629,236 @@ def test_a_compensated_afm_insulator_pins_a_zero_moment_on_fixed_occupations(
     assert float(_keyword(content, "tot_magnetization")) == 0.0
     assert _keyword(content, "nbnd") == "24"
     assert _keyword(content, "tot_charge") is None
+
+
+def _corundum_fe2o3() -> Structure:
+    """Hematite Fe2O3 (R-3c, MC3D mc3d-44692) in its 10-site rhombohedral
+    primitive cell, 4 of them Fe3+."""
+    return Structure.from_spacegroup(
+        "R-3c",
+        Lattice.hexagonal(5.035, 13.747),
+        ["Fe", "O"],
+        [[0, 0, 0.3553], [0.3059, 0, 0.25]],
+    ).get_primitive_structure()
+
+
+@pytest.fixture
+def hematite_store(tmp_path, monkeypatch) -> AssetStore:
+    spec, registry_table = sssp_fixture_table_spec(
+        tmp_path / "sources", {"Fe": 16.0, "O": 6.0}
+    )
+    monkeypatch.setattr(
+        "goldilocks_core.service._pseudo.load_tables",
+        lambda *a, **kw: {registry_table.id: registry_table},
+    )
+    installed = AssetStore(tmp_path / "store")
+    installed.install(spec, sssp_preparer(registry_table))
+    return installed
+
+
+@_needs_enumlib
+def test_a_requested_label_writes_that_ordering_and_records_its_alternatives(
+    hematite_store: AssetStore,
+) -> None:
+    """#144: plain afm on Fe2O3 applied the Cr2O3-type order (R3c), the
+    first of three 10-site candidates, and recorded only its label. The
+    hematite order (R-3 with the up and down Fe as two species) is asked
+    for by its listed label: the deck is written for it, and
+    records.magnetic names it, the criterion and the other two."""
+    hematite = _corundum_fe2o3()
+    listing = list_magnetic_orderings(hematite)
+    [label] = [
+        candidate.label
+        for candidate in listing.candidates
+        if candidate.label != "fm"
+        and symmetry(candidate.structure).value.space_group_symbol == "R-3"
+    ]
+    others = tuple(
+        candidate.label
+        for candidate in listing.candidates
+        if candidate.label not in ("fm", label)
+    )
+
+    steps, (content,) = _run(
+        "scf", hematite, {"magnetic_ordering": label}, hematite_store
+    )
+
+    advice = steps[0]
+    assert advice.system.symmetry_eff.value.space_group_symbol == "R-3"
+    assert _keyword(content, "nat") == "10"
+    record = advice.records()["magnetic"].value["ordering"]
+    assert record == {
+        "requested": label,
+        "applied": label,
+        "compensated": True,
+        "criterion": "requested",
+        "alternatives": list(others),
+    }
+    assert len(others) == 2
+
+
+def _gdi2_monolayer() -> Structure:
+    """A 2H GdI2 sheet like MC2D's monolayer (aedf368b): Gd between two I
+    planes 1.98 A away, in the xy plane of a cell 19.94 A high along z,
+    15.98 A of it vacuum."""
+    return Structure(
+        Lattice.hexagonal(4.357, 19.94),
+        ["Gd", "I", "I"],
+        [[1 / 3, 2 / 3, 0.0], [2 / 3, 1 / 3, 0.0993], [2 / 3, 1 / 3, -0.0993]],
+    )
+
+
+@pytest.fixture
+def gdi2_store(tmp_path, monkeypatch) -> AssetStore:
+    spec, registry_table = sssp_fixture_table_spec(
+        tmp_path / "sources", {"Gd": 18.0, "I": 7.0}
+    )
+    monkeypatch.setattr(
+        "goldilocks_core.service._pseudo.load_tables",
+        lambda *a, **kw: {registry_table.id: registry_table},
+    )
+    installed = AssetStore(tmp_path / "store")
+    installed.install(spec, sssp_preparer(registry_table))
+    return installed
+
+
+@_needs_enumlib
+def test_afm_on_a_monolayer_keeps_one_sheet_for_the_slab_gates(
+    gdi2_store: AssetStore,
+) -> None:
+    """#144: plain afm doubled the GdI2 monolayer across its vacuum (here
+    with the doubled c moved to b), so the written cell held two sheets:
+    fix_bottom_layers was refused for 'more than one slab' and
+    isolation='slab' for vacuum along b. The applied ordering is now in the
+    sheet, and the written cell keeps the input's c and vacuum: both gates
+    pass, fix_bottom_layers freezes the bottom I layer, and the vacuum the
+    step read from the uploaded structure (local-TF mixing) is the written
+    cell's."""
+    gdi2 = _gdi2_monolayer()
+
+    steps, (content,) = _run(
+        "relax",
+        gdi2,
+        {"magnetic_ordering": "afm", "fix_bottom_layers": 1, "isolation": "slab"},
+        gdi2_store,
+    )
+
+    advice = steps[0]
+    cell = advice.system.magnetic.value.cell
+    assert advice.system.magnetic.value.ordering.applied == "afm-1"
+    assert len(cell) == 6
+    assert np.array_equal(cell.lattice.matrix[2], gdi2.lattice.matrix[2])
+    assert vacuum_axes(cell) == advice.analysis.geometry.value.vacuum_axes == ("c",)
+    assert len(slab_layers(cell)) == 3
+    assert advice.step.kpoints.convergence.value.mixing_mode == "local-TF"
+    assert _keyword(content, "assume_isolated") == "'2D'"
+    lines = content.splitlines()
+    start = lines.index("ATOMIC_POSITIONS crystal") + 1
+    rows = [line.split() for line in lines[start : start + len(cell)]]
+    fixed = [row for row in rows if row[-3:] == ["0", "0", "0"]]
+    assert [row[0] for row in fixed] == ["I", "I"]
+    assert {round(float(row[3]) % 1.0, 4) for row in fixed} == {0.9007}
+
+
+def _janus_vsse(c: float = 20.0) -> Structure:
+    """A Janus VSSe sheet (a = 3.30 A) in the xy plane of a cell ``c`` A high
+    along z: the S plane 1.50 A above V4+ (d1) and the Se plane 1.62 A
+    below. No operation reverses c (P3m1), so it is polar."""
+    return Structure(
+        Lattice.hexagonal(3.30, c),
+        ["V", "S", "Se"],
+        [
+            [1 / 3, 2 / 3, 0.5],
+            [2 / 3, 1 / 3, 0.5 + 1.50 / c],
+            [2 / 3, 1 / 3, 0.5 - 1.62 / c],
+        ],
+    )
+
+
+def _dipole_notice(advice: Advice) -> str:
+    (message,) = [
+        warning["message"]
+        for warning in advice.warnings()
+        if warning["code"] == "boundary.dipole_correction_suggested"
+    ]
+    return message
+
+
+def _sawtooth(message: str) -> tuple[int, float, float]:
+    """``edir``, ``emaxpos`` and ``eopreg`` of a dipole notice."""
+    values = dict(re.findall(r"(edir|emaxpos|eopreg) = ([0-9.]+)", message))
+    return int(values["edir"]), float(values["emaxpos"]), float(values["eopreg"])
+
+
+def _drop_in_vacuum(cell: Structure, edir: int, emaxpos: float, eopreg: float) -> bool:
+    """Whether the sawtooth's drop, from ``emaxpos`` to ``emaxpos +
+    eopreg`` along lattice vector ``edir``, is centred on the widest
+    vacuum of ``cell`` along it and holds no atom."""
+    slab = slab_geometry(cell)
+    centre = (emaxpos + eopreg / 2) % 1.0
+    heights = np.mod(cell.frac_coords[:, edir - 1] - emaxpos, 1.0)
+    return (
+        slab is not None
+        and slab.vacuum_axis == "abc"[edir - 1]
+        and abs((centre - slab.vacuum_center + 0.5) % 1.0 - 0.5) < 1e-3
+        and bool(np.all(heights > eopreg))
+    )
+
+
+@_needs_enumlib
+def test_the_dipole_notice_of_a_polar_afm_slab_describes_the_written_cell() -> None:
+    """#144: plain afm on the polar VSSe sheet doubled it across its vacuum
+    and moved c to b, while the dipole notice, read from the uploaded
+    cell, still put edir = 3. The ordering is now in the sheet, the
+    written cell keeps c with its vacuum, and the notice's edir, emaxpos
+    and eopreg place the sawtooth's drop in that vacuum."""
+    janus = _janus_vsse()
+
+    advice = advise(
+        janus, hpc=_hpc(), overrides=build_overrides({"magnetic_ordering": "afm"})
+    )
+
+    cell = advice.system.magnetic.value.cell
+    edir, emaxpos, eopreg = _sawtooth(_dipole_notice(advice))
+    assert advice.system.magnetic.value.ordering.applied == "afm-1"
+    assert len(cell) == 6
+    assert np.array_equal(cell.lattice.matrix[2], janus.lattice.matrix[2])
+    assert edir == 3
+    assert _drop_in_vacuum(cell, edir, emaxpos, eopreg)
+    assert "isolation='slab'" in _dipole_notice(advice)
+
+
+def test_the_dipole_notice_reads_the_vacuum_of_the_cell_written(monkeypatch) -> None:
+    """#144: the notice's numbers belong to the cell the input is written
+    for. An ordering whose cell sits 0.45 c higher than the upload (its
+    vacuum centred at 0.45 instead of 0) moves the sawtooth with it; read
+    from the upload, the drop would fall inside the sheet."""
+    janus = _janus_vsse()
+    a, b, c = janus.lattice.matrix
+    species, coords = [], []
+    for shift, spin in ((0.45 * c, 5.0), (0.45 * c + b, -5.0)):
+        for site in janus:
+            species.append(
+                Species("V", spin=spin) if site.specie.symbol == "V" else site.specie
+            )
+            coords.append(site.coords + shift)
+    candidate = Structure(
+        Lattice([a, 2 * b, c]), species, coords, coords_are_cartesian=True
+    )
+    monkeypatch.setattr(
+        "goldilocks_core.advisors.magnetic_config.enumlib_installed", lambda: True
+    )
+    monkeypatch.setattr(
+        "goldilocks_core.advisors.magnetic_config.enumerate_orderings",
+        lambda *_args, **_kwargs: ((candidate, "afm"),),
+    )
+
+    advice = advise(
+        janus, hpc=_hpc(), overrides=build_overrides({"magnetic_ordering": "afm"})
+    )
+
+    cell = advice.system.magnetic.value.cell
+    edir, emaxpos, eopreg = _sawtooth(_dipole_notice(advice))
+    assert edir == 3
+    assert _drop_in_vacuum(cell, edir, emaxpos, eopreg)
+    assert not _drop_in_vacuum(janus, edir, emaxpos, eopreg)

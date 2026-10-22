@@ -19,7 +19,9 @@ Enumeration never needs mMACE (it is
 ``advisors/magnetic_config.enumerate_magnetic_orderings``, the same
 enumlib-backed path the existing heuristic tier already uses, run on a
 worker process in a private directory, #136, over the sites
-``analysis/local_moments.py`` says carry a local moment, #143) and returns
+``analysis/local_moments.py`` says carry a local moment, #143, keeping only
+the orderings that keep a slab's, wire's or boxed molecule's vacuum
+vectors, #144) and returns
 at least the plain ferromagnetic candidate, with a warning naming why when
 a structure with local moments gets no antiferromagnetic one; an
 enumeration fault (a scratch-directory

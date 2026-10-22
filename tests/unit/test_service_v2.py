@@ -1054,13 +1054,37 @@ def test_the_written_cell_is_seeded_once_from_the_selected_table(
         pytest.param(
             {},
             {"formula": "Ni1 O1", "nat": 2},
-            {"requested": "fm", "applied": "fm", "compensated": False},
+            {
+                "requested": None,
+                "applied": "fm",
+                "compensated": False,
+                "criterion": "identity",
+                "alternatives": [],
+            },
+            id="unset",
+        ),
+        pytest.param(
+            {"magnetic_ordering": "fm"},
+            {"formula": "Ni1 O1", "nat": 2},
+            {
+                "requested": "fm",
+                "applied": "fm",
+                "compensated": False,
+                "criterion": "identity",
+                "alternatives": [],
+            },
             id="fm",
         ),
         pytest.param(
             {"magnetic_ordering": "afm"},
             {"formula": "Ni2 O2", "nat": 4},
-            {"requested": "afm", "applied": "afm-1", "compensated": True},
+            {
+                "requested": "afm",
+                "applied": "afm-1",
+                "compensated": True,
+                "criterion": "smallest_cell",
+                "alternatives": [],
+            },
             id="afm",
         ),
     ],
@@ -1071,7 +1095,9 @@ def test_the_magnetic_record_shows_the_written_cell_and_its_ordering(
     """#128: goldilocks.json records the cell the input is written for, as
     its formula and atom count (any Structure in a record projects to
     those, never to host-specific or bulky data), next to the ordering
-    asked for, the one applied and whether it is compensated (#138)."""
+    asked for (none when unset, unlike an explicit fm, which is a spin
+    request), the one applied, whether it is compensated (#138), why it
+    was applied and the other candidates of its size (#144)."""
     advice = advise(
         _rock_salt_nio(),
         hpc=hpc,
