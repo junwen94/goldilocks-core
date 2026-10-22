@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import shutil
 
+import pytest
 from pymatgen.core import Lattice, Species, Structure
 
 from goldilocks_core.advisors import magnetic_config as magnetic_config_module
+from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
 from goldilocks_core.advisors.magnetic_ordering_ml import (
     MagneticOrderingMlUnavailable,
     OrderingCandidate,
@@ -147,3 +149,132 @@ def test_ranking_unavailable_falls_back_to_unranked_with_a_warning(monkeypatch) 
         if warning.code == "magnetic.ordering_ranking_unavailable"
     )
     assert "GOLDILOCKS_MACE_BACKBONE" in ranking_warning.message
+
+
+def _la2cuo4() -> Structure:
+    """T-type La2CuO4 (I4/mmm, Materials Project mp-19735)."""
+    return Structure.from_spacegroup(
+        "I4/mmm",
+        Lattice.tetragonal(3.78, 13.2),
+        ["La", "Cu", "O", "O"],
+        [[0, 0, 0.3606], [0, 0, 0], [0, 0.5, 0], [0, 0, 0.1828]],
+    )
+
+
+def _fept() -> Structure:
+    """L1_0 FePt (P4/mmm, MC3D mc3d-49510)."""
+    return Structure.from_spacegroup(
+        "P4/mmm",
+        Lattice.tetragonal(2.72, 3.71),
+        ["Fe", "Pt"],
+        [[0, 0, 0], [0.5, 0.5, 0.5]],
+    )
+
+
+_SOLID_OXYGEN = Structure(
+    Lattice.from_parameters(3.5119, 3.5119, 4.2801, 67.257, 112.743, 115.955),
+    ["O", "O"],
+    [[0.9105, 0.0895, 0.8544], [0.0895, 0.9105, 0.1456]],
+)
+"""alpha-O2 (MC3D mc3d-25060): a radical with no local d or f moment."""
+
+_DIAMOND_SILICON = Structure(
+    Lattice.from_parameters(3.84, 3.84, 3.84, 60, 60, 60),
+    ["Si", "Si"],
+    [[0, 0, 0], [0.25, 0.25, 0.25]],
+)
+
+
+def _spins(cell: Structure, element: str) -> set[float]:
+    return {
+        getattr(site.specie, "spin", None) or 0.0
+        for site in cell
+        if site.specie.symbol == element
+    }
+
+
+def _never_enumerating(monkeypatch) -> None:
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        magnetic_config_module,
+        "enumerate_orderings",
+        lambda *_args, **_kwargs: pytest.fail("enumerated without a sublattice"),
+    )
+
+
+_needs_enumlib = pytest.mark.skipif(
+    not enumlib_installed(),
+    reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
+)
+
+
+@_needs_enumlib
+def test_every_listed_la2cuo4_candidate_compensates_cu_and_leaves_la_unspun() -> None:
+    """#143: with 4f0 La3+ seeded too, 5 of 16 listed 'AFM' candidates kept
+    both Cu parallel and compensated on La alone."""
+    report = list_magnetic_orderings(_la2cuo4())
+
+    afm = [candidate for candidate in report.candidates if candidate.label != "fm"]
+    assert afm
+    for candidate in afm:
+        assert _spins(candidate.structure, "Cu") == {5.0, -5.0}, candidate.label
+        assert _spins(candidate.structure, "La") == {0.0}, candidate.label
+    assert report.warnings == ()
+
+
+@_needs_enumlib
+def test_no_listed_fept_candidate_is_the_two_site_fe_against_pt_cell() -> None:
+    """#143: Fe up / Pt down on the unchanged 2-site cell was listed (and
+    applied) as antiferromagnetic; it is ferromagnetic on the Fe sites."""
+    report = list_magnetic_orderings(_fept())
+
+    afm = [candidate for candidate in report.candidates if candidate.label != "fm"]
+    assert afm
+    for candidate in afm:
+        assert candidate.natoms >= 4, candidate.label
+        assert _spins(candidate.structure, "Fe") == {5.0, -5.0}, candidate.label
+        assert _spins(candidate.structure, "Pt") == {0.0}, candidate.label
+
+
+def test_listing_a_radical_without_moment_bearing_sites_explains_the_fm_only_list(
+    monkeypatch,
+) -> None:
+    """#143: solid O2 is magnetic (a molecular triplet) but has no site to
+    order; the listing said nothing about why it held 'fm' alone. The
+    warning is the run's, and fits a listing nobody asked an ordering of."""
+    _never_enumerating(monkeypatch)
+
+    report = list_magnetic_orderings(_SOLID_OXYGEN)
+
+    assert [candidate.label for candidate in report.candidates] == ["fm"]
+    [warning] = report.warnings
+    assert warning.code == "magnetic.afm_no_open_shell_sites"
+    assert "starting_magnetization per site label" in warning.message
+    assert "requested" not in warning.message
+
+
+def test_listing_undecidable_local_moments_explains_why(monkeypatch) -> None:
+    _never_enumerating(monkeypatch)
+    uranium_sulfide = Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(5.489), ["U", "S"], [[0, 0, 0], [0.5, 0.5, 0.5]]
+    )
+
+    report = list_magnetic_orderings(uranium_sulfide)
+
+    assert [candidate.label for candidate in report.candidates] == ["fm"]
+    [warning] = report.warnings
+    assert warning.code == "magnetic.afm_ordering_unavailable"
+    assert "U (+6)" in warning.message
+
+
+def test_listing_a_closed_shell_structure_is_fm_alone_without_a_warning(
+    monkeypatch,
+) -> None:
+    """Nothing in diamond Si could order, so 'fm' alone needs no
+    explanation -- and enumlib is never asked."""
+    _never_enumerating(monkeypatch)
+
+    report = list_magnetic_orderings(_DIAMOND_SILICON)
+
+    assert [candidate.label for candidate in report.candidates] == ["fm"]
+    assert report.warnings == ()

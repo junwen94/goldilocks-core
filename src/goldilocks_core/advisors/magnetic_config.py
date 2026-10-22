@@ -80,12 +80,16 @@ heuristic tier can or should attempt. What this tier gives instead is a
 antiferromagnetic candidate the enumerator finds, which can be a different
 cell from the input: NiO's 2-atom primitive cell becomes the 4-atom AFM-II
 cell), useful as a real starting point for a human/agent to actually run
-and compare against the plain ferromagnetic guess -- degrading back to the
-FM identity pass-through, with
-a warning naming why, whenever enumlib is missing, the structure exceeds a
-small site-count ceiling, pymatgen cannot enumerate it, enumlib runs out of
-time, or no compensated ordering exists at all. Any other enumeration error
-propagates. See `_afm_candidates_or_reason` below.
+and compare against the plain ferromagnetic guess. Only the sublattice is
+seeded and compensated: the elements `analysis/local_moments.py` says carry
+a local d or f moment, so closed-shell La3+ in La2CuO4 and the induced
+moment of Pt in FePt never carry the opposing spin (#143). The request
+degrades back to the FM identity pass-through, with a warning naming why,
+whenever no site carries a local moment (`magnetic.afm_no_open_shell_sites`),
+the sublattice cannot be decided, enumlib is missing, the structure exceeds
+a small site-count ceiling, pymatgen cannot enumerate it, enumlib runs out
+of time, or no compensated ordering exists at all. Any other enumeration
+error propagates. See `_afm_candidates_or_warning` below.
 
 SOC stays opt-in, matching v1's own policy: `needs_soc` only ever produces a
 warning recommending it be considered, never enables it automatically --
@@ -104,8 +108,8 @@ per-element table verbatim (elements with a partially-occupied d/f shell get
 an aggressive maximal-moment target -- 5 or 7 Bohr magnetons -- to reliably
 break spin symmetry; everything else gets 0, which maps to the flat
 `DEFAULT_MAGNETIZATION_FRACTION` below). Every element in the structure gets
-an entry when spin-polarized, not just the transition-metal/lanthanide/
-actinide `magnetic_elements` -- aiida does the same, so that no single
+an entry when spin-polarized, not just the moment-bearing
+`magnetic_elements` -- aiida does the same, so that no single
 species sits at exactly zero and re-locks the spin symmetry the rest of the
 structure is trying to break.
 
@@ -135,14 +139,15 @@ from goldilocks_core.advisors.magnetic_enumeration import (
     enumerate_orderings,
     enumlib_installed,
 )
-from goldilocks_core.analysis.composition import composition
 from goldilocks_core.analysis.is_magnetic import Magnetism
+from goldilocks_core.analysis.local_moments import LocalMomentFacts, local_moments
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import (
     Blocked,
     FieldState,
     Provenance,
     Resolved,
+    Unavailable,
     Warning,
     blocked_by,
 )
@@ -251,6 +256,22 @@ _DISORDERED_SPIN_POLARIZED = (
     "site occupancies (set spin_polarized to false, or upload an ordered cell)"
 )
 
+_SEED_IT_YOURSELF = (
+    "set starting_magnetization per site label, on a cell whose labels "
+    "separate the sublattices, to seed an ordering yourself"
+)
+
+_NO_OPEN_SHELL_SITES_WARNING = Warning(
+    code="magnetic.afm_no_open_shell_sites",
+    level="warning",
+    category="magnetic",
+    message=(
+        "no site carries a local d or f moment, so there is no "
+        "antiferromagnetic ordering to apply; only ferromagnetic order is "
+        f"available. To change that, {_SEED_IT_YOURSELF}."
+    ),
+)
+
 WARNING_CATALOGUE = (
     _SOC_SUGGESTED_WARNING,
     Warning(
@@ -268,6 +289,7 @@ WARNING_CATALOGUE = (
             "produced; kept ferromagnetic order."
         ),
     ),
+    _NO_OPEN_SHELL_SITES_WARNING,
     Warning(
         code="magnetic.afm_ordering_applied",
         level="info",
@@ -282,10 +304,12 @@ WARNING_CATALOGUE = (
 )
 """Every warning code this module can emit -- ``capabilities.py``'s
 ``warnings[]`` catalogue aggregates one of these tuples per advisor. The
-real, per-occurrence message for
-``magnetic.magnetism_unknown_defaulted_spin_polarized`` names the actual
-reason (built at its call site in ``_resolve_spin_polarized`` below); this
-is the generic description, for a caller that has not seen it fire."""
+real, per-occurrence messages for
+``magnetic.magnetism_unknown_defaulted_spin_polarized`` and
+``magnetic.afm_ordering_unavailable`` name the actual reason (built at
+their call sites in ``_resolve_spin_polarized`` and
+``_afm_unavailable_warning`` below); these are the generic descriptions,
+for a caller that has not seen them fire."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,6 +337,10 @@ class MagneticCell:
     That is an integer supercell matrix for a primitive input, but
     fractional when enumeration reduced a conventional input to a smaller
     cell (determinant 1/2 for rock-salt's 8-atom cell).
+
+    ``magnetic_elements`` is the antiferromagnetic sublattice: the
+    elements ``local_moments`` says carry a local d or f moment, empty when
+    it cannot decide or the run is not spin-polarized (#143).
 
     ``tot_magnetization`` is the human request admitted for this run: set
     only for a collinear spin-polarized run (module docstring, #146)."""
@@ -415,13 +443,16 @@ def magnetic_cell(
     tot_magnetization = human.tot_magnetization if spin_polarized else None
     if tot_magnetization is not None and spin_orbit_enabled:
         return Blocked(by=_NONCOLLINEAR_TOT_MAGNETIZATION)
-    magnetic_elements = magnetic_elements_in(structure) if spin_polarized else ()
     requested = human.magnetic_ordering or "fm"
 
     cell = structure
-    if spin_polarized and requested == "afm":
-        cell, ordering_warnings = _afm_cell(structure, magnetic_elements)
-        warnings = (*warnings, *ordering_warnings)
+    magnetic_elements: tuple[str, ...] = ()
+    if spin_polarized:
+        moments = local_moments(structure)
+        magnetic_elements = moments.value.moment_elements if moments.ok else ()
+        if requested == "afm":
+            cell, ordering_warnings = _afm_cell(structure, moments)
+            warnings = (*warnings, *ordering_warnings)
 
     if spin_polarized and human.starting_magnetization is not None:
         invalid = _invalid_labels(human.starting_magnetization, cell)
@@ -557,18 +588,6 @@ def _resolve_spin_polarized(
     )
 
 
-def magnetic_elements_in(structure: Structure) -> tuple[str, ...]:
-    """Every transition-metal/lanthanide/actinide symbol present, sorted.
-
-    Public (not ``_``-prefixed) because #87's ``enumerate_magnetic_orderings``
-    needs the same set a caller outside this module's own
-    ``magnetic_config()`` flow -- listing candidates before ``spin_polarized``
-    has even been resolved for that caller's own purposes."""
-    facts = composition(structure).value
-    candidates = {*facts.transition_metals, *facts.lanthanides, *facts.actinides}
-    return tuple(sorted(candidates))
-
-
 def _fraction_for(symbol: str, z_valences: dict[str, float] | None) -> float:
     target = _MAGNETIC_MOMENT_TARGETS.get(symbol, 0)
     if not target:
@@ -582,12 +601,9 @@ def _fraction_for(symbol: str, z_valences: dict[str, float] | None) -> float:
     return target / z_valences[symbol]
 
 
-def afm_unavailable_warning(reason: str) -> Warning:
-    """Public (v2 #87): ``service._magnetic_orderings.list_magnetic_orderings``
-    needs the same warning shape ``_afm_cell`` already uses
-    below, to explain *why* a listing came back FM-only rather than
-    silently looking like every structure has no compensated AFM
-    ordering at all."""
+def _afm_unavailable_warning(reason: str) -> Warning:
+    """``magnetic.afm_ordering_unavailable`` with the reason no
+    antiferromagnetic ordering was produced."""
     return Warning(
         code="magnetic.afm_ordering_unavailable",
         level="warning",
@@ -596,13 +612,39 @@ def afm_unavailable_warning(reason: str) -> Warning:
     )
 
 
-def _afm_candidates_or_reason(
-    structure: Structure, magnetic_elements: tuple[str, ...]
-) -> tuple[tuple[Structure, ...], str | None]:
+def _afm_sublattice(
+    moments: FieldState[LocalMomentFacts],
+) -> tuple[str, ...] | Warning:
+    """The elements an antiferromagnetic ordering may compensate on --
+    those ``local_moments`` says carry a local d or f moment -- or the
+    warning saying why there are none: ``magnetic.afm_no_open_shell_sites``
+    when no site carries one (closed shells, or a radical such as solid
+    O2), ``magnetic.afm_ordering_unavailable`` with the model's reason when
+    it cannot decide (#143)."""
+    if isinstance(moments, Unavailable):
+        return _afm_unavailable_warning(
+            f"the sites carrying a local moment could not be determined "
+            f"({moments.reason}); {_SEED_IT_YOURSELF}"
+        )
+    sublattice = moments.value.moment_elements
+    return sublattice if sublattice else _NO_OPEN_SHELL_SITES_WARNING
+
+
+def _afm_candidates_or_warning(
+    structure: Structure, moments: FieldState[LocalMomentFacts]
+) -> tuple[tuple[Structure, ...], Warning | None]:
     """Return every antiferromagnetic-origin candidate pymatgen's own
     ``MagneticStructureEnumerator`` (itself backed by
     ``MagOrderingTransformation``'s symmetry-aware enumeration) finds for
-    ``structure``, or an empty tuple plus the reason there is none.
+    ``structure``, or an empty tuple plus the warning saying why there is
+    none.
+
+    Only the sublattice (``_afm_sublattice``) is seeded, so a compensated
+    candidate is compensated on the moment-bearing sites: seeding every
+    transition metal, lanthanide and actinide let 4f0 La3+ in La2CuO4 or
+    the induced moment of Pt in FePt carry the opposing spin while the
+    real moments stayed parallel (#143). An empty or undecidable sublattice
+    never reaches the enumerator.
 
     Shared by ``_afm_cell`` (picks the smallest candidate, a
     deterministic starting point) and ``enumerate_magnetic_orderings``
@@ -614,19 +656,22 @@ def _afm_candidates_or_reason(
     Only the enumerator's own answers about the structure become a reason,
     each with a fixed wording that quotes no exception text: pymatgen's
     ``ValueError`` (enumlib found no ordering, or the enumerator refused the
-    structure as disordered, non-collinear, non-magnetic or with too many
-    magnetic sites) and enumlib's ``TimeoutError``. Anything else propagates
-    -- an ``OSError`` from a scratch directory, numpy's ``LinAlgError`` (a
+    structure as disordered, non-collinear or with too many magnetic sites)
+    and enumlib's ``TimeoutError``. Anything else propagates -- an
+    ``OSError`` from a scratch directory, numpy's ``LinAlgError`` (a
     ``ValueError`` subclass), a dead worker process -- because it is a
     fault, not an answer about this structure."""
+    sublattice = _afm_sublattice(moments)
+    if isinstance(sublattice, Warning):
+        return (), sublattice
     if len(structure) > _MAX_SITES_FOR_AFM_ENUMERATION:
-        return (), (
+        return (), _afm_unavailable_warning(
             f"structure has {len(structure)} sites, over the "
             f"{_MAX_SITES_FOR_AFM_ENUMERATION}-site ceiling this "
             "heuristic enumerates within"
         )
     if not enumlib_installed():
-        return (), (
+        return (), _afm_unavailable_warning(
             "antiferromagnetic ordering needs the enumlib executables on PATH "
             "(enum.x or multienum.x, plus makestr.x, makeStr.x or makeStr.py) "
             "and at least one was not found"
@@ -635,7 +680,7 @@ def _afm_candidates_or_reason(
     try:
         orderings = enumerate_orderings(
             structure,
-            default_magmoms=dict.fromkeys(magnetic_elements, 5.0),
+            default_magmoms=dict.fromkeys(sublattice, 5.0),
             strategies=("ferromagnetic", "antiferromagnetic"),
             truncate_by_symmetry=True,
             max_orderings=16,
@@ -643,57 +688,65 @@ def _afm_candidates_or_reason(
     except LinAlgError:
         raise
     except ValueError:
-        return (), "pymatgen could not enumerate magnetic orderings for this structure"
+        return (), _afm_unavailable_warning(
+            "pymatgen could not enumerate magnetic orderings for this structure"
+        )
     except TimeoutError:
-        return (), "enumlib did not finish within its time limit"
+        return (), _afm_unavailable_warning(
+            "enumlib did not finish within its time limit"
+        )
 
     candidates = tuple(candidate for candidate, origin in orderings if origin == "afm")
     if not candidates:
-        return (), "no compensated antiferromagnetic ordering was found"
+        return (), _afm_unavailable_warning(
+            "no compensated antiferromagnetic ordering was found"
+        )
     return candidates, None
 
 
 def enumerate_magnetic_orderings(
-    structure: Structure, magnetic_elements: tuple[str, ...]
-) -> tuple[tuple[tuple[str, Structure], ...], str | None]:
+    structure: Structure, moments: FieldState[LocalMomentFacts]
+) -> tuple[tuple[tuple[str, Structure], ...], Warning | None]:
     """List every magnetic-ordering candidate this heuristic tier can
-    produce for ``structure``: the plain ferromagnetic identity (label
-    ``"fm"``), plus every antiferromagnetic candidate
-    ``_afm_candidates_or_reason`` finds, labeled ``"afm-<n>"`` in
-    enumeration order and already relabeled by spin (``_label_by_spin``) so
-    a caller can use any entry directly as a simulated cell.
+    produce for ``structure``, whose ``local_moments`` are ``moments``: the
+    plain ferromagnetic identity (label ``"fm"``), plus every
+    antiferromagnetic candidate ``_afm_candidates_or_warning`` finds,
+    labeled ``"afm-<n>"`` in enumeration order and already relabeled by
+    spin (``_label_by_spin``) so a caller can use any entry directly as a
+    simulated cell.
 
     Unlike ``_afm_cell``, this never picks a winner -- it is
     the listing half of #87's "enumerate, then optionally rank with mMACE,
     then generate" split. Returns just the ``"fm"`` entry, with no
-    antiferromagnetic candidates, whenever ``_afm_candidates_or_reason``
-    gives a reason (oversized structure, missing enumlib, a structure
-    pymatgen cannot enumerate, enumlib's time limit, or no compensated
-    ordering found); any other enumeration error propagates.
+    antiferromagnetic candidates, whenever ``_afm_candidates_or_warning``
+    gives a warning (no moment-bearing site, an undecidable sublattice, an
+    oversized structure, missing enumlib, a structure pymatgen cannot
+    enumerate, enumlib's time limit, or no compensated ordering found); any
+    other enumeration error propagates.
 
-    The second return value is ``_afm_candidates_or_reason``'s own reason
-    whenever no AFM candidate was found, ``None`` otherwise -- surfaced
-    so a caller (#87's ``list_magnetic_orderings``) can tell a real "no
-    compensated ordering exists" result apart from "AFM enumeration
-    silently could not run here" (e.g. missing enumlib), which otherwise
-    look identical from the candidate list alone."""
+    The second return value is that warning whenever no AFM candidate was
+    found, ``None`` otherwise -- surfaced so a caller (#87's
+    ``list_magnetic_orderings``) can tell a real "no compensated ordering
+    exists" result apart from "AFM enumeration could not run here" (e.g.
+    missing enumlib), which otherwise look identical from the candidate
+    list alone."""
     candidates: list[tuple[str, Structure]] = [("fm", structure)]
-    afm_candidates, reason = _afm_candidates_or_reason(structure, magnetic_elements)
+    afm_candidates, warning = _afm_candidates_or_warning(structure, moments)
     for index, candidate in enumerate(afm_candidates, start=1):
         candidates.append((f"afm-{index}", _label_by_spin(candidate)))
-    return tuple(candidates), reason
+    return tuple(candidates), warning
 
 
 def _afm_cell(
-    structure: Structure, magnetic_elements: tuple[str, ...]
+    structure: Structure, moments: FieldState[LocalMomentFacts]
 ) -> tuple[Structure, tuple[Warning, ...]]:
     """The cell of one genuine, compensated two-sublattice antiferromagnetic
     ordering (the smallest candidate, relabeled by spin), or ``structure``
-    itself -- the FM identity pass-through -- with a warning naming why
-    ``_afm_candidates_or_reason`` could not produce one."""
-    candidates, reason = _afm_candidates_or_reason(structure, magnetic_elements)
-    if reason is not None:
-        return structure, (afm_unavailable_warning(reason),)
+    itself -- the FM identity pass-through -- with the warning
+    ``_afm_candidates_or_warning`` gives for producing none."""
+    candidates, warning = _afm_candidates_or_warning(structure, moments)
+    if warning is not None:
+        return structure, (warning,)
 
     winner = min(candidates, key=lambda candidate: candidate.num_sites)
     cell = _label_by_spin(winner)

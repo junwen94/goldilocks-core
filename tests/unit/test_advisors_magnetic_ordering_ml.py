@@ -267,7 +267,7 @@ def test_a_ranked_listing_with_a_non_finite_energy_is_strict_json(
     monkeypatch.setattr(
         magnetic_orderings_module,
         "enumerate_magnetic_orderings",
-        lambda structure, magnetic_elements: (
+        lambda structure, moments: (
             (("fm", structure), ("afm-1", _BCC_IRON_AFM)),
             None,
         ),
@@ -371,7 +371,7 @@ def test_a_ranking_process_that_dies_fails_the_listing(
     monkeypatch.setattr(
         magnetic_orderings_module,
         "enumerate_magnetic_orderings",
-        lambda structure, magnetic_elements: (
+        lambda structure, moments: (
             (("fm", structure), ("afm-1", _BCC_IRON_AFM)),
             None,
         ),

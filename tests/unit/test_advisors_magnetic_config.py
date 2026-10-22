@@ -15,10 +15,10 @@ from goldilocks_core.advisors.magnetic_config import (
     enumerate_magnetic_orderings,
     magnetic_cell,
     magnetic_config,
-    magnetic_elements_in,
 )
 from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
 from goldilocks_core.analysis.is_magnetic import is_magnetic
+from goldilocks_core.analysis.local_moments import local_moments
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
@@ -632,6 +632,156 @@ def test_afm_ordering_degrades_when_no_compensated_ordering_is_found(
     )
 
 
+def _la2cuo4() -> Structure:
+    """T-type La2CuO4 (I4/mmm, Materials Project mp-19735): Cu2+ d9 and
+    La3+ 4f0."""
+    return Structure.from_spacegroup(
+        "I4/mmm",
+        Lattice.tetragonal(3.78, 13.2),
+        ["La", "Cu", "O", "O"],
+        [[0, 0, 0.3606], [0, 0, 0], [0, 0.5, 0], [0, 0, 0.1828]],
+    )
+
+
+def _fept() -> Structure:
+    """L1_0 FePt (P4/mmm, MC3D mc3d-49510): Pt's moment is induced by Fe."""
+    return Structure.from_spacegroup(
+        "P4/mmm",
+        Lattice.tetragonal(2.72, 3.71),
+        ["Fe", "Pt"],
+        [[0, 0, 0], [0.5, 0.5, 0.5]],
+    )
+
+
+_SOLID_OXYGEN = Structure(
+    Lattice.from_parameters(3.5119, 3.5119, 4.2801, 67.257, 112.743, 115.955),
+    ["O", "O"],
+    [[0.9105, 0.0895, 0.8544], [0.0895, 0.9105, 0.1456]],
+)
+"""alpha-O2 (MC3D mc3d-25060): its moment is the O2 molecule's triplet, no
+site carries a local d or f moment."""
+
+_URANIUM_SULFIDE = Structure.from_spacegroup(
+    "Fm-3m", Lattice.cubic(5.489), ["U", "S"], [[0, 0, 0], [0.5, 0.5, 0.5]]
+)
+"""Rock-salt US: no oxidation-state guess, and U's one common state (+6) is
+5f0, so its local moments are undecidable."""
+
+
+def _spins(cell: Structure, element: str) -> set[float]:
+    return {
+        getattr(site.specie, "spin", None) or 0.0
+        for site in cell
+        if site.specie.symbol == element
+    }
+
+
+def _afm_warnings(warnings) -> list:
+    return [warning for warning in warnings if warning.code.startswith("magnetic.afm_")]
+
+
+@pytest.mark.skipif(
+    _ENUMLIB_MISSING,
+    reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
+)
+def test_afm_orders_the_open_shell_cu_of_la2cuo4_and_never_la() -> None:
+    """#143: the sublattice is the sites with a local moment. Seeding 4f0
+    La3+ too let La carry the compensating spin while both Cu stayed
+    parallel (afm-7 converged to Cu-FM on pw.x)."""
+    la2cuo4 = _la2cuo4()
+
+    state = magnetic_cell(la2cuo4, is_magnetic(la2cuo4), _AFM)
+
+    cell = state.value
+    assert cell.magnetic_elements == ("Cu",)
+    assert cell.ordering == OrderingRecord(requested="afm", applied="afm")
+    assert _spins(cell.structure, "Cu") == {5.0, -5.0}
+    assert _spins(cell.structure, "La") == {0.0}
+    assert {site.label for site in cell.structure} == {"Cu1", "Cu2", "La", "O"}
+
+
+@pytest.mark.skipif(
+    _ENUMLIB_MISSING,
+    reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
+)
+def test_afm_on_fept_splits_fe_in_a_doubled_cell_not_fe_against_pt() -> None:
+    """#143: with Pt seeded too, the 2-site input cell itself (Fe up, Pt
+    down) was applied as 'antiferromagnetic' and relaxed to the
+    ferromagnetic state. Fe alone needs at least a doubled cell."""
+    fept = _fept()
+
+    state = magnetic_cell(fept, is_magnetic(fept), _AFM)
+
+    cell = state.value
+    assert cell.magnetic_elements == ("Fe",)
+    assert cell.ordering.applied == "afm"
+    assert len(cell.structure) == 4
+    assert _spins(cell.structure, "Fe") == {5.0, -5.0}
+    assert _spins(cell.structure, "Pt") == {0.0}
+    assert {site.label for site in cell.structure} == {"Fe1", "Fe2", "Pt"}
+
+
+@pytest.mark.parametrize(
+    ("structure", "human"),
+    [
+        (_SOLID_OXYGEN, _AFM),
+        (
+            _DIAMOND_SILICON,
+            MagneticConfigHumanInput(magnetic_ordering="afm", spin_polarized=True),
+        ),
+    ],
+    ids=["solid-O2-radical", "closed-shell-Si"],
+)
+def test_afm_without_a_moment_bearing_site_is_refused_before_enumlib(
+    monkeypatch, structure: Structure, human: MagneticConfigHumanInput
+) -> None:
+    """#143: an empty sublattice reached pymatgen, whose 'Not detected as
+    magnetic' text came back as the reason. It is caught first, under its
+    own code naming the supported action."""
+    monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
+    monkeypatch.setattr(
+        magnetic_config_module,
+        "enumerate_orderings",
+        _failing_with(AssertionError("enumerated an empty sublattice")),
+    )
+
+    state = magnetic_cell(structure, is_magnetic(structure), human)
+
+    assert state.ok
+    assert state.value.structure is structure
+    assert state.value.magnetic_elements == ()
+    assert state.value.ordering == OrderingRecord(requested="afm", applied="fm")
+    [warning] = _afm_warnings(state.value.warnings)
+    assert warning.code == "magnetic.afm_no_open_shell_sites"
+    assert warning.level == "warning"
+    assert "local d or f moment" in warning.message
+    assert "starting_magnetization per site label" in warning.message
+    assert "pymatgen" not in warning.message
+
+
+def test_afm_with_undecidable_local_moments_reports_why(monkeypatch) -> None:
+    """#143: 'no open-shell sites' would be false when the model cannot
+    tell; the warning carries local_moments' own reason instead."""
+    monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
+    monkeypatch.setattr(
+        magnetic_config_module,
+        "enumerate_orderings",
+        _failing_with(AssertionError("enumerated an undecided sublattice")),
+    )
+
+    state = magnetic_cell(_URANIUM_SULFIDE, is_magnetic(_URANIUM_SULFIDE), _AFM)
+
+    assert state.ok
+    assert state.value.spin_polarized is True
+    assert state.value.magnetic_elements == ()
+    assert state.value.ordering == OrderingRecord(requested="afm", applied="fm")
+    [warning] = _afm_warnings(state.value.warnings)
+    assert warning.code == "magnetic.afm_ordering_unavailable"
+    assert "could not be determined" in warning.message
+    assert "U (+6)" in warning.message
+    assert "starting_magnetization per site label" in warning.message
+
+
 def test_enumerate_magnetic_orderings_is_just_fm_when_enumlib_is_missing(
     monkeypatch,
 ) -> None:
@@ -639,12 +789,13 @@ def test_enumerate_magnetic_orderings_is_just_fm_when_enumlib_is_missing(
     does: no enumlib means no antiferromagnetic candidates, not an error."""
     monkeypatch.setattr(shutil, "which", lambda _name: None)
 
-    candidates, reason = enumerate_magnetic_orderings(
-        _ROCK_SALT_FEO, magnetic_elements_in(_ROCK_SALT_FEO)
+    candidates, warning = enumerate_magnetic_orderings(
+        _ROCK_SALT_FEO, local_moments(_ROCK_SALT_FEO)
     )
 
     assert candidates == (("fm", _ROCK_SALT_FEO),)
-    assert reason is not None and "enumlib" in reason
+    assert warning.code == "magnetic.afm_ordering_unavailable"
+    assert "enumlib" in warning.message
 
 
 def test_enumerate_magnetic_orderings_never_picks_a_winner(monkeypatch) -> None:
@@ -658,13 +809,13 @@ def test_enumerate_magnetic_orderings_never_picks_a_winner(monkeypatch) -> None:
         _enumerating((_ROCK_SALT_FEO.copy(), "afm"), (_ROCK_SALT_FEO.copy(), "afm")),
     )
 
-    candidates, reason = enumerate_magnetic_orderings(
-        _ROCK_SALT_FEO, magnetic_elements_in(_ROCK_SALT_FEO)
+    candidates, warning = enumerate_magnetic_orderings(
+        _ROCK_SALT_FEO, local_moments(_ROCK_SALT_FEO)
     )
 
     labels = [label for label, _structure in candidates]
     assert labels == ["fm", "afm-1", "afm-2"]
-    assert reason is None
+    assert warning is None
 
 
 @pytest.mark.parametrize(
@@ -683,14 +834,14 @@ def test_afm_enumeration_needs_both_enumlib_executables(
         _failing_with(AssertionError("enumerated without both executables")),
     )
 
-    candidates, reason = enumerate_magnetic_orderings(
-        _ROCK_SALT_FEO, magnetic_elements_in(_ROCK_SALT_FEO)
+    candidates, warning = enumerate_magnetic_orderings(
+        _ROCK_SALT_FEO, local_moments(_ROCK_SALT_FEO)
     )
 
     assert candidates == (("fm", _ROCK_SALT_FEO),)
-    assert reason is not None
-    assert "enumlib" in reason
-    assert "makeStr.py" in reason
+    assert warning.code == "magnetic.afm_ordering_unavailable"
+    assert "enumlib" in warning.message
+    assert "makeStr.py" in warning.message
 
 
 @pytest.mark.parametrize(
@@ -711,12 +862,12 @@ def test_any_name_pymatgen_looks_up_counts_as_installed(
         _enumerating((_ROCK_SALT_FEO.copy(), "afm")),
     )
 
-    candidates, reason = enumerate_magnetic_orderings(
-        _ROCK_SALT_FEO, magnetic_elements_in(_ROCK_SALT_FEO)
+    candidates, warning = enumerate_magnetic_orderings(
+        _ROCK_SALT_FEO, local_moments(_ROCK_SALT_FEO)
     )
 
     assert [label for label, _structure in candidates] == ["fm", "afm-1"]
-    assert reason is None
+    assert warning is None
 
 
 @pytest.mark.parametrize(
@@ -739,9 +890,7 @@ def test_an_enumeration_error_that_is_not_an_enumlib_outcome_propagates(
     )
 
     with pytest.raises(type(error)):
-        enumerate_magnetic_orderings(
-            _ROCK_SALT_FEO, magnetic_elements_in(_ROCK_SALT_FEO)
-        )
+        enumerate_magnetic_orderings(_ROCK_SALT_FEO, local_moments(_ROCK_SALT_FEO))
 
 
 @pytest.mark.parametrize(
@@ -761,13 +910,15 @@ def test_an_unenumerable_structure_gets_a_fixed_reason_without_the_error_text(
         _failing_with(ValueError(message)),
     )
 
-    candidates, reason = enumerate_magnetic_orderings(
-        _ROCK_SALT_FEO, magnetic_elements_in(_ROCK_SALT_FEO)
+    candidates, warning = enumerate_magnetic_orderings(
+        _ROCK_SALT_FEO, local_moments(_ROCK_SALT_FEO)
     )
 
     assert candidates == (("fm", _ROCK_SALT_FEO),)
-    assert reason == (
-        "pymatgen could not enumerate magnetic orderings for this structure"
+    assert warning.code == "magnetic.afm_ordering_unavailable"
+    assert warning.message == (
+        "pymatgen could not enumerate magnetic orderings for this structure; "
+        "kept ferromagnetic order."
     )
 
 
@@ -803,11 +954,11 @@ def test_an_enumlib_timeout_gets_a_fixed_reason_without_the_error_text(
     reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
 )
 def test_enumerate_magnetic_orderings_finds_the_same_split_relabeling_does() -> None:
-    candidates, reason = enumerate_magnetic_orderings(
-        _ROCK_SALT_FEO, magnetic_elements_in(_ROCK_SALT_FEO)
+    candidates, warning = enumerate_magnetic_orderings(
+        _ROCK_SALT_FEO, local_moments(_ROCK_SALT_FEO)
     )
 
-    assert reason is None
+    assert warning is None
     assert candidates[0][0] == "fm"
     assert candidates[0][1] == _ROCK_SALT_FEO
     afm_candidates = candidates[1:]

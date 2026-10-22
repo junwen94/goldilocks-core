@@ -152,6 +152,16 @@ magnetic ordering is the true ground state -- that needs comparing total
 energies from several actual calculations -- so this only gives one
 reasonable, deterministic starting point (the smallest compensated ordering
 found), for you to run and compare against the ferromagnetic guess yourself.
+Only the sites the heuristic above says carry a local d or f moment are
+ordered and compensated against each other: the Cu2+ ions of La2CuO4 but
+not its La3+ (4f0), the Fe of FePt but not its Pt, whose moment Fe induces.
+A structure with no such site (closed-shell Si, or solid O2, whose moment
+belongs to the O2 molecule) keeps the ferromagnetic default with the warning
+`magnetic.afm_no_open_shell_sites`; to try an antiferromagnetic pattern
+there, upload a cell whose site labels separate the sublattices and set
+`starting_magnetization` per label. When the heuristic cannot decide which
+sites carry a moment, the warning `magnetic.afm_ordering_unavailable` gives
+its reason.
 That ordering can need a different cell from the one you uploaded: NiO's
 2-atom primitive cell becomes the 4-atom AFM-II cell, and its 8-atom
 conventional cell is reduced to the same 4-atom one. The input is then
@@ -174,8 +184,11 @@ enumeration finds -- the ferromagnetic guess plus any compensated
 antiferromagnetic ones -- for you to inspect or generate inputs from
 directly, optionally ranked by relaxing each on a frozen mMACE potential
 energy surface (`--rank-with-mmace`) rather than picking the ferromagnetic
-guess by default. See [Magnetic orderings](cli.md#magnetic-orderings) for
-the command and its setup requirements.
+guess by default. It warns the same way when a structure with a moment gets
+no antiferromagnetic candidate, and lists a closed-shell structure's
+ferromagnetic guess alone without a warning. See
+[Magnetic orderings](cli.md#magnetic-orderings) for the command and its
+setup requirements.
 
 ## Check dispersion and dimensionality
 

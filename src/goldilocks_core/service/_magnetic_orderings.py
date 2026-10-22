@@ -17,9 +17,11 @@ generate) this is the first layer of.
 Enumeration never needs mMACE (it is
 ``advisors/magnetic_config.enumerate_magnetic_orderings``, the same
 enumlib-backed path the existing heuristic tier already uses, run on a
-worker process in a private directory, #136) and returns at least the
-plain ferromagnetic candidate, with a warning naming why when enumlib gives
-no antiferromagnetic one; an enumeration fault (a scratch-directory
+worker process in a private directory, #136, over the sites
+``analysis/local_moments.py`` says carry a local moment, #143) and returns
+at least the plain ferromagnetic candidate, with a warning naming why when
+a structure with local moments gets no antiferromagnetic one; an
+enumeration fault (a scratch-directory
 ``OSError``, a dead worker) propagates instead of looking like a
 ferromagnetic-only answer. Ranking is opt-in and can fail independently
 (checkpoint not configured, mace/e3nn/sphericart not installed, a library
@@ -38,16 +40,15 @@ from typing import Any
 from pymatgen.core import Structure
 
 from goldilocks_core.advisors.magnetic_config import (
-    afm_unavailable_warning,
     enumerate_magnetic_orderings,
-    magnetic_elements_in,
     starting_magnetization_for,
 )
 from goldilocks_core.advisors.magnetic_ordering_ml import (
     MagneticOrderingMlUnavailable,
     rank_orderings,
 )
-from goldilocks_core.resolution import Warning
+from goldilocks_core.analysis.local_moments import LocalMomentFacts, local_moments
+from goldilocks_core.resolution import FieldState, Warning
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +168,15 @@ def _unranked(
     return tuple(candidates_out)
 
 
+def _has_moments_to_order(moments: FieldState[LocalMomentFacts]) -> bool:
+    """Whether a ferromagnetic-only listing needs explaining: the local
+    moments are undecidable, or an element carries one, or a radical
+    does."""
+    if not moments.ok:
+        return True
+    return bool(moments.value.moment_elements) or moments.value.radical
+
+
 def list_magnetic_orderings(
     structure: Structure, *, rank_with_mmace: bool = False, device: str = "cpu"
 ) -> MagneticOrderingsReport:
@@ -181,15 +191,17 @@ def list_magnetic_orderings(
 
     Also warns (rather than silently listing "fm" alone, indistinguishable
     from "this structure genuinely has no AFM candidates") whenever
-    ``structure`` actually has a magnetic element but AFM enumeration
-    itself could not run or find one -- the common real case being
-    enumlib (``enum.x``/``multienum.x``) not installed.
+    ``structure`` has local moments but no AFM candidate came back: AFM
+    enumeration could not run or find one (the common real case being
+    enumlib not installed), no site carries a local d or f moment to order
+    (a radical such as solid O2, #143), or which sites carry one could not
+    be determined. A closed-shell structure (Si) lists "fm" alone silently.
     """
-    magnetic_elements = magnetic_elements_in(structure)
-    candidates, afm_reason = enumerate_magnetic_orderings(structure, magnetic_elements)
+    moments = local_moments(structure)
+    candidates, afm_warning = enumerate_magnetic_orderings(structure, moments)
     warnings = (
-        (afm_unavailable_warning(afm_reason),)
-        if afm_reason is not None and magnetic_elements
+        (afm_warning,)
+        if afm_warning is not None and _has_moments_to_order(moments)
         else ()
     )
 
