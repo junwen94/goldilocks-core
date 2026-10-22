@@ -3,7 +3,8 @@ name: Publish on PyPI
 # Driven by a tag, so what reaches PyPI is always a commit in the history.
 # Shaped after stfc/goldilocks-ml's own release workflow (itself modeled on
 # stfc/janus-core's), so every package in this ecosystem releases the same
-# way.
+# way. Publishing waits for workbench-image.yml to build the production image
+# and pass its browser e2e (#205).
 on:
   push:
     tags:
@@ -11,7 +12,13 @@ on:
       - v[0-9]+.[0-9]+.[0-9]+*
 
 jobs:
+  workbench-image:
+    uses: ./.github/workflows/workbench-image.yml
+    permissions:
+      contents: read
+
   publish:
+    needs: workbench-image
     runs-on: ubuntu-latest
     # A fork that pushes a tag must not try to publish.
     if: github.repository == 'stfc/goldilocks-core'
