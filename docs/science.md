@@ -98,19 +98,43 @@ Spin polarization allows different spin populations, decided by `is_magnetic`
 Once its ML asset is installed, `mace`/`e3nn`/`sphericart` are on hand (a
 manual install -- see the CLI reference), and `GOLDILOCKS_MACE_BACKBONE`
 points at a downloaded mMACE checkpoint, a published mMACE-embedding
-classifier answers directly (if it then fails to run, the request fails);
-the heuristic tier otherwise enables it by
-default for lanthanides or actinides whenever present, and for transition
-metals only when a guessed oxidation state implies an open d-shell (a
-d-electron count other than 0 or 10 -- a closed or empty d-shell has no
-unpaired d electrons to align). Oxidation states are guessed from composition
-alone (pymatgen's `Composition.oxi_state_guesses`); if that guess is empty,
-ambiguous, or chemically implausible, the heuristic can't resolve
-`is_magnetic` either, and Goldilocks defaults to non-magnetic with a warning
-rather than guessing either way. Neither tier predicts magnetic *order* (see
-`magnetic_ordering` below for that). The generated input does not assign
-starting magnetic moments or magnetic sublattices; review and complete the
-magnetic setup for your calculation. Override either tier with
+classifier answers directly (if it then fails to run, the request fails).
+Otherwise the heuristic tier answers, and it calls a structure magnetic when
+an element carries a local d or f moment or the structure holds an open-shell
+radical:
+
+- **Ionic compounds** (an O, S, Se, Te, F, Cl, Br, or I anion is present): the
+  first oxidation-state guess from the composition (pymatgen's
+  `Composition.oxi_state_guesses`) gives each transition metal its d count
+  (group minus oxidation state) and each lanthanide or actinide its f count. A
+  shell strictly between empty and full carries a moment: Ni2+ (d8), Fe3+
+  (d5), and Gd3+ (f7) do; Zn2+ (d10), Ti4+ (d0), La3+, Ce4+, and Th4+ (f0),
+  and Lu3+ (f14) do not. When pymatgen finds no guess (GdI2, Fe3GeTe2, NpO2),
+  an element carries a moment if every one of its common oxidation states
+  leaves the shell open. Otherwise the heuristic cannot decide: a composition
+  those states cannot balance holds the element in another state.
+- **Metals and other compounds** (elements, intermetallics, nitrides,
+  carbides, borides, hydrides): oxidation states do not describe these, so Cr,
+  Mn, Fe, Co, and Ni carry moments, as do Ce to Tm (not La, Yb, or Lu) and, in
+  a compound such as UN, the actinides Pa to Md. Cu, the 4d and 5d metals,
+  metallic TiN and WC, and the elemental actinide metals (alpha-U) do not.
+- **Radicals**, in any structure: an open-shell main-group atom with no
+  neighbour within 1.5 times the covalent-radius sum (atoms in a box), or an
+  O2 or S2 molecule bonded only to its partner (solid O2).
+
+When the heuristic cannot decide, Goldilocks defaults to spin-polarized with
+the warning `magnetic.magnetism_unknown_defaulted_spin_polarized`. An SCF can
+quench a moment it was seeded with, but a non-spin-polarized run can never
+find one, so a wrong default costs compute time, not physics. The rules still
+over-seed where a formally open shell keeps no moment (low-spin Co3+ in
+LiCoO2, Mo4+ in MoS2), and a misguessed oxidation state can hide one (pymatgen
+reads CrTe3 as d0 Cr6+): set `spin_polarized` when you know better. A
+structure with fractional site occupancies is undecidable too, and since a
+spin-polarized run needs one species per site to seed, its magnetic setup is
+blocked until you set `spin_polarized` to false or upload an ordered cell.
+Spin-polarized inputs get a `starting_magnetization` for every species;
+review it for your calculation. Neither tier predicts magnetic *order* (see
+`magnetic_ordering` below for that). Override either tier with
 `spin_polarized`.
 
 Spin-orbit coupling (SOC) couples electron spin to orbital motion. Goldilocks

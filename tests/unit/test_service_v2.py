@@ -382,13 +382,15 @@ class TestJobMemory:
         self, hpc, installed_table
     ) -> None:
         """The estimate counts the species of the written cell, which a
-        partially occupied site does not have."""
+        partially occupied site does not have. (Spin-unpolarized: a
+        spin-polarized disordered cell is already Blocked, #142.)"""
         store, _table = installed_table
         vacancy = Structure(
             Lattice.cubic(5.43), [{"Si": 0.5}, "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]]
         )
+        overrides = build_overrides({"spin_polarized": False})
 
-        advice = advise(vacancy, hpc=hpc, store=store)
+        advice = advise(vacancy, hpc=hpc, overrides=overrides, store=store)
 
         job = advice.step.resources.job
         assert isinstance(job, Unavailable)
@@ -539,6 +541,31 @@ class TestAdviseDegradation:
         assert advice.step.kpoints.k_sampling.ok
         assert advice.step.kpoints.occupations.ok
         assert advice.system.boundary.ok
+
+    @pytest.mark.parametrize(
+        "settings", [{}, {"spin_polarized": True}], ids=["default", "spin_polarized"]
+    )
+    def test_a_disordered_structure_blocks_the_magnetic_record_not_a_crash(
+        self, hpc, settings
+    ) -> None:
+        """#142: the magnetism of fractional site occupancies cannot be
+        decided, so the run defaults to spin-polarized, whose seeds need
+        one species per site. The magnetic record is Blocked with that
+        reason. It used to resolve spin-unpolarized by default, and with
+        spin_polarized=true seeding raised AttributeError on
+        ``site.specie``."""
+        disordered = Structure(
+            Lattice.cubic(2.86),
+            [{"Fe": 0.5, "Co": 0.5}, {"Fe": 0.5, "Co": 0.5}],
+            [[0, 0, 0], [0.5, 0.5, 0.5]],
+        )
+
+        advice = advise(disordered, hpc=hpc, overrides=build_overrides(settings))
+
+        magnetic = advice.records()["magnetic"]
+        assert isinstance(magnetic, Blocked)
+        assert "fractional site occupancies" in magnetic.root_cause()
+        assert not check(advice).ok
 
     def test_blocked_root_cause_is_reachable_from_a_downstream_field(
         self, silicon, hpc

@@ -246,13 +246,18 @@ _SOC_SUGGESTED_WARNING = Warning(
     ),
 )
 
+_DISORDERED_SPIN_POLARIZED = (
+    "spin-polarized setup needs an ordered structure; the input has fractional "
+    "site occupancies (set spin_polarized to false, or upload an ordered cell)"
+)
+
 WARNING_CATALOGUE = (
     _SOC_SUGGESTED_WARNING,
     Warning(
-        code="magnetic.metallicity_unknown_defaulted_non_magnetic",
+        code="magnetic.magnetism_unknown_defaulted_spin_polarized",
         level="warning",
         category="magnetic",
-        message="magnetism could not be determined; defaulted to non-magnetic.",
+        message="magnetism could not be determined; defaulted to spin-polarized.",
     ),
     Warning(
         code="magnetic.afm_ordering_unavailable",
@@ -277,9 +282,10 @@ WARNING_CATALOGUE = (
 )
 """Every warning code this module can emit -- ``capabilities.py``'s
 ``warnings[]`` catalogue aggregates one of these tuples per advisor. The
-real, per-occurrence message for the second code names the actual
-reason (built at its call site in ``_resolve_spin_polarized`` below);
-this is the generic description, for a caller that has not seen it fire."""
+real, per-occurrence message for
+``magnetic.magnetism_unknown_defaulted_spin_polarized`` names the actual
+reason (built at its call site in ``_resolve_spin_polarized`` below); this
+is the generic description, for a caller that has not seen it fire."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -385,8 +391,11 @@ def magnetic_cell(
     ``structure`` with the requested ordering applied -- the one
     enumeration of a calculation. ``Blocked`` when ``is_magnetic`` is,
     when a human ``tot_magnetization`` comes with spin-orbit coupling
-    (#146), or when a human ``starting_magnetization`` names a label the
-    cell does not have."""
+    (#146), when a human ``starting_magnetization`` names a label the
+    cell does not have, or when a disordered structure resolves
+    spin-polarized: seeds are set per site species, which a fractionally
+    occupied site does not have, and such a structure's magnetism is
+    undecidable, so it defaults to spin-polarized (#142)."""
     human = human or MagneticConfigHumanInput()
     llm = llm or MagneticConfigLlmInput()
 
@@ -397,6 +406,8 @@ def magnetic_cell(
         return Blocked(by=is_magnetic)
 
     spin_polarized, source, warnings = _resolve_spin_polarized(is_magnetic, human, llm)
+    if spin_polarized and not structure.is_ordered:
+        return Blocked(by=_DISORDERED_SPIN_POLARIZED)
     spin_orbit_enabled = human.spin_orbit_coupling is True
     # A requested moment belongs to a spin-polarized run: an explicit
     # spin_polarized=false drops it (the warning above). With spin-orbit
@@ -524,17 +535,22 @@ def _resolve_spin_polarized(
         return llm.spin_polarized, "llm", ()
     if is_magnetic.ok:
         return is_magnetic.value == "magnetic", "heuristic", ()
+    # #142: an SCF can quench a seeded moment, but a spin-unpolarized run
+    # can never find one -- a wrong default this way costs compute time,
+    # never a silently missing moment.
     return (
-        False,
+        True,
         "heuristic",
         (
             Warning(
-                code="magnetic.metallicity_unknown_defaulted_non_magnetic",
+                code="magnetic.magnetism_unknown_defaulted_spin_polarized",
                 level="warning",
                 category="magnetic",
                 message=(
                     f"magnetism could not be determined ({is_magnetic.reason}); "
-                    "defaulted to non-magnetic."
+                    "defaulted to spin-polarized, since the SCF can quench a "
+                    "seeded moment but a spin-unpolarized run cannot find one. "
+                    "Set spin_polarized to decide."
                 ),
             ),
         ),

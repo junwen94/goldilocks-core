@@ -69,7 +69,8 @@ def test_document_python_blocks_run(
 def skill_structure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Diamond Si, a bulk crystal. A one-atom cubic cell with a = 5.43 A
     has 5.43 A of vacuum along every lattice vector, so it would be treated
-    as an isolated atom (#126)."""
+    as an isolated atom (#126), which the magnetism heuristic spin-polarizes
+    as an open-shell radical (#142)."""
     monkeypatch.chdir(tmp_path)
     structure = Structure.from_spacegroup(
         "Fd-3m", Lattice.cubic(5.431), ["Si"], [[0.0, 0.0, 0.0]]

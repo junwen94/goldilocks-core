@@ -2,8 +2,8 @@
 #1): every analysis/ fact's heuristic tier must be attemptable with zero
 external dependency -- no installed model, no network call, no agent. This
 is a claim about *availability*, not about always resolving: is_metal,
-symmetry, geometry, and is_magnetic all have real cases where the honest
-answer is Unavailable (see their own test files) -- that is still "the
+symmetry, geometry, is_magnetic and local_moments all have real cases where
+the honest answer is Unavailable (see their own test files) -- that is still "the
 heuristic tier ran to completion," the thing #175 asks to guarantee.
 Verified here as "calling every heuristic tier on a handful of structures,
 including a deliberately awkward disordered one, never raises."
@@ -17,6 +17,7 @@ from goldilocks_core.analysis.composition import composition
 from goldilocks_core.analysis.geometry import geometry
 from goldilocks_core.analysis.is_magnetic import is_magnetic
 from goldilocks_core.analysis.is_metal import is_metal
+from goldilocks_core.analysis.local_moments import local_moments
 from goldilocks_core.analysis.needs_soc import needs_soc
 from goldilocks_core.analysis.symmetry import symmetry
 from goldilocks_core.resolution import Blocked, Resolved, Unavailable
@@ -38,4 +39,5 @@ def test_every_heuristic_tier_runs_to_completion_with_no_external_dependency() -
         assert isinstance(geometry(structure), _FIELD_STATE_TYPES)
         assert isinstance(is_metal(structure), _FIELD_STATE_TYPES)
         assert isinstance(is_magnetic(structure), _FIELD_STATE_TYPES)
+        assert isinstance(local_moments(structure), _FIELD_STATE_TYPES)
         assert isinstance(needs_soc(composition_state), _FIELD_STATE_TYPES)
