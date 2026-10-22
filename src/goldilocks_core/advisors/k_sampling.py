@@ -49,18 +49,14 @@ underneath it is entirely new (``kmesh.py``, this epic's other
 deliverable).
 
 **Heuristic default k_distance** (operator-specified 2026-09-13, not
-from a published benchmark): metals get ``0.15`` A^-1; everything else
--- a *confirmed* non-metal, or ``is_metal`` itself ``Unavailable`` --
-gets ``0.30`` A^-1. Unlike ``advisors/occupations.py``, uncertain
-metallicity here leans toward the *metal* value, not the cheaper one:
-using too coarse a mesh on an actual, undetected metal risks a silently
-under-converged answer, while using too fine a mesh on an actual
-insulator only costs more compute -- a wrong-but-plausible-looking
-number is worse than an expensive-but-correct one. ``fixed`` occupations
-misjudging a metal fails differently (typically loud non-convergence),
-which is why that module could afford to lean the other way; the two
-are not required to agree with each other's tie-break, they just each
-need their own honest justification.
+from a published benchmark): metals, and ``is_metal`` itself
+``Unavailable``, get ``0.15`` A^-1; a *confirmed* non-metal gets ``0.30``
+A^-1. Uncertain metallicity leans toward the *metal* value, not the
+cheaper one, as it does in ``advisors/occupations.py``: using too coarse
+a mesh on an actual, undetected metal risks a silently under-converged
+answer, while using too fine a mesh on an actual insulator only costs
+more compute -- a wrong-but-plausible-looking number is worse than an
+expensive-but-correct one.
 
 **One k-point along each vacuum axis** (#159). Every k_distance -- human,
 ml, llm or heuristic -- and every k_index becomes a mesh in ``kmesh``,

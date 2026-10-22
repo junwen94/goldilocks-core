@@ -23,7 +23,8 @@ Every setting above is listed by `goldilocks settings` (with its group, type,
 and default) and, once resolved for a structure, shown in the matching record
 from `goldilocks explain`/the published `goldilocks.json` (`k_sampling`,
 `occupations`, `cutoffs`, and `convergence` respectively). `k_distance`
-defaults to `0.15` for metals and `0.30` otherwise; `degauss` defaults to
+defaults to `0.15` for metals or when metallicity is unknown and `0.30` for a
+confirmed non-metal; `degauss` defaults to
 `0.01` Ry for metals; `ecutwfc_ry`/`ecutrho_ry` are decided together by the
 `cutoffs` advisor from the selected pseudopotentials' own published
 recommendations, deriving `ecutrho_ry` from `ecutwfc_ry` when a table (e.g.

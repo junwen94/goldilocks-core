@@ -18,7 +18,7 @@ analysis fact:
 
 | `is_metal` result                                     | Default occupations                              |
 | ------------------------------------------------------ | ------------------------------------------------- |
-| `metal`, or unavailable (composition couldn't confirm) | Smearing (`smearing_type='cold'`, `degauss=0.01` Ry) |
+| `metal`, or unavailable (composition couldn't decide)  | Smearing (`smearing_type='cold'`, `degauss=0.01` Ry) |
 | `non_metal`, where fixed occupations can run (below)  | Fixed occupations, without smearing               |
 | `non_metal`, otherwise                                 | Smearing, as for a metal                          |
 
@@ -27,15 +27,17 @@ Ahead of the heuristic, a published CGCNN classifier (installed by default as
 `is_metal` only falls back to the heuristic below when that model asset is
 not installed or fails verification. If the installed model fails to run,
 the request fails rather than silently using the heuristic. The heuristic
-itself excludes common anion-forming elements (O, N, S, Se, Te, F, Cl, Br, I,
-H) from the composition, then checks whether every remaining element is a
-metal according to pymatgen. It returns `metal` if so; otherwise it reports that
-composition alone can't confirm metallic character, which -- like an actual
-`metal` result -- still defaults to smearing, not fixed occupations, because
-assuming "fixed" on an undetected metal risks silent non-convergence. A
-confident `non_metal` result is reachable via a human override, the ML
-classifier, or an LLM override. Neither the heuristic nor the ML model
-determines a band structure.
+itself returns `metal` only when every element in the composition is a metal
+according to pymatgen (elemental metals and intermetallics). Any other
+element (O, N, the halogens, H, metalloids such as Si) leaves `is_metal`
+unavailable, naming those elements: whether such a compound conducts depends
+on its band filling, which composition cannot settle, so insulating NaCl and
+MgO look the same to it as metallic RuO2 and TiN. Unavailable -- like an
+actual `metal` result -- still defaults to smearing, not fixed occupations,
+because assuming "fixed" on an undetected metal risks silent
+non-convergence. A confident `non_metal` result is reachable via a human
+override, the ML classifier, or an LLM override. Neither the heuristic nor
+the ML model determines a band structure.
 
 Fixed occupations fill whole bands in each spin channel: pw.x puts
 (nelec + `tot_magnetization`)/2 electrons in the spin-up channel and
@@ -60,11 +62,12 @@ refused before generation: set `tot_magnetization` too, or use smearing.
 Check the `is_metal` record's `status`, `source`, and `reason` (via
 `goldilocks explain --json` or the published `goldilocks.json`'s
 `records.is_metal`), and the `occupations` record's own `warnings` array. A
-composition-only "metal" result can still give the wrong occupation choice
-for your system. Override the scheme itself with `occupations` (`fixed`,
-`smearing`, or `tetrahedra_opt`); when using smearing, refine it with
-`smearing_type` (default `cold`) and `degauss` (Ry, default 0.01). Test the
-width together with the k-point mesh.
+composition-only `metal` result can still be wrong -- intermetallic
+semiconductors such as CsAu or Mg2Sn contain only metals -- and give the
+wrong occupation choice for your system. Override the scheme itself with
+`occupations` (`fixed`, `smearing`, or `tetrahedra_opt`); when using
+smearing, refine it with `smearing_type` (default `cold`) and `degauss` (Ry,
+default 0.01). Test the width together with the k-point mesh.
 
 ## Check k-point sampling
 
@@ -77,10 +80,10 @@ predict a raw `k_distance` for the structure (if the installed model fails to
 run, the request fails); only when that model asset is not installed or fails
 verification does it fall back to picking a target k-point spacing
 heuristically: 0.15 Å⁻¹ if `is_metal`
-resolves to `metal`, otherwise 0.30 Å⁻¹ (this also covers the unavailable
-case, since a mesh that is too coarse on an undetected metal risks silent
-under-convergence, while a mesh that is too fine on an actual insulator only
-costs more compute). There is no "confidence" or prediction-interval field
+resolves to `metal` or is unavailable, 0.30 Å⁻¹ for a `non_metal` (a mesh
+that is too coarse on an undetected metal risks silent under-convergence,
+while a mesh that is too fine on an actual insulator only costs more
+compute). There is no "confidence" or prediction-interval field
 in `explain`/`run` output today.
 
 Each lattice vector in the `geometry` record's `vacuum_axes` (see
