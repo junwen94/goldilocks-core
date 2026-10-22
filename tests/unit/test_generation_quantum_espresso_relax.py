@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
+from support import carbon_pair_in_a_box, graphene_monolayer
 
 from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.convergence import ConvergenceDecision
@@ -30,6 +32,7 @@ def _system(
     *,
     functional: str = "PBEsol",
     hubbard: HubbardUDecision | None = None,
+    boundary: BoundaryFacts | None = None,
 ):
     elements = sorted({site.specie.symbol for site in structure})
     return SystemSettings(
@@ -52,7 +55,7 @@ def _system(
         ),
         vdw=VdwFacts(use_vdw=False, method=None),
         hubbard=hubbard or HubbardUDecision(),
-        boundary=BoundaryFacts(assume_isolated="none"),
+        boundary=boundary or BoundaryFacts(isolation="periodic"),
     )
 
 
@@ -165,6 +168,54 @@ def test_writes_vc_relax_step_with_ions_and_cell_namelists(
     assert "press" in content
     assert "press_conv_thr" in content
     assert "cell_factor" in content
+
+
+def test_vc_relax_of_a_periodic_cell_writes_tstress(
+    diamond_silicon, pseudo_metadata_factory
+) -> None:
+    system = _system(diamond_silicon, pseudo_metadata_factory)
+    step = _step(relax=VcRelaxOptions())
+
+    steps = write_qe_relax(system, step, _CTX, "vc-relax")
+
+    assert "tstress          = .true." in steps[0].files["vc-relax.in"]
+
+
+def test_relax_under_martyna_tuckerman_writes_no_tstress(
+    pseudo_metadata_factory,
+) -> None:
+    """The relax writer passes the resolved boundary to the shared
+    &CONTROL keywords, like write_qe_scf (#126)."""
+    system = _system(
+        carbon_pair_in_a_box(),
+        pseudo_metadata_factory,
+        boundary=BoundaryFacts(isolation="isolated"),
+    )
+    step = _step(relax=RelaxOptions())
+
+    content = write_qe_relax(system, step, _CTX, "relax")[0].files["relax.in"]
+
+    assert "assume_isolated  = 'martyna-tuckerman'" in content
+    assert "tstress" not in content
+
+
+def test_vc_relax_of_a_slab_boundary_writes_the_2d_truncation_and_tstress(
+    pseudo_metadata_factory,
+) -> None:
+    """#161: under '2D' pw.x computes the in-plane stress a '2Dxy' vc-relax
+    needs."""
+    system = _system(
+        graphene_monolayer(),
+        pseudo_metadata_factory,
+        boundary=BoundaryFacts(isolation="slab"),
+    )
+    step = _step(relax=VcRelaxOptions(cell_dofree="2Dxy"))
+
+    content = write_qe_relax(system, step, _CTX, "vc-relax")[0].files["vc-relax.in"]
+
+    assert "assume_isolated  = '2D'" in content
+    assert "tstress          = .true." in content
+    assert "cell_dofree      = '2Dxy'" in content
 
 
 def test_etot_conv_thr_matches_the_resolved_convergence_decision(
@@ -328,6 +379,62 @@ def test_fix_bottom_layers_fixes_exactly_the_lowest_atoms(
     assert max(z[i] for i in fixed_indices) < min(z[i] for i in free_indices)
 
 
+def test_fix_bottom_layers_finds_the_layers_of_an_ionic_slab(
+    pseudo_metadata_factory,
+) -> None:
+    """NaCl(001): each atomic layer holds both Na and Cl, and the bottom one
+    is every atom at the lowest z. The layers follow the vacuum, not bonds,
+    which JmolNN alone misses here (Na-Cl 2.82 A, cutoff 2.41 A, #125)."""
+    from pymatgen.core import Lattice, Structure
+    from pymatgen.core.surface import SlabGenerator
+
+    bulk = Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(5.64), ["Na", "Cl"], [[0, 0, 0], [0.5, 0.5, 0.5]]
+    )
+    slab = SlabGenerator(
+        bulk, (0, 0, 1), min_slab_size=10, min_vacuum_size=12, center_slab=True
+    ).get_slab()
+    system = _system(slab, pseudo_metadata_factory)
+    step = _step(relax=RelaxOptions(fix_bottom_layers=1))
+
+    content = write_qe_relax(system, step, _CTX, "relax")[0].files["relax.in"]
+
+    rows = _atomic_positions_block(content)
+    fixed_indices = {
+        i for i, row in enumerate(rows) if row.split()[-3:] == ["0", "0", "0"]
+    }
+    z = slab.cart_coords[:, 2]
+    assert fixed_indices == {i for i in range(len(slab)) if z[i] < z.min() + 0.1}
+
+
+def test_fix_bottom_layers_counts_up_from_the_vacuum_across_the_cell_boundary(
+    pseudo_metadata_factory,
+) -> None:
+    """#160: shifted by half a cell, the Si(001) slab straddles z = 0, so
+    layers counted from fractional 0 start inside it. Counted up from the
+    upper edge of the vacuum, they are the slab's own: the writer fixes the
+    same atoms as in the centred slab, its two lowest."""
+    from pymatgen.core import Structure
+
+    slab = _silicon_slab()
+    shifted = Structure(
+        slab.lattice,
+        slab.species,
+        np.mod(slab.frac_coords + np.array([0, 0, 0.5]), 1.0),
+    )
+    system = _system(shifted, pseudo_metadata_factory)
+    step = _step(relax=RelaxOptions(fix_bottom_layers=2))
+
+    content = write_qe_relax(system, step, _CTX, "relax")[0].files["relax.in"]
+
+    rows = _atomic_positions_block(content)
+    fixed_indices = {
+        i for i, row in enumerate(rows) if row.split()[-3:] == ["0", "0", "0"]
+    }
+    z = slab.cart_coords[:, 2]
+    assert fixed_indices == {int(i) for i in np.argsort(z)[:2]}
+
+
 def test_fix_bottom_layers_exceeding_detected_layers_raises(
     pseudo_metadata_factory,
 ) -> None:
@@ -340,16 +447,17 @@ def test_fix_bottom_layers_exceeding_detected_layers_raises(
 
 
 def test_fix_bottom_layers_on_a_bulk_structure_raises(
-    silicon_structure, pseudo_metadata_factory
+    diamond_silicon, pseudo_metadata_factory
 ) -> None:
-    """``checks.check_all`` is expected to reject this before generation
-    is ever reached in the real pipeline -- this only confirms the
-    writer itself fails loudly rather than silently mis-fixing atoms if
-    that guard were ever bypassed."""
-    system = _system(silicon_structure, pseudo_metadata_factory)
+    """``checks.check_all`` rejects this before generation in the real
+    pipeline; called directly, the writer fails loudly rather than fixing
+    atoms of a cell with no bottom."""
+    system = _system(diamond_silicon, pseudo_metadata_factory)
     step = _step(relax=RelaxOptions(fix_bottom_layers=1))
 
-    with pytest.raises(GenerationError, match="2D bonded component"):
+    with pytest.raises(
+        GenerationError, match="exactly one lattice vector, but this cell has no vacuum"
+    ):
         write_qe_relax(system, step, _CTX, "relax")
 
 

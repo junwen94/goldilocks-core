@@ -78,7 +78,8 @@ class TestTopLevelShape:
         assert capabilities()["core_version"] == package_version("goldilocks-core")
 
     def test_vocabulary_version_is_the_module_constant(self) -> None:
-        assert capabilities()["vocabulary_version"] == VOCABULARY_VERSION == "1"
+        """'2': isolation replaced assume_isolated (#161)."""
+        assert capabilities()["vocabulary_version"] == VOCABULARY_VERSION == "2"
 
     def test_sources_is_the_closed_priority_order(self) -> None:
         assert (
@@ -225,6 +226,20 @@ class TestSettingsCompleteness:
             "smearing",
             "tetrahedra_opt",
         }
+
+    def test_isolation_offers_three_code_neutral_categories(self) -> None:
+        """#161: the boundary setting takes periodic/slab/isolated; the
+        Quantum ESPRESSO writer owns the assume_isolated spelling."""
+        settings = {s["key"]: s for s in capabilities()["settings"]}
+
+        assert "assume_isolated" not in settings
+        isolation = settings["isolation"]
+        assert isolation["group"] == "boundary"
+        assert isolation["scope"] == "system"
+        assert isolation["type"] == "string"
+        assert set(isolation["enum"]) == {"isolated", "periodic", "slab"}
+        for term in ("'2D'", "'martyna-tuckerman'", "wire", "vc-relax"):
+            assert term in isolation["description"], term
 
     def test_k_grid_is_a_fixed_length_integer_array(self) -> None:
         settings = {s["key"]: s for s in capabilities()["settings"]}

@@ -75,9 +75,9 @@ def advise_relax(
     """Diagnosis, under the same contract as ``advise()``: an undecided
     field degrades, a fault raises. ``relax_settings`` reads
     ``advice.step.kpoints.convergence`` (for ``etot_conv_thr``) and
-    ``advice.analysis.symmetry``/``.geometry`` (for vc-relax's
-    ``cell_dofree`` hexagonal-2D default) off the very same ``Advice``
-    this function just built -- no second structure-analysis pass."""
+    ``advice.analysis.geometry`` (whose vacuum decides vc-relax's
+    ``cell_dofree``) off the very same ``Advice`` this function just
+    built -- no second structure-analysis pass."""
     overrides = overrides or RunOverrides()
     advice = advise_steps(
         structure,
@@ -92,7 +92,6 @@ def advise_relax(
     relax = relax_settings(
         calculation,
         advice.step.kpoints.convergence,
-        advice.analysis.symmetry,
         advice.analysis.geometry,
         relax_overrides.relax,
         relax_overrides.relax_llm,

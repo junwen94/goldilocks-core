@@ -14,18 +14,34 @@ with unvalidated numbers.
 separately):** human-only (``RelaxHumanInput`` only, no ``RelaxLlmInput``
 counterpart) -- like the numerically-sensitive thresholds below, which
 atoms to physically pin during a relaxation is a structural decision,
-not a "which scenario" choice an llm tier should be guessing at.
-``checks.py``'s ``_fix_bottom_layers_requires_2d_geometry`` blocks any
-value other than ``None`` on a non-2D structure; the actual per-atom
-layer detection (bonded-graph orientation + ``ase.geometry.get_layers``)
-happens in ``generation/quantum_espresso/relax.py`` at generation time,
-against ``system.magnetic.relabeled_structure`` -- not here and not in
-``analysis/geometry.py`` -- since that is the exact structure whose site
-order the ``ATOMIC_POSITIONS`` card writer needs index-aligned layer
-data for, and AFM species-splitting (this module's own note above) can
-in principle change site count/order between the phase-1 ``structure``
-this module's own ``geometry`` parameter is computed against and
-generation time's ``relabeled_structure``.
+not a "which scenario" choice an llm tier should be guessing at. The
+layers are ``analysis.geometry.slab_layers``, counted up from the vacuum
+of a cell with exactly one vacuum axis, on
+``system.magnetic.relabeled_structure`` rather than the phase-1
+``structure`` this module's ``geometry`` parameter is computed against:
+that is the structure whose site order the ``ATOMIC_POSITIONS`` card
+needs index-aligned layers for, and AFM species-splitting can change its
+site count and order. ``checks.py``'s ``_fix_bottom_layers_requires_slab``
+refuses any value other than ``None`` unless that cell is a slab with at
+least that many layers (#160); a '2d' rank is not enough, since bulk
+graphite has one and no vacuum.
+
+**``cell_dofree`` comes from the vacuum, not the dimensionality rank
+(#132).** The rank cannot tell a bulk layered crystal from a slab:
+graphite ranks '2d' like graphene, and under QE's 2D constraint '2Dxy'
+its stacking axis stayed frozen while BFGS reported convergence on the
+masked stress. '2Dxy' moves only the x and y components of a and b and
+holds c fixed, in Cartesian axes (QE 7.3 Modules/cell_base.f90:803-808),
+so it is the default only for a slab in that frame: one vacuum axis, c,
+with a and b in the xy plane (``analysis.geometry.SlabGeometry``). A cell
+without vacuum, or with vacuum along all three axes, gets 'all' (the
+boundary gate in ``checks.py`` refuses a vc-relax of an isolated system).
+A wire, or a slab in any other orientation, has no default, so the
+vc-relax is ``Blocked`` until a human or llm value sets ``cell_dofree``;
+``checks.py`` refuses '2Dxy' and '2Dshape' from any source on a written
+cell outside that frame. The plain '2Dxy' is written because the writer's
+``ibrav = 0`` makes the 'ibrav+' forms act the same way (QE 7.3
+Modules/latgen.f90:749-752).
 
 **``etot_conv_thr`` is not this module's own decision.** ``advisors/
 convergence.py`` already resolves it as ``nat * etot_conv_thr_per_atom``
@@ -64,8 +80,7 @@ from typing import Literal
 from pydantic import Field
 
 from goldilocks_core.advisors.convergence import ConvergenceDecision
-from goldilocks_core.analysis.geometry import GeometryFacts
-from goldilocks_core.analysis.symmetry import SymmetryFacts
+from goldilocks_core.analysis.geometry import GeometryFacts, LatticeAxis, SlabGeometry
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import (
     Blocked,
@@ -156,25 +171,10 @@ _CELL_FACTOR_DEFAULT = 2.0
 """Must exceed the maximum linear *contraction* the cell will undergo,
 not expansion (audit finding #3)."""
 _DEFAULT_CELL_DOFREE: CellDofree = "all"
-_HEXAGONAL_2D_CELL_DOFREE: CellDofree = "ibrav+2Dxy"
-_NON_HEXAGONAL_2D_CELL_DOFREE: CellDofree = "2Dxy"
-
-NON_HEXAGONAL_2D_CELL_DOFREE_WARNING = Warning(
-    code="relax.cell_dofree_non_hexagonal_2d",
-    level="warning",
-    category="relax",
-    message=(
-        "cell_dofree='2Dxy' is being used on a non-hexagonal 2D structure; "
-        "QE's own docs warn the symmetry-preserving 'ibrav+2Dxy' form "
-        "'will never converge' for non-hexagonal cells, so the bare '2Dxy' "
-        "form is used instead, which can silently break exact cell "
-        "symmetry during relaxation."
-    ),
-)
-
-WARNING_CATALOGUE = (NON_HEXAGONAL_2D_CELL_DOFREE_WARNING,)
-"""Every warning code this module can emit -- ``capabilities.py``'s
-``warnings[]`` catalogue aggregates one of these tuples per advisor."""
+_SLAB_CELL_DOFREE: CellDofree = "2Dxy"
+_WIRE_CELL_DOFREE: dict[LatticeAxis, CellDofree] = {"a": "x", "b": "y", "c": "z"}
+"""The one-component constraint that relaxes only a wire's period, when the
+wire's lattice vector lies along the matching Cartesian axis."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,7 +264,6 @@ class RelaxLlmInput(LlmInput):
 def relax_settings(
     calculation: Literal["relax", "vc-relax"],
     convergence: FieldState[ConvergenceDecision],
-    symmetry: FieldState[SymmetryFacts] | None = None,
     geometry: FieldState[GeometryFacts] | None = None,
     human: RelaxHumanInput | None = None,
     llm: RelaxLlmInput | None = None,
@@ -272,7 +271,9 @@ def relax_settings(
     """``etot_conv_thr`` makes this ``Blocked`` whenever ``convergence``
     itself is not ``Resolved`` -- there is no fallback constant, per
     this module's own docstring on why that value is read off
-    ``convergence``, not recomputed."""
+    ``convergence``, not recomputed. A vc-relax is also ``Blocked`` when
+    ``geometry`` gives the cell no default ``cell_dofree`` and no human or
+    llm value is set (a wire, or a slab outside the xy frame)."""
     human = human or RelaxHumanInput()
     llm = llm or RelaxLlmInput()
 
@@ -284,7 +285,6 @@ def relax_settings(
         "etot_conv_thr", convergence.source
     )
 
-    warnings: list[Warning] = []
     base_kwargs: dict[str, object] = {
         "ion_dynamics": _pick(human.ion_dynamics, llm.ion_dynamics, "bfgs"),
         "forc_conv_thr": _pick(human.forc_conv_thr, None, _FORC_CONV_THR_DEFAULT),
@@ -315,18 +315,16 @@ def relax_settings(
     }
 
     if calculation == "vc-relax":
-        cell_dofree, cell_dofree_source, cell_dofree_warning = _resolve_cell_dofree(
-            human.cell_dofree, llm.cell_dofree, symmetry, geometry
-        )
-        if cell_dofree_warning is not None:
-            warnings.append(cell_dofree_warning)
+        cell_dofree = _resolve_cell_dofree(human.cell_dofree, llm.cell_dofree, geometry)
+        if isinstance(cell_dofree, Blocked):
+            return cell_dofree
+        cell_dofree_value, cell_dofree_source = cell_dofree
         decision: RelaxOptions | VcRelaxOptions = VcRelaxOptions(
             **base_kwargs,
-            cell_dofree=cell_dofree,
+            cell_dofree=cell_dofree_value,
             press=_pick(human.press, llm.press, _PRESS_DEFAULT),
             press_conv_thr=_pick(human.press_conv_thr, None, _PRESS_CONV_THR_DEFAULT),
             cell_factor=_pick(human.cell_factor, None, _CELL_FACTOR_DEFAULT),
-            warnings=tuple(warnings),
         )
         field_sources.update(
             {
@@ -337,7 +335,7 @@ def relax_settings(
             }
         )
     else:
-        decision = RelaxOptions(**base_kwargs, warnings=tuple(warnings))
+        decision = RelaxOptions(**base_kwargs)
 
     source = "human" if _any_set(human) else "llm" if _any_set(llm) else "heuristic"
     return Resolved(decision, Provenance(source=source, field_sources=field_sources))
@@ -346,29 +344,51 @@ def relax_settings(
 def _resolve_cell_dofree(
     human_value: CellDofree | None,
     llm_value: CellDofree | None,
-    symmetry: FieldState[SymmetryFacts] | None,
     geometry: FieldState[GeometryFacts] | None,
-) -> tuple[CellDofree, Source, Warning | None]:
+) -> tuple[CellDofree, Source] | Blocked:
+    """A human or llm value wins; otherwise the vacuum decides, as this
+    module's docstring describes. Without a resolved geometry the default
+    is QE's own, 'all'."""
     if human_value is not None:
-        return human_value, "human", None
+        return human_value, "human"
     if llm_value is not None:
-        return llm_value, "llm", None
-    is_2d = bool(
-        geometry is not None and geometry.ok and geometry.value.dimensionality == "2d"
+        return llm_value, "llm"
+    if geometry is None or not geometry.ok:
+        return _DEFAULT_CELL_DOFREE, "heuristic"
+    slab = geometry.value.slab
+    if slab is not None and slab.xy_frame:
+        return _SLAB_CELL_DOFREE, "heuristic"
+    if slab is not None:
+        return Blocked(by=_slab_outside_xy_frame(slab))
+    if len(geometry.value.vacuum_axes) == 2:
+        return Blocked(by=_wire(geometry.value.vacuum_axes))
+    return _DEFAULT_CELL_DOFREE, "heuristic"
+
+
+def _slab_outside_xy_frame(slab: SlabGeometry) -> str:
+    found = (
+        "a or b out of the xy plane"
+        if slab.vacuum_axis == "c"
+        else f"its vacuum along {slab.vacuum_axis}"
     )
-    if not is_2d:
-        return _DEFAULT_CELL_DOFREE, "heuristic", None
-    is_hexagonal = bool(
-        symmetry is not None
-        and symmetry.ok
-        and symmetry.value.crystal_system == "hexagonal"
-    )
-    if is_hexagonal:
-        return _HEXAGONAL_2D_CELL_DOFREE, "heuristic", None
     return (
-        _NON_HEXAGONAL_2D_CELL_DOFREE,
-        "heuristic",
-        NON_HEXAGONAL_2D_CELL_DOFREE_WARNING,
+        "vc-relax of a slab needs QE's 2D cell constraint cell_dofree="
+        f"{_SLAB_CELL_DOFREE!r}, which moves only the x and y components of a and b "
+        "and holds c fixed. It applies only with the vacuum along c and a, b in "
+        f"the Cartesian xy plane, but this slab has {found}. Reorient the cell "
+        "that way, or set cell_dofree explicitly."
+    )
+
+
+def _wire(vacuum_axes: tuple[LatticeAxis, ...]) -> str:
+    (period,) = (axis for axis in _WIRE_CELL_DOFREE if axis not in vacuum_axes)
+    component = _WIRE_CELL_DOFREE[period]
+    return (
+        f"vc-relax of a wire (vacuum along {' and '.join(vacuum_axes)}) has no "
+        "default cell_dofree, because 'all' would also relax the vacuum. Set "
+        f"cell_dofree explicitly: cell_dofree={component!r} relaxes only the "
+        f"{component} component of {period}, the wire's period when {period} lies "
+        f"along {component}."
     )
 
 

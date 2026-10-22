@@ -4,6 +4,7 @@ import math
 
 import pytest
 from pymatgen.core import Lattice, Structure
+from support import carbon_pair_in_a_box, graphene_monolayer
 
 from goldilocks_core.advisors.k_sampling import (
     KSamplingHumanInput,
@@ -19,6 +20,7 @@ _SILICON = Structure(Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25,
 _BCC_IRON = Structure.from_spacegroup(
     "Im-3m", Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]]
 )
+_NON_METAL = Resolved("non_metal", Provenance(source="heuristic"))
 
 
 def test_metal_gets_the_denser_default_k_distance() -> None:
@@ -291,3 +293,81 @@ def test_human_k_index_wins_over_k_distance_when_no_grid_is_set() -> None:
 
     assert state.value.mesh == entries[2].mesh
     assert any("k_index wins" in warning.message for warning in state.value.warnings)
+
+
+@pytest.mark.parametrize(
+    ("human", "llm", "source", "k_distance"),
+    [
+        (KSamplingHumanInput(k_distance=0.2), None, "human", 0.2),
+        (None, KSamplingLlmInput(k_distance=0.2), "llm", 0.2),
+        (None, None, "heuristic", 0.30),
+    ],
+    ids=["human", "llm", "heuristic"],
+)
+def test_a_slab_gets_one_k_point_along_its_vacuum_on_a_ladder_rung(
+    human: KSamplingHumanInput | None,
+    llm: KSamplingLlmInput | None,
+    source: str,
+    k_distance: float,
+) -> None:
+    """#159: every k_distance goes through kmesh, which gives the graphene
+    sheet's vacuum axis one division, so the reverse lookup finds the mesh
+    on the slab's own ladder, whose rung n is (n, n, 1)."""
+    slab = graphene_monolayer(c=15.0)
+    n = math.ceil(slab.lattice.reciprocal_lattice.a / k_distance)
+
+    state = k_sampling(_NON_METAL, slab, human=human, llm=llm)
+
+    assert state.source == source
+    assert state.value.k_distance == k_distance
+    assert state.value.mesh == (n, n, 1)
+    assert state.value.k_index == n
+    assert (
+        state.value.k_distance_interval
+        == build_gamma_kmesh_entries(slab)[n - 1].k_distance_interval
+    )
+
+
+def test_a_human_k_grid_on_a_slab_is_kept_verbatim() -> None:
+    """An explicit grid wins as given, vacuum axis included. No rung of the
+    slab's ladder has two k-points along the vacuum, so k_index stays None."""
+    state = k_sampling(
+        _NON_METAL,
+        graphene_monolayer(c=15.0),
+        human=KSamplingHumanInput(k_grid=(15, 15, 2)),
+    )
+
+    assert state.value.mesh == (15, 15, 2)
+    assert state.value.k_index is None
+    assert state.value.k_distance_interval is None
+
+
+@pytest.mark.parametrize(
+    "human",
+    [
+        KSamplingHumanInput(),
+        KSamplingHumanInput(k_distance=0.05),
+        KSamplingHumanInput(k_index=1),
+    ],
+    ids=["heuristic", "k_distance", "k_index"],
+)
+def test_a_cell_with_vacuum_along_every_axis_is_sampled_at_gamma_only(
+    human: KSamplingHumanInput,
+) -> None:
+    """The isolated C pair of MC3D mc3d-6516 ran on a 3x3x2 mesh (#159). Its
+    ladder is the Gamma rung alone, which every k-distance gives, so the
+    interval runs from 0 with no upper bound."""
+    state = k_sampling(_NON_METAL, carbon_pair_in_a_box(), human=human)
+
+    assert state.value.mesh == (1, 1, 1)
+    assert state.value.k_index == 1
+    assert state.value.k_distance_interval == (0.0, None)
+
+
+def test_a_second_rung_on_a_cell_with_vacuum_along_every_axis_is_blocked() -> None:
+    state = k_sampling(
+        _NON_METAL, carbon_pair_in_a_box(), human=KSamplingHumanInput(k_index=2)
+    )
+
+    assert state.status == "blocked"
+    assert "exceeds this structure's own ladder length" in state.root_cause()

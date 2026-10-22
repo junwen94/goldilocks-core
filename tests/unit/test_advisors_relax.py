@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from support import geometry_facts
+
 from goldilocks_core.advisors.convergence import convergence
 from goldilocks_core.advisors.relax import (
     RelaxHumanInput,
@@ -8,31 +11,18 @@ from goldilocks_core.advisors.relax import (
     VcRelaxOptions,
     relax_settings,
 )
-from goldilocks_core.analysis.geometry import GeometryFacts
-from goldilocks_core.analysis.symmetry import SymmetryFacts
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
 _CONVERGENCE = convergence(nat=4)
 
 
-def _symmetry(crystal_system: str):
-    return Resolved(
-        SymmetryFacts(
-            space_group_symbol="P6/mmm",
-            space_group_number=191,
-            crystal_system=crystal_system,
-        ),
-        Provenance(source="heuristic"),
-    )
+def _geometry(dimensionality: str, vacuum_axes=(), *, ab_in_xy: bool = True):
+    facts = geometry_facts(dimensionality, vacuum_axes, ab_in_xy=ab_in_xy)
+    return Resolved(facts, Provenance(source="heuristic"))
 
 
-def _geometry(dimensionality: str):
-    return Resolved(
-        GeometryFacts(
-            dimensionality=dimensionality, low_dimensional=dimensionality != "3d"
-        ),
-        Provenance(source="heuristic"),
-    )
+def _vc_relax(geometry, **overrides):
+    return relax_settings("vc-relax", _CONVERGENCE, geometry=geometry, **overrides)
 
 
 def test_plain_relax_uses_qe_defaults() -> None:
@@ -146,70 +136,93 @@ def test_fix_bottom_layers_has_no_llm_counterpart() -> None:
     assert not hasattr(RelaxLlmInput(), "fix_bottom_layers")
 
 
-def test_hexagonal_2d_defaults_cell_dofree_to_ibrav_2dxy() -> None:
-    state = relax_settings(
-        "vc-relax",
-        _CONVERGENCE,
-        symmetry=_symmetry("hexagonal"),
-        geometry=_geometry("2d"),
-    )
+def test_a_layered_rank_without_vacuum_relaxes_the_whole_cell() -> None:
+    """#132: bulk graphite ranks '2d' but has no vacuum; '2Dxy' froze its
+    stacking axis on SCARF."""
+    state = _vc_relax(_geometry("2d"))
 
-    assert state.value.cell_dofree == "ibrav+2Dxy"
+    assert state.value.cell_dofree == "all"
     assert state.value.warnings == ()
+    assert state.provenance.field_sources["cell_dofree"] == "heuristic"
 
 
-def test_non_hexagonal_2d_uses_bare_2dxy_with_a_warning() -> None:
-    state = relax_settings(
-        "vc-relax",
-        _CONVERGENCE,
-        symmetry=_symmetry("orthorhombic"),
-        geometry=_geometry("2d"),
-    )
+def test_a_slab_in_the_xy_frame_holds_its_vacuum_fixed() -> None:
+    state = _vc_relax(_geometry("2d", ("c",)))
 
     assert state.value.cell_dofree == "2Dxy"
-    assert len(state.value.warnings) == 1
-    assert state.value.warnings[0].code == "relax.cell_dofree_non_hexagonal_2d"
+    assert state.value.warnings == ()
+    assert state.provenance.field_sources["cell_dofree"] == "heuristic"
 
 
-def test_non_2d_structure_keeps_cell_dofree_all_even_if_hexagonal() -> None:
-    state = relax_settings(
-        "vc-relax",
-        _CONVERGENCE,
-        symmetry=_symmetry("hexagonal"),
-        geometry=_geometry("3d"),
-    )
+def test_a_slab_with_its_vacuum_along_a_is_blocked() -> None:
+    state = _vc_relax(_geometry("2d", ("a",)))
+
+    assert isinstance(state, Blocked)
+    assert "cell_dofree" in state.root_cause()
+    assert "vacuum along a" in state.root_cause()
+    assert "Reorient the cell" in state.root_cause()
+
+
+def test_a_slab_with_a_and_b_out_of_the_xy_plane_is_blocked() -> None:
+    state = _vc_relax(_geometry("2d", ("c",), ab_in_xy=False))
+
+    assert isinstance(state, Blocked)
+    assert "cell_dofree" in state.root_cause()
+    assert "a or b out of the xy plane" in state.root_cause()
+
+
+@pytest.mark.parametrize(
+    ("vacuum_axes", "suggestion"),
+    [
+        (("a", "b"), "cell_dofree='z' relaxes only the z component of c"),
+        (("a", "c"), "cell_dofree='y' relaxes only the y component of b"),
+        (("b", "c"), "cell_dofree='x' relaxes only the x component of a"),
+    ],
+)
+def test_a_wire_is_blocked_with_the_constraint_on_its_period(
+    vacuum_axes: tuple[str, str], suggestion: str
+) -> None:
+    """QE's 'x', 'y' and 'z' move one Cartesian component of a, b and c,
+    the wire's period when the wire's lattice vector lies along that
+    axis."""
+    state = _vc_relax(_geometry("1d", vacuum_axes))
+
+    assert isinstance(state, Blocked)
+    assert f"vacuum along {' and '.join(vacuum_axes)}" in state.root_cause()
+    assert suggestion in state.root_cause()
+
+
+def test_vacuum_along_every_axis_relaxes_the_whole_cell() -> None:
+    """The Martyna-Tuckerman boundary gate refuses this vc-relax once,
+    with remedies that do not involve cell_dofree."""
+    state = _vc_relax(_geometry("molecule", ("a", "b", "c")))
 
     assert state.value.cell_dofree == "all"
-    assert state.value.warnings == ()
 
 
-def test_missing_geometry_falls_back_to_cell_dofree_all() -> None:
-    state = relax_settings("vc-relax", _CONVERGENCE)
-
-    assert state.value.cell_dofree == "all"
-
-
-def test_explicit_human_cell_dofree_skips_the_hexagonal_heuristic() -> None:
-    state = relax_settings(
-        "vc-relax",
-        _CONVERGENCE,
-        symmetry=_symmetry("hexagonal"),
-        geometry=_geometry("2d"),
-        human=RelaxHumanInput(cell_dofree="volume"),
-    )
-
-    assert state.value.cell_dofree == "volume"
-    assert state.value.warnings == ()
+def test_missing_or_unresolved_geometry_falls_back_to_cell_dofree_all() -> None:
+    assert _vc_relax(None).value.cell_dofree == "all"
+    assert _vc_relax(Unavailable(reason="disordered")).value.cell_dofree == "all"
 
 
-def test_explicit_llm_cell_dofree_skips_the_hexagonal_heuristic() -> None:
-    state = relax_settings(
-        "vc-relax",
-        _CONVERGENCE,
-        symmetry=_symmetry("orthorhombic"),
-        geometry=_geometry("2d"),
-        llm=RelaxLlmInput(cell_dofree="shape"),
+def test_a_plain_relax_of_a_wire_is_not_blocked() -> None:
+    state = relax_settings("relax", _CONVERGENCE, geometry=_geometry("1d", ("a", "b")))
+
+    assert type(state.value) is RelaxOptions
+
+
+def test_a_human_cell_dofree_on_a_slab_outside_the_frame_is_kept() -> None:
+    state = _vc_relax(
+        _geometry("2d", ("a",)), human=RelaxHumanInput(cell_dofree="shape")
     )
 
     assert state.value.cell_dofree == "shape"
     assert state.value.warnings == ()
+    assert state.provenance.field_sources["cell_dofree"] == "human"
+
+
+def test_an_llm_cell_dofree_on_a_wire_is_kept() -> None:
+    state = _vc_relax(_geometry("1d", ("a", "b")), llm=RelaxLlmInput(cell_dofree="z"))
+
+    assert state.value.cell_dofree == "z"
+    assert state.provenance.field_sources["cell_dofree"] == "llm"

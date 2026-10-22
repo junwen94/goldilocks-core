@@ -8,7 +8,7 @@ Use this only after Goldilocks has already selected the scientific values. The g
   prefix = '<prefix>'
   pseudo_dir = './pseudo'
   outdir = './out'
-  tstress = .true.
+  tstress = .true.                    ! omit for isolation='isolated'
   tprnfor = .true.
 /
 
@@ -24,6 +24,7 @@ Use this only after Goldilocks has already selected the scientific values. The g
   nspin = 2                           ! only for collinear spin-polarized non-SOC
   noncolin = .true.                   ! only when SOC/noncollinear is enabled
   lspinorb = .true.                   ! only when SOC is enabled
+  assume_isolated = '<2D_or_martyna-tuckerman>'  ! '2D' for isolation='slab', 'martyna-tuckerman' for 'isolated'; omit for 'periodic'
 /
 
 &ELECTRONS
@@ -66,6 +67,7 @@ ecutwfc / ecutrho   -> advice.system.cutoffs.value (max across elements)
 occupations         -> advice.step.kpoints.occupations.value
 spin / SOC          -> advice.system.magnetic.value, advice.system.pseudo.relativistic
 convergence         -> advice.step.kpoints.convergence.value
+assume_isolated     -> advice.system.boundary.value.isolation
 warnings            -> advice.warnings()
 ```
 

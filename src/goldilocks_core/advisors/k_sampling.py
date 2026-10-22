@@ -62,14 +62,22 @@ which is why that module could afford to lean the other way; the two
 are not required to agree with each other's tie-break, they just each
 need their own honest justification.
 
+**One k-point along each vacuum axis** (#159). Every k_distance -- human,
+ml, llm or heuristic -- and every k_index becomes a mesh in ``kmesh``,
+which gives each vacuum axis of the structure it is passed
+(``analysis.geometry.vacuum_axes``) exactly one division and builds the
+ladder from the periodic axes alone, so the mesh, the ladder and the
+reverse lookup (``_with_k_index``) agree. A cell with vacuum along all
+three axes is sampled at Gamma only, the one rung of its ladder. The
+caller passes the cell the mesh is for (the AFM-relabelled one in
+``service/_step_kpoints.py``), and the vacuum is read from that cell,
+never from the dimensionality label, which calls bulk graphite '2d'. An
+explicit human ``k_grid`` is kept as given, vacuum axes included.
+
 Not attempted here (and not claimed to be): the ``is_metal``-based
 k_distance *ceiling* and the rung-cannot-exceed-the-ladder clamp
 (goldilocks-core-design.md:1732-1817) both gate the future ML tier's
-output, not this heuristic's; and dimensionality-aware anisotropic
-sampling (e.g. a single k-point along a 2d structure's vacuum direction)
-would need to identify *which* lattice vector is non-periodic, which
-``analysis/geometry.py`` does not currently expose -- this heuristic is
-isotropic and does not special-case low-dimensional structures.
+output, not this heuristic's.
 """
 
 from __future__ import annotations

@@ -1,16 +1,17 @@
 """The k-mesh ladder, checked on real materials -- ported from
 goldilocks-data's own test_kmesh.py (v2 epic 6, #6) so the rungs this
-module builds (kindex, mesh and intervals, which depend on the lattice
-alone) match goldilocks-data's on the same lattices, per the epic's
-acceptance criteria. Core's rungs carry
+module builds for a cell without vacuum (kindex, mesh and intervals, which
+depend on the lattice alone) match goldilocks-data's on the same lattices,
+per the epic's acceptance criteria. Core's rungs carry
 no symmetry-reduced count (#155); test_advisors_n_irr_k.py checks the
-reduction. Every structure here is a real crystal: three built from their
-space group and published lattice constants, and two MC3D cells --
+reduction. Every bulk structure here is a real crystal: three built from
+their space group and published lattice constants, and two MC3D cells --
 hexagonal Si exactly as goldilocks-data's own SCF campaign ran it
 (embedded inline rather than as a separate fixture file, since it is used
 by exactly one test) and triclinic TiNi. Synthetic lattices were tried
 first upstream and hid what a real cell exposes: the repeated-mesh skip
-never fired.
+never fired. The vacuum-axis tests (#159) use a graphene sheet, a carbon
+chain and the isolated C pair of MC3D mc3d-6516 from ``tests/support.py``.
 """
 
 from __future__ import annotations
@@ -21,10 +22,17 @@ from itertools import pairwise
 
 import pytest
 from pymatgen.core import Lattice, Structure
+from support import (
+    carbon_chain,
+    carbon_pair_in_a_box,
+    graphene_monolayer,
+    graphene_with_vacuum_along_a,
+)
 
 from goldilocks_core.kmesh import (
+    MIN_K_DISTANCE,
+    KMeshEntry,
     build_gamma_kmesh_entries,
-    generate_candidate_k_distances,
     k_distance_to_mesh,
 )
 
@@ -138,8 +146,10 @@ def test_only_the_gamma_rung_is_open_above() -> None:
 
     entries = build_gamma_kmesh_entries(silicon, min_k_distance=0.2)
 
+    # The largest change point is |b| / 1, |b| being equal on the three
+    # axes of the cubic cell.
     assert entries[0].k_distance_interval == (
-        generate_candidate_k_distances(silicon, 0.2)[0],
+        round(silicon.lattice.reciprocal_lattice.a, 8),
         None,
     )
     for entry in entries[1:]:
@@ -184,14 +194,15 @@ def test_ladder_drops_a_mesh_a_second_interval_would_repeat() -> None:
     # and collapse in the candidate set. It takes a near miss, which is
     # why this needs a real cell: 36 of the 20,826 MC3D structures in
     # goldilocks-data's campaign hit it, and no idealised lattice does.
-    structure = mc3d_67775_silicon()
+    entries = build_gamma_kmesh_entries(mc3d_67775_silicon())
 
-    candidates = generate_candidate_k_distances(structure)
-    entries = build_gamma_kmesh_entries(structure)
-
-    # One interval per candidate, so fewer rungs than candidates means the
-    # skip ran.
-    assert len(entries) < len(candidates)
+    # Consecutive change points bound consecutive intervals, so each rung's
+    # interval ends where the next one's starts unless an interval between
+    # them was dropped: a break in that chain means the skip ran.
+    assert any(
+        finer.k_distance_interval[1] != coarser.k_distance_interval[0]
+        for coarser, finer in pairwise(entries)
+    )
     assert len({entry.mesh for entry in entries}) == len(entries)
 
 
@@ -306,4 +317,72 @@ def test_ladder_matches_its_stored_reference(
     assert [astuple(entry) for entry in entries] == [
         (kindex, mesh, k_distance, pytest.approx(k_line_density, abs=1e-8), k_pra)
         for kindex, mesh, k_distance, k_line_density, k_pra in reference
+    ]
+
+
+@pytest.mark.parametrize("k_distance", [0.05, 0.1, 0.2, 0.3])
+@pytest.mark.parametrize(
+    ("structure", "vacuum"),
+    [
+        (graphene_monolayer(c=15.0), {2}),
+        (graphene_with_vacuum_along_a(), {0}),
+        (carbon_chain(), {0, 1}),
+    ],
+    ids=["slab, vacuum along c", "slab, vacuum along a", "wire"],
+)
+def test_a_vacuum_axis_gets_one_division_at_any_k_distance(
+    structure: Structure, vacuum: set[int], k_distance: float
+) -> None:
+    """A vacuum axis has no dispersion to sample, whatever its length. The
+    old ceil(|b_i| / k_distance) on every axis gave the graphene sheet in a
+    15 A cell kz = 3 at 0.2 A^-1 (#159); the periodic axes keep that
+    formula."""
+    lengths = structure.lattice.reciprocal_lattice.abc
+
+    assert k_distance_to_mesh(structure, k_distance) == tuple(
+        1 if axis in vacuum else math.ceil(round(length / k_distance, 5))
+        for axis, length in enumerate(lengths)
+    )
+
+
+def test_a_slab_ladder_steps_its_periodic_axes_alone() -> None:
+    """Only graphene's in-plane axes give change points, so its rungs are
+    (n, n, 1) and each interval runs between consecutive |b_1| / n: no
+    quotient of the vacuum axis splits a rung or renumbers the ladder
+    (#159). The k-line density covers the in-plane axes alone."""
+    slab = graphene_monolayer(c=15.0)
+    in_plane = slab.lattice.reciprocal_lattice.a
+    line = slab.lattice.reciprocal_lattice_crystallographic.a
+    counts = range(1, math.floor(in_plane / MIN_K_DISTANCE) + 1)
+
+    entries = build_gamma_kmesh_entries(slab)
+
+    assert [astuple(entry) for entry in entries] == [
+        (
+            n,
+            (n, n, 1),
+            (round(in_plane / n, 8), round(in_plane / (n - 1), 8) if n > 1 else None),
+            pytest.approx(((n - 0.5) / line, (n + 0.5) / line)),
+            2.0 * n * n,
+        )
+        for n in counts
+    ]
+
+
+def test_a_cell_with_vacuum_along_every_axis_has_only_the_gamma_rung() -> None:
+    """The isolated C pair of MC3D mc3d-6516 ran on a 3x3x2 mesh (#159).
+    With no periodic axis there is no change point, every k-distance gives
+    the Gamma-only mesh, and its rung's interval is open above: None, never
+    inf (#137). No axis is left for a k-line density."""
+    box = carbon_pair_in_a_box()
+
+    assert {k_distance_to_mesh(box, k) for k in (0.05, 0.1, 0.2, 0.3)} == {(1, 1, 1)}
+    assert build_gamma_kmesh_entries(box) == [
+        KMeshEntry(
+            kindex=1,
+            mesh=(1, 1, 1),
+            k_distance_interval=(0.0, None),
+            k_line_density_interval=None,
+            k_pra=2.0,
+        )
     ]

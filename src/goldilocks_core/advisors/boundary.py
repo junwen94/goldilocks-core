@@ -1,28 +1,67 @@
 """boundary: how to handle a structure's electrostatic boundary conditions
-in a periodic-cell code, from geometry.
+in a periodic-cell code, from geometry's vacuum fact.
 
-New in v2 (v2 epic 5, #5): v1 computes `dimensionality` but nothing turns it
-into a QE setting for the specific problem it causes -- a molecule or wire
-placed in a periodic box picks up a spurious image-interaction energy offset
-from its own periodic replicas (pitfall A8, goldilocks-core-design.md:4463).
-`analysis/geometry.py`'s dimensionality/low_dimensional facts already exist;
-this is their first real consumer for boundary-condition purposes.
-`_advise_vdw` (v1's `advice/parameters.py`) already reads dimensionality for
-a different purpose (dispersion correction, ported as `advisors/vdw_method.py`
-in this same epic) -- so "dimensionality is a dangling output" was an
-overstatement even before this epic; what was genuinely dangling is
-specifically the boundary-condition settings this file now owns.
+New in v2 (v2 epic 5, #5): a molecule placed in a periodic box picks up a
+spurious image-interaction energy offset from its own periodic replicas
+(pitfall A8, goldilocks-core-design.md:4463), and a polar slab a spurious
+field across its vacuum (pitfall A9). This module reads
+``GeometryFacts.vacuum_axes`` and ``GeometryFacts.slab``, never the bond
+rank (``dimensionality``/``low_dimensional``), which cannot tell a molecular
+crystal from a molecule in a box or a bulk layered crystal from a slab
+(#126, #160) and now drives only ``advisors/vdw_method.py``'s dispersion
+default.
 
-Scope decision: `assume_isolated` only, not the full boundary-condition
-picture. A 2D slab's periodic-image problem is normally solved with a dipole
-correction (`tefield`/`dipfield`/`edir`/...) rather than `assume_isolated`,
-and that correction needs to know which direction is the vacuum gap and
-whether the slab is symmetric -- information this heuristic-tier fact does
-not have. That is pitfall A9, explicitly deferred (see issue #5's "Deferred
-from #2" list) rather than guessed at here. `assume_isolated` is set only for
-0D (molecule) and 1D (wire) cases, where QE's Martyna-Tuckerman method
-(a real-space Coulomb cutoff, not specific to any one reduced dimension)
-applies directly; 2D gets a warning instead of a guess.
+The decision is a code-neutral isolation category, not a Quantum ESPRESSO
+keyword (#161): 'periodic' (no truncation), 'slab' (the Coulomb interaction
+truncated along the slab normal) or 'isolated' (truncated along all three
+lattice vectors). The Quantum ESPRESSO writer maps 'slab' to
+``assume_isolated='2D'`` and 'isolated' to 'martyna-tuckerman', and writes
+nothing for 'periodic'.
+
+The heuristic decides from ``GeometryFacts.vacuum_axes``, not from the bond
+rank. 'isolated' needs vacuum along all three lattice vectors: QE documents
+Martyna-Tuckerman for "a molecule or a cluster in a 3D supercell" (QE 7.3
+PW/Doc/INPUT_PW.def:1593-1594), while CO2 dry ice ranks 'molecule' but
+fills its cell, and Martyna-Tuckerman would replace its periodic Hartree,
+local-potential and Ewald terms with those of an isolated cluster (#126).
+The method is exact only when the density fits in half the cell along every
+axis (Martyna and Tuckerman, J. Chem. Phys. 110, 2810 (1999)), which a gap
+wider than `analysis.geometry.VACUUM_GAP_ANGSTROM` does not guarantee.
+pw.x computes no stress under it (QE 7.3 PW/src/input.f90:1361-1365), so
+generation omits `tstress` and `checks.check_all` refuses a vc-relax.
+Every other cell is 'periodic'. That includes wires, because pw.x has no 1D
+truncation.
+
+'slab' is QE's 2D Coulomb truncation (Sohier, Calandra and Mauri, Phys. Rev.
+B 96, 075448 (2017)), which computes energies, forces and in-plane stresses
+in a two-dimensional framework (QE 7.3 PW/Doc/INPUT_PW.def:1655-1678). It
+comes only from a human or llm value: the heuristic keeps a slab 'periodic',
+which is accurate for a neutral, symmetric monolayer with ~20 A of vacuum,
+and no pw.x comparison of '2D' against periodic boundaries exists for the
+bundled monolayers. ``checks.check_all`` refuses 'slab' and 'isolated', from
+any source, on a written cell without the vacuum and frame they need.
+
+A slab carries a dipole along its normal only when no point operation of
+its space group reverses that normal (``SymmetryFacts.reversible_axes``):
+inversion, a mirror in the sheet, an in-plane C2 axis or an S4/S6 axis along
+the normal cancels it. In a periodic cell, a polar slab's images add a
+spurious field across the vacuum (pitfall A9). The heuristic then attaches
+``boundary.dipole_correction_suggested`` with the keywords of QE's dipole
+correction, but does not set them: under ``tefield`` pw.x uses no symmetry
+and computes no stress (QE 7.3 PW/src/input.f90:659-663 and :690-694). QE
+allows the correction only in a slab, with the discontinuity in the empty
+space (PW/Doc/INPUT_PW.def:407-416), so ``edir`` is the vacuum axis and the
+sawtooth's drop is centred in the vacuum. A cell without exactly one vacuum
+axis gets no notice, whatever its bond rank: bulk graphite, 2H-MoS2 and
+Bi2Se3 rank '2d' but have no vacuum (#160). Without a resolved point group
+the slab may be symmetric, so there is no notice either.
+
+The notice reads ``geometry`` and ``symmetry`` of the structure as given,
+which is the cell written unless magnetic_ordering='afm' applies a
+supercell. A supercell that moves the vacuum to another lattice vector or
+doubles the cell across it (#144) leaves ``edir``, ``emaxpos`` and the
+'slab' offer describing the input cell, while ``checks.check_all`` tests
+'slab' on the written cell and refuses it.
 """
 
 from __future__ import annotations
@@ -30,7 +69,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from goldilocks_core.analysis.geometry import GeometryFacts
+from goldilocks_core.analysis.geometry import LATTICE_AXES, GeometryFacts, SlabGeometry
+from goldilocks_core.analysis.symmetry import SymmetryFacts
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import (
     Blocked,
@@ -41,18 +81,30 @@ from goldilocks_core.resolution import (
     blocked_by,
 )
 
-AssumeIsolated = Literal["none", "martyna-tuckerman"]
+Isolation = Literal["periodic", "slab", "isolated"]
+"""How the electrostatics treat the cell's periodic images: kept
+('periodic'), cut along the slab normal ('slab') or cut along all three
+lattice vectors ('isolated')."""
+
+_EOPREG = 0.1
+"""QE's default width of the sawtooth's drop, as a fraction of the cell along
+``edir`` (QE 7.3 PW/Doc/INPUT_PW.def:1446-1452)."""
 
 DIPOLE_CORRECTION_SUGGESTED = Warning(
     code="boundary.dipole_correction_suggested",
     level="info",
     category="boundary",
     message=(
-        "2D structure in a periodic cell: consider a dipole correction "
-        "(tefield/dipfield) if the slab is asymmetric along the vacuum "
-        "direction -- not set automatically here."
+        "Polar slab in a periodic cell: no symmetry operation reverses the "
+        "normal of its vacuum axis, so it can carry a dipole along that normal, "
+        "and its periodic images add a spurious field across the vacuum. "
+        "Consider Quantum ESPRESSO's dipole correction, not set automatically "
+        "here: tefield = .true., dipfield = .true., edir along the vacuum axis, "
+        "emaxpos and eopreg placing the sawtooth's drop inside the vacuum, and "
+        "eamp = 0."
     ),
 )
+"""Catalogue entry; ``_dipole_notice`` names the slab's values."""
 
 
 WARNING_CATALOGUE = (DIPOLE_CORRECTION_SUGGESTED,)
@@ -62,20 +114,21 @@ WARNING_CATALOGUE = (DIPOLE_CORRECTION_SUGGESTED,)
 
 @dataclass(frozen=True, slots=True)
 class BoundaryFacts:
-    assume_isolated: AssumeIsolated
+    isolation: Isolation
     warnings: tuple[Warning, ...] = ()
 
 
 class BoundaryHumanInput(HumanInput):
-    assume_isolated: AssumeIsolated | None = None
+    isolation: Isolation | None = None
 
 
 class BoundaryLlmInput(LlmInput):
-    assume_isolated: AssumeIsolated | None = None
+    isolation: Isolation | None = None
 
 
 def boundary(
     geometry: FieldState[GeometryFacts],
+    symmetry: FieldState[SymmetryFacts],
     human: BoundaryHumanInput | None = None,
     llm: BoundaryLlmInput | None = None,
 ) -> FieldState[BoundaryFacts]:
@@ -88,45 +141,92 @@ def boundary(
     support these) unconditionally blocked the whole run via this one
     field alone, even when every other setting the run needed was
     supplied. Matches ``vdw_method``'s own precedence: an explicit
-    override wins outright, checked before ``geometry.ok``."""
+    override wins outright, checked before ``geometry.ok``.
+
+    ``symmetry`` of the same structure as ``geometry`` decides only the
+    heuristic's dipole notice (#160); unresolved, it adds none and blocks
+    nothing."""
     human = human or BoundaryHumanInput()
     llm = llm or BoundaryLlmInput()
 
-    if human.assume_isolated is not None:
-        return Resolved(
-            BoundaryFacts(human.assume_isolated), Provenance(source="human")
-        )
-    ml_value: AssumeIsolated | None = None  # no ml model wired yet; epic 11's job
+    if human.isolation is not None:
+        return Resolved(BoundaryFacts(human.isolation), Provenance(source="human"))
+    ml_value: Isolation | None = None  # no ml model wired yet; epic 11's job
     if ml_value is not None:
         return Resolved(BoundaryFacts(ml_value), Provenance(source="ml"))
-    if llm.assume_isolated is not None:
-        return Resolved(BoundaryFacts(llm.assume_isolated), Provenance(source="llm"))
+    if llm.isolation is not None:
+        return Resolved(BoundaryFacts(llm.isolation), Provenance(source="llm"))
 
     if not geometry.ok:
         return Blocked(by=blocked_by(geometry))
-    return _heuristic(geometry.value)
+    return _heuristic(geometry.value, symmetry)
 
 
-def _heuristic(facts: GeometryFacts) -> FieldState[BoundaryFacts]:
-    if not facts.low_dimensional:
-        return Resolved(BoundaryFacts("none"), Provenance(source="heuristic"))
-
-    if facts.dimensionality in ("molecule", "1d"):
+def _heuristic(
+    facts: GeometryFacts, symmetry: FieldState[SymmetryFacts]
+) -> FieldState[BoundaryFacts]:
+    if len(facts.vacuum_axes) == 3:
         return Resolved(
-            BoundaryFacts("martyna-tuckerman"),
+            BoundaryFacts("isolated"),
             Provenance(
                 source="heuristic",
                 source_note=(
-                    f"{facts.dimensionality} structure in a periodic cell needs a "
-                    "real-space Coulomb cutoff to avoid spurious interaction "
-                    "with its own periodic images (pitfall A8)."
+                    "vacuum along all three lattice vectors: an isolated system "
+                    "needs a Coulomb cutoff to avoid spurious interaction with "
+                    "its own periodic images (pitfall A8)."
                 ),
             ),
         )
-
-    # 2D slabs: image interaction is normally handled by a dipole correction,
-    # not assume_isolated -- deferred (pitfall A9), not guessed at here.
     return Resolved(
-        BoundaryFacts("none", warnings=(DIPOLE_CORRECTION_SUGGESTED,)),
+        BoundaryFacts("periodic", warnings=_dipole_warnings(facts.slab, symmetry)),
         Provenance(source="heuristic"),
     )
+
+
+def _dipole_warnings(
+    slab: SlabGeometry | None, symmetry: FieldState[SymmetryFacts]
+) -> tuple[Warning, ...]:
+    """The dipole notice for a slab whose vacuum axis no point operation
+    reverses; nothing for any other cell, or without a resolved point
+    group."""
+    if slab is None or not symmetry.ok:
+        return ()
+    if slab.vacuum_axis in symmetry.value.reversible_axes:
+        return ()
+    return (_dipole_notice(slab),)
+
+
+def _dipole_notice(slab: SlabGeometry) -> Warning:
+    """``DIPOLE_CORRECTION_SUGGESTED`` with ``slab``'s keywords. The sawtooth
+    decreases from ``emaxpos`` to ``emaxpos + eopreg`` (QE 7.3
+    PW/src/extfield.f90:67-89), over ``_EOPREG`` or half the vacuum if that is
+    narrower, centred on the vacuum. QE's 2D Coulomb truncation is named as the
+    alternative only when ``slab.fits_2d_truncation``, the test
+    ``checks.check_all`` applies to isolation='slab' on the written cell; the
+    two agree unless that cell is a supercell that moves the vacuum or doubles
+    the cell across it (see the module docstring)."""
+    eopreg = min(_EOPREG, slab.vacuum_fraction / 2)
+    emaxpos = (slab.vacuum_center - eopreg / 2) % 1.0
+    alternative = (
+        " Alternatively set isolation='slab', Quantum ESPRESSO's 2D Coulomb "
+        "truncation, which removes the interaction between the images."
+        if slab.fits_2d_truncation
+        else ""
+    )
+    message = (
+        "Polar slab in a periodic cell: no symmetry operation reverses the normal "
+        f"of its vacuum axis {slab.vacuum_axis}, so it can carry a dipole along "
+        "that normal, and its periodic images add a spurious field across the "
+        "vacuum. Consider Quantum ESPRESSO's dipole correction, not set "
+        "automatically here: tefield = .true., dipfield = .true., "
+        f"edir = {LATTICE_AXES.index(slab.vacuum_axis) + 1}, "
+        f"emaxpos = {_fraction(emaxpos)}, eopreg = {_fraction(eopreg)}, eamp = 0, "
+        "which places the sawtooth's drop in the middle of the vacuum; pw.x then "
+        f"uses no symmetry and computes no stress.{alternative}"
+    )
+    return DIPOLE_CORRECTION_SUGGESTED.model_copy(update={"message": message})
+
+
+def _fraction(value: float) -> str:
+    """A fractional coordinate to 0.0001, without trailing zeros."""
+    return f"{round(value, 4):g}"

@@ -106,11 +106,12 @@ its type, default, and description; a selection of commonly used keys:
 | `functional`                        | Exchange-correlation functional (default `PBEsol`)                    |
 | `pseudo_table_id`                   | Pin a registered pseudopotential table id instead of automatic selection |
 | `k_grid`                            | Explicit Monkhorst-Pack mesh, e.g. `--set 'k_grid=[8,8,8]'`            |
-| `k_distance`                        | Target k-point spacing (heuristic default 0.15 for metals, 0.30 otherwise) |
+| `k_distance`                        | Target k-point spacing along each periodic axis; a vacuum axis always gets one k-point (heuristic default 0.15 for metals, 0.30 otherwise) |
 | `smearing_type`                     | Smearing function when `occupations=smearing` (default `cold`)        |
 | `degauss`                           | Smearing width in Ry (default 0.01)                                   |
 | `spin_polarized`, `spin_orbit_coupling` | Force spin polarization / spin-orbit coupling                     |
-| `use_vdw`, `method`                 | Force a dispersion correction; only `d3bj` is implemented today       |
+| `use_vdw`, `method`                 | Force a dispersion correction; only `d3bj` is implemented, for PBE and PBEsol |
+| `isolation`                         | Electrostatic boundary: `periodic`, `slab` (Quantum ESPRESSO's 2D truncation, `assume_isolated='2D'`) or `isolated` (Martyna-Tuckerman); see [boundary conditions](science.md#check-boundary-conditions-and-vacuum) |
 | `conv_thr`, `mixing_beta`, `electron_maxstep` | SCF energy-convergence threshold, density-mixing factor, max SCF iterations |
 | `u_by_element`                      | Hubbard U_eff per element in eV, replacing the built-in table, e.g. `--set 'u_by_element={"Ti": 4.0}'` |
 | `hubbard_needs_correlation`         | `false` runs without Hubbard +U; `true` applies the built-in U table  |

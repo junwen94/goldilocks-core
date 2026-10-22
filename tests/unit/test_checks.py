@@ -2,7 +2,21 @@ from __future__ import annotations
 
 import pytest
 from pymatgen.core import Lattice, Structure
+from support import (
+    carbon_chain,
+    carbon_pair_in_a_box,
+    graphene_monolayer,
+    graphene_with_c_tilted,
+    graphene_with_vacuum_along_a,
+    graphene_with_vacuum_along_x,
+    graphite,
+    molybdenum_disulfide_monolayer,
+    rhombohedral_bismuth_selenide,
+    rotated_about_x,
+    written_cell,
+)
 
+from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
@@ -10,7 +24,7 @@ from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.parallelisation import ParallelisationDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
-from goldilocks_core.analysis.geometry import GeometryFacts
+from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.checks import check_all, collect_blocked
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
@@ -26,9 +40,13 @@ _SMEARING = Resolved(
 )
 
 
-def _magnetic(spin_polarized: bool, tot_magnetization: float | None):
+def _magnetic(
+    spin_polarized: bool,
+    tot_magnetization: float | None,
+    structure: Structure = _IRON,
+):
     facts = MagneticConfigFacts(
-        relabeled_structure=_IRON,  # not read by any check
+        relabeled_structure=structure,
         spin_polarized=spin_polarized,
         magnetic_elements=("Fe",) if spin_polarized else (),
         starting_magnetization={"Fe": 0.1} if spin_polarized else None,
@@ -285,58 +303,490 @@ def test_relax_blocked_field_state_surfaces_via_the_generic_scan() -> None:
     assert report.blocking == ("convergence undecided",)
 
 
-def _geometry(dimensionality: str):
-    return Resolved(
-        GeometryFacts(
-            dimensionality=dimensionality, low_dimensional=dimensionality != "3d"
-        ),
-        Provenance(source="heuristic"),
+def _boundary(isolation: str, source: str = "heuristic"):
+    return Resolved(BoundaryFacts(isolation), Provenance(source=source))
+
+
+def test_vc_relax_of_an_isolated_system_blocks() -> None:
+    """#126: pw.x clears tstress for an isolated system (QE 7.3
+    PW/src/input.f90:1361-1365), so BFGS sees a zero cell gradient and
+    reports the input cell as converged."""
+    report = check_all(boundary=_boundary("isolated"), purpose="vc-relax")
+
+    assert not report.ok
+    assert len(report.blocking) == 1
+    assert "isolation='isolated'" in report.blocking[0]
+    assert "task='relax'" in report.blocking[0]
+    assert "isolation='periodic'" in report.blocking[0]
+
+
+def test_a_human_isolated_override_on_vc_relax_blocks_too() -> None:
+    report = check_all(
+        boundary=_boundary("isolated", source="human"), purpose="vc-relax"
     )
+
+    assert not report.ok
+    assert "task='relax'" in report.blocking[0]
+
+
+def test_an_isolated_system_without_a_cell_relaxation_passes() -> None:
+    for purpose in ("scf", "nscf", "relax"):
+        report = check_all(boundary=_boundary("isolated"), purpose=purpose)
+
+        assert report.ok, purpose
+
+
+@pytest.mark.parametrize("isolation", ["periodic", "slab"])
+def test_vc_relax_with_a_boundary_that_computes_stress_passes(isolation: str) -> None:
+    report = check_all(boundary=_boundary(isolation), purpose="vc-relax")
+
+    assert report.ok
+
+
+def test_blocked_boundary_surfaces_once_via_the_generic_scan() -> None:
+    report = check_all(boundary=Blocked(by="geometry undecided"), purpose="vc-relax")
+
+    assert report.blocking == ("geometry undecided",)
+
+
+def _vc_relax_with_cell_dofree(cell_dofree: str):
+    return Resolved(VcRelaxOptions(cell_dofree=cell_dofree), Provenance(source="human"))
+
+
+def _isolation_reasons(isolation: str, structure: Structure) -> tuple[str, ...]:
+    return check_all(
+        boundary=_boundary(isolation, source="human"),
+        magnetic=written_cell(structure),
+    ).blocking
+
+
+@pytest.mark.parametrize(
+    "build",
+    [graphene_monolayer, molybdenum_disulfide_monolayer],
+    ids=lambda build: build.__name__,
+)
+def test_a_slab_in_the_xy_frame_with_room_for_the_2d_truncation_passes(
+    build,
+) -> None:
+    """#161: QE's assume_isolated='2D' truncates the Coulomb interaction
+    beyond half the cell height along z (QE 7.3 PW/src/Coul_cut_2D.f90:77).
+    A sheet in a 20 A cell meets every precondition."""
+    assert _isolation_reasons("slab", build()) == ()
+
+
+@pytest.mark.parametrize(
+    ("build", "found"),
+    [
+        (graphite, "no vacuum"),
+        (graphene_with_vacuum_along_x, "vacuum along a"),
+        (graphene_with_vacuum_along_a, "a or b out of the xy plane and vacuum along a"),
+        (
+            lambda: rotated_about_x(graphene_monolayer(), 30.0),
+            "a or b out of the xy plane",
+        ),
+        (carbon_chain, "vacuum along a and b"),
+        (carbon_pair_in_a_box, "vacuum along a, b and c"),
+        (graphene_with_c_tilted, "c off the z axis"),
+        (
+            lambda: graphene_monolayer(c=11.0),
+            "a height of 11.00 Å along z (at least 11.11 Å needed)",
+        ),
+        (
+            lambda: molybdenum_disulfide_monolayer(c=12.0),
+            "8.83 Å of vacuum around a slab 3.17 Å thick (at least 13.75 Å needed)",
+        ),
+    ],
+    ids=[
+        "bulk",
+        "vacuum-along-a",
+        "vacuum-vector-out-of-plane",
+        "tilted-slab",
+        "wire",
+        "molecule",
+        "c-off-z",
+        "below-21-bohr",
+        "thick-slab-in-a-short-cell",
+    ],
+)
+def test_a_slab_isolation_without_qe_2d_preconditions_blocks(build, found: str) -> None:
+    """'2D' needs the vacuum along c only and a, b in the xy plane (QE 7.3
+    PW/src/Coul_cut_2D.f90:72-74), c along z, the only frame in which its
+    cutoff factor is exact (Coul_cut_2D.f90:77-81), half the cell height
+    above the pseudopotentials' 10 bohr radial cutoff
+    (PW/src/init_vloc.f90:62-65), and vacuum 20 bohr wider than the slab
+    (PW/Doc/INPUT_PW.def:1668-1675). A 11.00 A cell is below 21 bohr
+    (11.11 A); the 3.17 A MoS2 sheet needs 13.75 A of vacuum."""
+    reasons = _isolation_reasons("slab", build())
+
+    assert len(reasons) == 1
+    assert "isolation='slab'" in reasons[0]
+    assert f"the cell to be written has {found}." in reasons[0]
+    assert reasons[0].endswith("Set isolation='periodic'.")
+
+
+def test_the_2d_height_floor_is_21_bohr() -> None:
+    """Graphene has no thickness, so 11.12 A of vacuum clears the 20 bohr
+    (10.58 A) margin and isolates the height floor: 21 bohr is 11.113 A."""
+    assert _isolation_reasons("slab", graphene_monolayer(c=11.12)) == ()
+    assert len(_isolation_reasons("slab", graphene_monolayer(c=11.1))) == 1
+
+
+def test_the_2d_vacuum_margin_is_20_bohr_beyond_the_slab() -> None:
+    """The 3.17 A MoS2 sheet needs 3.17 + 10.58 = 13.75 A of vacuum: a
+    16.93 A cell leaves 13.76 A, a 16.91 A cell 13.74 A."""
+    assert _isolation_reasons("slab", molybdenum_disulfide_monolayer(c=16.93)) == ()
+    reasons = _isolation_reasons("slab", molybdenum_disulfide_monolayer(c=16.91))
+    assert "13.74 Å of vacuum around a slab 3.17 Å thick" in reasons[0]
+
+
+def test_an_isolated_system_in_a_box_passes() -> None:
+    assert _isolation_reasons("isolated", carbon_pair_in_a_box()) == ()
+
+
+@pytest.mark.parametrize(
+    ("build", "found"),
+    [
+        (graphite, "no vacuum"),
+        (graphene_monolayer, "vacuum only along c"),
+        (carbon_chain, "vacuum only along a and b"),
+    ],
+    ids=["bulk", "slab", "wire"],
+)
+def test_an_isolated_boundary_on_a_periodic_cell_blocks(build, found: str) -> None:
+    """#161: Martyna-Tuckerman is a correction for a molecule or cluster in
+    a 3D supercell (QE 7.3 PW/Doc/INPUT_PW.def:1593-1594), and pw.x has no
+    1D truncation, so a wire must stay periodic."""
+    reasons = _isolation_reasons("isolated", build())
+
+    assert len(reasons) == 1
+    assert "isolation='isolated'" in reasons[0]
+    assert f"the cell to be written has {found}." in reasons[0]
+    assert reasons[0].endswith("Set isolation='periodic'.")
+
+
+@pytest.mark.parametrize(
+    "build", [graphite, carbon_chain, carbon_pair_in_a_box], ids=lambda b: b.__name__
+)
+def test_a_periodic_boundary_suits_every_cell(build) -> None:
+    assert _isolation_reasons("periodic", build()) == ()
+
+
+@pytest.mark.parametrize("isolation", ["slab", "isolated"])
+def test_the_isolation_gate_is_skipped_without_the_written_cell(
+    isolation: str,
+) -> None:
+    assert check_all(boundary=_boundary(isolation)).ok
+
+
+def test_the_isolation_gate_reads_the_written_cell_whatever_the_source() -> None:
+    """The heuristic decides from the input structure; an AFM cell can move
+    the vacuum, and the gate judges the cell pw.x reads."""
+    report = check_all(
+        boundary=_boundary("isolated", source="heuristic"),
+        magnetic=written_cell(graphite()),
+    )
+
+    assert len(report.blocking) == 1
+    assert "isolation='isolated'" in report.blocking[0]
+
+
+@pytest.mark.parametrize("cell_dofree", ["all", "shape", "z", "fixc", "epitaxial_ab"])
+def test_vc_relax_under_the_2d_truncation_needs_a_2d_cell_constraint(
+    cell_dofree: str,
+) -> None:
+    """Under '2D' only in-plane stresses make sense, and QE asks for
+    cell_dofree='2Dxy' (QE 7.3 PW/Doc/INPUT_PW.def:1677-1678); pw.x itself
+    does not check it."""
+    report = check_all(
+        boundary=_boundary("slab", source="human"),
+        relax=_vc_relax_with_cell_dofree(cell_dofree),
+        magnetic=written_cell(graphene_monolayer()),
+        purpose="vc-relax",
+    )
+
+    assert len(report.blocking) == 1
+    assert f"cell_dofree={cell_dofree!r}" in report.blocking[0]
+    assert "cell_dofree='2Dxy'" in report.blocking[0]
+    assert "isolation='periodic'" in report.blocking[0]
+
+
+@pytest.mark.parametrize(
+    "cell_dofree", ["2Dxy", "2Dshape", "ibrav+2Dxy", "ibrav+2Dshape"]
+)
+def test_vc_relax_under_the_2d_truncation_with_a_2d_cell_constraint_passes(
+    cell_dofree: str,
+) -> None:
+    report = check_all(
+        boundary=_boundary("slab", source="human"),
+        relax=_vc_relax_with_cell_dofree(cell_dofree),
+        magnetic=written_cell(graphene_monolayer()),
+        purpose="vc-relax",
+    )
+
+    assert report.ok
+
+
+def test_a_plain_relax_under_the_2d_truncation_needs_no_cell_constraint() -> None:
+    report = check_all(
+        boundary=_boundary("slab", source="human"),
+        relax=Resolved(RelaxOptions(), Provenance(source="heuristic")),
+        magnetic=written_cell(graphene_monolayer()),
+        purpose="relax",
+    )
+
+    assert report.ok
+
+
+def test_a_periodic_slab_may_relax_its_whole_cell() -> None:
+    report = check_all(
+        boundary=_boundary("periodic"),
+        relax=_vc_relax_with_cell_dofree("all"),
+        magnetic=written_cell(graphene_monolayer()),
+        purpose="vc-relax",
+    )
+
+    assert report.ok
+
+
+@pytest.mark.parametrize(
+    "build",
+    [graphene_with_vacuum_along_x, rhombohedral_bismuth_selenide],
+    ids=lambda build: build.__name__,
+)
+def test_a_2d_cell_constraint_outside_the_xy_frame_blocks(build) -> None:
+    """#132: '2Dxy' moves only the x and y components of a and b (QE 7.3
+    Modules/cell_base.f90:803-808). With the vacuum along a it frees the
+    vacuum vector; with a and b out of the xy plane (rhombohedral Bi2Se3) it
+    distorts the cell."""
+    report = check_all(
+        relax=_vc_relax_with_cell_dofree("2Dxy"),
+        magnetic=written_cell(build()),
+        purpose="vc-relax",
+    )
+
+    assert not report.ok
+    assert len(report.blocking) == 1
+    assert "cell_dofree='2Dxy'" in report.blocking[0]
+    assert "cell_dofree='all'" in report.blocking[0]
+
+
+@pytest.mark.parametrize(
+    ("build", "found"),
+    [
+        (graphene_with_vacuum_along_x, "vacuum along a"),
+        (rhombohedral_bismuth_selenide, "a or b out of the xy plane"),
+        (carbon_chain, "vacuum along a and b"),
+        (graphene_with_vacuum_along_a, "a or b out of the xy plane and vacuum along a"),
+    ],
+    ids=lambda value: value.__name__ if callable(value) else None,
+)
+def test_the_frame_reason_names_what_is_out_of_place(build, found: str) -> None:
+    report = check_all(
+        relax=_vc_relax_with_cell_dofree("2Dxy"),
+        magnetic=written_cell(build()),
+        purpose="vc-relax",
+    )
+
+    assert f"the cell to be written has {found}." in report.blocking[0]
+
+
+@pytest.mark.parametrize(
+    "cell_dofree", ["2Dxy", "2Dshape", "ibrav+2Dxy", "ibrav+2Dshape"]
+)
+def test_every_2d_cell_constraint_is_checked_against_the_frame(
+    cell_dofree: str,
+) -> None:
+    report = check_all(
+        relax=_vc_relax_with_cell_dofree(cell_dofree),
+        magnetic=written_cell(rhombohedral_bismuth_selenide()),
+        purpose="vc-relax",
+    )
+
+    assert len(report.blocking) == 1
+    assert f"cell_dofree={cell_dofree!r}" in report.blocking[0]
+
+
+@pytest.mark.parametrize(
+    "build", [graphite, graphene_monolayer], ids=lambda build: build.__name__
+)
+def test_a_2d_cell_constraint_in_the_xy_frame_passes(build) -> None:
+    """Bulk graphite keeps an explicit '2Dxy' (in-plane relaxation at fixed
+    c); the monolayer has its vacuum along c."""
+    report = check_all(
+        relax=_vc_relax_with_cell_dofree("2Dxy"),
+        magnetic=written_cell(build()),
+        purpose="vc-relax",
+    )
+
+    assert report.ok
+
+
+@pytest.mark.parametrize("cell_dofree", ["all", "shape", "z"])
+def test_other_cell_constraints_are_not_checked_against_the_frame(
+    cell_dofree: str,
+) -> None:
+    report = check_all(
+        relax=_vc_relax_with_cell_dofree(cell_dofree),
+        magnetic=written_cell(rhombohedral_bismuth_selenide()),
+        purpose="vc-relax",
+    )
+
+    assert report.ok
+
+
+def test_the_frame_check_is_skipped_without_the_written_cell() -> None:
+    report = check_all(relax=_vc_relax_with_cell_dofree("2Dxy"), purpose="vc-relax")
+
+    assert report.ok
+
+
+def _vdw(use_vdw: bool, source: str = "heuristic"):
+    facts = VdwFacts(use_vdw=use_vdw, method="d3bj" if use_vdw else None)
+    return Resolved(facts, Provenance(source=source))
+
+
+def _functional(label: str):
+    return Resolved(label, Provenance(source="human"))
+
+
+def test_d3_dispersion_with_lda_blocks() -> None:
+    """#141: pw.x hands DFT-D3 the pseudopotentials' short functional name
+    (QE 7.3 PW/src/input.f90:2039-2041), and the D3(BJ) table has no LDA
+    entry, so pw.x would stop with 'functional name unknown'."""
+    report = check_all(vdw=_vdw(True, source="human"), functional=_functional("LDA"))
+
+    assert not report.ok
+    assert len(report.blocking) == 1
+    assert "'LDA'" in report.blocking[0]
+    assert "use_vdw=false" in report.blocking[0]
+
+
+def test_d3_dispersion_with_an_unrecognised_functional_blocks() -> None:
+    report = check_all(vdw=_vdw(True, source="llm"), functional=_functional("revPBE"))
+
+    assert not report.ok
+    assert "'revPBE'" in report.blocking[0]
+
+
+def test_d3_dispersion_with_pbe_or_pbesol_passes() -> None:
+    for label in ("PBE", "PBEsol"):
+        report = check_all(vdw=_vdw(True), functional=_functional(label))
+
+        assert report.ok, label
+
+
+def test_no_dispersion_with_lda_passes() -> None:
+    report = check_all(vdw=_vdw(False), functional=_functional("LDA"))
+
+    assert report.ok
+
+
+def test_dispersion_check_is_unaffected_when_either_side_is_missing() -> None:
+    assert check_all(vdw=_vdw(True)).ok
+    assert check_all(functional=_functional("LDA")).ok
+
+
+def test_blocked_vdw_surfaces_once_via_the_generic_scan() -> None:
+    report = check_all(
+        vdw=Blocked(by="geometry undecided"), functional=_functional("LDA")
+    )
+
+    assert report.blocking == ("geometry undecided",)
 
 
 def _relax_with_fix_bottom_layers(count: int | None):
-    return Resolved(
-        RelaxOptions(fix_bottom_layers=count), Provenance(source="heuristic")
+    return Resolved(RelaxOptions(fix_bottom_layers=count), Provenance(source="human"))
+
+
+def _fix_bottom_layers_reasons(count: int | None, structure: Structure):
+    return check_all(
+        relax=_relax_with_fix_bottom_layers(count),
+        magnetic=written_cell(structure),
+    ).blocking
+
+
+@pytest.mark.parametrize(
+    "build",
+    [graphene_monolayer, molybdenum_disulfide_monolayer, graphene_with_vacuum_along_x],
+    ids=lambda build: build.__name__,
+)
+def test_fix_bottom_layers_on_a_slab_passes(build) -> None:
+    """A slab is any cell with vacuum along exactly one lattice vector, in
+    whatever orientation: if_pos flags do not depend on the Cartesian
+    frame."""
+    assert _fix_bottom_layers_reasons(1, build()) == ()
+
+
+@pytest.mark.parametrize(
+    ("build", "found"),
+    [
+        (graphite, "no vacuum"),
+        (carbon_chain, "vacuum along a and b"),
+        (carbon_pair_in_a_box, "vacuum along a, b and c"),
+    ],
+    ids=["bulk-layered-crystal", "wire", "molecule"],
+)
+def test_fix_bottom_layers_without_exactly_one_vacuum_axis_blocks(
+    build, found: str
+) -> None:
+    """#160: bulk graphite ranks '2d', yet it has no vacuum and so no bottom
+    to count layers up from; with fix_bottom_layers=1 the rank-keyed gate
+    passed and relax.in froze its z = 1/4 sheet. The gate reads the cell the
+    writer renders, not the rank."""
+    reasons = _fix_bottom_layers_reasons(1, build())
+
+    assert len(reasons) == 1
+    assert reasons[0].startswith("relax.fix_bottom_layers requires a slab")
+    assert f"the cell to be written has {found}." in reasons[0]
+    assert reasons[0].endswith("Unset fix_bottom_layers.")
+
+
+def test_fix_bottom_layers_on_a_cell_holding_two_slabs_blocks() -> None:
+    """An antiferromagnetic supercell can double a monolayer along its
+    normal, putting two sheets and two vacuum gaps along c in the written
+    cell. Counted up from one gap, the layers would run through one sheet
+    and on into the other, so the gate refuses the cell."""
+    reasons = _fix_bottom_layers_reasons(
+        1, molybdenum_disulfide_monolayer() * (1, 1, 2)
+    )
+
+    assert reasons == (
+        "relax.fix_bottom_layers requires a slab: it freezes the bottom atomic "
+        "layers counted up from the vacuum, so the cell needs one vacuum gap, "
+        "along exactly one lattice vector, but the cell to be written has more "
+        "than one vacuum gap along c, so more than one slab. Unset "
+        "fix_bottom_layers.",
     )
 
 
-def test_fix_bottom_layers_on_a_2d_structure_is_ok() -> None:
-    report = check_all(relax=_relax_with_fix_bottom_layers(2), geometry=_geometry("2d"))
+def test_fix_bottom_layers_may_fix_every_layer_of_the_slab_but_no_more() -> None:
+    """D16: the MoS2 sheet has three atomic layers on the written cell (S, Mo,
+    S), counted the way the writer counts them, so check() refuses a fourth
+    instead of passing a count the writer cannot apply."""
+    sheet = molybdenum_disulfide_monolayer()
 
-    assert report.ok
-
-
-def test_fix_bottom_layers_unset_is_unaffected_by_geometry() -> None:
-    report = check_all(
-        relax=_relax_with_fix_bottom_layers(None), geometry=_geometry("3d")
+    assert _fix_bottom_layers_reasons(3, sheet) == ()
+    assert _fix_bottom_layers_reasons(4, sheet) == (
+        "relax.fix_bottom_layers=4 exceeds the 3 atomic layers of the slab to be "
+        "written. Set fix_bottom_layers to at most 3, or unset it.",
     )
 
-    assert report.ok
+
+def test_fix_bottom_layers_unset_is_never_checked() -> None:
+    assert _fix_bottom_layers_reasons(None, graphite()) == ()
 
 
-def test_fix_bottom_layers_on_a_3d_structure_blocks() -> None:
-    report = check_all(relax=_relax_with_fix_bottom_layers(2), geometry=_geometry("3d"))
-
-    assert not report.ok
-    assert "2D slab structure" in report.blocking[0]
-    assert "dimensionality='3d'" in report.blocking[0]
+def test_the_fix_bottom_layers_gate_is_skipped_without_the_written_cell() -> None:
+    assert check_all(relax=_relax_with_fix_bottom_layers(2)).ok
 
 
-def test_fix_bottom_layers_with_no_geometry_at_all_blocks() -> None:
-    report = check_all(relax=_relax_with_fix_bottom_layers(2))
-
-    assert not report.ok
-    assert "geometry classification is not available" in report.blocking[0]
-
-
-def test_fix_bottom_layers_with_unresolved_geometry_blocks() -> None:
+def test_a_blocked_written_cell_surfaces_once_via_the_generic_scan() -> None:
     report = check_all(
         relax=_relax_with_fix_bottom_layers(2),
-        geometry=Unavailable(reason="dimensionality classification failed"),
+        magnetic=Blocked(by="magnetic ordering undecided"),
     )
 
-    assert not report.ok
-    assert "geometry classification is not available" in report.blocking[0]
+    assert report.blocking == ("magnetic ordering undecided",)
 
 
 def _job(ntasks: int) -> Resolved[JobDecision]:

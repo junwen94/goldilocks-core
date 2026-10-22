@@ -19,6 +19,14 @@ includes dispersion physics -- v1 had no functional advisor to read at all,
 so this check did not exist. Nothing in `functionals.py`'s recognized label
 table is currently a vdW-inclusive functional (only LDA/PBE/PBEsol), so this
 mostly guards a future functional this epic does not otherwise build.
+
+The functional also decides whether the low-dimensional D3BJ default is
+possible at all: D3(BJ) needs damping parameters for the functional, which
+Quantum ESPRESSO ships only for `functionals.D3BJ_FUNCTIONALS` (#141). For
+any other functional, LDA included, the heuristic adds no correction and
+warns (`vdw.d3bj_unavailable_for_functional`). A human or llm `use_vdw` is
+still resolved as given; `checks.check_all` refuses `use_vdw=True` with such
+a functional.
 """
 
 from __future__ import annotations
@@ -27,6 +35,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from goldilocks_core.analysis.geometry import GeometryFacts
+from goldilocks_core.functionals import D3BJ_FUNCTIONALS, has_d3bj_parameters
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import (
     Blocked,
@@ -45,6 +54,8 @@ _VDW_INCLUSIVE_FUNCTIONAL_MARKERS = ("vdw", "vv10")
 functional is not double-corrected. No functional this codebase currently
 recognizes matches; this is a guard for one that eventually will."""
 
+_D3BJ_FUNCTIONAL_LABELS = ", ".join(sorted(D3BJ_FUNCTIONALS))
+
 WARNING_CATALOGUE = (
     Warning(
         code="vdw.double_counting_avoided",
@@ -54,6 +65,17 @@ WARNING_CATALOGUE = (
             "a vdW correction method was requested, but the chosen functional "
             "already includes dispersion physics; no correction was added to "
             "avoid double-counting it."
+        ),
+    ),
+    Warning(
+        code="vdw.d3bj_unavailable_for_functional",
+        level="warning",
+        category="vdw",
+        message=(
+            "a low-dimensional structure defaults to D3(BJ) dispersion, but "
+            "Quantum ESPRESSO's DFT-D3 has no parameters for the chosen "
+            "functional; no correction was added. Choose a functional with "
+            f"D3(BJ) parameters ({_D3BJ_FUNCTIONAL_LABELS}) if dispersion matters."
         ),
     ),
 )
@@ -124,7 +146,7 @@ def vdw_method(
 
     if not geometry.ok:
         return Blocked(by=blocked_by(geometry))
-    return _heuristic(geometry.value)
+    return _heuristic(geometry.value, functional)
 
 
 def _resolved_facts(use_vdw: bool, method: VdwMethod | None) -> VdwFacts:
@@ -136,23 +158,47 @@ def _is_vdw_inclusive(functional: str) -> bool:
     return any(marker in lowered for marker in _VDW_INCLUSIVE_FUNCTIONAL_MARKERS)
 
 
-def _heuristic(facts: GeometryFacts) -> FieldState[VdwFacts]:
-    if facts.low_dimensional:
+def _heuristic(facts: GeometryFacts, functional: str) -> FieldState[VdwFacts]:
+    if not facts.low_dimensional:
         return Resolved(
-            VdwFacts(use_vdw=True, method="d3bj"),
+            VdwFacts(use_vdw=False, method=None),
+            Provenance(
+                source="heuristic",
+                source_note=("3D bulk structure; no vdW correction by default."),
+            ),
+        )
+    if not has_d3bj_parameters(functional):
+        warning = Warning(
+            code="vdw.d3bj_unavailable_for_functional",
+            level="warning",
+            category="vdw",
+            message=(
+                f"No D3(BJ) dispersion correction was added for this "
+                f"{facts.dimensionality} structure: Quantum ESPRESSO's DFT-D3 has "
+                f"no parameters for {functional!r}, so pw.x would stop with "
+                "'functional name unknown'. Choose a functional with D3(BJ) "
+                f"parameters ({_D3BJ_FUNCTIONAL_LABELS}) if dispersion matters."
+            ),
+        )
+        return Resolved(
+            VdwFacts(use_vdw=False, method=None, warnings=(warning,)),
             Provenance(
                 source="heuristic",
                 source_note=(
                     f"Connectivity-derived {facts.dimensionality} classification "
-                    "indicates a low-dimensional structure; D3BJ is the "
-                    "conservative default because dispersion may be important."
+                    f"would default to D3BJ, but DFT-D3 has no D3(BJ) parameters "
+                    f"for {functional}, so no correction is added."
                 ),
             ),
         )
     return Resolved(
-        VdwFacts(use_vdw=False, method=None),
+        VdwFacts(use_vdw=True, method="d3bj"),
         Provenance(
             source="heuristic",
-            source_note=("3D bulk structure; no vdW correction by default."),
+            source_note=(
+                f"Connectivity-derived {facts.dimensionality} classification "
+                "indicates a low-dimensional structure; D3BJ is the "
+                "conservative default because dispersion may be important."
+            ),
         ),
     )

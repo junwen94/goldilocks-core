@@ -19,7 +19,7 @@ import pytest
 pytest.importorskip("fastapi")
 
 from fastapi.testclient import TestClient
-from support import strict_json
+from support import silicon_dimer_in_a_box, strict_json
 
 from goldilocks_core.server.http import create_app
 
@@ -496,6 +496,26 @@ class TestRun:
             manifest = strict_json(archive.read("goldilocks.json"))
         interval = manifest["records"]["k_sampling"]["value"]["k_distance_interval"]
         assert interval == _SILICON_GAMMA_INTERVAL
+
+    def test_an_isolated_molecule_runs_at_gamma_only_by_default(
+        self, client: TestClient, silicon_fixture_table
+    ) -> None:
+        """#159: a molecule in a box, vacuum along a, b and c, gets the
+        Gamma-only mesh without any k-point override, and its open-ended
+        interval reaches the response as strict JSON (#137)."""
+        response = client.post(
+            "/run",
+            json={
+                "structure_content": silicon_dimer_in_a_box().to(fmt="cif"),
+                "structure_format": "cif",
+                "hpc": "scarf",
+            },
+        )
+
+        assert response.status_code == 200
+        k_sampling = strict_json(response.text)["records"]["k_sampling"]["value"]
+        assert k_sampling["mesh"] == [1, 1, 1]
+        assert k_sampling["k_distance_interval"] == [0.0, None]
 
     def test_dos_task_generates_all_three_steps(
         self, client: TestClient, real_assets, silicon_cif: str

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from support import geometry_facts
 
 from goldilocks_core.advisors.convergence import (
     ConvergenceHumanInput,
@@ -8,7 +9,6 @@ from goldilocks_core.advisors.convergence import (
     convergence,
 )
 from goldilocks_core.advisors.hubbard_u import HubbardU, HubbardUDecision
-from goldilocks_core.analysis.geometry import GeometryFacts
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
 _FROZEN_NS = "convergence.mixing_fixed_ns_freezes_hubbard_occupations"
@@ -37,36 +37,43 @@ def test_defaults_match_v1s_flat_constants() -> None:
     assert state.value.electron_maxstep == 80
 
 
-def test_2d_geometry_switches_mixing_mode_to_local_tf() -> None:
-    geometry = Resolved(
-        GeometryFacts(dimensionality="2d", low_dimensional=True),
-        Provenance(source="heuristic"),
+def _geometry(dimensionality: str, vacuum_axes: tuple[str, ...] = ()):
+    return Resolved(
+        geometry_facts(dimensionality, vacuum_axes), Provenance(source="heuristic")
     )
 
-    state = convergence(nat=6, geometry=geometry)
+
+@pytest.mark.parametrize(
+    ("dimensionality", "vacuum_axes"),
+    [("2d", ("c",)), ("1d", ("a", "b")), ("molecule", ("a", "b", "c"))],
+    ids=["slab", "wire", "isolated"],
+)
+def test_vacuum_along_any_axis_switches_mixing_mode_to_local_tf(
+    dimensionality: str, vacuum_axes: tuple[str, ...]
+) -> None:
+    """F26: plain mixing struggles on a cell with a vacuum region, which
+    local-TF's Thomas-Fermi screening handles better. A wire has a vacuum
+    region too (#160)."""
+    state = convergence(nat=6, geometry=_geometry(dimensionality, vacuum_axes))
 
     assert state.value.mixing_mode == "local-TF"
 
 
-def test_molecule_geometry_also_switches_mixing_mode() -> None:
-    geometry = Resolved(
-        GeometryFacts(dimensionality="molecule", low_dimensional=True),
-        Provenance(source="heuristic"),
-    )
-
-    state = convergence(nat=3, geometry=geometry)
+def test_vacuum_decides_local_tf_whatever_the_rank() -> None:
+    """A lone atom bonded to its own images ranks '3d' in a box."""
+    state = convergence(nat=1, geometry=_geometry("3d", ("a", "b", "c")))
 
     assert state.value.mixing_mode == "local-TF"
 
 
-def test_1d_geometry_does_not_switch_mixing_mode() -> None:
-    """F26 names only 2d/molecule; 1d is deliberately not extended to."""
-    geometry = Resolved(
-        GeometryFacts(dimensionality="1d", low_dimensional=True),
-        Provenance(source="heuristic"),
-    )
-
-    state = convergence(nat=6, geometry=geometry)
+@pytest.mark.parametrize("dimensionality", ["3d", "2d", "1d", "molecule"])
+def test_a_cell_without_vacuum_keeps_plain_mixing_whatever_its_rank(
+    dimensionality: str,
+) -> None:
+    """#160: bulk graphite ranks '2d' and CO2 dry ice 'molecule', but neither
+    has a vacuum region. On SCARF, local-TF and plain mixing gave the same
+    energies and SCF iteration counts for bulk MgB2 and graphite."""
+    state = convergence(nat=6, geometry=_geometry(dimensionality))
 
     assert state.value.mixing_mode == "plain"
 

@@ -21,13 +21,16 @@ than invented ones. ``mixing_beta``/``electron_maxstep`` keep v1's own
 flat defaults (``0.4``, ``80`` -- ``advice/parameters.py:17-18``); no
 source in this codebase scales those with system size.
 
-**`mixing_mode='local-TF'` for 2d/molecule geometries**
+**`mixing_mode='local-TF'` for a cell with a vacuum region**
 (goldilocks-core-design.md:2907, "F26"): QE's default ``'plain'``
-mixing struggles on structures with a vacuum region (the long-range
-part of Thomas-Fermi screening mixing handles better); ``'1d'`` is
-deliberately *not* included -- the design doc's finding names only
-``2d``/``molecule``, and this module does not extend that without a
-source.
+mixing struggles on structures with a vacuum region, which the
+long-range part of Thomas-Fermi screening mixing handles better. The
+rule reads ``GeometryFacts.vacuum_axes``, the region itself: a slab, a
+wire and an isolated system all have one. The design doc named the
+``2d``/``molecule`` ranks, but bulk graphite ranks '2d' and CO2 dry ice
+'molecule' without any vacuum (#160); on SCARF, local-TF and plain
+mixing gave the same energies and SCF iteration counts for bulk MgB2
+and graphite.
 
 **No default `mixing_fixed_ns`** (#127; replaces the design doc's "F5"
 default of 50 for every +U input, goldilocks-core-design.md:2908). While
@@ -100,7 +103,6 @@ _DEFAULT_MIXING_BETA = 0.4
 """Matches v1's DEFAULT_MIXING_BETA (advice/parameters.py:17)."""
 _DEFAULT_ELECTRON_MAXSTEP = 80
 """Matches v1's DEFAULT_ELECTRON_MAXSTEP (advice/parameters.py:18)."""
-_LOCAL_TF_DIMENSIONALITIES = frozenset({"2d", "molecule"})
 
 
 def _frozen_ns_message(iterations: int | str) -> str:
@@ -164,11 +166,7 @@ def convergence(
     human = human or ConvergenceHumanInput()
     llm = llm or ConvergenceLlmInput()
 
-    local_tf = bool(
-        geometry is not None
-        and geometry.ok
-        and geometry.value.dimensionality in _LOCAL_TF_DIMENSIONALITIES
-    )
+    local_tf = bool(geometry is not None and geometry.ok and geometry.value.vacuum_axes)
 
     conv_thr = (
         human.conv_thr if human.conv_thr is not None else nat * _CONV_THR_PER_ATOM

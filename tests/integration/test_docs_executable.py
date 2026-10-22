@@ -67,8 +67,13 @@ def test_document_python_blocks_run(
 
 @pytest.fixture
 def skill_structure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Diamond Si, a bulk crystal. A one-atom cubic cell with a = 5.43 A
+    has 5.43 A of vacuum along every lattice vector, so it would be treated
+    as an isolated atom (#126)."""
     monkeypatch.chdir(tmp_path)
-    structure = Structure(Lattice.cubic(5.43), ["Si"], [[0.0, 0.0, 0.0]])
+    structure = Structure.from_spacegroup(
+        "Fd-3m", Lattice.cubic(5.431), ["Si"], [[0.0, 0.0, 0.0]]
+    )
     structure.to(filename=tmp_path / "structure.cif")
 
 

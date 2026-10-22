@@ -137,12 +137,15 @@ def check(
     ``ntasks`` rule and the ``ndiag`` grid rule (#133, ``checks.py``'s
     ``_npool_must_divide_ntasks``/``_ndiag_grid_must_distribute_bands``)
     apply regardless of ``purpose``, each step with its own ``nbnd``.
-    ``geometry`` (#44): same "always read straight off ``advice``"
-    treatment -- every ``Advice`` has an ``analysis.geometry``, needed
-    by ``_fix_bottom_layers_requires_2d_geometry`` regardless of
-    ``purpose`` (a non-relax caller never sets
-    ``relax.fix_bottom_layers`` in the first place, so the rule is a
-    no-op for them).
+    ``magnetic`` carries the cell the writer renders: ``relax.fix_bottom_layers``
+    (#44, #160) is checked against that cell's slab layers, and a non-relax
+    caller never sets it. ``boundary`` (#126, #161): read off ``advice`` too, so a
+    vc-relax of an isolated system is refused and ``isolation`` is checked
+    against the vacuum of ``magnetic``'s written cell. ``vdw``/``functional``
+    (#141): read off ``advice`` so D3 dispersion with a functional that has
+    no D3(BJ) parameters is refused. ``check_all`` also folds a ``Blocked``
+    boundary, vdw or functional in, which is why
+    ``SystemAdvice.field_states()`` leaves them out.
     """
     return check_all(
         *advice.field_states(),
@@ -150,7 +153,9 @@ def check(
         magnetic=advice.system.magnetic,
         electron_count=advice.system.electron_count,
         relax=relax,
-        geometry=advice.analysis.geometry,
+        boundary=advice.system.boundary,
+        vdw=advice.system.vdw,
+        functional=advice.system.functional,
         job=advice.step.resources.job,
         parallel=advice.step.resources.parallelisation,
         nbnd=advice.step.kpoints.nbnd,

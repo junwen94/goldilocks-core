@@ -117,7 +117,7 @@ from goldilocks_core.service import (
     SystemOverrides,
 )
 
-VOCABULARY_VERSION = "1"
+VOCABULARY_VERSION = "2"
 """Bump when the settings/facts vocabulary changes in a way other
 ecosystem repos (ml/agent/data) need to know about -- goldilocks-core
 -design.md S4.2's cross-repo validation antidote."""
@@ -267,7 +267,10 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "use_vdw": {
         "description": (
-            "Force whether a van der Waals dispersion correction is applied."
+            "Force whether a van der Waals dispersion correction is applied. "
+            "D3(BJ) needs parameters for the functional, which Quantum "
+            "ESPRESSO has only for PBE and PBEsol: with any other functional, "
+            "such as LDA, the default is no correction and true is refused."
         ),
     },
     "method": {
@@ -276,11 +279,20 @@ _SETTING_META: dict[str, _SettingExtra] = {
             "implemented)."
         ),
     },
-    "assume_isolated": {
+    "isolation": {
         "description": (
-            "Force the electrostatic boundary-condition treatment for a "
-            "periodic cell (e.g. 'martyna-tuckerman' for an isolated "
-            "molecule/wire); 'none' for the normal fully-periodic case."
+            "How the electrostatics treat periodic images. 'periodic': no "
+            "truncation, the default for any cell periodic along at least one "
+            "lattice vector, including molecular crystals, slabs and wires "
+            "(pw.x has no 1D truncation). 'slab': Quantum ESPRESSO's 2D Coulomb "
+            "truncation (assume_isolated='2D', Sohier et al. 2017), never the "
+            "default; refused unless the vacuum lies along c only, a and b lie "
+            "in the xy plane, c lies along z, the cell is at least 11.11 Å "
+            "(21 bohr) high and the vacuum is at least 10.58 Å (20 bohr) wider "
+            "than the slab, and a vc-relax needs cell_dofree='2Dxy' or '2Dshape'. "
+            "'isolated': Martyna-Tuckerman (assume_isolated='martyna-tuckerman'), "
+            "the default with vacuum along all three lattice vectors and refused "
+            "otherwise; pw.x computes no stress under it, so vc-relax is refused."
         ),
     },
     "needs_correlation": {
@@ -334,7 +346,8 @@ _SETTING_META: dict[str, _SettingExtra] = {
         "unit": "1/Angstrom",
         "ml_target": "k_distance",
         "description": (
-            "Target k-point spacing; heuristic default is 0.15 for metals, "
+            "Target k-point spacing along each periodic axis; a vacuum axis "
+            "always gets one k-point. Heuristic default is 0.15 for metals, "
             "0.30 otherwise."
         ),
     },
@@ -382,8 +395,9 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "mixing_mode": {
         "description": (
-            "SCF density-mixing algorithm; heuristic default is local-TF for "
-            "2D/molecule geometries."
+            "SCF density-mixing algorithm; heuristic default is local-TF for a "
+            "cell with vacuum along any lattice vector (a slab, wire or isolated "
+            "system) and plain otherwise, including bulk layered crystals."
         ),
     },
     "mixing_fixed_ns": {
@@ -484,16 +498,21 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "fix_bottom_layers": {
         "description": (
-            "Fix the bottom N atomic layers of a 2D slab (if_pos) during "
-            "relax/vc-relax; requires the structure to classify as 2D."
+            "Fix the bottom N atomic layers of a slab (if_pos) during "
+            "relax/vc-relax, counted up from the vacuum; refused unless the cell "
+            "to be written has one vacuum gap, along exactly one lattice vector, "
+            "and at least N layers (atoms within 0.5 Å along the normal share "
+            "one)."
         ),
     },
     "cell_dofree": {
         "default": "all",
         "description": (
-            "Which cell degrees of freedom vc-relax may move; heuristic "
-            "default is hexagon-aware for 2D structures ('ibrav+2Dxy' vs "
-            "bare '2Dxy')."
+            "Which cell degrees of freedom vc-relax may move. Default 'all'; "
+            "'2Dxy' for a slab with its vacuum along c and a, b in the xy "
+            "plane. A wire or a slab in another orientation has no default. "
+            "'2Dxy' and '2Dshape' are refused unless a and b lie in the xy "
+            "plane and any vacuum lies along c."
         ),
     },
     "press": {
