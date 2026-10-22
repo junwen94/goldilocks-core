@@ -119,28 +119,11 @@ jobs:
         working-directory: web
         run: npm run check
 
+      # Lints the Dockerfile only. Building the image downloads every runtime
+      # asset, so the build and browser e2e run in workbench-image.yml, for
+      # release tags and on dispatch (#205).
       - name: Check production image definition
         run: docker build --check .
-
-      - name: Build production Workbench image
-        run: docker build --tag goldilocks-workbench:e2e .
-
-      - name: Install Chromium
-        working-directory: web
-        run: npx --no-install playwright install --with-deps chromium
-
-      - name: Exercise real-server browser workflow
-        working-directory: web
-        run: |
-          docker run --detach --name goldilocks-workbench-e2e \
-            --publish 8000:8000 goldilocks-workbench:e2e
-          trap 'docker rm --force goldilocks-workbench-e2e' EXIT
-          for attempt in {1..120}; do
-            curl --fail --silent http://127.0.0.1:8000/ready && break
-            sleep 1
-          done
-          curl --fail http://127.0.0.1:8000/ready
-          npm run test:e2e
 
   package-build:
     name: Build distribution
