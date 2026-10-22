@@ -80,15 +80,23 @@ def strict_json(document: str | bytes) -> Any:
     return json.loads(document, parse_constant=reject)
 
 
-SSSP_FIXTURE_UPF = (
-    b'<UPF version="2.0.1">\n'
-    b'<PP_HEADER element="Si" pseudo_type="NC" functional="PBEsol" '
-    b'relativistic="scalar" z_valence="4.0" number_of_wfc="2" '
-    b'number_of_proj="4" l_max="1"/>\n'
-    b"</UPF>\n"
-)
-"""Carries the projector counts every installed UPF has: the job's
-memory estimate reads them from the header (#148)."""
+def fixture_upf(element: str, z_valence: float) -> bytes:
+    """A minimal SSSP-shaped UPF file for ``element``: only the
+    ``PP_HEADER`` attributes the importer reads and the projector counts
+    every installed UPF carries, which the job's memory estimate reads
+    (#148)."""
+    return (
+        b'<UPF version="2.0.1">\n'
+        + (
+            f'<PP_HEADER element="{element}" pseudo_type="NC" functional="PBEsol" '
+            f'relativistic="scalar" z_valence="{z_valence}" number_of_wfc="2" '
+            'number_of_proj="4" l_max="1"/>\n'
+        ).encode()
+        + b"</UPF>\n"
+    )
+
+
+SSSP_FIXTURE_UPF = fixture_upf("Si", 4.0)
 
 
 def sssp_fixture_archive(path: Path, members: dict[str, bytes]) -> None:
@@ -102,29 +110,48 @@ def sssp_fixture_archive(path: Path, members: dict[str, bytes]) -> None:
             tar.addfile(info, io.BytesIO(payload))
 
 
-def sssp_fixture_table_spec(tmp_path: Path) -> tuple[AssetSpec, PseudoTable]:
+def sssp_fixture_table_spec(
+    tmp_path: Path, z_valences: dict[str, float] | None = None
+) -> tuple[AssetSpec, PseudoTable]:
     """Build one real, fully-offline SSSP-shaped pseudopotential asset
     (file:// sources, no network) -- shared between
     ``tests/unit/test_service_v2.py`` and ``tests/unit/test_service_dos.py``
     (v2 epic 9, #9), matching the pattern already used by
-    ``tests/unit/test_pseudo_importers.py``'s ``install_sssp_fixture``."""
+    ``tests/unit/test_pseudo_importers.py``'s ``install_sssp_fixture``.
+
+    ``z_valences`` maps every element the table covers to its UPF
+    ``z_valence``. The default is Si alone, whose file is
+    ``SSSP_FIXTURE_UPF`` as this module holds it at call time, so a test
+    can monkeypatch it to vary the header."""
     from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 
+    upf_by_element = (
+        {
+            element: fixture_upf(element, z_valence)
+            for element, z_valence in z_valences.items()
+        }
+        if z_valences
+        else {"Si": SSSP_FIXTURE_UPF}
+    )
     tmp_path.mkdir(parents=True, exist_ok=True)
     upfs = tmp_path / "table.tar.gz"
     sidecar = tmp_path / "table.json"
     licence = tmp_path / "LICENSE.txt"
-    sssp_fixture_archive(upfs, {"nested/Si.upf": SSSP_FIXTURE_UPF})
+    sssp_fixture_archive(
+        upfs,
+        {f"nested/{element}.upf": upf for element, upf in upf_by_element.items()},
+    )
     sidecar.write_text(
         json.dumps(
             {
-                "Si": {
-                    "filename": "Si.upf",
-                    "md5": hashlib.md5(SSSP_FIXTURE_UPF).hexdigest(),
+                element: {
+                    "filename": f"{element}.upf",
+                    "md5": hashlib.md5(upf).hexdigest(),
                     "cutoff_wfc": 30.0,
                     "cutoff_rho": 120.0,
-                    "pseudopotential": "Si fixture",
+                    "pseudopotential": f"{element} fixture",
                 }
+                for element, upf in upf_by_element.items()
             }
         )
     )
@@ -148,7 +175,7 @@ def sssp_fixture_table_spec(tmp_path: Path) -> tuple[AssetSpec, PseudoTable]:
         accuracy="efficiency",
         licence="fixture licence",
         citation="Synthetic SSSP fixture, cite me.",
-        elements=("Si",),
+        elements=tuple(sorted(upf_by_element)),
         asset=spec,
         default=True,
     )

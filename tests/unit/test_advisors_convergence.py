@@ -1,12 +1,25 @@
 from __future__ import annotations
 
+import pytest
+
 from goldilocks_core.advisors.convergence import (
     ConvergenceHumanInput,
     ConvergenceLlmInput,
     convergence,
 )
+from goldilocks_core.advisors.hubbard_u import HubbardU, HubbardUDecision
 from goldilocks_core.analysis.geometry import GeometryFacts
-from goldilocks_core.resolution import Provenance, Resolved, Unavailable
+from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
+
+_FROZEN_NS = "convergence.mixing_fixed_ns_freezes_hubbard_occupations"
+
+
+def _hubbard(*u_values: HubbardU) -> Resolved[HubbardUDecision]:
+    return Resolved(HubbardUDecision(u_values=u_values), Provenance(source="heuristic"))
+
+
+_NICKEL_U = _hubbard(HubbardU("Ni", "3d", 6.2, "human"))
+_NO_U = _hubbard()
 
 
 def test_conv_thr_scales_with_system_size() -> None:
@@ -64,27 +77,106 @@ def test_unavailable_geometry_keeps_plain_mixing() -> None:
     assert state.value.mixing_mode == "plain"
 
 
-def test_active_hubbard_sets_mixing_fixed_ns() -> None:
-    needs_correlation = Resolved(True, Provenance(source="heuristic"))
+def test_mixing_fixed_ns_is_unset_by_default() -> None:
+    """#127: pw.x can report convergence while mixing_fixed_ns still holds
+    the Hubbard occupation matrix at its starting value, so nothing sets
+    it by default; unset leaves QE's own default of 0."""
+    state = convergence(nat=5)
 
-    state = convergence(nat=5, needs_correlation=needs_correlation)
+    assert state.value.mixing_fixed_ns is None
+    assert state.provenance.field_sources["mixing_fixed_ns"] == "heuristic"
+
+
+def test_human_mixing_fixed_ns_is_used_as_given() -> None:
+    state = convergence(nat=5, human=ConvergenceHumanInput(mixing_fixed_ns=10))
+
+    assert state.value.mixing_fixed_ns == 10
+    assert state.provenance.field_sources["mixing_fixed_ns"] == "human"
+
+
+@pytest.mark.parametrize(
+    ("human", "llm", "value"),
+    [
+        pytest.param(ConvergenceHumanInput(mixing_fixed_ns=50), None, 50, id="human"),
+        pytest.param(None, ConvergenceLlmInput(mixing_fixed_ns=1), 1, id="llm"),
+    ],
+)
+def test_a_nonzero_mixing_fixed_ns_with_an_applied_u_is_flagged(
+    human: ConvergenceHumanInput | None, llm: ConvergenceLlmInput | None, value: int
+) -> None:
+    """#166: the +U-specific part of the decision keys on the resolved
+    Hubbard decision. pw.x holds the occupation matrix for the first
+    mixing_fixed_ns iterations and can report convergence inside that
+    window, so the value is kept as given and flagged."""
+    state = convergence(nat=2, hubbard=_NICKEL_U, human=human, llm=llm)
+
+    assert state.value.mixing_fixed_ns == value
+    (warning,) = state.value.warnings
+    assert (warning.code, warning.level, warning.category) == (
+        _FROZEN_NS,
+        "warning",
+        "convergence",
+    )
+    assert f"mixing_fixed_ns = {value} holds the Hubbard occupation" in warning.message
+    assert f"first {value} SCF iterations" in warning.message
+    assert "not self-consistent DFT+U results" in warning.message
+
+
+def test_mixing_fixed_ns_without_an_applied_u_is_kept_unflagged() -> None:
+    """pw.x reads mixing_fixed_ns only under lda_plus_u (QE 7.3
+    PW/src/electrons.f90:748-815), so with no U the value is inert: kept
+    as given, with no frozen-occupation warning."""
+    state = convergence(
+        nat=2, hubbard=_NO_U, human=ConvergenceHumanInput(mixing_fixed_ns=50)
+    )
 
     assert state.value.mixing_fixed_ns == 50
+    assert state.value.warnings == ()
 
 
-def test_inactive_hubbard_leaves_mixing_fixed_ns_unset() -> None:
-    needs_correlation = Resolved(False, Provenance(source="heuristic"))
-
-    state = convergence(nat=5, needs_correlation=needs_correlation)
+@pytest.mark.parametrize(
+    "hubbard",
+    [
+        pytest.param(None, id="not-supplied"),
+        pytest.param(_NO_U, id="no-u"),
+        pytest.param(_NICKEL_U, id="u"),
+        pytest.param(Blocked(by="synthetic failure"), id="blocked"),
+        pytest.param(Unavailable(reason="synthetic failure"), id="unavailable"),
+    ],
+)
+def test_no_override_sets_nothing_and_warns_about_nothing(hubbard) -> None:
+    state = convergence(nat=2, hubbard=hubbard)
 
     assert state.value.mixing_fixed_ns is None
+    assert state.value.warnings == ()
 
 
-def test_unavailable_needs_correlation_does_not_block_or_guess() -> None:
-    state = convergence(nat=5, needs_correlation=Unavailable(reason="synthetic"))
+def test_an_explicit_zero_freezes_nothing_so_carries_no_warning() -> None:
+    """0 is QE's own default: the occupation matrix is free from the first
+    iteration."""
+    state = convergence(
+        nat=2, hubbard=_NICKEL_U, human=ConvergenceHumanInput(mixing_fixed_ns=0)
+    )
+
+    assert state.value.mixing_fixed_ns == 0
+    assert state.value.warnings == ()
+
+
+@pytest.mark.parametrize(
+    "hubbard",
+    [
+        pytest.param(Blocked(by="synthetic failure"), id="blocked"),
+        pytest.param(Unavailable(reason="synthetic failure"), id="unavailable"),
+    ],
+)
+def test_an_unresolved_hubbard_decision_neither_blocks_nor_warns(hubbard) -> None:
+    state = convergence(
+        nat=2, hubbard=hubbard, human=ConvergenceHumanInput(mixing_fixed_ns=50)
+    )
 
     assert state.ok
-    assert state.value.mixing_fixed_ns is None
+    assert state.value.mixing_fixed_ns == 50
+    assert state.value.warnings == ()
 
 
 def test_human_conv_thr_override_is_used_directly_not_scaled() -> None:

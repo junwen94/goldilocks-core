@@ -718,6 +718,154 @@ class TestAfmRelabeling:
         assert advice.system.symmetry_eff.value == advice.analysis.symmetry.value
 
 
+@pytest.fixture
+def correlated_store(tmp_path, monkeypatch) -> AssetStore:
+    """A synthetic table covering NiO, ThO2 and UN."""
+    spec, registry_table = _sssp_table_spec(
+        tmp_path / "sources", {"N": 5.0, "Ni": 18.0, "O": 6.0, "Th": 12.0, "U": 14.0}
+    )
+    store = AssetStore(tmp_path / "store")
+    store.install(spec, sssp_preparer(registry_table))
+    monkeypatch.setattr(
+        "goldilocks_core.service._pseudo.load_tables",
+        lambda *a, **kw: {registry_table.id: registry_table},
+    )
+    return store
+
+
+def _rock_salt_nio() -> Structure:
+    return Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(4.17), ["Ni", "O"], [[0, 0, 0], [0.5, 0.5, 0.5]]
+    ).get_primitive_structure()
+
+
+def _rock_salt_un() -> Structure:
+    return Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(4.89), ["U", "N"], [[0, 0, 0], [0.5, 0.5, 0.5]]
+    ).get_primitive_structure()
+
+
+def _fluorite_tho2() -> Structure:
+    return Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(5.60), ["Th", "O"], [[0, 0, 0], [0.25, 0.25, 0.25]]
+    ).get_primitive_structure()
+
+
+def test_hubbard_record_lists_each_applied_u_with_its_source(
+    hpc, correlated_store
+) -> None:
+    """#135: records.hubbard (explain --json, /explain, goldilocks.json)
+    carries one entry per element that gets +U, with where its value came
+    from, instead of a plan name and a bare element-to-U map."""
+    advice = advise(_rock_salt_nio(), hpc=hpc, store=correlated_store)
+
+    record = advice.records()["hubbard"]
+    assert record.status == "resolved"
+    (entry,) = record.value["u_values"]
+    assert set(record.value) == {"u_values", "warnings"}
+    assert {key: entry[key] for key in ("element", "manifold", "u_ev")} == {
+        "element": "Ni",
+        "manifold": "3d",
+        "u_ev": 6.2,
+    }
+    assert entry["value_source"] == "table"
+    assert "Materials Project" in entry["citation"]
+    assert entry["doi"] == "10.1038/s41598-021-94550-5"
+    codes = {warning["code"] for warning in advice.warnings()}
+    assert "hubbard.projector_mismatch" in codes
+
+
+def test_user_u_by_element_reaches_the_generated_card(hpc, correlated_store) -> None:
+    overrides = build_overrides({"u_by_element": {"Ni": 5.0}})
+
+    advice = advise(
+        _rock_salt_nio(), hpc=hpc, overrides=overrides, store=correlated_store
+    )
+    report = check(advice)
+
+    assert report.ok, report.blocking
+    (entry,) = advice.records()["hubbard"].value["u_values"]
+    assert (entry["value_source"], entry["citation"], entry["doi"]) == (
+        "human",
+        None,
+        None,
+    )
+    content = generate(advice, report)[0].files["scf.in"]
+    assert "HUBBARD (ortho-atomic)\n  U  Ni-3d  5\n" in content
+
+
+@pytest.mark.parametrize(
+    ("overrides", "hubbard_codes"),
+    [
+        pytest.param(
+            {},
+            ["hubbard.projector_mismatch", "hubbard.starting_ns_eigenvalue_missing"],
+            id="table",
+        ),
+        pytest.param(
+            {"u_by_element": {"Ni": 6.2}},
+            ["hubbard.starting_ns_eigenvalue_missing"],
+            id="user-equal-to-table",
+        ),
+    ],
+)
+def test_hubbard_warnings_reach_the_top_level_list_for_table_and_user_u(
+    hpc, correlated_store, overrides, hubbard_codes
+) -> None:
+    """#167: the table and u_by_element={"Ni": 6.2} give NiO the same U, but
+    the user run used to carry no Hubbard warning, so none reached
+    ``Advice.warnings()``."""
+    advice = advise(
+        _rock_salt_nio(),
+        hpc=hpc,
+        overrides=build_overrides(overrides),
+        store=correlated_store,
+    )
+
+    codes = [
+        item["code"] for item in advice.warnings() if item["category"] == "hubbard"
+    ]
+    assert codes == hubbard_codes
+
+
+@pytest.mark.parametrize(
+    ("structure", "overrides", "needs_correlation", "applies_u"),
+    [
+        pytest.param(_rock_salt_nio, {}, True, True, id="NiO-table-U"),
+        pytest.param(
+            _rock_salt_un, {"u_by_element": {"U": 4.0}}, False, True, id="UN-user-U"
+        ),
+        pytest.param(
+            _fluorite_tho2,
+            {"hubbard_needs_correlation": False},
+            True,
+            False,
+            id="ThO2-no-U",
+        ),
+    ],
+)
+def test_frozen_ns_warning_follows_the_hubbard_decision_not_needs_correlation(
+    hpc, correlated_store, structure, overrides, needs_correlation, applies_u
+) -> None:
+    """#166: +U-specific convergence output keys on the resolved Hubbard
+    decision (the one that renders the HUBBARD card), not on the
+    needs_correlation fact, which is false for the nitride UN given a user U
+    and true for ThO2 with +U switched off."""
+    advice = advise(
+        structure(),
+        hpc=hpc,
+        overrides=build_overrides({**overrides, "mixing_fixed_ns": 50}),
+        store=correlated_store,
+    )
+
+    assert advice.analysis.needs_correlation.value is needs_correlation
+    assert bool(advice.system.hubbard.value.u_values) is applies_u
+    assert advice.step.kpoints.convergence.value.mixing_fixed_ns == 50
+    codes = {item["code"] for item in advice.warnings()}
+    frozen_ns = "convergence.mixing_fixed_ns_freezes_hubbard_occupations"
+    assert (frozen_ns in codes) is applies_u
+
+
 def test_pseudo_requirements_reflects_first_pass_spin_orbit(
     silicon, hpc, installed_table
 ) -> None:

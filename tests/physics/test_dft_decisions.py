@@ -22,6 +22,9 @@ from __future__ import annotations
 
 from pymatgen.core import Lattice, Structure
 
+from goldilocks_core.advisors.convergence import ConvergenceHumanInput, convergence
+from goldilocks_core.advisors.functional import DEFAULT_FUNCTIONAL
+from goldilocks_core.advisors.hubbard_u import hubbard_u
 from goldilocks_core.advisors.magnetic_config import (
     MagneticConfigHumanInput,
     magnetic_config,
@@ -35,6 +38,7 @@ from goldilocks_core.advisors.pseudo_selection import (
 from goldilocks_core.analysis.composition import composition
 from goldilocks_core.analysis.is_magnetic import is_magnetic
 from goldilocks_core.analysis.is_metal import is_metal
+from goldilocks_core.analysis.needs_correlation import needs_correlation
 from goldilocks_core.analysis.needs_soc import needs_soc
 from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 from goldilocks_core.assets.records import AssetFile, AssetSpec
@@ -196,3 +200,42 @@ def test_soc_does_not_silently_discard_a_magnetic_structures_magnetism() -> None
     assert magnetism.value.spin_polarized is True
     assert magnetism.value.spin_orbit_enabled is True
     assert magnetism.value.starting_magnetization
+
+
+def test_hubbard_u_input_leaves_the_occupation_matrix_free_to_converge() -> None:
+    """#127: a +U input must not freeze the Hubbard occupation matrix ns.
+    While iter <= mixing_fixed_ns, pw.x resets ns to its iteration-1 value,
+    yet it still declares convergence if the density converges inside that
+    window (QE 7.3 PW/src/electrons.f90:815-833, mix_rho.f90:162), and the
+    freeze restarts at every ionic step (electrons.f90:556). A user's
+    nonzero value is kept but flagged, keyed on the Hubbard decision that
+    applies the U (#166).
+
+    pw.x reference (SCARF, QE 7.5): the default bundle for this NiO cell
+    (MC3D mc3d-29856, U Ni-3d 6.2), run as generated with mixing_fixed_ns = 50
+    and again with that line removed. The frozen run converged in 11
+    iterations, all 11 printing "RESET ns to initial values"; its total
+    energy is 19.7 mRy (0.27 eV) per NiO above the free run's, and its
+    pressure is 156.44 kbar against 180.27 kbar. The default LiCoO2 vc-relax
+    bundle (mc3d-75346, U Co-3d 3.32) aborted in stres_hub ("non-symmetric
+    stress contribution") at its second ionic step.
+    """
+    nio = Structure(
+        Lattice.from_parameters(2.89337, 2.89337, 2.89337, 60, 60, 60),
+        ["Ni", "O"],
+        [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+    )
+    hubbard = hubbard_u(nio, needs_correlation(composition(nio)), DEFAULT_FUNCTIONAL)
+    assert [(u.element, u.u_ev) for u in hubbard.value.u_values] == [("Ni", 6.2)]
+
+    free = convergence(len(nio), hubbard=hubbard)
+    frozen = convergence(
+        len(nio), hubbard=hubbard, human=ConvergenceHumanInput(mixing_fixed_ns=50)
+    )
+
+    assert free.value.mixing_fixed_ns is None
+    assert free.value.warnings == ()
+    assert frozen.value.mixing_fixed_ns == 50
+    assert [warning.code for warning in frozen.value.warnings] == [
+        "convergence.mixing_fixed_ns_freezes_hubbard_occupations"
+    ]

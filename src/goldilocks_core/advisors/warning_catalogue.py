@@ -7,7 +7,7 @@ frontend builds a filter").
 A dedicated aggregator, not ``capabilities.py`` importing each advisor
 directly: this project's own import-surface ceiling
 (``scripts/check_complexity.py``) would make a "god module" of a
-capabilities builder that imports all eleven advisors that emit warnings.
+capabilities builder that imports all twelve advisors that emit warnings.
 This module absorbs that cost instead -- it exists for no other
 purpose -- while ``capabilities.py`` only ever imports this one name.
 """
@@ -15,6 +15,7 @@ purpose -- while ``capabilities.py`` only ever imports this one name.
 from __future__ import annotations
 
 from goldilocks_core.advisors.boundary import WARNING_CATALOGUE as _BOUNDARY
+from goldilocks_core.advisors.convergence import WARNING_CATALOGUE as _CONVERGENCE
 from goldilocks_core.advisors.cutoffs import WARNING_CATALOGUE as _CUTOFFS
 from goldilocks_core.advisors.hubbard_u import WARNING_CATALOGUE as _HUBBARD
 from goldilocks_core.advisors.job_resources import WARNING_CATALOGUE as _JOB
@@ -30,6 +31,7 @@ from goldilocks_core.advisors.vdw_method import WARNING_CATALOGUE as _VDW
 
 WARNING_CATALOGUE = (
     _BOUNDARY
+    + _CONVERGENCE
     + _CUTOFFS
     + _HUBBARD
     + _JOB

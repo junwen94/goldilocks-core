@@ -73,7 +73,7 @@ fit this shape; they are not exposed here.
 advisor that can emit a ``resolution.Warning`` declares its own
 ``WARNING_CATALOGUE`` constant (code/level/category/a generic
 description), and ``advisors/warning_catalogue.py`` -- a dedicated
-aggregator, not this module -- imports all ten of them so this module
+aggregator, not this module -- imports every one of them so this module
 itself only needs one import to get the full list without blowing its
 own import-surface ceiling.
 
@@ -287,15 +287,17 @@ _SETTING_META: dict[str, _SettingExtra] = {
         "key": "hubbard_needs_correlation",
         "description": (
             "Force whether a Hubbard +U correction is applied, overriding even "
-            "a human-set needs_correlation fact -- see the analysis-layer "
-            "needs_correlation fact for the general judgement this escalates past."
+            "a human-set needs_correlation fact: false runs without +U, true "
+            "applies the built-in U table to the structure's d and f elements."
         ),
     },
     "u_by_element": {
         "unit": "eV",
         "description": (
-            "Explicit Dudarev effective-U value per element, overriding the "
-            "built-in table."
+            "Dudarev U_eff in eV (> 0) per element symbol; replaces the built-in "
+            "table, so only listed elements present in the structure get +U. "
+            "La and Ac are rejected: no installed pseudopotential has an "
+            "occupied La 4f or any Ac 5f channel, so pw.x stops on any U for them."
         ),
     },
     "occupations": {
@@ -386,8 +388,12 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "mixing_fixed_ns": {
         "description": (
-            "Initial SCF iterations that freeze Hubbard occupation-matrix "
-            "mixing (+U calculations)."
+            "Number of initial SCF iterations during which pw.x holds the "
+            "Hubbard occupation matrix at its starting value (+U runs only). "
+            "Unset by default (QE's 0). pw.x can report convergence inside "
+            "this window, so energies, forces and stresses from a nonzero "
+            "value are not self-consistent DFT+U results; use it only for a "
+            "preparatory run whose output seeds a separate run with ns free."
         ),
     },
     "partition": {

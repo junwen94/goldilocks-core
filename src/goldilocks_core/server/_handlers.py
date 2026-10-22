@@ -92,6 +92,10 @@ def magnetic_orderings(document: MagneticOrderingsRequestDocument) -> dict[str, 
 
 
 def explain(document: ComputeRequestDocument) -> dict[str, Any]:
+    """Every decision plus the verdict ``run`` reaches before generating
+    (#165): ``blocking`` holds the distinct reasons the task's check
+    refuses generation for, in first-seen order, and is empty when ``run``
+    would go on to generate."""
     structure = normalize_structure(_structure_source(document)).structure
     hpc = resolve_hpc_profile(document.hpc, field=_HPC_FIELD_NAME)
     overrides = build_overrides(document.overrides)
@@ -103,6 +107,7 @@ def explain(document: ComputeRequestDocument) -> dict[str, Any]:
             overrides=overrides,
             fetch_missing=document.fetch_missing,
         )
+        report = check_dos(advice)
     elif document.task in ("relax", "vc-relax"):
         advice = advise_relax(
             structure,
@@ -112,6 +117,7 @@ def explain(document: ComputeRequestDocument) -> dict[str, Any]:
             overrides=overrides,
             fetch_missing=document.fetch_missing,
         )
+        report = check_relax(advice)
     else:
         advice = advise(
             structure,
@@ -120,9 +126,11 @@ def explain(document: ComputeRequestDocument) -> dict[str, Any]:
             overrides=overrides,
             fetch_missing=document.fetch_missing,
         )
+        report = check(advice)
     return {
         "records": _records_document(advice.records()),
         "warnings": advice.warnings(),
+        "blocking": list(dict.fromkeys(report.blocking)),
     }
 
 

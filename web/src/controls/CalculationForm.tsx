@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useId } from "react";
 import {
   Accordion,
   Badge,
@@ -864,6 +864,80 @@ function KSamplingGroupBody({
   );
 }
 
+/** One entry of the resolved `hubbard` record's `u_values`
+ * (`advisors.hubbard_u.HubbardU` on the wire): `citation` names a
+ * built-in value's source and is `null` for a `u_by_element` value. */
+interface HubbardU {
+  readonly element: string;
+  readonly manifold: string;
+  readonly u_ev: number;
+  readonly value_source: "table" | "human";
+  readonly citation: string | null;
+}
+
+/** The resolved +U decision: every element that gets +U, with its
+ * manifold, Dudarev U_eff and where the value came from. Elements left
+ * out get plain DFT; one without a published U is named by the
+ * decision's own warning, shown under the group's Notes. */
+function AppliedHubbardU({
+  record,
+}: {
+  readonly record: ResolvedField | undefined;
+}) {
+  const labelId = useId();
+  const uValues = fieldValue(record, "u_values");
+  if (!Array.isArray(uValues)) return null;
+  if (uValues.length === 0) {
+    return (
+      <Text size="sm" c="dimmed">
+        No element gets +U.
+      </Text>
+    );
+  }
+  return (
+    <Stack gap={2}>
+      <Text id={labelId} size="xs" fw={600} c="dimmed">
+        Applied +U
+      </Text>
+      <Stack component="ul" gap={2} m={0} pl="md" aria-labelledby={labelId}>
+        {(uValues as readonly HubbardU[]).map((entry) => (
+          <Text component="li" key={entry.element} size="sm">
+            {entry.element} {entry.manifold}: {entry.u_ev} eV ·{" "}
+            {entry.value_source === "human" ? (
+              <SourceLabel source="human" />
+            ) : (
+              entry.citation
+            )}
+          </Text>
+        ))}
+      </Stack>
+    </Stack>
+  );
+}
+
+function HubbardGroupBody({
+  groupedSettings,
+  record,
+  overrides,
+  disabled,
+  onChange,
+}: {
+  readonly groupedSettings: readonly GroupedSetting[];
+  readonly record: ResolvedField | undefined;
+  readonly overrides: Readonly<Record<string, unknown>>;
+  readonly disabled: boolean;
+  readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
+}) {
+  return (
+    <>
+      {groupedSettings.map((entry) =>
+        renderSetting({ entry, record, overrides, disabled, onChange }),
+      )}
+      <AppliedHubbardU record={record} />
+    </>
+  );
+}
+
 function GroupBody({
   group,
   groupedSettings,
@@ -918,6 +992,17 @@ function GroupBody({
         groupedSettings={groupedSettings}
         kSamplingRecord={records.get("k_sampling")}
         nIrrKRecord={records.get("n_irr_k")}
+        overrides={overrides}
+        disabled={disabled}
+        onChange={onChange}
+      />
+    );
+  }
+  if (group === "hubbard") {
+    return (
+      <HubbardGroupBody
+        groupedSettings={groupedSettings}
+        record={records.get("hubbard")}
         overrides={overrides}
         disabled={disabled}
         onChange={onChange}

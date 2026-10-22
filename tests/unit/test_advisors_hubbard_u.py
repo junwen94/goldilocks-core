@@ -2,158 +2,370 @@ from __future__ import annotations
 
 import pytest
 from pymatgen.core import Lattice, Structure
+from pymatgen.core.periodic_table import Element
 
 from goldilocks_core.advisors.functional import HYBRID_FUNCTIONAL
 from goldilocks_core.advisors.hubbard_u import (
-    CalibrationRequest,
+    HubbardU,
     HubbardUHumanInput,
-    expand_hubbard_label,
+    HubbardULlmInput,
     hubbard_u,
 )
 from goldilocks_core.analysis.composition import composition
 from goldilocks_core.analysis.needs_correlation import needs_correlation
 from goldilocks_core.resolution import Blocked
 
+_MP = ("Sci. Rep. 11, 15496", "10.1038/s41598-021-94550-5")
+_MP_RELAX_SET = ("MPRelaxSet", "10.1103/PhysRevB.84.045115")
+_JAIN = ("Jain et al., Phys. Rev. B 84, 045115 (2011), Table I", _MP_RELAX_SET[1])
+_TOPSAKAL = ("Topsakal", "10.1016/j.commatsci.2014.07.030")
+_OQMD = ("Kirklin et al. (OQMD)", "10.1038/npjcompumats.2015.10")
+_SUZUKI = ("Suzuki", "10.1103/PhysRevB.88.195146")
+_CITED_U_TABLE = {
+    "V": ("3d", 3.25, *_MP),
+    "Cr": ("3d", 3.7, *_MP),
+    "Mn": ("3d", 3.9, *_MP),
+    "Fe": ("3d", 5.3, *_MP),
+    "Co": ("3d", 3.32, *_MP),
+    "Ni": ("3d", 6.2, *_MP),
+    "Cu": ("3d", 4.0, *_JAIN),
+    "Mo": ("4d", 4.38, *_MP_RELAX_SET),
+    "W": ("5d", 6.2, *_MP_RELAX_SET),
+    "Ce": ("4f", 5.0, "Loschen", "10.1103/PhysRevB.75.035115"),
+    "Pr": ("4f", 4.0, *_TOPSAKAL),
+    "Nd": ("4f", 3.1, *_TOPSAKAL),
+    "Pm": ("4f", 3.4, *_TOPSAKAL),
+    "Sm": ("4f", 3.3, *_TOPSAKAL),
+    "Eu": ("4f", 3.0, *_TOPSAKAL),
+    "Gd": ("4f", 4.6, *_TOPSAKAL),
+    "Tb": ("4f", 5.0, *_TOPSAKAL),
+    "Dy": ("4f", 5.0, *_TOPSAKAL),
+    "Ho": ("4f", 4.9, *_TOPSAKAL),
+    "Er": ("4f", 4.2, *_TOPSAKAL),
+    "Tm": ("4f", 4.8, *_TOPSAKAL),
+    "Yb": ("4f", 3.0, *_TOPSAKAL),
+    "Pa": ("5f", 4.0, "qmpy configuration", _OQMD[1]),
+    "U": ("5f", 4.0, *_OQMD),
+    "Np": ("5f", 4.0, *_OQMD),
+    "Pu": ("5f", 4.0, *_OQMD),
+    "Am": ("5f", 4.0, *_SUZUKI),
+    "Cm": ("5f", 4.0, *_SUZUKI),
+    "Bk": ("5f", 3.54, "Kaltsoyannis", "10.1021/acs.jpcc.5c01663"),
+}
+"""The maintainer-reviewed table (#135): element -> (manifold, Dudarev
+U_eff in eV, a citation fragment naming its source, DOI)."""
+_TABULATED = frozenset(_CITED_U_TABLE)
+_NO_U = frozenset(
+    {
+        *("Sc", "Ti", "Zn", "Y", "Zr", "Nb", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd"),
+        *("Hf", "Ta", "Re", "Os", "Ir", "Pt", "Au", "Hg", "La", "Lu", "Th"),
+    }
+)
+_MISSING = frozenset({"Ac", "Cf", "Es", "Fm", "Md", "No", "Lr"})
+_FLAGGED_WITH_PSEUDOPOTENTIALS = tuple(
+    element.symbol
+    for element in (Element.from_Z(z) for z in range(1, 104))
+    if element.is_transition_metal or element.is_lanthanoid or element.is_actinoid
+)
 
-def _structure(*species: str) -> Structure:
-    lattice = Lattice.cubic(4.0)
-    coords = [[i / len(species), 0.0, 0.0] for i in range(len(species))]
-    return Structure(lattice, species, coords)
+
+def _rock_salt(cation: str, anion: str = "O") -> Structure:
+    return Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(4.4), [cation, anion], [[0, 0, 0], [0.5, 0.5, 0.5]]
+    )
+
+
+def _perovskite(a_site: str, b_site: str) -> Structure:
+    return Structure.from_spacegroup(
+        "Pm-3m",
+        Lattice.cubic(3.9),
+        [a_site, b_site, "O"],
+        [[0, 0, 0], [0.5, 0.5, 0.5], [0.5, 0.5, 0]],
+    )
+
+
+def _fluorite(cation: str) -> Structure:
+    return Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(5.47), [cation, "O"], [[0, 0, 0], [0.25, 0.25, 0.25]]
+    )
+
+
+def _hubbard(structure: Structure, functional: str = "PBEsol", **overrides):
+    return hubbard_u(
+        structure, needs_correlation(composition(structure)), functional, **overrides
+    )
+
+
+def _warning(state, code: str):
+    (warning,) = (item for item in state.value.warnings if item.code == code)
+    return warning
+
+
+def _codes(state) -> tuple[str, ...]:
+    return tuple(warning.code for warning in state.value.warnings)
+
+
+def test_the_element_lists_cover_every_correlated_element_once() -> None:
+    """Every element the correlation rule can flag and a pseudopotential
+    table covers (Z <= 103) gets a cited U, no U by convention, or the
+    missing-value warning -- exactly one of the three."""
+    assert sorted(_TABULATED | _NO_U | _MISSING) == sorted(
+        _FLAGGED_WITH_PSEUDOPOTENTIALS
+    )
+    assert len(_TABULATED) + len(_NO_U) + len(_MISSING) == len(
+        _FLAGGED_WITH_PSEUDOPOTENTIALS
+    )
+
+
+@pytest.mark.parametrize("symbol", _FLAGGED_WITH_PSEUDOPOTENTIALS)
+def test_each_correlated_oxide_gets_its_policy(symbol: str) -> None:
+    state = _hubbard(_rock_salt(symbol))
+
+    assert state.ok
+    if symbol in _TABULATED:
+        (entry,) = state.value.u_values
+        assert (entry.element, entry.value_source) == (symbol, "table")
+        assert entry.u_ev > 0
+        assert entry.citation
+        assert entry.doi
+        assert "hubbard.u_value_missing" not in _codes(state)
+    elif symbol in _NO_U:
+        assert state.value.u_values == ()
+        assert state.value.warnings == ()
+    else:
+        assert state.value.u_values == ()
+        assert _codes(state) == ("hubbard.u_value_missing",)
+
+
+@pytest.mark.parametrize(
+    ("symbol", "manifold", "u_ev", "citation", "doi"),
+    [(symbol, *row) for symbol, row in _CITED_U_TABLE.items()],
+)
+def test_tabulated_values_carry_their_citation(
+    symbol: str, manifold: str, u_ev: float, citation: str, doi: str
+) -> None:
+    state = _hubbard(_rock_salt(symbol))
+
+    (entry,) = state.value.u_values
+    assert (entry.element, entry.manifold, entry.u_ev) == (symbol, manifold, u_ev)
+    assert entry.value_source == "table"
+    assert citation in entry.citation
+    assert entry.doi == doi
+    assert state.source == "heuristic"
 
 
 def test_metallic_transition_metal_does_not_get_plus_u() -> None:
     """stfc/goldilocks-core#175's "metallic Fe gets U=5.3" bug: no anion,
     no correction."""
-    iron = _structure("Fe")
+    iron = Structure.from_spacegroup("Im-3m", Lattice.cubic(2.87), ["Fe"], [[0, 0, 0]])
 
-    state = hubbard_u(iron, needs_correlation(composition(iron)), "PBEsol")
-
-    assert state.ok
-    assert state.value.plan == "not_needed"
-
-
-def test_forced_needs_correlation_on_a_non_correlated_structure_is_not_needed() -> None:
-    """Regression for #36 (v2 epic 9, #9): forcing needs_correlation=True
-    on a structure with zero transition-metal/lanthanide/actinide
-    content (e.g. plain Si) used to fall through to plan='table' with
-    an EMPTY u_by_element plus two Hubbard-specific warnings that make
-    no sense with no +U term present -- and since write_qe_scf treats
-    any plan != 'not_needed' as a real +U resolution, this failed with
-    a factually wrong 'a Hubbard +U correction was resolved' error."""
-    silicon = _structure("Si")
-
-    state = hubbard_u(
-        silicon,
-        needs_correlation(composition(silicon)),
-        "PBEsol",
-        human=HubbardUHumanInput(needs_correlation=True),
-    )
+    state = _hubbard(iron)
 
     assert state.ok
-    assert state.value.plan == "not_needed"
-    assert state.value.u_by_element == {}
+    assert state.value.u_values == ()
     assert state.value.warnings == ()
 
 
-def test_common_3d_oxide_uses_the_package_default_table() -> None:
-    nio = _structure("Ni", "O")
-
-    state = hubbard_u(nio, needs_correlation(composition(nio)), "PBEsol")
-
-    assert state.value.plan == "table"
-    assert state.value.u_by_element == {"Ni": 6.2}
-    assert any(
-        "projector" in warning.message.lower() for warning in state.value.warnings
+def test_forced_needs_correlation_on_a_non_correlated_structure_gets_no_u() -> None:
+    """Regression for #36: forcing needs_correlation on a structure with no
+    transition metal, lanthanide or actinide (plain Si) must not produce
+    a +U decision or Hubbard warnings."""
+    silicon = Structure.from_spacegroup(
+        "Fd-3m", Lattice.cubic(5.43), ["Si"], [[0, 0, 0]]
     )
+
+    state = _hubbard(silicon, human=HubbardUHumanInput(needs_correlation=True))
+
+    assert state.ok
+    assert state.value.u_values == ()
+    assert state.value.warnings == ()
+
+
+@pytest.mark.parametrize("cation", ["Fe", "Co", "Mn", "Ni"])
+def test_canonical_mott_insulators_get_plus_u(cation: str) -> None:
+    """stfc/goldilocks-core#175: FeO/CoO/MnO/NiO are the textbook O-bearing
+    transition-metal Mott insulators GGA/LDA get wrong without +U."""
+    state = _hubbard(_rock_salt(cation))
+
+    assert [entry.element for entry in state.value.u_values] == [cation]
+
+
+def test_no_u_element_does_not_take_the_tabulated_one_down_with_it() -> None:
+    """#135: La2CuO4 used to stop at a La-4f calibration request although
+    Cu has a value. La gets no U by convention, so Cu alone does."""
+    state = _hubbard(_perovskite("La", "Cu"))
+
+    (entry,) = state.value.u_values
+    assert (entry.element, entry.manifold, entry.u_ev) == ("Cu", "3d", 4.0)
+    assert "hubbard.u_value_missing" not in _codes(state)
+
+
+def test_missing_value_warning_names_the_element_manifold_and_override() -> None:
+    state = _hubbard(_rock_salt("Cf"))
+
+    message = _warning(state, "hubbard.u_value_missing").message
+    assert "Cf (5f)" in message
+    assert "plain DFT" in message
+    assert 'u_by_element={"Cf": <U in eV>}' in message
+    assert _warning(state, "hubbard.u_value_missing").level == "warning"
+
+
+def test_missing_value_warning_names_lawrencium_s_6d_manifold() -> None:
+    state = _hubbard(_rock_salt("Lr"))
+
+    assert "Lr (6d)" in _warning(state, "hubbard.u_value_missing").message
+
+
+def test_actinium_warning_says_u_by_element_cannot_apply_a_u() -> None:
+    """The only installed Ac pseudopotential has no 5f channel, so pw.x
+    stops on any Ac-5f U: the warning must not suggest one."""
+    state = _hubbard(_rock_salt("Ac"))
+
+    message = _warning(state, "hubbard.u_value_missing").message
+    assert "Ac (5f)" in message
+    assert "plain DFT" in message
+    assert "no installed Ac pseudopotential has a 5f channel" in message
+    assert "u_by_element cannot apply one" in message
+    assert "u_by_element={" not in message
+
+
+def test_missing_value_suggestion_leaves_out_actinium() -> None:
+    state = _hubbard(_perovskite("Ac", "Cf"))
+
+    (californium,) = (
+        warning.message
+        for warning in state.value.warnings
+        if warning.code == "hubbard.u_value_missing" and "Cf (5f)" in warning.message
+    )
+    assert 'u_by_element={"Cf": <U in eV>}' in californium
+
+
+def test_missing_value_suggestion_keeps_the_elements_that_have_a_u() -> None:
+    """u_by_element replaces the built-in table, so the suggested setting
+    lists the tabulated U next to the missing one."""
+    state = _hubbard(_perovskite("Cf", "Ni"))
+
+    assert [entry.element for entry in state.value.u_values] == ["Ni"]
+    message = _warning(state, "hubbard.u_value_missing").message
+    assert 'u_by_element={"Ni": 6.2, "Cf": <U in eV>}' in message
+
+
+_PROJECTOR = "hubbard.projector_mismatch"
+_STARTING_NS = "hubbard.starting_ns_eigenvalue_missing"
+_MISSING_VALUE = "hubbard.u_value_missing"
+_UNUSED = "hubbard.u_by_element_unused"
 
 
 @pytest.mark.parametrize(
-    ("species", "expected_element"),
+    ("structure", "functional", "overrides", "codes"),
     [
-        (("Fe", "Fe", "O", "O", "O"), "Fe"),  # Fe2O3
-        (("Co", "O"), "Co"),  # CoO
-        (("Mn", "O"), "Mn"),  # MnO
+        pytest.param(
+            _rock_salt("Ni"), "PBEsol", {}, (_PROJECTOR, _STARTING_NS), id="NiO-table"
+        ),
+        pytest.param(
+            _perovskite("La", "Cu"),
+            "PBEsol",
+            {},
+            (_PROJECTOR, _STARTING_NS),
+            id="LaCuO3-table-and-no-u",
+        ),
+        pytest.param(
+            _perovskite("Cf", "Ni"),
+            "PBEsol",
+            {},
+            (_PROJECTOR, _STARTING_NS, _MISSING_VALUE),
+            id="CfNiO3-table-and-missing",
+        ),
+        pytest.param(
+            _rock_salt("Ni", "S"),
+            "PBEsol",
+            {"llm": HubbardULlmInput(needs_correlation=True)},
+            (_PROJECTOR, _STARTING_NS),
+            id="NiS-llm-forced-table",
+        ),
+        pytest.param(
+            _rock_salt("Ru"),
+            "PBEsol",
+            {"human": HubbardUHumanInput(u_by_element={"Ru": 4.0})},
+            (_STARTING_NS,),
+            id="RuO-user",
+        ),
+        pytest.param(
+            _rock_salt("Ni"),
+            "PBEsol",
+            {"human": HubbardUHumanInput(u_by_element={"Ni": 6.2})},
+            (_STARTING_NS,),
+            id="NiO-user-equal-to-table",
+        ),
+        pytest.param(
+            _fluorite("U"),
+            "PBEsol",
+            {"human": HubbardUHumanInput(u_by_element={"U": 4.0})},
+            (_STARTING_NS,),
+            id="UO2-user",
+        ),
+        pytest.param(
+            _rock_salt("Ni"),
+            "PBEsol",
+            {"human": HubbardUHumanInput(u_by_element={"Ni": 6.2, "Fe": 5.0})},
+            (_STARTING_NS, _UNUSED),
+            id="NiO-user-and-absent",
+        ),
+        pytest.param(
+            _rock_salt("Ni"),
+            "PBEsol",
+            {"human": HubbardUHumanInput(u_by_element={"Fe": 5.0})},
+            (_UNUSED,),
+            id="NiO-user-absent-only",
+        ),
+        pytest.param(_rock_salt("Ti"), "PBEsol", {}, (), id="TiO-no-u"),
+        pytest.param(
+            _rock_salt("Cf"), "PBEsol", {}, (_MISSING_VALUE,), id="CfO-missing"
+        ),
+        pytest.param(_rock_salt("Ni"), HYBRID_FUNCTIONAL, {}, (), id="NiO-hybrid"),
+        pytest.param(
+            _rock_salt("Ni"),
+            "PBEsol",
+            {"human": HubbardUHumanInput(needs_correlation=False)},
+            (),
+            id="NiO-human-off",
+        ),
     ],
 )
-def test_canonical_mott_insulators_get_plus_u(
-    species: tuple[str, ...], expected_element: str
+def test_warnings_follow_the_applied_u_values_whichever_branch_set_them(
+    structure: Structure, functional: str, overrides: dict, codes: tuple[str, ...]
 ) -> None:
-    """stfc/goldilocks-core#175: NiO/Fe2O3/CoO/MnO are the textbook
-    O-bearing transition-metal Mott insulators GGA/LDA get wrong without
-    +U -- all four must trigger a correction, not just NiO."""
-    oxide = _structure(*species)
+    """#167: every applied U gets the starting-guess warning, a built-in one
+    also the projector-mismatch warning (a u_by_element value's source is
+    unknown), and a decision without a U gets neither. NiO gets the same
+    ``U Ni-3d 6.2`` card from the table and from u_by_element={"Ni": 6.2}."""
+    state = _hubbard(structure, functional, **overrides)
 
-    state = hubbard_u(oxide, needs_correlation(composition(oxide)), "PBEsol")
-
-    assert state.value.plan == "table"
-    assert expected_element in state.value.u_by_element
+    assert _codes(state) == codes
 
 
-def test_4d_transition_metal_oxide_recommends_calibration() -> None:
-    """RuO2 (Ru is 4d) has no package-default U -- must recommend
-    self-consistent calibration rather than guess."""
-    ruo2 = _structure("Ru", "O", "O")
+def test_projector_mismatch_warning_names_the_vasp_derived_values() -> None:
+    state = _hubbard(_rock_salt("Gd"))
 
-    state = hubbard_u(ruo2, needs_correlation(composition(ruo2)), "PBEsol")
-
-    assert state.value.plan == "self_consistent_calibration_needed"
-    assert state.value.calibration_requests == (
-        CalibrationRequest(element="Ru", manifold="4d"),
-    )
-
-
-def test_lanthanide_oxide_recommends_calibration_with_4f_manifold() -> None:
-    ceo2 = _structure("Ce", "O", "O")
-
-    state = hubbard_u(ceo2, needs_correlation(composition(ceo2)), "PBEsol")
-
-    assert state.value.plan == "self_consistent_calibration_needed"
-    assert state.value.calibration_requests[0].element == "Ce"
-    assert state.value.calibration_requests[0].manifold == "4f"
-    assert state.value.calibration_requests[0].suggested_method == "hp.x"
-
-
-def test_plus_u_from_the_table_warns_about_the_missing_initial_guess() -> None:
-    """A10 (goldilocks-core-design.md:4465): +U has multiple metastable
-    occupation-matrix solutions; this package does not compute a real
-    starting_ns_eigenvalue guess, and must say so rather than stay silent."""
-    nio = _structure("Ni", "O")
-
-    state = hubbard_u(nio, needs_correlation(composition(nio)), "PBEsol")
-
-    assert any(
-        "starting_ns_eigenvalue" in warning.message for warning in state.value.warnings
-    )
-
-
-def test_calibration_needed_with_a_partial_table_still_warns_about_the_guess() -> None:
-    """La2NiO4-shaped case: Ni is in the table (needs the A10 warning), Ru
-    is not (needs calibration) -- mixing the two must not lose the warning
-    for the element that IS resolved via the table."""
-    mixed = _structure("Ni", "Ru", "O", "O", "O")
-
-    state = hubbard_u(mixed, needs_correlation(composition(mixed)), "PBEsol")
-
-    assert state.value.plan == "self_consistent_calibration_needed"
-    assert state.value.u_by_element == {"Ni": 6.2}
-    assert any(
-        "starting_ns_eigenvalue" in warning.message for warning in state.value.warnings
-    )
+    message = _warning(state, "hubbard.projector_mismatch").message
+    assert "ortho-atomic" in message
+    assert "VASP" in message
+    assert "V, Cr, Mn, Fe, Co, Ni, Cu, Mo, W, Ce, Pa, U, Np, Pu" in message
+    assert "Gd" not in message
 
 
 def test_hybrid_functional_suppresses_plus_u_regardless_of_composition() -> None:
     """goldilocks-core-design.md:2626-2627's cross-parameter rule."""
-    nio = _structure("Ni", "O")
+    state = _hubbard(_rock_salt("Ni"), HYBRID_FUNCTIONAL)
 
-    state = hubbard_u(nio, needs_correlation(composition(nio)), HYBRID_FUNCTIONAL)
-
-    assert state.value.plan == "not_needed"
+    assert state.value.u_values == ()
+    assert state.value.warnings == ()
 
 
 def test_blocked_needs_correlation_propagates() -> None:
-    iron = _structure("Fe")
+    nickel_oxide = _rock_salt("Ni")
 
-    state = hubbard_u(iron, Blocked(by="synthetic failure"), "PBEsol")
+    state = hubbard_u(nickel_oxide, Blocked(by="synthetic failure"), "PBEsol")
 
     assert not state.ok
     assert state.status == "blocked"
@@ -161,94 +373,64 @@ def test_blocked_needs_correlation_propagates() -> None:
 
 
 def test_human_can_force_off() -> None:
-    nio = _structure("Ni", "O")
-
-    state = hubbard_u(
-        nio,
-        needs_correlation(composition(nio)),
-        "PBEsol",
-        human=HubbardUHumanInput(needs_correlation=False),
+    state = _hubbard(
+        _rock_salt("Ni"), human=HubbardUHumanInput(needs_correlation=False)
     )
 
-    assert state.value.plan == "not_needed"
+    assert state.value.u_values == ()
     assert state.source == "human"
 
 
-def test_human_can_supply_an_explicit_u_table() -> None:
-    ruo2 = _structure("Ru", "O", "O")
+def test_llm_can_force_off() -> None:
+    state = _hubbard(_rock_salt("Ni"), llm=HubbardULlmInput(needs_correlation=False))
 
-    state = hubbard_u(
-        ruo2,
-        needs_correlation(composition(ruo2)),
-        "PBEsol",
-        human=HubbardUHumanInput(u_by_element={"Ru": 4.0}),
+    assert state.value.u_values == ()
+    assert state.source == "llm"
+
+
+def test_llm_can_force_the_table_on_a_sulfide() -> None:
+    """The O/F screening rule leaves NiS alone; an LLM override applies the
+    table anyway."""
+    state = _hubbard(
+        _rock_salt("Ni", "S"), llm=HubbardULlmInput(needs_correlation=True)
     )
 
-    assert state.value.plan == "table"
-    assert state.value.u_by_element == {"Ru": 4.0}
+    assert [(entry.element, entry.u_ev) for entry in state.value.u_values] == [
+        ("Ni", 6.2)
+    ]
+    assert state.source == "llm"
+
+
+def test_user_u_by_element_replaces_the_table() -> None:
+    state = _hubbard(
+        _rock_salt("Ru"), human=HubbardUHumanInput(u_by_element={"Ru": 4.0})
+    )
+
+    assert state.value.u_values == (HubbardU("Ru", "4d", 4.0, "human"),)
     assert state.source == "human"
+    assert "hubbard.u_by_element_unused" not in _codes(state)
 
 
-class TestExpandHubbardLabel:
-    def test_expands_split_species_to_the_canonical_element_u_value(self) -> None:
-        relabeled = Structure(
-            Lattice.cubic(4.0),
-            ["Fe", "Fe", "O", "O"],
-            [[0, 0, 0], [0.5, 0.5, 0.5], [0.25, 0.25, 0.25], [0.75, 0.75, 0.75]],
-            labels=["Fe1", "Fe2", "O", "O"],
-        )
+def test_user_u_for_an_absent_element_applies_no_u_and_says_so() -> None:
+    """NiO with only an Fe value used to render an empty HUBBARD card."""
+    state = _hubbard(
+        _rock_salt("Ni"), human=HubbardUHumanInput(u_by_element={"Fe": 5.0})
+    )
 
-        expanded = expand_hubbard_label({"Fe": 5.3}, relabeled)
+    assert state.value.u_values == ()
+    message = _warning(state, "hubbard.u_by_element_unused").message
+    assert "Fe" in message
+    assert "No +U is applied" in message
 
-        # Not {"Fe": ..., "Fe1": ..., "Fe2": ...} -- "Fe" (bare) is not
-        # one of this structure's own labels, so it must not survive
-        # into a HUBBARD-card-bound result (#88).
-        assert expanded == {"Fe1": 5.3, "Fe2": 5.3}
 
-    def test_does_not_override_an_already_individually_specified_split_species(
-        self,
-    ) -> None:
-        relabeled = Structure(
-            Lattice.cubic(4.0),
-            ["Fe", "Fe"],
-            [[0, 0, 0], [0.5, 0.5, 0.5]],
-            labels=["Fe1", "Fe2"],
-        )
+def test_user_u_keeps_present_elements_and_reports_absent_ones() -> None:
+    state = _hubbard(
+        _rock_salt("Ni"),
+        human=HubbardUHumanInput(u_by_element={"Ni": 6.2, "Fe": 5.0}),
+    )
 
-        expanded = expand_hubbard_label({"Fe": 5.3, "Fe1": 6.0}, relabeled)
-
-        assert expanded == {"Fe1": 6.0, "Fe2": 5.3}
-
-    def test_identity_structure_with_no_split_species_is_unchanged(self) -> None:
-        plain = _structure("Fe", "O")
-
-        expanded = expand_hubbard_label({"Fe": 5.3}, plain)
-
-        assert expanded == {"Fe": 5.3}
-
-    def test_numbered_labels_from_a_real_loaded_structure_never_keep_the_bare_symbol(
-        self,
-    ) -> None:
-        """Regression (#88): a structure loaded through ``/run`` (CIF or
-        POSCAR) never has a bare-symbol label like this module's other
-        tests use -- pymatgen numbers every site (``V0``, ``Cl1``,
-        ``Cl2``), even with no AFM splitting at all. Caught live: the
-        old implementation kept a stray ``"V"`` key that isn't a real
-        ``ATOMIC_SPECIES`` label, and ``hubbard_card`` ``KeyError``'d
-        looking it up."""
-        loaded = Structure.from_str(
-            Structure(
-                Lattice.cubic(4.0),
-                ["V", "Cl", "Cl"],
-                [[0, 0, 0], [0.5, 0.5, 0], [0, 0.5, 0.5]],
-            ).to(fmt="cif"),
-            fmt="cif",
-        )
-
-        expanded = expand_hubbard_label({"V": 3.25}, loaded)
-
-        assert "V" not in expanded
-        assert set(expanded) == {
-            site.label for site in loaded if site.specie.symbol == "V"
-        }
-        assert set(expanded.values()) == {3.25}
+    assert state.value.u_values == (HubbardU("Ni", "3d", 6.2, "human"),)
+    message = _warning(state, "hubbard.u_by_element_unused").message
+    assert "Fe" in message
+    assert "Ni" not in message
+    assert "No +U is applied" not in message

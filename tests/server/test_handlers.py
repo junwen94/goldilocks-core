@@ -94,6 +94,75 @@ class TestExplain:
         assert result["records"]["pseudo_table"]["status"] == "unavailable"
         assert result["records"]["cutoffs"]["status"] == "blocked"
 
+    @pytest.mark.parametrize(
+        ("task", "overrides", "expected"),
+        [
+            pytest.param("scf_single_point", {}, ["is not installed"], id="scf"),
+            pytest.param("dos", {}, ["is not installed"], id="dos"),
+            pytest.param(
+                "relax",
+                {"fix_bottom_layers": 2},
+                ["is not installed", "fix_bottom_layers requires a 2D slab"],
+                id="relax",
+            ),
+            pytest.param(
+                "vc-relax",
+                {"ion_dynamics": "damp"},
+                ["is not installed", "vc-relax requires ion_dynamics='bfgs'"],
+                id="vc-relax",
+            ),
+        ],
+    )
+    def test_blocking_is_the_verdict_run_refuses_with(
+        self, silicon_cif, task, overrides, expected
+    ) -> None:
+        """#165: explain reports run's verdict (advise, then the task's own
+        check) before any files are requested. No real assets: the isolated
+        asset root has no pseudopotential table installed, a deterministic
+        blocker; the relax overrides add each task's named check rule."""
+        document = ComputeRequestDocument(
+            structure_content=silicon_cif,
+            hpc="scarf",
+            task=task,
+            overrides=overrides,
+        )
+
+        result = _handlers.explain(document)
+
+        with pytest.raises(AdviceIncomplete) as excinfo:
+            _handlers.run(document)
+        reasons = list(dict.fromkeys(excinfo.value.report.blocking))
+        assert result["blocking"] == reasons
+        assert len(reasons) == len(expected)
+        for reason, fragment in zip(reasons, expected, strict=True):
+            assert fragment in reason
+
+    def test_blocking_is_empty_when_run_generates(
+        self, real_assets, silicon_cif
+    ) -> None:
+        document = ComputeRequestDocument(structure_content=silicon_cif, hpc="scarf")
+
+        result = _handlers.explain(document)
+
+        assert result["blocking"] == []
+        summary, _bundle_input = _handlers.run(document)
+        assert "scf.in" in summary["files"]
+
+    def test_blocking_names_a_cross_parameter_rule(
+        self, real_assets, silicon_cif
+    ) -> None:
+        document = ComputeRequestDocument(
+            structure_content=silicon_cif, hpc="scarf", overrides={"npool": 7}
+        )
+
+        result = _handlers.explain(document)
+
+        with pytest.raises(AdviceIncomplete) as excinfo:
+            _handlers.run(document)
+        assert result["blocking"] == list(dict.fromkeys(excinfo.value.report.blocking))
+        [reason] = result["blocking"]
+        assert reason.startswith("npool=7 does not divide ntasks=")
+
 
 class TestRun:
     def test_produces_a_complete_bundle_summary(self, real_assets, silicon_cif) -> None:

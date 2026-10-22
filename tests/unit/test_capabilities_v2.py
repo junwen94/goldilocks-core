@@ -118,10 +118,31 @@ class TestTopLevelShape:
             assert entry.keys() == {"code", "level", "category", "message"}
             assert entry["level"] in {"info", "warning", "error"}
 
+    def test_warnings_catalogue_lists_the_hubbard_u_value_warnings(self) -> None:
+        """#135: the missing-value and unused-element codes are published,
+        so a frontend can filter on them before any run has emitted them."""
+        by_code = {entry["code"]: entry for entry in capabilities()["warnings"]}
+
+        for code in ("hubbard.u_value_missing", "hubbard.u_by_element_unused"):
+            assert (by_code[code]["level"], by_code[code]["category"]) == (
+                "warning",
+                "hubbard",
+            )
+
     def test_warnings_catalogue_codes_are_unique(self) -> None:
         codes = [entry["code"] for entry in capabilities()["warnings"]]
 
         assert len(codes) == len(set(codes))
+
+    def test_warnings_catalogue_lists_the_frozen_hubbard_occupations_warning(
+        self,
+    ) -> None:
+        """#166: the convergence advisor's one code is published, so a
+        frontend can filter on it before any run has emitted it."""
+        by_code = {entry["code"]: entry for entry in capabilities()["warnings"]}
+
+        entry = by_code["convergence.mixing_fixed_ns_freezes_hubbard_occupations"]
+        assert (entry["level"], entry["category"]) == ("warning", "convergence")
 
     def test_codes_and_tasks_reflect_only_what_actually_runs(self) -> None:
         """v2 epic 9 (#9, #28): ``dos`` joined ``scf_single_point`` once

@@ -28,7 +28,7 @@ def _system_settings(structure, pseudo_metadata_factory) -> SystemSettings:
             angle2=None,
         ),
         vdw=VdwFacts(use_vdw=False, method=None),
-        hubbard=HubbardUDecision(plan="not_needed", u_by_element={}),
+        hubbard=HubbardUDecision(),
         boundary=BoundaryFacts(assume_isolated="none"),
     )
 
@@ -44,7 +44,7 @@ def test_system_settings_bundles_every_epic_5_advisor_output(
     assert settings.pseudopotentials[0].element == "Si"
     assert settings.magnetic.spin_polarized is False
     assert settings.vdw.use_vdw is False
-    assert settings.hubbard.plan == "not_needed"
+    assert settings.hubbard.u_values == ()
     assert settings.boundary.assume_isolated == "none"
 
 

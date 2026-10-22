@@ -189,6 +189,32 @@ export const capabilities: Capabilities = {
       description: "Disable symmetry reduction when counting k-points.",
     },
     {
+      key: "hubbard_needs_correlation",
+      group: "hubbard",
+      type: "boolean",
+      unit: null,
+      codes: null,
+      tasks: null,
+      programs: null,
+      scope: "system",
+      ml_target: null,
+      approaches: ["human", "heuristic"],
+      description: "Force whether a Hubbard +U correction is applied.",
+    },
+    {
+      key: "u_by_element",
+      group: "hubbard",
+      type: "object",
+      unit: "eV",
+      codes: null,
+      tasks: null,
+      programs: null,
+      scope: "system",
+      ml_target: null,
+      approaches: ["human", "heuristic"],
+      description: "Dudarev U_eff in eV (> 0) per element symbol.",
+    },
+    {
       key: "ion_dynamics",
       group: "relax",
       type: "string",
@@ -303,6 +329,7 @@ export const scientificRecords: Readonly<Record<string, ResolvedField>> = {
 export const explainResult: ExplainResult = {
   records: scientificRecords,
   warnings: [],
+  blocking: [],
 };
 
 export const runResult: RunResult = {

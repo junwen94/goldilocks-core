@@ -16,6 +16,12 @@ Object.defineProperty(window, "matchMedia", {
   })),
 });
 HTMLElement.prototype.scrollIntoView = vi.fn();
+// jsdom has no FontFaceSet; Mantine's autosize Textarea (the JSON override
+// control, e.g. u_by_element) subscribes to document.fonts when it mounts.
+Object.defineProperty(document, "fonts", {
+  configurable: true,
+  value: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
+});
 
 afterEach(() => {
   cleanup();

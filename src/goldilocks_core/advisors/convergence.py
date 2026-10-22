@@ -29,15 +29,33 @@ deliberately *not* included -- the design doc's finding names only
 ``2d``/``molecule``, and this module does not extend that without a
 source.
 
-**`mixing_fixed_ns=50` when +U is active**
-(goldilocks-core-design.md:2908, "F5"): an engineering heuristic, not a
-literature-standardized constant -- freezing the occupation-matrix
-mixing for the first N iterations helps a Hubbard-corrected SCF avoid
-oscillating between metastable occupation-matrix solutions early on.
-The design doc's own finding notes a QE-mailing-list two-stage restart
-procedure as the fallback when 50 iterations are not enough, but
-choosing to run that restart is a multi-step workflow decision, not
-something a single stateless call can decide -- out of scope here.
+**No default `mixing_fixed_ns`** (#127; replaces the design doc's "F5"
+default of 50 for every +U input, goldilocks-core-design.md:2908). While
+``iter <= mixing_fixed_ns``, pw.x resets the Hubbard occupation matrix
+ns to its iteration-1 value (QE 7.3 ``PW/src/electrons.f90:815-833``),
+yet it still declares convergence if the density converges inside that
+window: ``mix_rho.f90:162`` has no fixed-ns guard. The freeze restarts
+at every ionic step (``electrons.f90:556``). With ns frozen, the Hubbard
+stress from ``stres_hub`` can have an antisymmetric part, and pw.x
+aborts with "non-symmetric stress contribution"
+(``stres_hub.f90:391-397``) when the symmetry group it found leaves
+that part in place, as the Ci or C2h groups it often finds on
+goldilocks' CIF-frame ``ibrav = 0`` cells do (#140). So the field
+resolves only from a human or LLM value; unset leaves QE's default of
+0 and the writer renders nothing. A frozen-ns start would have to be an
+explicit two-stage plan (a frozen-ns stage with
+``starting_ns_eigenvalue``, then a restart with ns free), which is not
+modelled.
+
+**+U-specific logic keys on the resolved Hubbard decision** (#166): the
+``hubbard_u`` decision that renders the HUBBARD card, never the
+``needs_correlation`` fact. The two disagree whenever an override or a
+hybrid functional decides (``hubbard_needs_correlation=false`` on CeO2,
+``u_by_element`` on the nitride UN) or no element present has a U (Th in
+ThO2). A human or LLM ``mixing_fixed_ns`` is kept as given; a nonzero one
+on a decision that applies a U carries ``MIXING_FIXED_NS_WARNING``. With
+no U, pw.x ignores the keyword: it reads ``mixing_fixed_ns`` only under
+``lda_plus_u`` (``electrons.f90:748-815``, ``potinit.f90:286-290``).
 
 **No `is_metal` input.** It appears in the design doc's own illustrative
 per-step loop snippet, but no source in this codebase specifies a
@@ -46,11 +64,12 @@ for metals) -- unlike `k_sampling`'s deliberately-unused `occupations`
 input, there is no documented future contract this would need to match,
 so it is left out rather than carried as an unjustified placeholder.
 
-``needs_correlation``/``geometry`` are optional: anything other than a
-confirmed ``Resolved`` value (``Unavailable``, ``Blocked``, or simply
-not supplied) just skips the corresponding optional adjustment --
-``conv_thr``/``etot_conv_thr``/``mixing_beta``/``electron_maxstep`` do
-not depend on either, so this module never blocks on them.
+``hubbard`` and ``geometry`` are optional: anything other than a
+confirmed ``Resolved`` value (``Unavailable``, ``Blocked``, or simply not
+supplied) adds no frozen-ns warning and keeps ``mixing_mode='plain'``
+respectively -- ``conv_thr``/``etot_conv_thr``/``mixing_beta``/
+``electron_maxstep`` depend on neither, so this module never blocks on
+them.
 
 **``Provenance.field_sources``, populated here first.** The one
 ``Provenance`` on this whole ``ConvergenceDecision`` answers "did a
@@ -68,6 +87,7 @@ from typing import Literal
 
 from pydantic import Field
 
+from goldilocks_core.advisors.hubbard_u import HubbardUDecision
 from goldilocks_core.analysis.geometry import GeometryFacts
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import FieldState, Provenance, Resolved, Warning
@@ -80,8 +100,31 @@ _DEFAULT_MIXING_BETA = 0.4
 """Matches v1's DEFAULT_MIXING_BETA (advice/parameters.py:17)."""
 _DEFAULT_ELECTRON_MAXSTEP = 80
 """Matches v1's DEFAULT_ELECTRON_MAXSTEP (advice/parameters.py:18)."""
-_HUBBARD_MIXING_FIXED_NS = 50
 _LOCAL_TF_DIMENSIONALITIES = frozenset({"2d", "molecule"})
+
+
+def _frozen_ns_message(iterations: int | str) -> str:
+    return (
+        f"mixing_fixed_ns = {iterations} holds the Hubbard occupation matrix at "
+        f"its starting value for the first {iterations} SCF iterations, and pw.x "
+        "can report convergence inside that window; the resulting energies, "
+        "forces and stresses are then not self-consistent DFT+U results. Use a "
+        "nonzero value only for a preparatory run whose output seeds a separate "
+        "run with ns free."
+    )
+
+
+MIXING_FIXED_NS_WARNING = Warning(
+    code="convergence.mixing_fixed_ns_freezes_hubbard_occupations",
+    level="warning",
+    category="convergence",
+    message=_frozen_ns_message("N"),
+)
+"""Catalogue entry; ``_frozen_ns_warnings`` names the value."""
+
+WARNING_CATALOGUE = (MIXING_FIXED_NS_WARNING,)
+"""Every warning code this module can emit -- ``capabilities.py``'s
+``warnings[]`` catalogue aggregates one of these tuples per advisor."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +156,7 @@ class ConvergenceLlmInput(LlmInput):
 
 def convergence(
     nat: int,
-    needs_correlation: FieldState[bool] | None = None,
+    hubbard: FieldState[HubbardUDecision] | None = None,
     geometry: FieldState[GeometryFacts] | None = None,
     human: ConvergenceHumanInput | None = None,
     llm: ConvergenceLlmInput | None = None,
@@ -121,11 +164,6 @@ def convergence(
     human = human or ConvergenceHumanInput()
     llm = llm or ConvergenceLlmInput()
 
-    hubbard_active = bool(
-        needs_correlation is not None
-        and needs_correlation.ok
-        and needs_correlation.value
-    )
     local_tf = bool(
         geometry is not None
         and geometry.ok
@@ -135,6 +173,7 @@ def convergence(
     conv_thr = (
         human.conv_thr if human.conv_thr is not None else nat * _CONV_THR_PER_ATOM
     )
+    mixing_fixed_ns = _pick(human.mixing_fixed_ns, llm.mixing_fixed_ns, None)
     decision = ConvergenceDecision(
         conv_thr=conv_thr,
         etot_conv_thr=(
@@ -149,11 +188,8 @@ def convergence(
         mixing_mode=_pick(
             human.mixing_mode, llm.mixing_mode, "local-TF" if local_tf else "plain"
         ),
-        mixing_fixed_ns=_pick(
-            human.mixing_fixed_ns,
-            llm.mixing_fixed_ns,
-            _HUBBARD_MIXING_FIXED_NS if hubbard_active else None,
-        ),
+        mixing_fixed_ns=mixing_fixed_ns,
+        warnings=_frozen_ns_warnings(mixing_fixed_ns, hubbard),
     )
     field_sources = {
         "conv_thr": _field_source(human.conv_thr),
@@ -165,6 +201,19 @@ def convergence(
     }
     source = "human" if _any_set(human) else "llm" if _any_set(llm) else "heuristic"
     return Resolved(decision, Provenance(source=source, field_sources=field_sources))
+
+
+def _frozen_ns_warnings(
+    mixing_fixed_ns: int | None, hubbard: FieldState[HubbardUDecision] | None
+) -> tuple[Warning, ...]:
+    """``MIXING_FIXED_NS_WARNING`` naming the value when a nonzero
+    ``mixing_fixed_ns`` meets a resolved decision that applies a U (#166);
+    nothing otherwise."""
+    applies_u = hubbard is not None and hubbard.ok and bool(hubbard.value.u_values)
+    if not (mixing_fixed_ns and applies_u):
+        return ()
+    message = _frozen_ns_message(mixing_fixed_ns)
+    return (MIXING_FIXED_NS_WARNING.model_copy(update={"message": message}),)
 
 
 def _pick[T](human_value: T | None, llm_value: T | None, default: T) -> T:

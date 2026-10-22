@@ -319,6 +319,28 @@ class TestExplain:
         body = response.json()
         assert body["records"]["functional"]["value"] == "PBEsol"
         assert "warnings" in body
+        assert body["blocking"] == []
+
+    @pytest.mark.parametrize("task", ["scf_single_point", "dos"])
+    def test_blocking_lists_the_reasons_run_refuses_with(
+        self, client: TestClient, silicon_cif: str, task: str
+    ) -> None:
+        """#165: no real assets, so the isolated asset root's uninstalled
+        default table blocks both routes; /explain still answers 200 and
+        names the reason /run's 422 gives."""
+        body = {"structure_content": silicon_cif, "hpc": "scarf", "task": task}
+
+        explained = client.post("/explain", json=body)
+        refused = client.post("/run", json=body)
+
+        assert explained.status_code == 200
+        blocking = explained.json()["blocking"]
+        assert len(blocking) == 1
+        assert "is not installed" in blocking[0]
+        assert refused.status_code == 422
+        assert refused.json()["error"]["message"] == (
+            "cannot generate a runnable input: " + "; ".join(blocking)
+        )
 
     def test_dos_task_returns_nscf_prefixed_records_and_a_dos_record(
         self, client: TestClient, real_assets, silicon_cif: str

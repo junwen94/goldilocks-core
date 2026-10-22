@@ -32,6 +32,9 @@ import {
 import { WorkspaceProvider } from "../../src/workspace/WorkspaceProvider";
 import { createWorkspace } from "../../src/workspace/workspace";
 
+const MATERIALS_PROJECT_CITATION =
+  "Materials Project; A. Wang et al., Sci. Rep. 11, 15496 (2021), Table S3";
+
 vi.mock("../../src/viewer/StructureViewport", () => ({
   StructureViewport: () => (
     <div aria-label="Crystal structure viewer">3D crystal</div>
@@ -200,6 +203,7 @@ describe("Goldilocks Workbench", () => {
           },
         },
         warnings: [],
+        blocking: [],
       }),
     ];
     const { container } = renderApp(core);
@@ -339,13 +343,19 @@ describe("Goldilocks Workbench", () => {
 
     // No manual "update" action -- the edit above is picked up and
     // recomputed automatically (see useAutoCompute), after its debounce.
+    // Wait for the recompute that carries the edit, not only for the notice
+    // to be absent: during the debounce the notice may not have appeared
+    // yet, and Download would then fetch the archive for the old draft.
     await waitFor(
       () => {
+        expect(core.explainCalls.at(-1)?.overrides).toMatchObject({
+          spin_polarized: true,
+        });
         expect(
           screen.queryByRole("status", { name: "Recommendation notice" }),
         ).not.toBeInTheDocument();
       },
-      { timeout: 2000 },
+      { timeout: 5000 },
     );
     await user.click(screen.getByRole("button", { name: "Download (.zip)" }));
 
@@ -358,7 +368,10 @@ describe("Goldilocks Workbench", () => {
     expect(core.explainCalls.at(-1)?.overrides).toMatchObject({
       spin_polarized: true,
     });
-    expect(core.archiveCalls[0]?.overrides).toMatchObject({
+    // The archive that was saved comes from the last /run. An auto-preview of
+    // the pre-edit draft may have run first on a slow machine; that one is
+    // discarded when the edit's recompute lands, so it is not what matters.
+    expect(core.archiveCalls.at(-1)?.overrides).toMatchObject({
       spin_polarized: true,
     });
   });
@@ -477,6 +490,7 @@ describe("Goldilocks Workbench", () => {
           },
         },
         warnings: [],
+        blocking: [],
       }),
     ];
     const { container } = renderApp(core);
@@ -522,6 +536,7 @@ describe("Goldilocks Workbench", () => {
           },
         },
         warnings: [],
+        blocking: [],
       }),
     ];
     const { container } = renderApp(core);
@@ -538,6 +553,106 @@ describe("Goldilocks Workbench", () => {
     expect(
       screen.getByRole("region", { name: "Structure workspace" }),
     ).toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      shows: "a built-in U with its citation",
+      uValues: [
+        {
+          element: "Ni",
+          manifold: "3d",
+          u_ev: 6.2,
+          value_source: "table",
+          citation: MATERIALS_PROJECT_CITATION,
+          doi: "10.1038/s41598-021-94550-5",
+        },
+      ],
+      items: [`Ni 3d: 6.2 eV · ${MATERIALS_PROJECT_CITATION}`],
+    },
+    {
+      shows: "u_by_element values as your override",
+      uValues: [
+        {
+          element: "Fe",
+          manifold: "3d",
+          u_ev: 4.5,
+          value_source: "human",
+          citation: null,
+          doi: null,
+        },
+        {
+          element: "Ni",
+          manifold: "3d",
+          u_ev: 5,
+          value_source: "human",
+          citation: null,
+          doi: null,
+        },
+      ],
+      items: ["Fe 3d: 4.5 eV · Your override", "Ni 3d: 5 eV · Your override"],
+    },
+  ])("lists $shows in the Hubbard section", async ({ uValues, items }) => {
+    const user = userEvent.setup();
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [
+      Promise.resolve(withHubbard({ u_values: uValues, warnings: [] })),
+    ];
+    const { container } = renderApp(core);
+
+    await openStructure(user, container);
+    await screen.findByRole("button", { name: "Download (.zip)" });
+    const calculation = advisorsPanel();
+    await user.click(within(calculation).getByText("Hubbard"));
+
+    const applied = within(calculation).getByRole("list", {
+      name: "Applied +U",
+    });
+    expect(
+      within(applied)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual(items);
+    expectHubbardOverrideControls(calculation);
+  });
+
+  it("says when no element gets +U and names an element without a published U", async () => {
+    const user = userEvent.setup();
+    const missing =
+      "No published Hubbard U value exists for Cf (5f), so Cf gets plain DFT.";
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [
+      Promise.resolve(
+        withHubbard({
+          u_values: [],
+          warnings: [
+            {
+              code: "hubbard.u_value_missing",
+              level: "warning",
+              category: "hubbard",
+              message: missing,
+            },
+          ],
+        }),
+      ),
+    ];
+    const { container } = renderApp(core);
+
+    await openStructure(user, container);
+    await screen.findByRole("button", { name: "Download (.zip)" });
+    const calculation = advisorsPanel();
+    await user.click(within(calculation).getByText("Hubbard"));
+
+    expect(
+      within(calculation).getByText("No element gets +U."),
+    ).toBeInTheDocument();
+    expect(
+      within(calculation).queryByRole("list", { name: "Applied +U" }),
+    ).not.toBeInTheDocument();
+    expect(within(calculation).getByText(missing)).toBeInTheDocument();
+    expectHubbardOverrideControls(calculation);
   });
 
   it("announces structured scientific warnings returned with a recommendation", async () => {
@@ -642,6 +757,30 @@ describe("Goldilocks Workbench", () => {
     ).toBeInTheDocument();
   });
 });
+
+/** `explainResult` plus a resolved `hubbard` record shaped like
+ * `advisors.hubbard_u.HubbardUDecision` on the wire. */
+function withHubbard(decision: {
+  readonly u_values: readonly Readonly<Record<string, unknown>>[];
+  readonly warnings: readonly Readonly<Record<string, unknown>>[];
+}): ExplainResult {
+  return {
+    ...explainResult,
+    records: {
+      ...explainResult.records,
+      hubbard: { status: "resolved", value: decision, source: "heuristic" },
+    },
+  };
+}
+
+/** The Hubbard section keeps both override controls next to the decision:
+ * they are how a missing or unwanted U is fixed. */
+function expectHubbardOverrideControls(calculation: HTMLElement): void {
+  expect(within(calculation).getByLabelText("u by element · eV")).toBeVisible();
+  expect(
+    within(calculation).getByLabelText("hubbard needs correlation"),
+  ).toBeVisible();
+}
 
 function structureFile(): File {
   const file = new File(["data_Si"], "Si.cif", {

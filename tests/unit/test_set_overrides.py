@@ -303,6 +303,55 @@ class TestBuildOverrides:
         with pytest.raises(InvalidSetting, match="finite number"):
             build_overrides({key: value})
 
+    @pytest.mark.parametrize(
+        "u_by_element",
+        [
+            {"Ni": 0},
+            {"Ni": -2.0},
+            {"Ni": float("inf")},
+            {"Ni": float("nan")},
+            {"Ni1": 6.0},
+            {"Xx": 4.0},
+            {"ni": 6.0},
+        ],
+    )
+    def test_u_by_element_needs_element_symbols_and_positive_finite_values(
+        self, u_by_element: dict[str, float]
+    ) -> None:
+        """#135: a lone U <= 0 leaves QE's HUBBARD card without a positive
+        value (pw.x stops in card_hubbard), a non-finite one renders 'inf',
+        and a key that is not an element symbol never matches a species."""
+        with pytest.raises(InvalidSetting, match="u_by_element"):
+            build_overrides({"u_by_element": u_by_element})
+
+    @pytest.mark.parametrize(
+        ("u_by_element", "manifold"),
+        [
+            ({"La": 5.0}, "La-4f"),
+            ({"Cu": 4.0, "La": 5.0}, "La-4f"),
+            ({"Ac": 4.0}, "Ac-5f"),
+        ],
+    )
+    def test_u_by_element_rejects_manifolds_no_installed_pseudopotential_carries(
+        self, u_by_element: dict[str, float], manifold: str
+    ) -> None:
+        """#135: pw.x stops on a La-4f U (SSSP's La has 4f occupation 0,
+        PseudoDojo's no 4f channel) and on an Ac-5f U (the only Ac file has
+        no 5f channel) whatever the value, so neither key is accepted."""
+        with pytest.raises(InvalidSetting, match=f"stops on any {manifold} U"):
+            build_overrides({"u_by_element": u_by_element})
+
+    def test_u_by_element_accepts_element_symbols_with_positive_values(
+        self,
+    ) -> None:
+        overrides = build_overrides({"u_by_element": {"Fe": 5.3, "O": 1.5}})
+
+        assert overrides.system.hubbard.u_by_element == {"Fe": 5.3, "O": 1.5}
+
+    def test_u_by_element_rejects_infinity_from_the_cli(self) -> None:
+        with pytest.raises(InvalidSetting, match="u_by_element"):
+            build_overrides_from_cli(['u_by_element={"Ni": Infinity}'])
+
     def test_empty_assignments_gives_all_defaults(self) -> None:
         overrides = build_overrides({})
 

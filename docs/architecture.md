@@ -65,8 +65,10 @@ A `run` (or `explain`) request follows this path:
    / `bundle.archive_bytes(bundle_input)` write a directory (`DirectoryOutput`)
    or ZIP (`ArchiveOutput`), or return an in-memory preview.
 
-CLI's `explain` is exactly `advise()` (plus `check()`, to print blocking
-reasons); CLI's `run` is `advise()` -> `check()` -> `generate()` ->
+`explain` (CLI, HTTP `POST /explain` and the MCP `explain` tool) is
+`advise()` -> `check()` (`check_dos()`/`check_relax()` for those tasks): every
+decision plus `blocking`, the reasons `run` would refuse to generate, without
+rendering anything. CLI's `run` is `advise()` -> `check()` -> `generate()` ->
 `render_submission()` -> `to_bundle_input()` -> `bundle.publish()`/preview.
 Omitting `-o/--out` gives a memory-only preview (file names and byte sizes
 only, nothing written); a directory path publishes a directory; a path

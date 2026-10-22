@@ -213,6 +213,26 @@ class TestToolCalls:
         interval = records["k_sampling"]["value"]["k_distance_interval"]
         assert interval == _SILICON_GAMMA_INTERVAL
 
+    def test_explain_tool_returns_the_reasons_the_run_tool_refuses_with(
+        self, silicon_cif: str
+    ) -> None:
+        """#165: no real assets, so the isolated asset root's uninstalled
+        default table blocks both tools."""
+        server = create_server()
+        arguments = {"document": {"structure_content": silicon_cif, "hpc": "scarf"}}
+
+        explained = asyncio.run(server.call_tool("explain", arguments))
+
+        assert explained.is_error is False
+        blocking = explained.structured_content["blocking"]
+        assert len(blocking) == 1
+        assert "is not installed" in blocking[0]
+        with pytest.raises(ToolError) as excinfo:
+            asyncio.run(server.call_tool("run", arguments))
+        assert str(excinfo.value).endswith(
+            "cannot generate a runnable input: " + "; ".join(blocking)
+        )
+
     def test_unknown_top_level_argument_raises_tool_error(
         self, silicon_cif: str
     ) -> None:
