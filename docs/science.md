@@ -171,13 +171,17 @@ convergence threshold, k-points and the job's memory) is counted on it;
 counts the electrons of the cell you uploaded, so it is refused together
 with an ordering that changes the cell's size.
 This needs the external `enumlib` executables (`enum.x` or `multienum.x`,
-plus `makeStr.py`, `makestr.x` or `makeStr.x`) on `PATH`. Without them, above a
-site-count ceiling, when pymatgen cannot enumerate your structure, when enumlib
-runs out of time, or if no compensated ordering exists for your structure, it
-degrades to the ferromagnetic default with a warning; any other enumeration
-error fails the request. Enumeration runs in a separate worker process, inside
-a private scratch directory, so it writes nothing to the current directory and
-concurrent requests cannot disturb each other.
+plus `makeStr.py`, `makestr.x` or `makeStr.x`) on `PATH`. Its cost grows with
+the number of moment-bearing sites in your structure's primitive cell, which
+is what enumlib orders, not with the atom count: 28-site LiFePO4 has 4 Fe.
+Without enumlib, with more than 8 such sites, when enumlib finds no ordering
+or a call runs past its 30 s limit, or if no compensated ordering exists for
+your structure, it degrades to the ferromagnetic default with a warning; any
+other enumeration error fails the request. Magnetic moments your file carries
+(a magCIF's) are not read; only the seeds above are. Enumeration runs in a
+separate worker process, inside a private scratch directory, so it writes
+nothing to the current directory and concurrent requests cannot disturb each
+other.
 
 `uv run goldilocks magnetic-orderings` lists every candidate this same
 enumeration finds -- the ferromagnetic guess plus any compensated

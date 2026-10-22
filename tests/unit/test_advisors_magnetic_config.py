@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from numpy.linalg import LinAlgError
 from pymatgen.core import Lattice, Species, Structure
+from pymatgen.electronic_structure.core import Magmom
 from support import magnetic_decision
 
 from goldilocks_core.advisors import magnetic_config as magnetic_config_module
@@ -591,22 +592,145 @@ def test_afm_ordering_degrades_when_enumlib_is_missing(monkeypatch) -> None:
     )
 
 
-def test_afm_ordering_degrades_for_oversized_structures() -> None:
-    oversized = _ROCK_SALT_FEO * (3, 3, 3)  # 54 sites, over the ceiling
+@pytest.mark.skipif(
+    _ENUMLIB_MISSING,
+    reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
+)
+def test_afm_on_a_54_site_supercell_of_a_one_fe_cell_is_applied() -> None:
+    """#171: the ceiling counted all 54 sites of this 3x3x3 supercell and
+    kept it ferromagnetic, though pymatgen reduces it to its primitive cell
+    first, whose one Fe enumlib orders in about a second."""
+    supercell = _ROCK_SALT_FEO * (3, 3, 3)
 
-    state = magnetic_cell(
-        oversized,
-        is_magnetic(oversized),
-        human=MagneticConfigHumanInput(magnetic_ordering="afm"),
-    )
+    state = magnetic_cell(supercell, is_magnetic(supercell), _AFM)
 
-    assert state.ok
-    assert state.value.structure == oversized
+    assert state.value.ordering == OrderingRecord(requested="afm", applied="afm")
     assert any(
-        warning.code == "magnetic.afm_ordering_unavailable"
-        and "ceiling" in warning.message
+        warning.code == "magnetic.afm_ordering_applied"
         for warning in state.value.warnings
     )
+
+
+def _feo_supercell(scaling: tuple[int, int, int], *, displaced: bool) -> Structure:
+    """``_ROCK_SALT_FEO`` repeated by ``scaling``; ``displaced`` moves one O
+    off its site, so the supercell is its own primitive cell."""
+    supercell = _ROCK_SALT_FEO * scaling
+    if displaced:
+        oxygen = next(
+            index for index, site in enumerate(supercell) if site.specie.symbol == "O"
+        )
+        supercell.translate_sites([oxygen], [0.02, 0.0, 0.0])
+    return supercell
+
+
+@pytest.mark.parametrize(
+    ("scaling", "displaced"),
+    [((3, 3, 3), False), ((2, 2, 2), True)],
+    ids=["27-Fe-supercell-of-a-1-Fe-cell", "8-Fe-primitive-cell"],
+)
+def test_afm_enumerates_up_to_eight_magnetic_sites_in_the_primitive_cell(
+    monkeypatch, scaling: tuple[int, int, int], displaced: bool
+) -> None:
+    """#171: what enumlib orders is the sublattice sites of the primitive
+    cell, not every atom of the uploaded one."""
+    enumerated: list[Structure] = []
+
+    def enumerate_orderings(structure: Structure, **_kwargs):
+        enumerated.append(structure)
+        return ()
+
+    monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
+    monkeypatch.setattr(
+        magnetic_config_module, "enumerate_orderings", enumerate_orderings
+    )
+    supercell = _feo_supercell(scaling, displaced=displaced)
+
+    _candidates, warning = enumerate_magnetic_orderings(
+        supercell, local_moments(supercell)
+    )
+
+    assert len(enumerated) == 1
+    assert warning.message == (
+        "no compensated antiferromagnetic ordering was found; kept ferromagnetic order."
+    )
+
+
+def test_afm_refuses_more_than_eight_magnetic_sites_in_the_primitive_cell(
+    monkeypatch,
+) -> None:
+    """#171: nine Fe that no translation maps onto each other are past the
+    ceiling, which is refused before enumlib runs."""
+    monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
+    monkeypatch.setattr(
+        magnetic_config_module,
+        "enumerate_orderings",
+        _failing_with(AssertionError("enumerated past the ceiling")),
+    )
+    supercell = _feo_supercell((3, 3, 1), displaced=True)
+
+    state = magnetic_cell(supercell, is_magnetic(supercell), _AFM)
+
+    assert state.value.structure is supercell
+    assert state.value.ordering == OrderingRecord(requested="afm", applied="fm")
+    [warning] = _afm_warnings(state.value.warnings)
+    assert warning.code == "magnetic.afm_ordering_unavailable"
+    assert warning.message == (
+        "the primitive cell has 9 magnetic sites (Fe), over the 8 this "
+        "heuristic enumerates orderings for; kept ferromagnetic order."
+    )
+
+
+def test_the_enumerator_gets_an_interactive_budget(monkeypatch) -> None:
+    """#171: pymatgen gives enumlib 5 minutes per call, starts a joblib
+    process pool on every call for its bookkeeping, and adds ferrimagnetic
+    strategies whose candidates are never antiferromagnetic."""
+    received: dict[str, object] = {}
+
+    def enumerate_orderings(_structure: Structure, **kwargs):
+        received.update(kwargs)
+        return ()
+
+    monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
+    monkeypatch.setattr(
+        magnetic_config_module, "enumerate_orderings", enumerate_orderings
+    )
+
+    enumerate_magnetic_orderings(_ROCK_SALT_FEO, local_moments(_ROCK_SALT_FEO))
+
+    assert received["automatic"] is False
+    assert received["transformation_kwargs"] == {"timeout": 0.5, "n_jobs": 1}
+
+
+def _canted_nio() -> Structure:
+    """Conventional rock-salt NiO with the non-collinear Ni moments a magCIF
+    carries as a ``magmom`` site property."""
+    nio = Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(4.17), ["Ni", "O"], [[0, 0, 0], [0.5, 0.5, 0.5]]
+    )
+    directions = iter(([1, 0, 0], [0, 1, 0], [-1, 0, 0], [0, -1, 0]))
+    nio.add_site_property(
+        "magmom",
+        [
+            Magmom(next(directions) if site.specie.symbol == "Ni" else [0, 0, 0])
+            for site in nio
+        ],
+    )
+    return nio
+
+
+@pytest.mark.skipif(
+    _ENUMLIB_MISSING,
+    reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
+)
+def test_afm_seeds_the_sublattice_whatever_moments_the_upload_carries() -> None:
+    """pymatgen refuses an input whose own moments are non-collinear; the
+    AFM search never reads them, it seeds the sublattice itself."""
+    nio = _canted_nio()
+
+    state = magnetic_cell(nio, is_magnetic(nio), _AFM)
+
+    assert state.value.ordering == OrderingRecord(requested="afm", applied="afm")
+    assert _spins(state.value.structure, "Ni") == {5.0, -5.0}
 
 
 def test_afm_ordering_degrades_when_no_compensated_ordering_is_found(
@@ -876,14 +1000,18 @@ def test_any_name_pymatgen_looks_up_counts_as_installed(
         FileNotFoundError(2, "No such file or directory", "vasp.3"),
         LinAlgError("Singular matrix"),
         RuntimeError("This shouldn't happen, found neighbors=[]"),
+        ValueError("Too many magnetic sites to sensibly perform enumeration."),
+        ValueError("Input structure (NiO) is non-collinear."),
     ],
 )
 def test_an_enumeration_error_that_is_not_an_enumlib_outcome_propagates(
     monkeypatch, error: Exception
 ) -> None:
-    """#136: overlapping enumerations sharing one cwd failed with exactly
-    these errors (LinAlgError subclasses ValueError), which came back as a
-    plausible ferromagnetic-only listing quoting a host path."""
+    """#136: overlapping enumerations sharing one cwd failed with the first
+    three errors (LinAlgError subclasses ValueError), which came back as a
+    plausible ferromagnetic-only listing quoting a host path. #171: the
+    magnetic-site ceiling and the moment-free input leave pymatgen no other
+    ValueError to raise about a structure, so one is a fault too."""
     monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
     monkeypatch.setattr(
         magnetic_config_module, "enumerate_orderings", _failing_with(error)
@@ -893,21 +1021,15 @@ def test_an_enumeration_error_that_is_not_an_enumlib_outcome_propagates(
         enumerate_magnetic_orderings(_ROCK_SALT_FEO, local_moments(_ROCK_SALT_FEO))
 
 
-@pytest.mark.parametrize(
-    "message",
-    [
-        "Unable to enumerate",
-        "/home/operator/goldilocks/tmpq3x9: Too many magnetic sites",
-    ],
-)
-def test_an_unenumerable_structure_gets_a_fixed_reason_without_the_error_text(
-    monkeypatch, message: str
-) -> None:
+def test_enumlib_finding_no_ordering_gets_a_fixed_reason(monkeypatch) -> None:
+    """pymatgen turns enumlib's EnumError for every cell size it tries into
+    ValueError('Unable to enumerate'), the one answer about the structure a
+    ValueError still gives (#171)."""
     monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
     monkeypatch.setattr(
         magnetic_config_module,
         "enumerate_orderings",
-        _failing_with(ValueError(message)),
+        _failing_with(ValueError("Unable to enumerate")),
     )
 
     candidates, warning = enumerate_magnetic_orderings(
@@ -917,7 +1039,7 @@ def test_an_unenumerable_structure_gets_a_fixed_reason_without_the_error_text(
     assert candidates == (("fm", _ROCK_SALT_FEO),)
     assert warning.code == "magnetic.afm_ordering_unavailable"
     assert warning.message == (
-        "pymatgen could not enumerate magnetic orderings for this structure; "
+        "enumlib found no ordering of the magnetic sites for this structure; "
         "kept ferromagnetic order."
     )
 
@@ -929,7 +1051,7 @@ def test_an_enumlib_timeout_gets_a_fixed_reason_without_the_error_text(
     monkeypatch.setattr(
         magnetic_config_module,
         "enumerate_orderings",
-        _failing_with(TimeoutError("Enumeration took more than timeout 5 minutes")),
+        _failing_with(TimeoutError("Enumeration took more than timeout 0.5 minutes")),
     )
 
     state = magnetic_cell(
@@ -945,7 +1067,7 @@ def test_an_enumlib_timeout_gets_a_fixed_reason_without_the_error_text(
         if warning.code == "magnetic.afm_ordering_unavailable"
     ]
     assert warning.message == (
-        "enumlib did not finish within its time limit; kept ferromagnetic order."
+        "enumlib did not finish within its 30 s time limit; kept ferromagnetic order."
     )
 
 

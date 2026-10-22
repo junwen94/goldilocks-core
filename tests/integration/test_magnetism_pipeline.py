@@ -19,6 +19,10 @@ Spin-orbit coupling makes a run noncollinear, where pw.x has no
 ``tot_magnetization`` and fixed occupations need none (#146). The CrI3
 monolayer (MC2D mc2d-da9644c9) runs on a synthetic fully relativistic Cr/I
 table (z_valence 14 and 7) and needs no enumlib.
+
+Olivine LiFePO4 (MC3D mc3d-52501) has 28 sites but only 4 Fe for enumlib to
+order, so ``magnetic_ordering=afm`` orders them (#171); it runs on a
+synthetic Li/Fe/P/O table (z_valence 3, 16, 5 and 6) with the real enumlib.
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ import pytest
 from pymatgen.core import Lattice, Structure
 from support import sssp_fixture_table_spec
 
+from goldilocks_core.advisors.magnetic_config import OrderingRecord
 from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
@@ -47,6 +52,7 @@ from goldilocks_core.service import (
     generate_dos,
     generate_relax,
 )
+from goldilocks_core.service._magnetic_orderings import list_magnetic_orderings
 from goldilocks_core.set_overrides import build_overrides
 
 _needs_enumlib = pytest.mark.skipif(
@@ -307,3 +313,60 @@ def test_an_ignored_tot_magnetization_never_reaches_a_spin_orbit_deck(
     assert _keyword(content, "noncolin") == ".true."
     assert "starting_magnetization" not in content
     assert _keyword(content, "tot_magnetization") is None
+
+
+def _olivine_lifepo4() -> Structure:
+    """Olivine LiFePO4 (Pnma, MC3D mc3d-52501): 28 sites, 4 of them Fe2+."""
+    return Structure.from_spacegroup(
+        "Pnma",
+        Lattice.orthorhombic(10.242, 5.968, 4.687),
+        ["Li", "Fe", "P", "O", "O", "O"],
+        [
+            [0.5, 0.5, 0.5],
+            [0.7803, 0.75, 0.4789],
+            [0.5948, 0.75, 0.9226],
+            [0.5952, 0.75, 0.2504],
+            [0.955, 0.75, 0.7068],
+            [0.6672, 0.5435, 0.7876],
+        ],
+    )
+
+
+@pytest.fixture
+def olivine_store(tmp_path, monkeypatch) -> AssetStore:
+    spec, registry_table = sssp_fixture_table_spec(
+        tmp_path / "sources", {"Li": 3.0, "Fe": 16.0, "P": 5.0, "O": 6.0}
+    )
+    monkeypatch.setattr(
+        "goldilocks_core.service._pseudo.load_tables",
+        lambda *a, **kw: {registry_table.id: registry_table},
+    )
+    installed = AssetStore(tmp_path / "store")
+    installed.install(spec, sssp_preparer(registry_table))
+    return installed
+
+
+@_needs_enumlib
+def test_afm_orders_the_four_fe_of_olivine_lifepo4(olivine_store: AssetStore) -> None:
+    """#171: a ceiling on all 28 sites kept LiFePO4 ferromagnetic and listed
+    only 'fm', though pymatgen enumerates its 4 Fe in about a second."""
+    olivine = _olivine_lifepo4()
+
+    listing = list_magnetic_orderings(olivine)
+    advice = advise(
+        olivine,
+        hpc=_hpc(),
+        overrides=build_overrides({"magnetic_ordering": "afm"}),
+        store=olivine_store,
+    )
+
+    labels = [candidate.label for candidate in listing.candidates]
+    assert labels[0] == "fm"
+    assert len(labels) > 1
+    assert listing.warnings == ()
+    magnetic = advice.system.magnetic.value
+    assert magnetic.ordering == OrderingRecord(requested="afm", applied="afm")
+    assert len(magnetic.cell) == 28
+    assert {site.label for site in magnetic.cell} == {"Li", "Fe1", "Fe2", "P", "O"}
+    assert magnetic.starting_magnetization["Fe1"] == pytest.approx(5.0 / 16.0)
+    assert magnetic.starting_magnetization["Fe2"] == pytest.approx(-5.0 / 16.0)

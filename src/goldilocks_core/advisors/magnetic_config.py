@@ -86,9 +86,9 @@ a local d or f moment, so closed-shell La3+ in La2CuO4 and the induced
 moment of Pt in FePt never carry the opposing spin (#143). The request
 degrades back to the FM identity pass-through, with a warning naming why,
 whenever no site carries a local moment (`magnetic.afm_no_open_shell_sites`),
-the sublattice cannot be decided, enumlib is missing, the structure exceeds
-a small site-count ceiling, pymatgen cannot enumerate it, enumlib runs out
-of time, or no compensated ordering exists at all. Any other enumeration
+the sublattice cannot be decided, enumlib is missing, the primitive cell has
+more magnetic sites than a small ceiling, enumlib finds no ordering or runs
+out of time, or no compensated ordering exists at all. Any other enumeration
 error propagates. See `_afm_candidates_or_warning` below.
 
 SOC stays opt-in, matching v1's own policy: `needs_soc` only ever produces a
@@ -132,7 +132,6 @@ from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
-from numpy.linalg import LinAlgError
 from pymatgen.core import Structure
 
 from goldilocks_core.advisors.magnetic_enumeration import (
@@ -152,14 +151,24 @@ from goldilocks_core.resolution import (
     blocked_by,
 )
 
-_MAX_SITES_FOR_AFM_ENUMERATION = 16
-"""Combinatorial enumeration cost grows quickly with site count; this
-matches the order of magnitude the design doc itself treats as the
-practical ceiling for magnetic sublattice counts (QE's own 3-character
-``ATOMIC_SPECIES`` label limit already makes ``>=10`` inequivalent
-magnetic sites "extremely rare" by goldilocks-core-design.md's own F19
-note) -- not a benchmarked number, just a guard against a multi-minute
-call for a case this heuristic tier was never meant to serve."""
+_MAX_MAGNETIC_SITES_FOR_AFM_ENUMERATION = 8
+"""The most sublattice sites (``_afm_sublattice``) in the primitive cell an
+antiferromagnetic search enumerates orderings for (#171). pymatgen reduces
+the input to its primitive cell and hands enumlib only the magnetic sites,
+so they, not the atom count, drive the cost: 16 seeded sites took 18 s
+(alpha-Pu) and 46 s (Lu2O3, every Lu seeded), while the 4 Fe of 28-site
+LiFePO4 and the one Fe of a 54-site FeO supercell took under 2 s. At 8,
+pymatgen's own limit of 8 symmetry-distinct magnetic sites is never
+reached."""
+
+_ENUMLIB_TIMEOUT_MINUTES = 0.5
+"""enumlib's time limit per call, in pymatgen's unit (minutes; its default
+is 5), sized for an interactive request (#171)."""
+
+_ENUMLIB_FOUND_NO_ORDERING = "Unable to enumerate"
+"""The message of the ``ValueError`` pymatgen's
+``EnumerateStructureTransformation`` raises when enumlib finds no ordering
+at any cell size it tries (it re-raises enumlib's ``EnumError`` as this)."""
 
 DEFAULT_MAGNETIZATION_FRACTION = 0.1
 """aiida-quantumespresso's own flat default for elements with no specific
@@ -653,22 +662,33 @@ def _afm_candidates_or_warning(
     runs on a worker process in a private directory
     (``magnetic_enumeration.enumerate_orderings``, #136).
 
-    Only the enumerator's own answers about the structure become a reason,
-    each with a fixed wording that quotes no exception text: pymatgen's
-    ``ValueError`` (enumlib found no ordering, or the enumerator refused the
-    structure as disordered, non-collinear or with too many magnetic sites)
-    and enumlib's ``TimeoutError``. Anything else propagates -- an
-    ``OSError`` from a scratch directory, numpy's ``LinAlgError`` (a
-    ``ValueError`` subclass), a dead worker process -- because it is a
-    fault, not an answer about this structure."""
+    The structure the enumerator sees carries no moments of its own (a
+    magCIF's arrive as a ``magmom`` site property): the sublattice seeds are
+    the only ones it reads, and pymatgen refuses an input whose moments are
+    non-collinear. Past ``_MAX_MAGNETIC_SITES_FOR_AFM_ENUMERATION`` sublattice
+    sites in the primitive cell, enumlib is not run at all. Each enumlib
+    call gets ``_ENUMLIB_TIMEOUT_MINUTES`` and no process pool, and only the
+    plain ferromagnetic and antiferromagnetic strategies run: pymatgen's
+    automatic ferrimagnetic ones never give an ``"afm"`` candidate (#171).
+
+    The enumerator's two answers about the structure become reasons, each
+    with a fixed wording that quotes no exception text: enumlib found no
+    ordering (pymatgen's ``ValueError('Unable to enumerate')``) or ran out
+    of time (``TimeoutError``). Anything else propagates -- an ``OSError``
+    from a scratch directory, numpy's ``LinAlgError`` or any other
+    ``ValueError``, a dead worker process -- because the checks above leave
+    pymatgen nothing else to refuse a structure for, so it is a fault."""
     sublattice = _afm_sublattice(moments)
     if isinstance(sublattice, Warning):
         return (), sublattice
-    if len(structure) > _MAX_SITES_FOR_AFM_ENUMERATION:
+    unmagnetized = _without_moments(structure)
+    magnetic_sites = _primitive_sublattice_sites(unmagnetized, sublattice)
+    if magnetic_sites > _MAX_MAGNETIC_SITES_FOR_AFM_ENUMERATION:
         return (), _afm_unavailable_warning(
-            f"structure has {len(structure)} sites, over the "
-            f"{_MAX_SITES_FOR_AFM_ENUMERATION}-site ceiling this "
-            "heuristic enumerates within"
+            f"the primitive cell has {magnetic_sites} magnetic sites "
+            f"({', '.join(sublattice)}), over the "
+            f"{_MAX_MAGNETIC_SITES_FOR_AFM_ENUMERATION} this heuristic "
+            "enumerates orderings for"
         )
     if not enumlib_installed():
         return (), _afm_unavailable_warning(
@@ -677,31 +697,71 @@ def _afm_candidates_or_warning(
             "and at least one was not found"
         )
 
-    try:
-        orderings = enumerate_orderings(
-            structure,
-            default_magmoms=dict.fromkeys(sublattice, 5.0),
-            strategies=("ferromagnetic", "antiferromagnetic"),
-            truncate_by_symmetry=True,
-            max_orderings=16,
-        )
-    except LinAlgError:
-        raise
-    except ValueError:
-        return (), _afm_unavailable_warning(
-            "pymatgen could not enumerate magnetic orderings for this structure"
-        )
-    except TimeoutError:
-        return (), _afm_unavailable_warning(
-            "enumlib did not finish within its time limit"
-        )
-
+    orderings = _enumerated_or_warning(unmagnetized, sublattice)
+    if isinstance(orderings, Warning):
+        return (), orderings
     candidates = tuple(candidate for candidate, origin in orderings if origin == "afm")
     if not candidates:
         return (), _afm_unavailable_warning(
             "no compensated antiferromagnetic ordering was found"
         )
     return candidates, None
+
+
+def _without_moments(structure: Structure) -> Structure:
+    """A copy of ``structure`` without spins or a ``magmom`` site
+    property."""
+    unmagnetized = structure.copy()
+    unmagnetized.remove_spin()
+    if "magmom" in unmagnetized.site_properties:
+        unmagnetized.remove_site_property("magmom")
+    return unmagnetized
+
+
+def _primitive_sublattice_sites(
+    structure: Structure, sublattice: tuple[str, ...]
+) -> int:
+    """How many sites of ``sublattice`` the primitive cell of ``structure``
+    (without moments) has, as pymatgen reduces it before enumerating.
+    Counted on ``structure`` itself when that is within the ceiling, since
+    the reduction never adds sites."""
+
+    def count(cell: Structure) -> int:
+        return sum(site.specie.symbol in sublattice for site in cell)
+
+    in_structure = count(structure)
+    if in_structure <= _MAX_MAGNETIC_SITES_FOR_AFM_ENUMERATION:
+        return in_structure
+    return count(structure.get_primitive_structure(use_site_props=False))
+
+
+def _enumerated_or_warning(
+    structure: Structure, sublattice: tuple[str, ...]
+) -> tuple[tuple[Structure, str], ...] | Warning:
+    """``enumerate_orderings`` on ``structure`` with ``sublattice`` seeded,
+    or the warning for enumlib finding no ordering or running out of time;
+    any other error propagates (``_afm_candidates_or_warning``)."""
+    try:
+        return enumerate_orderings(
+            structure,
+            default_magmoms=dict.fromkeys(sublattice, 5.0),
+            strategies=("ferromagnetic", "antiferromagnetic"),
+            automatic=False,
+            truncate_by_symmetry=True,
+            max_orderings=16,
+            transformation_kwargs={"timeout": _ENUMLIB_TIMEOUT_MINUTES, "n_jobs": 1},
+        )
+    except TimeoutError:
+        return _afm_unavailable_warning(
+            "enumlib did not finish within its "
+            f"{_ENUMLIB_TIMEOUT_MINUTES * 60:g} s time limit"
+        )
+    except ValueError as error:
+        if str(error) != _ENUMLIB_FOUND_NO_ORDERING:
+            raise
+        return _afm_unavailable_warning(
+            "enumlib found no ordering of the magnetic sites for this structure"
+        )
 
 
 def enumerate_magnetic_orderings(
@@ -719,10 +779,10 @@ def enumerate_magnetic_orderings(
     the listing half of #87's "enumerate, then optionally rank with mMACE,
     then generate" split. Returns just the ``"fm"`` entry, with no
     antiferromagnetic candidates, whenever ``_afm_candidates_or_warning``
-    gives a warning (no moment-bearing site, an undecidable sublattice, an
-    oversized structure, missing enumlib, a structure pymatgen cannot
-    enumerate, enumlib's time limit, or no compensated ordering found); any
-    other enumeration error propagates.
+    gives a warning (no moment-bearing site, an undecidable sublattice, too
+    many magnetic sites, missing enumlib, enumlib finding no ordering or
+    running out of time, or no compensated ordering found); any other
+    enumeration error propagates.
 
     The second return value is that warning whenever no AFM candidate was
     found, ``None`` otherwise -- surfaced so a caller (#87's
