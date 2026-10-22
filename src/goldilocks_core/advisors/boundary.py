@@ -56,12 +56,15 @@ axis gets no notice, whatever its bond rank: bulk graphite, 2H-MoS2 and
 Bi2Se3 rank '2d' but have no vacuum (#160). Without a resolved point group
 the slab may be symmetric, so there is no notice either.
 
-The notice reads ``geometry`` and ``symmetry`` of the structure as given,
-which is the cell written unless magnetic_ordering='afm' applies a
-supercell. A supercell that moves the vacuum to another lattice vector or
-doubles the cell across it (#144) leaves ``edir``, ``emaxpos`` and the
-'slab' offer describing the input cell, while ``checks.check_all`` tests
-'slab' on the written cell and refuses it.
+The service passes the vacuum facts of the cell the input is written for
+(``service/_magnetic.py``'s ``geometry_eff``), so ``edir``, ``emaxpos`` and
+the 'slab' offer describe that cell, the one ``checks.check_all`` tests
+'slab' on. ``symmetry`` is the uploaded structure's: an antiferromagnetic
+ordering writes the same atoms in another cell with the vacuum vector at
+its own index (#144), so whether an operation reverses the slab normal is
+unchanged. The written cell's species, split by spin, would hide the
+operations that map every spin onto an opposite one, which leave the charge
+density, and so its dipole, unchanged.
 """
 
 from __future__ import annotations
@@ -143,9 +146,9 @@ def boundary(
     supplied. Matches ``vdw_method``'s own precedence: an explicit
     override wins outright, checked before ``geometry.ok``.
 
-    ``symmetry`` of the same structure as ``geometry`` decides only the
-    heuristic's dipole notice (#160); unresolved, it adds none and blocks
-    nothing."""
+    ``symmetry``, of the structure whose cell ``geometry`` describes (the
+    module docstring), decides only the heuristic's dipole notice (#160);
+    unresolved, it adds none and blocks nothing."""
     human = human or BoundaryHumanInput()
     llm = llm or BoundaryLlmInput()
 
@@ -202,9 +205,7 @@ def _dipole_notice(slab: SlabGeometry) -> Warning:
     PW/src/extfield.f90:67-89), over ``_EOPREG`` or half the vacuum if that is
     narrower, centred on the vacuum. QE's 2D Coulomb truncation is named as the
     alternative only when ``slab.fits_2d_truncation``, the test
-    ``checks.check_all`` applies to isolation='slab' on the written cell; the
-    two agree unless that cell is a supercell that moves the vacuum or doubles
-    the cell across it (see the module docstring)."""
+    ``checks.check_all`` applies to isolation='slab' on the written cell."""
     eopreg = min(_EOPREG, slab.vacuum_fraction / 2)
     emaxpos = (slab.vacuum_center - eopreg / 2) % 1.0
     alternative = (

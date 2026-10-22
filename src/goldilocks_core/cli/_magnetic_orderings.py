@@ -6,13 +6,13 @@ with mMACE -> generate). Deliberately its own command, not a ``run``/
 ``explain`` flag: this lists candidates for a human/agent to choose among
 *before* generating any input file, the same reason
 ``service.list_magnetic_orderings`` sits outside ``advise()``/``generate()``
-entirely. This command only lists and, optionally, ranks -- but each
-listed candidate's ``--json`` output already carries the
-``structure_content``/``overrides`` needed to generate its own input
-files (write ``structure_content`` to a ``.cif`` file and pass it plus
-``overrides`` to ``goldilocks run``/``goldilocks explain``); there is no
-dedicated ``--generate`` flag here yet since that's a UI/UX design the
-Workbench frontend drives (#87 layer 4), not this listing command.
+entirely. This command only lists and, optionally, ranks; a listed
+candidate is generated from the same structure file by its label --
+``goldilocks run <structure> --set magnetic_ordering=afm-3`` (its
+``--json`` ``overrides``) -- through the same magnetic step as
+``magnetic_ordering=afm`` (#170). There is no dedicated ``--generate``
+flag here yet since that's a UI/UX design the Workbench frontend drives
+(#87 layer 4), not this listing command.
 """
 
 from __future__ import annotations

@@ -69,8 +69,9 @@ which gives each vacuum axis of the structure it is passed
 ladder from the periodic axes alone, so the mesh, the ladder and the
 reverse lookup (``_with_k_index``) agree. A cell with vacuum along all
 three axes is sampled at Gamma only, the one rung of its ladder. The
-caller passes the cell the mesh is for (the AFM-relabelled one in
-``service/_step_kpoints.py``), and the vacuum is read from that cell,
+caller passes the cell the mesh is for (the simulated cell,
+``system.cell``, in ``service/_step_kpoints.py``), and the vacuum is read
+from that cell,
 never from the dimensionality label, which calls bulk graphite '2d'. An
 explicit human ``k_grid`` is kept as given, vacuum axes included.
 
@@ -89,6 +90,7 @@ from pydantic import Field
 from pymatgen.core import Structure
 
 from goldilocks_core.advisors.occupations import OccupationsDecision
+from goldilocks_core.advisors.species_split import split_species
 from goldilocks_core.analysis.is_metal import Metallicity
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.kmesh import (
@@ -274,11 +276,17 @@ def _ml_k_distance(structure: Structure) -> float | None:
     in which case ``k_sampling()`` falls back to its next tier, as
     ``analysis/is_metal.py``'s ``_ml_is_metal`` does. A model that is set up
     but fails to load or predict raises, failing ``k_sampling()`` itself
-    (#130)."""
+    (#130).
+
+    QRF95 reads the cell's chemistry, so it gets ``structure`` with one
+    plain element per site (``split_species`` without classes): the species
+    of a spin-polarized cell carry their starting-magnetization class as
+    ``Species.spin``, a pw.x species label the model was not trained on,
+    and its prediction moved with them (LiFePO4's afm-1 by 11%, #170)."""
     from goldilocks_core.ml.predict import MlModelUnavailable, predict_k_distance
 
     try:
-        prediction = predict_k_distance(structure)
+        prediction = predict_k_distance(split_species(structure, None))
     except MlModelUnavailable:
         return None
     return float(prediction.value)

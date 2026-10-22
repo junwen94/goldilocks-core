@@ -32,9 +32,10 @@ A `run` (or `explain`) request follows this path:
    `/inspect` route use.
 2. `service.advise(structure, *, code, hpc, overrides, store, fetch_missing)`
    runs three phases in a fixed order: `_analysis.analyze` (structure facts),
-   `_system.system_advice` (system-wide advisors, including pseudopotential-
-   table selection), and `_step.steps_advice` (per-step k-point/occupation
-   advisors, then the task's job and each step's parallelisation).
+   `_system.system_advice` (system-wide advisors, starting with the simulated
+   cell and pseudopotential-table selection), and `_step.steps_advice`
+   (per-step k-point/occupation advisors, then the task's job and each step's
+   parallelisation).
    `advise()` returns an `Advice` even for an incomplete request: a field it
    cannot decide, because an input is missing, something is not installed or
    configured, or the request leaves it open, is `Unavailable`/`Blocked`. A
@@ -98,13 +99,24 @@ Every task runs the same fixed order — `advise` -> `check` -> `generate` ->
 Inside `advise()` itself, the three phases are:
 
 - **Analyze** (`service/_analysis.py`, backed by `analysis/`: `composition.py`,
-  `geometry.py`, `is_magnetic.py`, `is_metal.py`, `needs_correlation.py`,
-  `needs_soc.py`, `symmetry.py`) reports structure facts.
+  `geometry.py`, `is_magnetic.py`, `is_metal.py`, `local_moments.py`,
+  `needs_correlation.py`, `needs_soc.py`, `symmetry.py`) reports structure
+  facts. `local_moments.py` is the open-shell model behind `is_magnetic`'s
+  heuristic tier.
 - **System advice** (`service/_system.py`, backed by system-scoped advisors in
   `advisors/` such as `functional.py`, `hubbard_u.py`, `vdw_method.py`,
   `boundary.py`, `magnetic_config.py`) recommends system-wide parameters,
   including pseudopotential-table selection via `advisors/pseudo_selection.py`
-  and `service/_pseudo.py`.
+  and `service/_pseudo.py`. It starts with the simulated cell
+  (`service/_magnetic.py`): `magnetic_config.magnetic_cell` resolves spin
+  polarization, spin-orbit coupling and a magnetic spin-orbit run's moment
+  direction, and applies the requested magnetic ordering, the only enumlib
+  call, which can replace the input with a different cell. Table selection
+  then reads the cell's spin-orbit switch, and
+  `magnetic_config.magnetic_config` seeds the cell's moments from the
+  selected z_valence. Everything after that -- the electron count, the step
+  advice, the gate and the writer -- reads that one cell object, so no count
+  describes a cell other than the one written.
 - **Step advice** (`service/_step.py`, split into `service/_step_kpoints.py`
   for occupations/k-mesh/bands/convergence and `service/_step_resources.py`
   for the job/parallelisation, backed by per-step advisors such as
@@ -137,7 +149,7 @@ Paths below are relative to `src/goldilocks_core/` unless stated otherwise.
 | Core types          | `resolution.py`: the `Resolved`/`Unavailable`/`Blocked` tri-state and `Provenance`/`Source`, used everywhere; `steps.py`: `Step`/`SharedContext`; `step_settings.py`/`system_settings.py`: the settings dataclasses `generate()` builds; `plan.py`: `PlannedStep`/`expand_task`, multi-step task planning. There is no centralized `contracts` package any more — importing `goldilocks_core.contracts` is a ruff-banned API; import from the module that defines the name instead. |
 | Orchestration       | `service/_pipeline.py`: `advise()`/`check()`, and `advise_steps`, which advises every `pw.x` step of a task with one shared job; `service/_generate.py`: `generate()`, the hard-fail boundary; `service/_dos.py` / `service/_relax.py`: the multi-step and relax task variants; `service/_bundle.py`: submission rendering and bundle assembly; `checks.py`: the sole cross-parameter hard-fail gateway. |
 | Input and discovery | `inputs/structure.py`: structure normalization and inspection; `capabilities.py`: available codes, tasks, settings, pseudopotential tables, HPC profiles, and warnings — reflected from the override dataclasses and advisor warning catalogues, not hand-listed.                                                        |
-| Scientific behavior | `analysis/`: structure facts (`composition.py`, `geometry.py`, `is_magnetic.py`, `is_metal.py`, `needs_correlation.py`, `needs_soc.py`, `symmetry.py`); `advisors/`: the recommendation layer (`boundary.py`, `convergence.py`, `cutoffs.py`, `electron_count.py`, `functional.py`, `hubbard_u.py`, `job_resources.py`, `k_sampling.py`, `magnetic_config.py`, `n_irr_k.py`, `nbnd.py`, `occupations.py`, `parallelisation.py`, `pseudo_selection.py`, `relax.py`, `size.py`, `vdw_method.py`, `dos.py`, `warning_catalogue.py`); top-level `kmesh.py`: k-point mesh ladder math. |
+| Scientific behavior | `analysis/`: structure facts (`composition.py`, `geometry.py`, `is_magnetic.py`, `is_metal.py`, `local_moments.py`, `needs_correlation.py`, `needs_soc.py`, `symmetry.py`); `advisors/`: the recommendation layer (`boundary.py`, `convergence.py`, `cutoffs.py`, `electron_count.py`, `functional.py`, `hubbard_u.py`, `job_resources.py`, `k_sampling.py`, `magnetic_config.py`, `n_irr_k.py`, `nbnd.py`, `occupations.py`, `parallelisation.py`, `pseudo_selection.py`, `relax.py`, `size.py`, `species_split.py`, `vdw_method.py`, `dos.py`, `warning_catalogue.py`); top-level `kmesh.py`: k-point mesh ladder math. |
 | Assets              | `assets/`: installation and integrity (`AssetStore`); `ml/models.py`: model declarations (loading plumbing only — no advisor calls it yet, see below); `assets/pseudopotentials/registry.py` and `assets/pseudopotentials/importers.py`: table declarations and provider normalization; `service/_pseudo.py`: the one place in the pipeline that touches the asset store/filesystem, resolving the installed asset, loading its manifest, narrowing it to a structure's elements, and reading the selected UPF headers' projector counts for the memory estimate. |
 | Output              | `generation/`: target-code writers (`generation/quantum_espresso/scf.py`, `relax.py`, `dos.py`, `namelists.py`); top-level `bundle.py`: manifest assembly and directory/ZIP publication, replacing v1's separate `input_data.py`/`publication.py`/`serialization.py` roles.                                                                                                                        |
 | Transports          | `cli/core.py`: local commands; `server/documents.py`: request/response pydantic models; `server/_handlers.py`: the one shared request-validation/dispatch implementation both `server/http.py` and `server/mcp.py` call; `server/readiness.py`: cached asset checks.                                                     |

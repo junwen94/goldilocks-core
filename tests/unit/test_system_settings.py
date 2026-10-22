@@ -6,7 +6,10 @@ from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.cutoffs import CutoffsDecision
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.hubbard_u import HubbardUDecision
-from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
+from goldilocks_core.advisors.magnetic_config import (
+    MagneticConfigFacts,
+    OrderingRecord,
+)
 from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.system_settings import SystemSettings
 
@@ -15,10 +18,11 @@ def _system_settings(structure, pseudo_metadata_factory) -> SystemSettings:
     return SystemSettings(
         functional="PBEsol",
         cutoffs=CutoffsDecision(ecutwfc_ry=30.0, ecutrho_ry=120.0),
-        electron_count=ElectronCountDecision(nelec=4.0),
+        electron_count=ElectronCountDecision(nelec=4.0, tot_charge=0.0),
         pseudopotentials=(pseudo_metadata_factory("Si"),),
         magnetic=MagneticConfigFacts(
-            relabeled_structure=structure,
+            cell=structure,
+            ordering=OrderingRecord(requested="fm", applied="fm", compensated=False),
             spin_polarized=False,
             magnetic_elements=(),
             starting_magnetization=None,

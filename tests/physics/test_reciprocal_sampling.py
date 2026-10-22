@@ -7,7 +7,15 @@ import pytest
 from pymatgen.core import Lattice, Structure
 from support import graphene_monolayer
 
+from goldilocks_core.advisors.k_sampling import KSamplingDecision
+from goldilocks_core.advisors.magnetic_config import (
+    MagneticCell,
+    MagneticConfigHumanInput,
+    magnetic_cell,
+)
+from goldilocks_core.advisors.n_irr_k import n_irr_k
 from goldilocks_core.kmesh import build_gamma_kmesh_entries, k_distance_to_mesh
+from goldilocks_core.resolution import Provenance, Resolved
 
 
 def _dense_orthorhombic(a: float, b: float, c: float) -> Structure:
@@ -137,3 +145,65 @@ def test_floating_point_noise_at_an_integer_boundary_does_not_inflate_the_mesh()
     mesh = k_distance_to_mesh(structure, boundary_k_distance)
 
     assert mesh == (7, 7, 7)
+
+
+def _spin_orbit_cell(structure: Structure, **settings: object) -> MagneticCell:
+    """``structure``'s cell for a magnetic spin-orbit run (#172)."""
+    state = magnetic_cell(
+        structure,
+        Resolved("magnetic", Provenance(source="heuristic")),
+        MagneticConfigHumanInput(spin_orbit_coupling=True, **settings),
+    )
+    return state.value
+
+
+def _gamma_mesh(mesh: tuple[int, int, int]) -> Resolved[KSamplingDecision]:
+    return Resolved(
+        KSamplingDecision(mesh=mesh, shift=(0, 0, 0), k_distance=0.2),
+        Provenance(source="heuristic"),
+    )
+
+
+def test_noncollinear_moments_lower_the_k_point_symmetry_as_pw_x_does() -> None:
+    """#172: with spin-orbit coupling and moments, pw.x keeps only the
+    operations that leave every moment unchanged, alone or combined with
+    time reversal, and drops the plain k -> -k pairing (QE 7.3
+    PW/src/setup.f90:484-485, symm_base.f90 sgam_at_mag). B2 FeCo with
+    moments along [001] keeps 16 of its 48 operations, and pw.x 7.5 ran
+    goldilocks' own 10x10x10 deck with 126 k-points; the structural count
+    is 56, which sized npool and memory for too few k-points."""
+    feco = Structure(Lattice.cubic(2.80), ["Fe", "Co"], [[0, 0, 0], [0.5, 0.5, 0.5]])
+    mesh = _gamma_mesh((10, 10, 10))
+
+    noncollinear = n_irr_k(_spin_orbit_cell(feco, moment_direction=(0, 0, 1)), mesh)
+    collinear = n_irr_k(
+        magnetic_cell(feco, Resolved("magnetic", Provenance(source="heuristic"))).value,
+        mesh,
+    )
+
+    assert noncollinear.value == 126
+    assert noncollinear.source == "heuristic"
+    assert collinear.value == 56
+
+
+def test_moments_along_the_tetragonal_axis_keep_the_structural_count() -> None:
+    """#172: L1_0 FePt (MC3D mc3d-49510) with moments along c, its easy
+    axis: the operations that keep the moments, with the time-reversed
+    ones acting on k as -R, still make up the whole 4/mmm point group, so
+    the count is the structural one. Moments along a break it."""
+    fept = Structure(
+        Lattice.tetragonal(3.86 / math.sqrt(2), 3.71),
+        ["Fe", "Pt"],
+        [[0, 0, 0], [0.5, 0.5, 0.5]],
+    )
+    mesh = _gamma_mesh((12, 12, 9))
+
+    along_c = n_irr_k(_spin_orbit_cell(fept, moment_direction=(0, 0, 1)), mesh)
+    along_a = n_irr_k(_spin_orbit_cell(fept, moment_direction=(1, 0, 0)), mesh)
+    collinear = n_irr_k(
+        magnetic_cell(fept, Resolved("magnetic", Provenance(source="heuristic"))).value,
+        mesh,
+    )
+
+    assert along_c.value == collinear.value == 140
+    assert along_a.value > 140

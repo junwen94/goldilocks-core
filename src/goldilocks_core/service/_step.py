@@ -23,8 +23,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from pymatgen.core import Structure
-
 from goldilocks_core.advisors.job_resources import JobHumanInput, JobLlmInput
 from goldilocks_core.advisors.relax import RelaxHumanInput, RelaxLlmInput
 from goldilocks_core.inputs.hpc import HpcProfile
@@ -82,7 +80,6 @@ class StepAdvice:
 
 
 def steps_advice(
-    structure: Structure,
     analysis: AnalysisFacts,
     system: SystemAdvice,
     hpc: HpcProfile,
@@ -91,11 +88,12 @@ def steps_advice(
     job_llm: JobLlmInput | None,
 ) -> dict[str, StepAdvice]:
     """One ``StepAdvice`` per entry of ``steps`` (a pw.x step's purpose ->
-    its overrides, in run order). The steps share one job, sized with
-    the task-level ``job_human``/``job_llm``; each step's own overrides
-    give its k-point/band advice and npool/ndiag."""
+    its overrides, in run order), all on the simulated cell
+    ``system.cell``. The steps share one job, sized with the task-level
+    ``job_human``/``job_llm``; each step's own overrides give its
+    k-point/band advice and npool/ndiag."""
     electronic = {
-        purpose: electronic_step_advice(structure, analysis, system, step.kpoints)
+        purpose: electronic_step_advice(analysis, system, step.kpoints)
         for purpose, step in steps.items()
     }
     resources = task_resources(

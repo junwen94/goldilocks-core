@@ -110,6 +110,7 @@ its type, default, and description; a selection of commonly used keys:
 | `smearing_type`                     | Smearing function when `occupations=smearing` (default `cold`)        |
 | `degauss`                           | Smearing width in Ry (default 0.01)                                   |
 | `spin_polarized`, `spin_orbit_coupling` | Force spin polarization / spin-orbit coupling                     |
+| `moment_direction`                  | Lattice direction of the uploaded cell the moments of a magnetic spin-orbit run start along, e.g. `--set 'moment_direction=[1,1,0]'` (default `[0,0,1]`) |
 | `use_vdw`, `method`                 | Force a dispersion correction; only `d3bj` is implemented, for PBE and PBEsol |
 | `isolation`                         | Electrostatic boundary: `periodic`, `slab` (Quantum ESPRESSO's 2D truncation, `assume_isolated='2D'`) or `isolated` (Martyna-Tuckerman); see [boundary conditions](science.md#check-boundary-conditions-and-vacuum) |
 | `conv_thr`, `mixing_beta`, `electron_maxstep` | SCF energy-convergence threshold, density-mixing factor, max SCF iterations |
@@ -159,14 +160,25 @@ uv run goldilocks magnetic-orderings structure.cif --json
 uv run goldilocks magnetic-orderings structure.cif --rank-with-mmace
 ```
 
-Lists a ferromagnetic guess plus any compensated antiferromagnetic
+Lists a ferromagnetic guess plus any antiferromagnetic
 candidates `enumlib` finds (see [Check magnetism and spin-orbit
 coupling](science.md#check-magnetism-and-spin-orbit-coupling)) for a
 human or agent to choose among before generating any input file. Each
-listed candidate's `--json` output carries its own `structure_content`
-and `overrides` (a fresh CIF, plus a remapped `starting_magnetization`
-for AFM candidates), enough to hand straight to `goldilocks run`/`explain`
-without re-deriving anything.
+candidate is named by its label (`fm`, `afm-1`, `afm-2`, ...), and its
+`--json` `overrides` generate it, spin-polarized, from the same structure
+file:
+
+```bash
+uv run goldilocks run structure.cif --hpc scarf --set magnetic_ordering=afm-2
+```
+
+The run enumerates again, applies the candidate of that label through the
+same steps as `magnetic_ordering=afm` (which applies `afm-1`, the smallest
+and most symmetric), and records the label in `records.magnetic` next to the
+cell's formula and atom count, with why it was written (`criterion`) and
+the other candidates of its size (`alternatives`). For a slab, wire or
+molecule in a box, only candidates that keep its vacuum vectors are listed
+and applied, so every label writes one slab with the uploaded vacuum.
 
 `--rank-with-mmace` relaxes every candidate's magnetic moments on a frozen
 mMACE potential energy surface and recommends the lowest energy-per-atom

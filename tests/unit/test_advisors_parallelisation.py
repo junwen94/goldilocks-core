@@ -3,7 +3,10 @@ from __future__ import annotations
 import pytest
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
+from goldilocks_core.advisors.magnetic_config import (
+    MagneticConfigFacts,
+    OrderingRecord,
+)
 from goldilocks_core.advisors.parallelisation import (
     WARNING_CATALOGUE,
     ParallelisationHumanInput,
@@ -23,7 +26,8 @@ def _magnetic(*, spin_polarized: bool, spin_orbit_enabled: bool) -> MagneticConf
         Lattice.cubic(2.857), ["Fe", "Co"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
     )
     return MagneticConfigFacts(
-        relabeled_structure=feco,
+        cell=feco,
+        ordering=OrderingRecord(requested="fm", applied="fm", compensated=False),
         spin_polarized=spin_polarized,
         magnetic_elements=("Co", "Fe") if spin_polarized else (),
         starting_magnetization={"Fe": 0.3, "Co": 0.2} if spin_polarized else None,

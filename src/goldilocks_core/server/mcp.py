@@ -98,13 +98,15 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
     @server.tool(
         description=(
             "List candidate magnetic orderings for a structure (plain "
-            "ferromagnetic, plus every compensated antiferromagnetic candidate "
+            "ferromagnetic, plus every antiferromagnetic candidate "
             "enumlib finds). rank_with_mmace=True additionally relaxes each "
             "candidate on the mMACE potential energy surface and marks the "
             "lowest energy-per-atom one as recommended; degrades to an "
             "unranked listing, with a warning, if that is not configured on "
             "the server. Lists candidates only -- does not generate any "
-            "input file."
+            "input file: generate one by calling run or explain on the same "
+            "structure with the candidate's overrides "
+            "({'magnetic_ordering': '<label>'})."
         )
     )
     async def magnetic_orderings(

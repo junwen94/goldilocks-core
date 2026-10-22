@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
 import json
 
 import pytest
-from pymatgen.core import Lattice, Structure
+from pymatgen.core import Lattice, Species as SpinSpecies, Structure
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from support import (
     SSSP_FIXTURE_UPF as _UPF,
     sssp_fixture_table_spec as _sssp_table_spec,
 )
 
+from goldilocks_core.advisors import magnetic_config as magnetic_config_module
 from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
 from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
 from goldilocks_core.advisors.parallelisation import (
@@ -33,6 +35,7 @@ from goldilocks_core.service import (
     StepOverrides,
     SystemOverrides,
     advise,
+    advise_dos,
     advise_relax,
     check,
     generate,
@@ -253,7 +256,7 @@ def _per_process_mb(
     cutoffs = advice.system.cutoffs.value
     nbnd = advice.step.kpoints.nbnd.value.nbnd
     estimate = resource_estimate(
-        advice.system.magnetic.value.relabeled_structure.lattice,
+        advice.system.magnetic.value.cell.lattice,
         (species,),
         ecutwfc_ry=cutoffs.ecutwfc_ry,
         ecutrho_ry=cutoffs.ecutrho_ry,
@@ -379,13 +382,15 @@ class TestJobMemory:
         self, hpc, installed_table
     ) -> None:
         """The estimate counts the species of the written cell, which a
-        partially occupied site does not have."""
+        partially occupied site does not have. (Spin-unpolarized: a
+        spin-polarized disordered cell is already Blocked, #142.)"""
         store, _table = installed_table
         vacancy = Structure(
             Lattice.cubic(5.43), [{"Si": 0.5}, "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]]
         )
+        overrides = build_overrides({"spin_polarized": False})
 
-        advice = advise(vacancy, hpc=hpc, store=store)
+        advice = advise(vacancy, hpc=hpc, overrides=overrides, store=store)
 
         job = advice.step.resources.job
         assert isinstance(job, Unavailable)
@@ -537,6 +542,31 @@ class TestAdviseDegradation:
         assert advice.step.kpoints.occupations.ok
         assert advice.system.boundary.ok
 
+    @pytest.mark.parametrize(
+        "settings", [{}, {"spin_polarized": True}], ids=["default", "spin_polarized"]
+    )
+    def test_a_disordered_structure_blocks_the_magnetic_record_not_a_crash(
+        self, hpc, settings
+    ) -> None:
+        """#142: the magnetism of fractional site occupancies cannot be
+        decided, so the run defaults to spin-polarized, whose seeds need
+        one species per site. The magnetic record is Blocked with that
+        reason. It used to resolve spin-unpolarized by default, and with
+        spin_polarized=true seeding raised AttributeError on
+        ``site.specie``."""
+        disordered = Structure(
+            Lattice.cubic(2.86),
+            [{"Fe": 0.5, "Co": 0.5}, {"Fe": 0.5, "Co": 0.5}],
+            [[0, 0, 0], [0.5, 0.5, 0.5]],
+        )
+
+        advice = advise(disordered, hpc=hpc, overrides=build_overrides(settings))
+
+        magnetic = advice.records()["magnetic"]
+        assert isinstance(magnetic, Blocked)
+        assert "fractional site occupancies" in magnetic.root_cause()
+        assert not check(advice).ok
+
     def test_blocked_root_cause_is_reachable_from_a_downstream_field(
         self, silicon, hpc
     ) -> None:
@@ -599,8 +629,9 @@ class TestAdviseDegradation:
         assert "not installed" in advice.system.pseudo.metadata.reason
         assert isinstance(advice.system.cutoffs, Blocked)
         # A table *was* selected (only the asset isn't downloaded yet) --
-        # ``relativistic`` is already confirmed, and magnetic still falls
-        # back to its pre-pseudo provisional guess rather than blocking:
+        # ``relativistic`` is already confirmed, and magnetic still
+        # resolves, seeded at the flat default fractions because the table
+        # is not installed, rather than blocking:
         # this is an ordinary preview-without-download run, not a chain
         # failure (contrast the SOC-on-a-lanthanide test above, where no
         # table can ever be selected at all).
@@ -674,12 +705,12 @@ def test_forced_spin_polarization_survives_generation_on_a_labeled_structure(
 )
 class TestAfmRelabeling:
     """v2 epic 9 (#9)'s AFM acceptance scenario, through the real
-    ``advise()`` orchestrator -- not just ``magnetic_config()`` in
+    ``advise()`` orchestrator -- not just ``magnetic_cell()`` in
     isolation (that half is ``test_advisors_magnetic_config.py``'s job).
     No asset store needed: table *selection* (which is all AFM relabeling
     itself depends on) works off the bundled registry data alone."""
 
-    def test_afm_ordering_produces_a_relabeled_structure_and_a_different_symmetry_eff(
+    def test_afm_ordering_produces_a_split_cell_and_a_different_symmetry_eff(
         self, hpc
     ) -> None:
         rock_salt_feo = Structure(
@@ -694,14 +725,15 @@ class TestAfmRelabeling:
         advice = advise(rock_salt_feo, hpc=hpc, overrides=overrides)
 
         assert advice.system.magnetic.ok
-        relabeled = advice.system.magnetic.value.relabeled_structure
-        assert len(set(relabeled.species)) > len(set(rock_salt_feo.species))
+        cell = advice.system.cell.value.structure
+        assert advice.system.magnetic.value.cell is cell
+        assert len(set(cell.species)) > len(set(rock_salt_feo.species))
 
         assert advice.analysis.symmetry.ok
         assert advice.system.symmetry_eff.ok
         assert advice.system.symmetry_eff.value != advice.analysis.symmetry.value
 
-        # k_sampling/n_irr_k consumed the relabeled (bigger) cell, not the
+        # k_sampling/n_irr_k consumed the split (bigger) cell, not the
         # original one, and did not crash doing it.
         assert advice.step.kpoints.k_sampling.ok
         assert advice.step.kpoints.n_irr_k.ok
@@ -714,7 +746,9 @@ class TestAfmRelabeling:
         advice = advise(rock_salt_feo, hpc=hpc)
 
         assert advice.system.magnetic.ok
-        assert advice.system.magnetic.value.relabeled_structure == rock_salt_feo
+        cell = advice.system.magnetic.value.cell
+        assert [site.label for site in cell] == ["Fe", "O"]
+        assert cell.frac_coords.tolist() == rock_salt_feo.frac_coords.tolist()
         assert advice.system.symmetry_eff.value == advice.analysis.symmetry.value
 
 
@@ -866,20 +900,215 @@ def test_frozen_ns_warning_follows_the_hubbard_decision_not_needs_correlation(
     assert (frozen_ns in codes) is applies_u
 
 
-def test_pseudo_requirements_reflects_first_pass_spin_orbit(
+def test_a_blocked_cell_blocks_every_count_made_on_it(
     silicon, hpc, installed_table
 ) -> None:
-    """Regression guard for the two-pass magnetic_config wiring: the
-    table search must use the *first*-pass spin_orbit_enabled, since the
-    real per-element z_valence calibration only exists after a table is
-    already chosen."""
+    """#128: k-points, convergence, the electron count and bands describe
+    the simulated cell. When it cannot be decided -- a starting_magnetization
+    label the cell does not have -- they block on that reason instead of
+    describing the uploaded structure."""
+    store, _table = installed_table
+
+    advice = advise(
+        silicon,
+        hpc=hpc,
+        overrides=build_overrides({"starting_magnetization": {"Si9": 0.5}}),
+        store=store,
+    )
+
+    kpoints = advice.step.kpoints
+    for state in (
+        kpoints.k_sampling,
+        kpoints.n_irr_k,
+        kpoints.convergence,
+        kpoints.nbnd,
+        advice.step.resources.job,
+        advice.system.electron_count,
+        advice.system.symmetry_eff,
+        advice.system.magnetic,
+        advice.system.cell,
+    ):
+        assert isinstance(state, Blocked)
+        assert "Si9" in state.root_cause()
+    assert not check(advice).ok
+
+
+def test_table_selection_reads_the_simulated_cell_s_spin_orbit_switch(
+    silicon, hpc, installed_table
+) -> None:
+    """The cell step decides spin-orbit coupling before any table is
+    chosen, and selection reads it (#128): the scalar-relativistic
+    fixture table serves the plain run and cannot serve a spin-orbit one.
+    The seeds that need the table's z_valence come after it, so nothing
+    runs twice."""
     store, table = installed_table
 
-    advice = advise(silicon, hpc=hpc, store=store)
+    plain = advise(silicon, hpc=hpc, store=store)
+    spin_orbit = advise(
+        silicon,
+        hpc=hpc,
+        overrides=build_overrides({"spin_orbit_coupling": True}),
+        store=store,
+    )
 
-    assert advice.system.magnetic.ok
-    assert advice.system.pseudo.table.ok
-    assert advice.system.pseudo.table.value.id == table.id
+    assert plain.system.magnetic.ok
+    assert plain.system.pseudo.table.value.id == table.id
+    assert spin_orbit.system.cell.value.spin_orbit_enabled is True
+    assert not spin_orbit.system.pseudo.table.ok
+
+
+def _afm_rock_salt(structure: Structure) -> Structure:
+    """A spin-decorated 4-site cell of a 2-site rock-salt input, Ni up and
+    down along the doubled c -- the shape ``MagneticStructureEnumerator``
+    returns a candidate in."""
+    supercell = structure * (1, 1, 2)
+    spins = iter((5.0, -5.0))
+    return Structure(
+        supercell.lattice,
+        [
+            SpinSpecies("Ni", spin=next(spins))
+            if site.specie.symbol == "Ni"
+            else site.specie
+            for site in supercell
+        ],
+        supercell.frac_coords,
+    )
+
+
+@pytest.fixture
+def counted_enumerations(monkeypatch) -> list[Structure]:
+    """Every structure handed to enumlib's enumeration, which returns one
+    4-site antiferromagnetic candidate -- stubbed on the module that calls
+    it, because the real enumerator runs in a worker process a
+    monkeypatch cannot reach."""
+    calls: list[Structure] = []
+
+    def enumerate_orderings(structure: Structure, **_kwargs: object):
+        calls.append(structure)
+        return ((_afm_rock_salt(structure), "afm"),)
+
+    monkeypatch.setattr(magnetic_config_module, "enumlib_installed", lambda: True)
+    monkeypatch.setattr(
+        magnetic_config_module, "enumerate_orderings", enumerate_orderings
+    )
+    return calls
+
+
+@pytest.mark.parametrize(
+    "advise_task",
+    [
+        pytest.param(advise, id="advise"),
+        pytest.param(advise_dos, id="advise_dos"),
+        pytest.param(functools.partial(advise_relax, calculation="relax"), id="relax"),
+    ],
+)
+def test_an_afm_task_enumerates_its_orderings_once(
+    hpc, correlated_store, counted_enumerations, advise_task
+) -> None:
+    """#184 (part A), #128: the simulated cell is resolved once per task.
+    The two-pass magnetic decision used to enumerate before pseudopotential
+    selection and again after it, about a second of enumlib each."""
+    advise_task(
+        _rock_salt_nio(),
+        hpc=hpc,
+        overrides=build_overrides({"magnetic_ordering": "afm"}),
+        store=correlated_store,
+    )
+
+    assert len(counted_enumerations) == 1
+
+
+def test_the_written_cell_is_seeded_once_from_the_selected_table(
+    hpc, correlated_store, counted_enumerations, tmp_path
+) -> None:
+    """#128: the starting moments are set once, on the written cell, after
+    table selection -- Ni's 5 Bohr magneton target over the table's
+    z_valence of 18, opposite on the two Ni sublattices, with O off the
+    sublattice at 0 (#170). A table that is not installed yet leaves
+    aiida's flat 0.1."""
+    overrides = build_overrides({"magnetic_ordering": "afm"})
+
+    installed = advise(
+        _rock_salt_nio(), hpc=hpc, overrides=overrides, store=correlated_store
+    )
+    not_installed = advise(
+        _rock_salt_nio(), hpc=hpc, overrides=overrides, store=AssetStore(tmp_path)
+    )
+
+    assert installed.system.magnetic.value.starting_magnetization == {
+        "Ni1": 5.0 / 18.0,
+        "Ni2": -5.0 / 18.0,
+        "O": 0.0,
+    }
+    assert isinstance(not_installed.system.pseudo.metadata, Unavailable)
+    assert not_installed.system.magnetic.value.starting_magnetization == {
+        "Ni1": 0.1,
+        "Ni2": -0.1,
+        "O": 0.0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("settings", "cell", "ordering"),
+    [
+        pytest.param(
+            {},
+            {"formula": "Ni1 O1", "nat": 2},
+            {
+                "requested": None,
+                "applied": "fm",
+                "compensated": False,
+                "criterion": "identity",
+                "alternatives": [],
+            },
+            id="unset",
+        ),
+        pytest.param(
+            {"magnetic_ordering": "fm"},
+            {"formula": "Ni1 O1", "nat": 2},
+            {
+                "requested": "fm",
+                "applied": "fm",
+                "compensated": False,
+                "criterion": "identity",
+                "alternatives": [],
+            },
+            id="fm",
+        ),
+        pytest.param(
+            {"magnetic_ordering": "afm"},
+            {"formula": "Ni2 O2", "nat": 4},
+            {
+                "requested": "afm",
+                "applied": "afm-1",
+                "compensated": True,
+                "criterion": "smallest_cell",
+                "alternatives": [],
+            },
+            id="afm",
+        ),
+    ],
+)
+def test_the_magnetic_record_shows_the_written_cell_and_its_ordering(
+    hpc, correlated_store, counted_enumerations, settings, cell, ordering
+) -> None:
+    """#128: goldilocks.json records the cell the input is written for, as
+    its formula and atom count (any Structure in a record projects to
+    those, never to host-specific or bulky data), next to the ordering
+    asked for (none when unset, unlike an explicit fm, which is a spin
+    request), the one applied, whether it is compensated (#138), why it
+    was applied and the other candidates of its size (#144)."""
+    advice = advise(
+        _rock_salt_nio(),
+        hpc=hpc,
+        overrides=build_overrides(settings),
+        store=correlated_store,
+    )
+
+    record = advice.records()["magnetic"].value
+    assert record["cell"] == cell
+    assert record["ordering"] == ordering
+    assert json.loads(json.dumps(record))["cell"] == cell
 
 
 def test_advise_reduces_only_the_chosen_mesh_by_symmetry(hpc, monkeypatch) -> None:

@@ -1,27 +1,21 @@
-"""is_magnetic: magnetic | non_magnetic, from composition and guessed
-oxidation states.
+"""is_magnetic: magnetic | non_magnetic -- whether the structure has local
+moments a spin-polarized calculation should seed.
 
-Fixes the bug in stfc/goldilocks-core#175 (v2 epic 4, #1): v1 has no
-``is_magnetic`` function -- the closest equivalent, ``advice/parameters.py``'s
-``_advise_magnetism``, triggers on any transition-metal/lanthanide/actinide
-*presence* with no regard to oxidation state, so ZnO/TiO2/Cu2O/Sc2O3 (Zn2+,
-Ti4+, Cu+, Sc3+ -- d10, d0, d10, d0: closed or empty d shells, no unpaired d
-electrons) get advised spin-polarised for nothing.
+Resolves ``human > ml > llm > heuristic``. The heuristic tier (#142) reads
+``analysis/local_moments.py``, the package's one open-shell model: magnetic
+when an element carries a local d or f moment or the structure holds an
+open-shell radical, non-magnetic otherwise, and ``Unavailable`` -- never a
+guessed answer -- when that model cannot decide (a disordered structure, an
+oxidation state it cannot pin down, an element without a covalent radius).
+``advisors/magnetic_config.py`` then defaults the run to spin-polarized
+under a warning.
 
-Lanthanides/actinides keep the broad "present -> magnetic" rule unchanged:
-#175's evidence is all transition-metal oxides, and f-electron counting is a
-materially different problem from the d-electron rule below -- narrowing
-that is future work with no evidence base here, not something to guess at.
-
-For transition metals, d-electron count = group number - oxidation state
-(the standard crystal-field-theory convention for groups 3-12); d0 or d10
-means a closed or empty d shell, hence no unpaired d electrons to align.
-Oxidation states are guessed from composition alone
-(``pymatgen.core.Composition.oxi_state_guesses`` -- ICSD-derived charge
-statistics, no bond geometry, no network, no installed model). When the
-guess is empty, ambiguous, or chemically implausible, this returns
-``Unavailable`` rather than assuming either answer -- exactly the case
-tri-state exists for.
+It replaces a rule that counted d electrons as group minus a guessed
+oxidation state for every transition metal (stfc/goldilocks-core#175's fix
+for v1, which spin-polarized any transition-metal presence): elemental Ni
+read as Ni0 d10, FePt and FeCo had no guess, metallic TiN and WC read as
+Ti3+ d1 and W4+ d2, any lanthanide or actinide counted as magnetic (f0
+ThO2), and no p-block radical ever did (solid O2).
 """
 
 from __future__ import annotations
@@ -29,14 +23,12 @@ from __future__ import annotations
 from typing import Literal
 
 from pymatgen.core import Structure
-from pymatgen.core.periodic_table import Element
 
+from goldilocks_core.analysis.local_moments import local_moments
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
-from goldilocks_core.resolution import FieldState, Provenance, Resolved, Unavailable
+from goldilocks_core.resolution import FieldState, Provenance, Resolved
 
 Magnetism = Literal["magnetic", "non_magnetic"]
-
-_CLOSED_SHELL_D_COUNTS = frozenset({0, 10})
 
 
 class IsMagneticHumanInput(HumanInput):
@@ -105,43 +97,11 @@ def _ml_is_magnetic(structure: Structure) -> bool | None:
 
 
 def _heuristic(structure: Structure) -> FieldState[Magnetism]:
-    elements = tuple(sorted(e.symbol for e in structure.composition.elements))
-    periodic_elements = tuple(Element(symbol) for symbol in elements)
-
-    if any(
-        element.is_lanthanoid or element.is_actinoid for element in periodic_elements
-    ):
-        return Resolved("magnetic", Provenance(source="heuristic"))
-
-    transition_metals = tuple(
-        element for element in periodic_elements if element.is_transition_metal
+    moments = local_moments(structure)
+    if not moments.ok:
+        return moments
+    facts = moments.value
+    magnetic = bool(facts.moment_elements) or facts.radical
+    return Resolved(
+        "magnetic" if magnetic else "non_magnetic", Provenance(source="heuristic")
     )
-    if not transition_metals:
-        return Resolved("non_magnetic", Provenance(source="heuristic"))
-
-    try:
-        guesses = structure.composition.oxi_state_guesses()
-    except ValueError:
-        # e.g. a disordered structure's fractional site occupancies give a
-        # non-integer composition, which oxi_state_guesses refuses outright.
-        guesses = ()
-    if not guesses:
-        return Unavailable(
-            reason="could not guess oxidation states to check d-electron count"
-        )
-    best_guess = guesses[0]
-
-    for element in transition_metals:
-        oxidation_state = best_guess.get(element.symbol)
-        if oxidation_state is None:
-            return Unavailable(reason=f"oxidation state guess omits {element.symbol}")
-        d_electrons = round(element.group - oxidation_state)
-        if not 0 <= d_electrons <= 10:
-            return Unavailable(
-                reason=f"{element.symbol}{oxidation_state:+g} implies an "
-                f"unphysical d-electron count ({d_electrons})"
-            )
-        if d_electrons not in _CLOSED_SHELL_D_COUNTS:
-            return Resolved("magnetic", Provenance(source="heuristic"))
-
-    return Resolved("non_magnetic", Provenance(source="heuristic"))

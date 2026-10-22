@@ -229,13 +229,16 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "nelec": {
         "description": (
-            "Total valence electron count; otherwise summed from "
-            "pseudopotential z_valence."
+            "Total valence electron count of the uploaded cell (otherwise "
+            "summed from pseudopotential z_valence), written as tot_charge, "
+            "its difference from the neutral count; refused when "
+            "magnetic_ordering writes a cell of another size."
         ),
     },
     "spin_polarized": {
         "description": (
-            "Force spin-polarized (nspin=2) vs non-spin-polarized calculation."
+            "Force spin polarization on or off: a collinear nspin=2 run, or a "
+            "magnetic noncollinear one with spin_orbit_coupling."
         ),
     },
     "spin_orbit_coupling": {
@@ -246,23 +249,46 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "tot_magnetization": {
         "description": (
-            "Total per-cell magnetization target; not valid together with "
-            "spin_orbit_coupling."
+            "Total per-cell magnetization target of a collinear spin-polarized "
+            "run (nspin=2); refused with spin_orbit_coupling, whose noncollinear "
+            "run takes starting_magnetization instead, and ignored when "
+            "spin_polarized is false. Fixed occupations need an integer of the "
+            "electron count's parity; a non-metal gets them by default only "
+            "then, and smearing otherwise."
         ),
     },
     "starting_magnetization": {
         "description": (
-            "Per-element starting spin-polarization fraction (each value in "
-            "[-1, 1]) fed directly to the generated input, bypassing the "
-            "valence-electron-based heuristic."
+            "Starting spin-polarization fraction (each value in [-1, 1]) per "
+            "site label -- the uploaded structure's labels, or Ni1/Ni2/O-style "
+            "labels of an applied magnetic_ordering -- replacing the "
+            "valence-electron-based heuristic; labels left out start at 0, and "
+            "sites with different values become separate species."
         ),
     },
     "magnetic_ordering": {
         "description": (
-            "Opt in to a compensated antiferromagnetic ordering search "
-            "('afm') instead of the ferromagnetic default ('fm' or unset); "
-            "degrades to ferromagnetic with a warning if no ordering can "
-            "be found."
+            "Opt in to an antiferromagnetic ordering instead of the "
+            "ferromagnetic default ('fm' or unset), over the sites that carry "
+            "a local d or f moment: 'afm' applies the first candidate the "
+            "magnetic-orderings listing gives (the smallest cell, then the "
+            "most symmetric), 'afm-<n>' the listed candidate of that label; "
+            "records.magnetic names the criterion and the other candidates of "
+            "that size. A slab, wire or boxed molecule gets only candidates "
+            "that keep its vacuum vectors. Any value, 'fm' included, turns spin "
+            "polarization on unless spin_polarized is false, which ignores it "
+            "with a warning. 'afm' degrades to ferromagnetic with a warning if "
+            "there is no candidate; an 'afm-<n>' that is not listed is refused."
+        ),
+    },
+    "moment_direction": {
+        "description": (
+            "Direction the moments of a spin-polarized spin_orbit_coupling run "
+            "start along, as a lattice direction [u, v, w] of the uploaded "
+            "cell (non-zero), written as QE's angle1/angle2 and used to count "
+            "the k-points by magnetic symmetry. A physical choice: unset, the "
+            "moments start along [0, 0, 1], with a notice. Ignored with a "
+            "warning by any other run."
         ),
     },
     "use_vdw": {
@@ -314,7 +340,15 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "occupations": {
         "description": (
-            "Electronic-occupation scheme (fixed, smearing, or tetrahedra_opt)."
+            "Electronic-occupation scheme (fixed, smearing, or tetrahedra_opt). "
+            "Default: smearing for a metal or unconfirmed metallicity; fixed for "
+            "a non-metal where fixed occupations can run -- an even electron "
+            "count without spin polarization (spin_orbit_coupling or not), any "
+            "count on a spin-polarized spin_orbit_coupling run, and, for a "
+            "collinear spin-polarized run, an integer tot_magnetization of the "
+            "count's parity (one set, or 0 for a magnetic_ordering compensated "
+            "by symmetry) -- and smearing otherwise. An explicit fixed on a "
+            "collinear run with no such moment is refused."
         ),
     },
     "smearing_type": {

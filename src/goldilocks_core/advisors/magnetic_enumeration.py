@@ -13,13 +13,26 @@ Every enumeration therefore runs on one long-lived worker process
 directory under the system temporary directory that is deleted afterwards.
 The caller's cwd and files are never touched; concurrent callers queue on the
 worker. Only the worker imports pymatgen's enumeration stack.
+
+The worker also reads enumlib's ``vasp.<n>`` output files in enumlib's own
+numbering (``_in_enumlib_order``), not the directory's read order, which the
+filesystem decides: pymatgen keeps the first ``max_orderings`` structures,
+smallest cells first, ties in the order it reads them, so the same structure
+gave different candidates on different hosts (#170). pymatgen-core reads
+those files through ``command_line.enumlib_caller.glob`` and leaves them in
+the order ``glob`` returns, so the worker replaces that name for each
+enumeration; an enumeration that returns an antiferromagnetic ordering
+without reading through it raises, since a pymatgen-core that reads them
+some other way would make the candidates host-dependent again.
 """
 
 from __future__ import annotations
 
+import glob
 import os
 import shutil
 import tempfile
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from goldilocks_core.worker_process import WorkerProcess
@@ -63,19 +76,40 @@ def _enumerate_in_private_directory(
     structure: Structure, enumerator_kwargs: dict[str, Any]
 ) -> tuple[tuple[Structure, str], ...]:
     """Worker side of ``enumerate_orderings``: enumerate with this process's
-    cwd inside a new temporary directory, then leave and delete it."""
-    from pymatgen.analysis.magnetism.analyzer import MagneticStructureEnumerator
+    cwd inside a new temporary directory, reading enumlib's output files in
+    their own numbering (``_in_enumlib_order``), then leave and delete it.
 
+    Raises ``RuntimeError`` when an antiferromagnetic ordering comes back
+    although pymatgen never read enumlib's output through
+    ``enumlib_caller.glob`` (module docstring)."""
+    from pymatgen.analysis.magnetism.analyzer import MagneticStructureEnumerator
+    from pymatgen.command_line import enumlib_caller
+
+    patterns_read: list[str] = []
+    directory_order = enumlib_caller.glob
     with tempfile.TemporaryDirectory(prefix="goldilocks-enumlib-") as scratch:
         os.chdir(scratch)
+        enumlib_caller.glob = partial(_in_enumlib_order, read=patterns_read)
         try:
             enumerator = MagneticStructureEnumerator(structure, **enumerator_kwargs)
         finally:
+            enumlib_caller.glob = directory_order
             os.chdir(tempfile.gettempdir())
-    return tuple(
-        zip(
-            enumerator.ordered_structures,
-            enumerator.ordered_structure_origins,
-            strict=True,
+    origins = enumerator.ordered_structure_origins
+    if "afm" in origins and not patterns_read:
+        raise RuntimeError(
+            "pymatgen-core returned antiferromagnetic orderings without reading "
+            "enumlib's vasp.<n> files through enumlib_caller.glob, so their "
+            "order, and which orderings it kept, follow the filesystem (#170)"
         )
-    )
+    return tuple(zip(enumerator.ordered_structures, origins, strict=True))
+
+
+def _in_enumlib_order(pattern: str, *, read: list[str]) -> list[str]:
+    """The files ``glob.glob(pattern)`` finds, sorted by the number after
+    their last dot, with ``pattern`` appended to ``read``: pymatgen's
+    ``EnumlibAdaptor`` reads ``glob("vasp.*")``, and makeStr numbers those
+    files in enumlib's order. A name without a number raises
+    ``ValueError``."""
+    read.append(pattern)
+    return sorted(glob.glob(pattern), key=lambda name: int(name.rpartition(".")[2]))

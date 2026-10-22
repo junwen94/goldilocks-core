@@ -36,6 +36,12 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from goldilocks_core.analysis.geometry import LATTICE_AXES, LatticeAxis
 from goldilocks_core.resolution import FieldState, Provenance, Resolved, Unavailable
 
+SYMPREC = 0.01
+"""Angstrom: the one tolerance core searches symmetry with --
+``SpacegroupAnalyzer``'s default -- for the space group here (and so
+``symmetry_eff``), the k-point counts of ``advisors/n_irr_k.py`` and the
+compensated-ordering test of ``advisors/magnetic_config.py``."""
+
 
 @dataclass(frozen=True, slots=True)
 class SymmetryFacts:
@@ -55,7 +61,7 @@ def symmetry(structure: Structure) -> FieldState[SymmetryFacts]:
             reason="symmetry analysis does not support disordered structures"
         )
     try:
-        analyzer = SpacegroupAnalyzer(structure)
+        analyzer = SpacegroupAnalyzer(structure, symprec=SYMPREC)
         facts = SymmetryFacts(
             space_group_symbol=analyzer.get_space_group_symbol(),
             space_group_number=analyzer.get_space_group_number(),

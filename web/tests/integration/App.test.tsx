@@ -181,30 +181,21 @@ describe("Goldilocks Workbench", () => {
       screen.getByRole("region", { name: "Goldilocks advisors" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Bundle" })).toBeInTheDocument();
-    // Magnetic Orderings only pops in once a structure is classified
-    // magnetic (see "shows Magnetic Orderings..." below) -- absent here,
-    // it must not silently count as a fifth always-present column.
+    // Magnetic Orderings only pops in once the run is spin-polarized
+    // (see "shows Magnetic Orderings..." below) -- absent here, it must
+    // not silently count as a fifth always-present column.
     expect(
       screen.queryByRole("region", { name: "Magnetic orderings" }),
     ).not.toBeInTheDocument();
   });
 
-  it("shows Magnetic Orderings between Advisors and Bundle once the structure is classified magnetic", async () => {
+  it("shows Magnetic Orderings between Advisors and Bundle once the run is spin-polarized, even for a structure classified non-magnetic", async () => {
     const core = new CoreStub(Promise.resolve(capabilities));
     core.inspectionResults = [Promise.resolve(inspection)];
     core.explainResults = [
-      Promise.resolve({
-        records: {
-          ...explainResult.records,
-          is_magnetic: {
-            status: "resolved",
-            value: "magnetic",
-            source: "heuristic",
-          },
-        },
-        warnings: [],
-        blocking: [],
-      }),
+      Promise.resolve(
+        magneticReview({ isMagnetic: "non_magnetic", spinPolarized: true }),
+      ),
     ];
     const { container } = renderApp(core);
 
@@ -223,6 +214,26 @@ describe("Goldilocks Workbench", () => {
       regions.indexOf("Bundle"),
     );
     expect(magnetic).toBeInTheDocument();
+  });
+
+  it("hides Magnetic Orderings for a spin-unpolarized run of a structure classified magnetic", async () => {
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [
+      Promise.resolve(
+        magneticReview({ isMagnetic: "magnetic", spinPolarized: false }),
+      ),
+    ];
+    const { container } = renderApp(core);
+
+    await openStructure(userEvent.setup(), container);
+    // The review has landed once Download appears.
+    await screen.findByRole("button", { name: "Download (.zip)" });
+
+    expect(core.explainCalls).toHaveLength(1);
+    expect(
+      screen.queryByRole("region", { name: "Magnetic orderings" }),
+    ).not.toBeInTheDocument();
   });
 
   it("uses light mode by default and persists an explicit dark mode", async () => {
@@ -803,6 +814,31 @@ function optionValues(select: HTMLElement): string[] {
     select.querySelectorAll<HTMLOptionElement>("option"),
     (option) => option.value,
   );
+}
+
+/** A review whose is_magnetic classification and magnetic decision are
+ * set independently, as a spin_polarized or magnetic_ordering setting can
+ * make them disagree (#145). */
+function magneticReview({
+  isMagnetic,
+  spinPolarized,
+}: {
+  readonly isMagnetic: "magnetic" | "non_magnetic";
+  readonly spinPolarized: boolean;
+}): ExplainResult {
+  return {
+    records: {
+      ...explainResult.records,
+      is_magnetic: { status: "resolved", value: isMagnetic, source: "ml" },
+      magnetic: {
+        status: "resolved",
+        value: { spin_polarized: spinPolarized },
+        source: "human",
+      },
+    },
+    warnings: [],
+    blocking: [],
+  };
 }
 
 /** A settings group's humanized name (e.g. "Magnetic") can collide with

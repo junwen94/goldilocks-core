@@ -19,7 +19,8 @@ analysis fact:
 | `is_metal` result                                     | Default occupations                              |
 | ------------------------------------------------------ | ------------------------------------------------- |
 | `metal`, or unavailable (composition couldn't confirm) | Smearing (`smearing_type='cold'`, `degauss=0.01` Ry) |
-| `non_metal`                                            | Fixed occupations, without smearing               |
+| `non_metal`, where fixed occupations can run (below)  | Fixed occupations, without smearing               |
+| `non_metal`, otherwise                                 | Smearing, as for a metal                          |
 
 Ahead of the heuristic, a published CGCNN classifier (installed by default as
 `models/is-metal-classifier`) can resolve `is_metal` directly from structure;
@@ -35,6 +36,26 @@ assuming "fixed" on an undetected metal risks silent non-convergence. A
 confident `non_metal` result is reachable via a human override, the ML
 classifier, or an LLM override. Neither the heuristic nor the ML model
 determines a band structure.
+
+Fixed occupations fill whole bands in each spin channel: pw.x puts
+(nelec + `tot_magnetization`)/2 electrons in the spin-up channel and
+(nelec - `tot_magnetization`)/2 in the spin-down one. A non-metal therefore
+gets fixed occupations only where both are whole numbers: a run without spin
+polarization and an even electron count, with or without spin-orbit coupling
+(without moments, time reversal pairs every spin-orbit band with a degenerate
+partner, so an odd count half-fills one); a spin-polarized spin-orbit run,
+which has no `tot_magnetization` and fills single-electron bands; or a collinear
+spin-polarized run with an integer `tot_magnetization` of the electron
+count's parity, either one you set or 0 when the applied `magnetic_ordering`
+is compensated by symmetry (see below). Any other non-metal gets smearing.
+LiFePO4, or NiO classified as a non-metal, therefore runs spin-polarized on
+smearing instead of being refused. The occupations record's
+`tot_magnetization` is the moment the input pins: the one you set, with any
+occupations, or the derived 0 under fixed occupations. If you set
+`occupations` to `fixed` on a collinear spin-polarized run with no such
+moment, it gets the warning
+`occupations.fixed_spin_polarized_needs_integer_tot_magnetization` and is
+refused before generation: set `tot_magnetization` too, or use smearing.
 
 Check the `is_metal` record's `status`, `source`, and `reason` (via
 `goldilocks explain --json` or the published `goldilocks.json`'s
@@ -98,20 +119,54 @@ Spin polarization allows different spin populations, decided by `is_magnetic`
 Once its ML asset is installed, `mace`/`e3nn`/`sphericart` are on hand (a
 manual install -- see the CLI reference), and `GOLDILOCKS_MACE_BACKBONE`
 points at a downloaded mMACE checkpoint, a published mMACE-embedding
-classifier answers directly (if it then fails to run, the request fails);
-the heuristic tier otherwise enables it by
-default for lanthanides or actinides whenever present, and for transition
-metals only when a guessed oxidation state implies an open d-shell (a
-d-electron count other than 0 or 10 -- a closed or empty d-shell has no
-unpaired d electrons to align). Oxidation states are guessed from composition
-alone (pymatgen's `Composition.oxi_state_guesses`); if that guess is empty,
-ambiguous, or chemically implausible, the heuristic can't resolve
-`is_magnetic` either, and Goldilocks defaults to non-magnetic with a warning
-rather than guessing either way. Neither tier predicts magnetic *order* (see
-`magnetic_ordering` below for that). The generated input does not assign
-starting magnetic moments or magnetic sublattices; review and complete the
-magnetic setup for your calculation. Override either tier with
+classifier answers directly (if it then fails to run, the request fails).
+Otherwise the heuristic tier answers, and it calls a structure magnetic when
+an element carries a local d or f moment or the structure holds an open-shell
+radical:
+
+- **Ionic compounds** (an O, S, Se, Te, F, Cl, Br, or I anion is present): the
+  first oxidation-state guess from the composition (pymatgen's
+  `Composition.oxi_state_guesses`) gives each transition metal its d count
+  (group minus oxidation state) and each lanthanide or actinide its f count. A
+  shell strictly between empty and full carries a moment: Ni2+ (d8), Fe3+
+  (d5), and Gd3+ (f7) do; Zn2+ (d10), Ti4+ (d0), La3+, Ce4+, and Th4+ (f0),
+  and Lu3+ (f14) do not. When pymatgen finds no guess (GdI2, Fe3GeTe2, NpO2),
+  an element carries a moment if every one of its common oxidation states
+  leaves the shell open. Otherwise the heuristic cannot decide: a composition
+  those states cannot balance holds the element in another state.
+- **Metals and other compounds** (elements, intermetallics, nitrides,
+  carbides, borides, hydrides): oxidation states do not describe these, so Cr,
+  Mn, Fe, Co, and Ni carry moments, as do Ce to Tm (not La, Yb, or Lu) and, in
+  a compound such as UN, the actinides Pa to Md. Cu, the 4d and 5d metals,
+  metallic TiN and WC, and the elemental actinide metals (alpha-U) do not.
+- **Radicals**, in any structure: an open-shell main-group atom with no
+  neighbour within 1.5 times the covalent-radius sum (atoms in a box), or an
+  O2 or S2 molecule bonded only to its partner (solid O2).
+
+When the heuristic cannot decide, Goldilocks defaults to spin-polarized with
+the warning `magnetic.magnetism_unknown_defaulted_spin_polarized`. An SCF can
+quench a moment it was seeded with, but a non-spin-polarized run can never
+find one, so a wrong default costs compute time, not physics. The rules still
+over-seed where a formally open shell keeps no moment (low-spin Co3+ in
+LiCoO2, Mo4+ in MoS2), and a misguessed oxidation state can hide one (pymatgen
+reads CrTe3 as d0 Cr6+): set `spin_polarized` when you know better. A
+structure with fractional site occupancies is undecidable too, and since a
+spin-polarized run needs one species per site to seed, its magnetic setup is
+blocked until you set `spin_polarized` to false or upload an ordered cell.
+Spin-polarized inputs get a `starting_magnetization` for every species;
+review it for your calculation. Neither tier predicts magnetic *order* (see
+`magnetic_ordering` below for that). Override either tier with
 `spin_polarized`.
+
+A `starting_magnetization` you set is keyed by site label and replaces the
+heuristic seeds; labels you leave out start at 0. The input has one species
+per element and starting value, whatever labels your file gave its sites
+(`Si1`..`Si40` are one `Si`), and sites of one element with different values
+become separate species (`Fe0` at 0.5 and `Fe1` at -0.5 are written as `Fe1`
+and `Fe2`). Symmetry and the irreducible k-points are counted on those
+species, the way pw.x counts them: that bcc Fe pair is simple cubic (Pm-3m),
+not body-centred. `records.magnetic.starting_magnetization` is keyed by the
+written species, not by your file's site labels.
 
 Spin-orbit coupling (SOC) couples electron spin to orbital motion. Goldilocks
 flags elements at or above Rb (Z=37) whose valence character is p, d, or f for
@@ -122,28 +177,123 @@ not only the elements. Enabling it changes the required pseudopotentials and
 the QE spin settings. See [relativistic modes](conventions.md#relativistic-modes)
 and the [table restrictions](pseudopotentials.md#choose-a-table).
 
-Set `magnetic_ordering` to `afm` to opt in to a compensated antiferromagnetic
-search instead of the ferromagnetic default. Goldilocks cannot tell you which
-magnetic ordering is the true ground state -- that needs comparing total
-energies from several actual calculations -- so this only gives one
-reasonable, deterministic starting point (the smallest compensated ordering
-found), for you to run and compare against the ferromagnetic guess yourself.
+A spin-polarized run with SOC is noncollinear: every moment starts along one
+direction, and that direction is a physical choice, since magnetic
+anisotropy, orbital moments and band splittings depend on it. Set
+`moment_direction` to a lattice direction [u, v, w] of the uploaded cell
+(`--set 'moment_direction=[1,1,0]'`). Unset, the moments start along
+[0, 0, 1], the uploaded cell's third lattice vector, with the info notice
+`magnetic.soc_moment_direction_defaulted`; for a CIF that is the c axis,
+which pymatgen puts along Cartesian z, QE's own default. The direction is a
+crystal direction, so it keeps its meaning whatever cell is written, an
+antiferromagnetic one included. `records.magnetic.moment_direction` shows it
+and whether you set it, and the input carries it as `angle1`/`angle2`, the
+same for every species (the sign stays in `starting_magnetization`). Any
+other run ignores `moment_direction` with the warning
+`magnetic.moment_direction_ignored`. The irreducible k-points of such a run
+are counted the way pw.x counts them: with only the symmetry operations
+that keep every moment, alone or combined with time reversal, and no
+k -> -k pairing. Cubic B2 FeCo with moments along [001] keeps 16 of its 48
+operations, so a 10x10x10 mesh has 126 irreducible k-points rather than
+56, and `npool` and the memory estimate follow that count.
+
+Set `magnetic_ordering` to `afm` to opt in to an antiferromagnetic
+ordering instead of the ferromagnetic default, or to the label of one
+candidate `goldilocks magnetic-orderings` lists (`afm-3`). Like
+`tot_magnetization` and
+`starting_magnetization`, any `magnetic_ordering`, `fm` included, asks for a
+spin-polarized run, so it turns spin
+polarization on even for a structure the classifier calls non-magnetic; an
+explicit `spin_polarized` false wins and ignores it with the warning
+`magnetic.ordering_ignored_spin_polarized_false`. Goldilocks cannot tell you
+which magnetic ordering is the true ground state -- that needs comparing total
+energies from several actual calculations -- so `afm` only gives one
+reasonable, deterministic starting point (`afm-1`, the smallest and most
+symmetric ordering found), for you to run and compare against
+the ferromagnetic guess yourself. Only the sites the heuristic above says
+carry a local d or f moment are ordered, up against down:
+the Cu2+ ions of La2CuO4 but not its La3+ (4f0), the Fe of FePt but not its
+Pt, whose moment Fe induces. Those sites are seeded up and down with the
+calibrated value (5 Bohr magnetons over the pseudopotential's valence for
+Ni, 5/18 with an 18-electron pseudopotential); every other species starts
+at 0, as in QE's own antiferromagnetic examples, so the start carries no
+net moment. `records.magnetic` records the label applied, and whether the
+ordering is compensated: whether some symmetry operation of its cell maps
+every spin onto an opposite one, so its net moment is zero by construction.
+NiO's AFM-II cell is compensated. Spinel Fe3O4's R-3m candidate is not: it
+has 3 Fe up and 3 down, but both tetrahedral Fe point down, so it is a
+ferrimagnet. Nor is B2 FeCo's `afm-1`, Fe up and Co down in the uploaded
+cell: its starting moments sum to zero, but no symmetry makes the two
+elements' moments cancel. A compensated non-metal gets fixed occupations with
+`tot_magnetization = 0`. Starting magnetizations you set on the applied
+cell decide this in place of the heuristic signs.
+A structure with no such site (closed-shell Si, or solid O2, whose moment
+belongs to the O2 molecule) keeps the ferromagnetic default with the warning
+`magnetic.afm_no_open_shell_sites`; to try an antiferromagnetic pattern
+there, upload a cell whose site labels separate the sublattices and set
+`starting_magnetization` per label. When the heuristic cannot decide which
+sites carry a moment, the warning `magnetic.afm_ordering_unavailable` gives
+its reason.
+That ordering can need a different cell from the one you uploaded: NiO's
+2-atom primitive cell becomes the 4-atom AFM-II cell, and its 8-atom
+conventional cell is reduced to the same 4-atom one. The input is then
+written for that cell, and everything counted for it (electrons, bands, the
+convergence threshold, k-points and the job's memory) is counted on it;
+`records.magnetic` names it by formula and atom count. A `nelec` you set
+counts the electrons of the cell you uploaded, so it is refused together
+with an ordering that changes the cell's size.
+pymatgen keeps at most 16 of enumlib's orderings, smallest cells first;
+goldilocks has it read enumlib's output in enumlib's own numbering, so the
+same 16 are kept wherever the structure is enumerated again with the same
+pymatgen-core, spglib and enumlib versions. They are numbered in one order
+that depends on the cells alone -- smallest first, then most symmetric --
+so a label means the same cell there too; a label
+past the listed candidates is refused.
+`records.magnetic.ordering` says why the cell was written (`criterion`:
+`smallest_cell` for `afm`, `requested` for a label, `identity` when the
+uploaded cell is kept) and lists the other candidates with as many sites
+(`alternatives`); the `magnetic.afm_ordering_applied` notice names them too.
+Smallest-and-most-symmetric is a convention, not a prediction: for Fe2O3 it
+picks the Cr2O3-type order (`afm-1`, R3c), not hematite's own (`afm-3`, R-3),
+so list the candidates and choose among them.
+A slab, a wire or a molecule in a box only gets orderings that keep its
+vacuum: a candidate is kept when its cell can be written with the uploaded
+vacuum vectors (the `geometry` record's `vacuum_axes`) as cell vectors, and
+it is written that way, each vacuum vector where it was and the other
+vectors in the plane of the rest. enumlib also offers cells that repeat the structure across the
+vacuum -- the GdI2 monolayer's first candidate doubled c, every sheet
+ferromagnetic and its only antiparallel Gd 19.94 Å away across the vacuum
+-- and those are dropped, so the monolayer gets the in-plane stripe. The
+written cell then has the uploaded vacuum, and the slab advice and gates
+(one k-point along the vacuum, `isolation`, `fix_bottom_layers`, the
+dipole notice) describe one slab. A bulk van der Waals magnet has no vacuum
+and keeps its interlayer orderings. When every candidate repeats across
+the vacuum, `afm` keeps the ferromagnetic default with a warning saying so.
 This needs the external `enumlib` executables (`enum.x` or `multienum.x`,
-plus `makeStr.py`, `makestr.x` or `makeStr.x`) on `PATH`. Without them, above a
-site-count ceiling, when pymatgen cannot enumerate your structure, when enumlib
-runs out of time, or if no compensated ordering exists for your structure, it
-degrades to the ferromagnetic default with a warning; any other enumeration
-error fails the request. Enumeration runs in a separate worker process, inside
-a private scratch directory, so it writes nothing to the current directory and
-concurrent requests cannot disturb each other.
+plus `makeStr.py`, `makestr.x` or `makeStr.x`) on `PATH`. Its cost grows with
+the number of moment-bearing sites in your structure's primitive cell, which
+is what enumlib orders, not with the atom count: 28-site LiFePO4 has 4 Fe.
+Without enumlib, with more than 8 such sites, when enumlib finds no ordering
+or a call runs past its 30 s limit, or if no antiferromagnetic ordering
+exists for your structure, `afm` degrades to the ferromagnetic default with a warning,
+and an `afm-<n>` label is refused with the same reason; any other enumeration
+error fails the request. Magnetic moments your file carries
+(a magCIF's) are not read; only the seeds above are. Enumeration runs in a
+separate worker process, inside a private scratch directory, so it writes
+nothing to the current directory and concurrent requests cannot disturb each
+other.
 
 `uv run goldilocks magnetic-orderings` lists every candidate this same
-enumeration finds -- the ferromagnetic guess plus any compensated
-antiferromagnetic ones -- for you to inspect or generate inputs from
-directly, optionally ranked by relaxing each on a frozen mMACE potential
+enumeration finds -- the ferromagnetic guess plus any antiferromagnetic
+ones, by label -- for you to inspect or generate inputs
+from with `magnetic_ordering=<label>` on the same structure, optionally
+ranked by relaxing each on a frozen mMACE potential
 energy surface (`--rank-with-mmace`) rather than picking the ferromagnetic
-guess by default. See [Magnetic orderings](cli.md#magnetic-orderings) for
-the command and its setup requirements.
+guess by default. It warns the same way when a structure with a moment gets
+no antiferromagnetic candidate, and lists a closed-shell structure's
+ferromagnetic guess alone without a warning. See
+[Magnetic orderings](cli.md#magnetic-orderings) for the command and its
+setup requirements.
 
 ## Check dispersion and dimensionality
 
@@ -239,11 +389,9 @@ requires it; the `geometry` record's `slab` field locates the vacuum
 only when the slab meets every precondition of that setting (the `slab`
 field's `fits_2d_truncation`). It does not set the
 correction itself, because pw.x then uses no symmetry and computes no stress.
-The notice and the `geometry` record describe the structure as given. With
-`magnetic_ordering=afm` the cell written can be a supercell that moves the
-vacuum to another lattice vector or doubles the cell across it; the notice's
-`edir`, `emaxpos` and `slab` offer then refer to the input cell, and
-Goldilocks still refuses `slab` on the cell written.
+The notice describes the cell that is written, which an antiferromagnetic
+`magnetic_ordering` writes with the uploaded vacuum (see
+[magnetism](#check-magnetism-and-spin-orbit-coupling)).
 Symmetric monolayers and bulk crystals get no notice: a bulk layered crystal
 such as graphite classifies as `2d` but has no vacuum.
 

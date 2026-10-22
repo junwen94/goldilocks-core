@@ -894,6 +894,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pymatgen" },
     { name = "requests" },
+    { name = "spglib" },
 ]
 
 [package.optional-dependencies]
@@ -928,6 +929,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.12" },
     { name = "pymatgen", specifier = ">=2026.3.23" },
     { name = "requests", specifier = ">=2.32" },
+    { name = "spglib", specifier = ">=2.5" },
     { name = "uvicorn", marker = "extra == 'http'" },
 ]
 provides-extras = ["http", "mcp"]

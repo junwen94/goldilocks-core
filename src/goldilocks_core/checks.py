@@ -26,30 +26,50 @@ is now where that decision belongs.
    advisor, not just the ones this epic happens to build.
 
 2. A named cross-parameter rule -- ``occupations='fixed'`` together with
-   a spin-polarized system requires an *integer* ``tot_magnetization``
+   a collinear spin-polarized run (``MagneticConfigFacts.spin_mode``
+   ``collinear``, nspin=2) requires an *integer* ``tot_magnetization``
    *that shares parity with the electron count* (nelup=(nelec+tot)/2,
    neldw=(nelec-tot)/2, #70: both need to be whole numbers, which an
    integer ``tot_magnetization`` alone does not guarantee -- QE's own
    requirement once occupation numbers are no longer automatically
-   split by smearing). This is scoped to the ``scf`` step only: an
-   ``nscf`` step reads the charge/spin density a prior ``scf`` step
-   already converged and does not re-derive this constraint
-   (goldilocks-core-design.md:3417, "per-step constraint").
-   ``advisors/occupations.py`` already flags this combination with an
-   informational warning when it produces ``fixed``, but only *this*
-   module owns the actual numeric check and the decision to block.
+   split by smearing). pw.x stops on fixed occupations without one only
+   with lsda (QE 7.3 ``PW/src/input.f90:764-781``); a noncollinear
+   (spin-orbit) run has lsda off and takes no ``tot_magnetization`` at
+   all (``input.f90:761-762``), so it needs none (#146). This is scoped
+   to the ``scf`` step only: an ``nscf`` step reads the charge/spin
+   density a prior ``scf`` step already converged and does not re-derive
+   this constraint (goldilocks-core-design.md:3417, "per-step
+   constraint").
+   The moment checked is the occupations decision's
+   (``OccupationsDecision.tot_magnetization``), the one the writer
+   renders (#138). ``advisors/occupations.py`` picks fixed for a
+   collinear run only with a moment that passes, so this rule fires only
+   for an explicit ``occupations='fixed'``, which that advisor flags with
+   a warning; only *this* module blocks.
 
 3. Its sibling rule, found empirically 2026-09-16 against real QE 7.3
    source (``PW/src/iweights.f90``'s ``iweights_only``): ``occupations
-   ='fixed'`` together with a *non*-spin-polarized system requires an
-   *even* ``electron_count`` -- with ``nspin=1`` (``degspin=2``), fixed
-   occupations fill ``NINT(nelec)/degspin`` doubly-occupied bands, which
-   can only reconstruct an even ``nelec`` exactly. An odd ``nelec`` here
-   silently truncates to the nearest even count (QE only ever prints an
-   ``infomsg`` -- "the system is metallic, specify occupations" --
-   never an error), converging on a wrong total charge with nothing
-   obviously wrong in the output. Same ``plan.SCF_LIKE_PURPOSES``
-   scoping as rule 2, same reasoning.
+   ='fixed'`` together with a *non*-spin-polarized run (spin mode
+   ``none``, or a spin-orbit run without moments) requires an *even*
+   ``electron_count`` -- with ``nspin=1``
+   (``degspin=2``), fixed occupations fill ``NINT(nelec)/degspin``
+   doubly-occupied bands, which can only reconstruct an even ``nelec``
+   exactly. An odd ``nelec`` here silently truncates to the nearest even
+   count (QE only ever prints an ``infomsg`` -- "the system is metallic,
+   specify occupations" -- never an error), converging on a wrong total
+   charge with nothing obviously wrong in the output. A noncollinear run
+   fills single-electron spinor bands (``degspin=1``,
+   ``iweights.f90:105-107``), so its count is never truncated, but one
+   without moments keeps time reversal (``domag`` false), so every band
+   has a Kramers partner degenerate with it at the time-reversal-invariant
+   k-points, and at every k with inversion: an odd count half-fills a
+   degenerate pair, a metallic state fixed occupations cannot describe,
+   and the rule applies to it too. Only a spin-polarized noncollinear run,
+   which breaks time reversal, is exempt (#146). Same
+   ``plan.SCF_LIKE_PURPOSES`` scoping as
+   rule 2, same reasoning; like rule 2 it is reachable only from an
+   explicit ``occupations='fixed'``, since the advisor's default for an odd
+   count is smearing (#138).
 
 4. A user ``ndiag`` whose s x s diagonalization grid cannot distribute
    ``nbnd`` bands (#133), s = isqrt(min(ndiag, ntasks/npool)): pw.x
@@ -84,7 +104,10 @@ from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.nbnd import NbndDecision
-from goldilocks_core.advisors.occupations import OccupationsDecision
+from goldilocks_core.advisors.occupations import (
+    OccupationsDecision,
+    whole_spin_channels,
+)
 from goldilocks_core.advisors.parallelisation import (
     ParallelisationDecision,
     diag_grid_side,
@@ -104,14 +127,9 @@ from goldilocks_core.resolution import Blocked, FieldState
 
 _MISSING_TOT_MAGNETIZATION = (
     "occupations='fixed' with a spin-polarized system requires an explicit "
-    "integer tot_magnetization, but none was set."
+    "integer tot_magnetization, but none was set; set tot_magnetization, or "
+    "use occupations='smearing'."
 )
-_EVEN_ELECTRON_COUNT_TOLERANCE = 1e-6
-"""Matches QE's own ``eps8``-scale tolerance (``PW/src/setup.f90``'s odd
--electron check) for treating a heuristically-summed ``nelec`` as an
-integer despite floating-point noise, without also treating a
-genuinely fractional ``nelec`` (e.g. a disordered/partial-occupancy
-structure) as spuriously even."""
 _TWO_D_CELL_DOFREE = frozenset({"2Dxy", "2Dshape", "ibrav+2Dxy", "ibrav+2Dshape"})
 """``cell_dofree`` values that move only the x and y components of a and b.
 The 'ibrav+' forms act as the plain ones under the writer's ``ibrav = 0``
@@ -221,9 +239,12 @@ def _fixed_occupations_needs_integer_moment(
         return None
     if not (occupations.ok and magnetic.ok):
         return None  # already surfaced via collect_blocked, or genuinely unknown
-    if occupations.value.occupations != "fixed" or not magnetic.value.spin_polarized:
+    if (
+        occupations.value.occupations != "fixed"
+        or magnetic.value.spin_mode != "collinear"
+    ):
         return None
-    tot = magnetic.value.tot_magnetization
+    tot = occupations.value.tot_magnetization
     if tot is None:
         return _MISSING_TOT_MAGNETIZATION
     if tot != int(tot):
@@ -231,19 +252,21 @@ def _fixed_occupations_needs_integer_moment(
             "occupations='fixed' with a spin-polarized system requires an "
             f"integer tot_magnetization; got {tot!r}."
         )
-    if electron_count is not None and electron_count.ok:
-        # nelup = (nelec + tot) / 2, neldw = (nelec - tot) / 2 (#70): both
-        # need to be integers, which needs tot_magnetization and nelec to
-        # share parity -- an integer tot_magnetization alone is not
-        # sufficient (e.g. nelec=3, tot=2 gives nelup=2.5/neldw=0.5).
-        nelup = (electron_count.value.nelec + tot) / 2
-        if abs(round(nelup) - nelup) > _EVEN_ELECTRON_COUNT_TOLERANCE:
-            return (
-                "occupations='fixed' requires tot_magnetization to share "
-                "parity with the electron count, so nelup/neldw are both "
-                f"integers; got tot_magnetization={tot!r}, "
-                f"nelec={electron_count.value.nelec!r}."
-            )
+    # nelup = (nelec + tot) / 2, neldw = (nelec - tot) / 2 (#70): both need
+    # to be integers, which needs tot_magnetization and nelec to share
+    # parity -- an integer tot_magnetization alone is not sufficient (e.g.
+    # nelec=3, tot=2 gives nelup=2.5/neldw=0.5).
+    if (
+        electron_count is not None
+        and electron_count.ok
+        and not whole_spin_channels(electron_count.value.nelec, tot)
+    ):
+        return (
+            "occupations='fixed' requires tot_magnetization to share "
+            "parity with the electron count, so nelup/neldw are both "
+            f"integers; got tot_magnetization={tot!r}, "
+            f"nelec={electron_count.value.nelec!r}."
+        )
     return None
 
 
@@ -254,9 +277,9 @@ def _fixed_occupations_needs_even_electron_count(
     purpose: str,
 ) -> str | None:
     """Sibling of ``_fixed_occupations_needs_integer_moment`` above, for
-    the non-spin-polarized side: found empirically 2026-09-16, verified
-    against real QE 7.3 source (``PW/src/iweights.f90``) -- see this
-    module's own docstring, rule 3."""
+    runs without spin polarization, spin-orbit or not: found empirically
+    2026-09-16, verified against real QE 7.3 source
+    (``PW/src/iweights.f90``) -- see this module's own docstring, rule 3."""
     if (
         purpose not in SCF_LIKE_PURPOSES
         or occupations is None
@@ -269,7 +292,7 @@ def _fixed_occupations_needs_even_electron_count(
     if occupations.value.occupations != "fixed" or magnetic.value.spin_polarized:
         return None
     nelec = electron_count.value.nelec
-    if abs(round(nelec / 2) - nelec / 2) > _EVEN_ELECTRON_COUNT_TOLERANCE:
+    if not whole_spin_channels(nelec, 0.0):
         return (
             "occupations='fixed' with a non-spin-polarized system requires "
             f"an even electron count; got nelec={nelec!r}, which likely means "
@@ -363,7 +386,7 @@ def _isolation_matches_written_cell(
     renders, whatever the source of ``isolation``."""
     if boundary is None or magnetic is None or not (boundary.ok and magnetic.ok):
         return None
-    cell = magnetic.value.relabeled_structure
+    cell = magnetic.value.cell
     if boundary.value.isolation == "isolated":
         return _isolated_needs_vacuum_along_every_axis(cell)
     if boundary.value.isolation == "slab":
@@ -477,9 +500,7 @@ def _two_d_cell_dofree_needs_xy_frame(
         return None
     if options.cell_dofree not in _TWO_D_CELL_DOFREE:
         return None
-    found = _xy_frame_obstacles(
-        magnetic.value.relabeled_structure, allowed_vacuum=((), ("c",))
-    )
+    found = _xy_frame_obstacles(magnetic.value.cell, allowed_vacuum=((), ("c",)))
     if not found:
         return None
     return (
@@ -547,7 +568,7 @@ def _fix_bottom_layers_requires_slab(
     count = relax.value.fix_bottom_layers
     if count is None:
         return None
-    cell = magnetic.value.relabeled_structure
+    cell = magnetic.value.cell
     layers = slab_layers(cell)
     if layers is None:
         return (

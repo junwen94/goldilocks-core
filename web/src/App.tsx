@@ -7,6 +7,7 @@ import {
   useMantineColorScheme,
 } from "@mantine/core";
 
+import type { ResolvedField } from "./api/coreClient";
 import { AdvisorsCard } from "./cards/AdvisorsCard";
 import { AnalysisCard } from "./cards/AnalysisCard";
 import { BundleCard } from "./cards/BundleCard";
@@ -43,13 +44,17 @@ export function WorkbenchContent() {
   const snapshot = useWorkspaceSnapshot();
   useAutoCompute(workspace, snapshot);
 
-  // Magnetic-ordering exploration is only meaningful once the structure
-  // is actually classified magnetic -- rather than a fifth column that's
-  // always present but usually empty, it pops in between Advisors and
-  // Bundle exactly when that classification resolves true, and the grid
-  // itself grows from four to five columns to match.
-  const showMagneticOrderings =
-    snapshot.reviewed?.records.is_magnetic?.value === "magnetic";
+  // Magnetic-ordering exploration is only meaningful for a spin-polarized
+  // run -- rather than a fifth column that's always present but usually
+  // empty, it pops in between Advisors and Bundle exactly when the
+  // magnetic decision resolves spin-polarized, and the grid itself grows
+  // from four to five columns to match. It follows the decision, not the
+  // is_magnetic classifier, so a spin_polarized or magnetic_ordering
+  // setting that overrides a non-magnetic classification shows it too
+  // (#145).
+  const showMagneticOrderings = spinPolarized(
+    snapshot.reviewed?.records.magnetic,
+  );
   const columns = showMagneticOrderings ? 5 : 4;
 
   return (
@@ -92,6 +97,14 @@ export function WorkbenchContent() {
       </main>
     </>
   );
+}
+
+/** Whether a magnetic record resolved to a spin-polarized run. */
+function spinPolarized(record: ResolvedField | undefined): boolean {
+  if (record?.status !== "resolved") return false;
+  const value = record.value;
+  if (typeof value !== "object" || value === null) return false;
+  return (value as Readonly<Record<string, unknown>>).spin_polarized === true;
 }
 
 function Workbench() {

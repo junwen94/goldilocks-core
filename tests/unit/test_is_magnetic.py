@@ -54,33 +54,69 @@ def test_open_shell_transition_metal_oxides_resolve_as_magnetic(
     assert state.value == "magnetic"
 
 
-def test_lanthanide_presence_is_magnetic_without_checking_oxidation_state() -> None:
-    """Narrowing by d-electron count only applies to transition metals here
-    -- #175's evidence base is all transition-metal oxides, not lanthanides,
-    so La keeps the broad v1-style "present -> magnetic" rule."""
-    lanthanum_nickelate = _structure("La", "Ni", "O", "O", "O")
+@pytest.mark.parametrize(
+    ("species", "magnetism"),
+    [
+        (("La", "La", "O", "O", "O"), "non_magnetic"),  # La3+ is f0
+        (("Gd", "Gd", "O", "O", "O"), "magnetic"),  # Gd3+ is f7
+        (("Th", "O", "O"), "non_magnetic"),  # Th4+ is f0
+        (("U", "O", "O"), "magnetic"),  # U4+ is f2
+    ],
+)
+def test_lanthanide_and_actinide_ions_are_decided_by_their_f_count(
+    species: tuple[str, ...], magnetism: str
+) -> None:
+    """#142: a lanthanide or actinide no longer means magnetic by its
+    presence alone -- f0 La3+ and Th4+ are closed shells (the old rule
+    seeded ThO2 at 5 uB)."""
+    state = is_magnetic(_structure(*species))
 
-    state = is_magnetic(lanthanum_nickelate)
+    assert state.value == magnetism
+    assert state.source == "heuristic"
 
-    assert state.value == "magnetic"
 
-
-def test_no_magnetic_candidate_elements_resolves_as_non_magnetic() -> None:
-    state = is_magnetic(_structure("Si"))
+def test_closed_shell_main_group_solid_resolves_as_non_magnetic(
+    diamond_silicon: Structure,
+) -> None:
+    state = is_magnetic(diamond_silicon)
 
     assert state.value == "non_magnetic"
 
 
-def test_ambiguous_oxidation_state_guess_is_unavailable() -> None:
+def test_an_isolated_open_shell_atom_resolves_as_magnetic(
+    silicon_structure: Structure,
+) -> None:
+    """One Si atom in a 4 A box has no neighbour within 1.5x the
+    covalent-radius sum (3.33 A), so it is an isolated 3P atom (#142)."""
+    state = is_magnetic(silicon_structure)
+
+    assert state.value == "magnetic"
+
+
+def test_an_intermetallic_without_an_oxidation_state_guess_is_magnetic() -> None:
     """FeNi3 has no anion to balance charge against, so
-    Composition.oxi_state_guesses() returns nothing -- this must not guess
-    either answer."""
+    Composition.oxi_state_guesses() returns nothing; Fe and Ni are
+    itinerant moment carriers in a metal (#142: the old rule called this
+    undecidable and ran it non-magnetic)."""
     permalloy_like = _structure("Fe", "Ni", "Ni", "Ni")
 
     state = is_magnetic(permalloy_like)
 
+    assert state.value == "magnetic"
+    assert state.source == "heuristic"
+
+
+def test_undecidable_local_moments_leave_is_magnetic_unavailable() -> None:
+    """US has no oxidation-state guess, and U's common +6 (5f0) does not
+    decide a compound outside its common states -- the tier must not guess
+    either answer."""
+    uranium_sulfide = _structure("U", "S")
+
+    state = is_magnetic(uranium_sulfide)
+
     assert not state.ok
     assert state.status == "unavailable"
+    assert "U" in state.reason
 
 
 def test_human_override_wins_over_heuristic() -> None:

@@ -37,7 +37,13 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
+from goldilocks_core.advisors.magnetic_config import (
+    MagneticConfigFacts,
+    MagneticConfigHumanInput,
+    OrderingRecord,
+    magnetic_cell,
+    magnetic_config,
+)
 from goldilocks_core.analysis.geometry import GeometryFacts, SlabGeometry
 from goldilocks_core.assets.records import AssetFile, AssetSpec
 from goldilocks_core.assets.runtime import statuses
@@ -46,7 +52,10 @@ from goldilocks_core.resolution import Provenance, Resolved
 
 if TYPE_CHECKING:
     from goldilocks_core.analysis.geometry import Dimensionality, LatticeAxis
+    from goldilocks_core.analysis.is_magnetic import Magnetism
     from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
+    from goldilocks_core.resolution import FieldState
+    from goldilocks_core.types import RelativisticTreatment
 
 REAL_ASSET_ROOT = asset_root()
 """The real, developer-machine asset root (not the per-test isolated
@@ -76,6 +85,21 @@ def run_cli(
     )
 
 
+def magnetic_decision(
+    structure: Structure,
+    is_magnetic: FieldState[Magnetism],
+    needs_soc: FieldState[bool] | None = None,
+    z_valences: dict[str, float] | None = None,
+    human: MagneticConfigHumanInput | None = None,
+) -> FieldState[MagneticConfigFacts]:
+    """``magnetic_cell`` then ``magnetic_config``, the two steps
+    ``service/_magnetic.py`` runs around pseudopotential selection -- for
+    advisor-level tests that need one structure's whole magnetic
+    decision (#128)."""
+    cell = magnetic_cell(structure, is_magnetic, human)
+    return magnetic_config(cell, needs_soc, z_valences, human)
+
+
 def strict_json(document: str | bytes) -> Any:
     """``json.loads`` that rejects the non-standard ``Infinity``,
     ``-Infinity`` and ``NaN`` tokens Python's ``json.dumps`` writes by
@@ -88,7 +112,9 @@ def strict_json(document: str | bytes) -> Any:
     return json.loads(document, parse_constant=reject)
 
 
-def fixture_upf(element: str, z_valence: float) -> bytes:
+def fixture_upf(
+    element: str, z_valence: float, relativistic: RelativisticTreatment = "scalar"
+) -> bytes:
     """A minimal SSSP-shaped UPF file for ``element``: only the
     ``PP_HEADER`` attributes the importer reads and the projector counts
     every installed UPF carries, which the job's memory estimate reads
@@ -97,8 +123,8 @@ def fixture_upf(element: str, z_valence: float) -> bytes:
         b'<UPF version="2.0.1">\n'
         + (
             f'<PP_HEADER element="{element}" pseudo_type="NC" functional="PBEsol" '
-            f'relativistic="scalar" z_valence="{z_valence}" number_of_wfc="2" '
-            'number_of_proj="4" l_max="1"/>\n'
+            f'relativistic="{relativistic}" z_valence="{z_valence}" '
+            'number_of_wfc="2" number_of_proj="4" l_max="1"/>\n'
         ).encode()
         + b"</UPF>\n"
     )
@@ -119,7 +145,9 @@ def sssp_fixture_archive(path: Path, members: dict[str, bytes]) -> None:
 
 
 def sssp_fixture_table_spec(
-    tmp_path: Path, z_valences: dict[str, float] | None = None
+    tmp_path: Path,
+    z_valences: dict[str, float] | None = None,
+    relativistic: RelativisticTreatment = "scalar",
 ) -> tuple[AssetSpec, PseudoTable]:
     """Build one real, fully-offline SSSP-shaped pseudopotential asset
     (file:// sources, no network) -- shared between
@@ -130,12 +158,16 @@ def sssp_fixture_table_spec(
     ``z_valences`` maps every element the table covers to its UPF
     ``z_valence``. The default is Si alone, whose file is
     ``SSSP_FIXTURE_UPF`` as this module holds it at call time, so a test
-    can monkeypatch it to vary the header."""
+    can monkeypatch it to vary the header. ``relativistic="full"`` builds
+    the fully relativistic table a spin-orbit run selects (it needs
+    ``z_valences``), named ``sssp-fixture-fr`` so it installs next to the
+    scalar one."""
     from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 
+    table_id = "sssp-fixture" if relativistic == "scalar" else "sssp-fixture-fr"
     upf_by_element = (
         {
-            element: fixture_upf(element, z_valence)
+            element: fixture_upf(element, z_valence, relativistic)
             for element, z_valence in z_valences.items()
         }
         if z_valences
@@ -165,7 +197,7 @@ def sssp_fixture_table_spec(
     )
     licence.write_text("SSSP fixture licence\n")
     spec = AssetSpec(
-        "pseudopotentials/sssp-fixture",
+        f"pseudopotentials/{table_id}",
         "1",
         (
             AssetFile("pseudopotentials", "source/table.tar.gz", upfs.as_uri()),
@@ -174,12 +206,12 @@ def sssp_fixture_table_spec(
         ),
     )
     registry_table = PseudoTable(
-        id="sssp-fixture",
+        id=table_id,
         provider="sssp",
         upstream_table="fixture",
         version="1",
         functional="PBEsol",
-        relativistic="scalar",
+        relativistic=relativistic,
         accuracy="efficiency",
         licence="fixture licence",
         citation="Synthetic SSSP fixture, cite me.",
@@ -506,11 +538,12 @@ def geometry_facts(
 
 
 def written_cell(structure: Structure) -> Resolved[MagneticConfigFacts]:
-    """A resolved non-magnetic ``MagneticConfigFacts`` whose
-    ``relabeled_structure`` is ``structure``: the cell the writer renders,
-    which the written-cell rules of ``checks.check_all`` read."""
+    """A resolved non-magnetic ``MagneticConfigFacts`` whose ``cell`` is
+    ``structure``: the cell the writer renders, which the written-cell rules
+    of ``checks.check_all`` read."""
     facts = MagneticConfigFacts(
-        relabeled_structure=structure,
+        cell=structure,
+        ordering=OrderingRecord(requested="fm", applied="fm", compensated=False),
         spin_polarized=False,
         magnetic_elements=(),
         starting_magnetization=None,

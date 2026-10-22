@@ -42,8 +42,8 @@ _BCC_IRON = Structure.from_spacegroup(
     "Im-3m", Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]]
 )
 # bcc Fe's simplest compensated antiferromagnetic candidate (corner and
-# body-centre spins opposed), labelled the way magnetic_config._label_by_spin
-# labels an enumerated candidate.
+# body-centre spins opposed), spin-decorated the way
+# magnetic_config.enumerate_magnetic_orderings lists an enumerated candidate.
 _BCC_IRON_AFM = Structure(
     Lattice.cubic(2.87),
     [Species("Fe", spin=1), Species("Fe", spin=-1)],
@@ -267,7 +267,7 @@ def test_a_ranked_listing_with_a_non_finite_energy_is_strict_json(
     monkeypatch.setattr(
         magnetic_orderings_module,
         "enumerate_magnetic_orderings",
-        lambda structure, magnetic_elements: (
+        lambda structure, moments: (
             (("fm", structure), ("afm-1", _BCC_IRON_AFM)),
             None,
         ),
@@ -371,7 +371,7 @@ def test_a_ranking_process_that_dies_fails_the_listing(
     monkeypatch.setattr(
         magnetic_orderings_module,
         "enumerate_magnetic_orderings",
-        lambda structure, magnetic_elements: (
+        lambda structure, moments: (
             (("fm", structure), ("afm-1", _BCC_IRON_AFM)),
             None,
         ),
@@ -453,8 +453,9 @@ def test_rank_orderings_ranks_antiferromagnetic_nio_below_ferromagnetic() -> Non
     )
     # A hand-built compensated AFM candidate: alternating +/-z spin on the
     # rocksalt Ni sublattice, oxygen unsigned -- the same shape
-    # ``magnetic_config._label_by_spin`` produces from a real enumerator
-    # candidate, built here directly since this test does not need enumlib.
+    # ``magnetic_config.enumerate_magnetic_orderings`` lists for a real
+    # enumerator candidate, built here directly since this test does not
+    # need enumlib.
     ni_up, ni_down = Species("Ni", spin=1), Species("Ni", spin=-1)
     nio_afm = Structure(
         nio_fm.lattice,

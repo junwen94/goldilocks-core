@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
-from pymatgen.core import Lattice, Structure
+from pymatgen.core import Element, Lattice, Structure
 from support import carbon_pair_in_a_box, graphene_monolayer
 
 from goldilocks_core.advisors.k_sampling import (
@@ -11,8 +13,10 @@ from goldilocks_core.advisors.k_sampling import (
     KSamplingLlmInput,
     k_sampling,
 )
+from goldilocks_core.advisors.species_split import split_species
 from goldilocks_core.analysis.is_metal import is_metal
 from goldilocks_core.kmesh import build_gamma_kmesh_entries, k_distance_to_mesh
+from goldilocks_core.ml import predict as predict_module
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
@@ -156,6 +160,62 @@ def test_human_k_distance_wins_over_ml(real_assets) -> None:
 
     assert state.source == "human"
     assert state.value.k_distance == 0.25
+
+
+def _afm_nickel_oxide() -> Structure:
+    """Conventional rock-salt NiO split as the magnetic step splits it:
+    Ni up at z = 0 and down at z = 1/2, O unspun (``split_species``)."""
+    nio = Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(4.17), ["Ni", "O"], [[0, 0, 0], [0.5, 0.5, 0.5]]
+    )
+    classes = [
+        (1.0 if site.frac_coords[2] < 0.25 else -1.0)
+        if site.specie.symbol == "Ni"
+        else 0.0
+        for site in nio
+    ]
+    return split_species(nio, classes)
+
+
+def test_the_ml_tier_reads_a_spin_split_cell_as_plain_elements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#170: a spin-polarized cell's species carry their
+    starting-magnetization class as ``Species.spin``, which QRF95 was not
+    trained on. The model gets the same lattice and sites as plain
+    elements."""
+    read: list[Structure] = []
+
+    def predict(structure: Structure) -> SimpleNamespace:
+        read.append(structure)
+        return SimpleNamespace(value=0.25)
+
+    monkeypatch.setattr(predict_module, "predict_k_distance", predict)
+    cell = _afm_nickel_oxide()
+
+    state = k_sampling(_NON_METAL, cell)
+
+    assert state.source == "ml"
+    [model_input] = read
+    assert all(isinstance(site.specie, Element) for site in model_input)
+    assert [site.specie.symbol for site in model_input] == [
+        site.specie.symbol for site in cell
+    ]
+    assert np.allclose(model_input.lattice.matrix, cell.lattice.matrix)
+    assert np.allclose(model_input.frac_coords, cell.frac_coords)
+
+
+def test_an_afm_split_cell_gets_the_k_distance_of_its_bare_cell(real_assets) -> None:
+    """#170: QRF95 predicted 0.262 1/A for this AFM NiO cell with its spin
+    classes and 0.266 without (LiFePO4's afm-1 moved by 11%), so an AFM
+    deck was meshed differently from the same cell's FM one."""
+    cell = _afm_nickel_oxide()
+
+    split = k_sampling(_NON_METAL, cell)
+    bare = k_sampling(_NON_METAL, split_species(cell, None))
+
+    assert split.source == bare.source == "ml"
+    assert split.value.k_distance == bare.value.k_distance
 
 
 def test_human_k_index_resolves_to_that_rung_s_own_mesh() -> None:

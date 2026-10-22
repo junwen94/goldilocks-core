@@ -137,7 +137,7 @@ def test_explains_during_a_ranking_match_sequential_ones(
     monkeypatch.setattr(
         magnetic_orderings_module,
         "enumerate_magnetic_orderings",
-        lambda structure, magnetic_elements: (candidates, None),
+        lambda structure, moments: (candidates, None),
     )
     predict_module._model.cache_clear()
 

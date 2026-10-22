@@ -42,10 +42,10 @@ that frame with c along z as well (PW/src/Coul_cut_2D.f90:72-81), and needs
 room along z for the pseudopotentials and the slab
 (``two_d_truncation_obstacles``); ``SlabGeometry.fits_2d_truncation``
 records whether a slab has all of it. The boundary advisor offers that
-truncation by this flag of the input cell and ``checks.check_all`` accepts it
-by the same test on the written cell, so the two agree unless an
-antiferromagnetic supercell moves the vacuum or doubles the cell across it.
-All 15 monolayers of the batch are in that frame, with c along z, while its
+truncation by this flag and ``checks.check_all`` accepts it by the same test,
+both on the cell that is written (``with_vacuum_of`` gives an
+antiferromagnetic ordering's cell the facts of its own vacuum). All 15
+monolayers of the batch are in that frame, with c along z, while its
 fcc, bcc and rhombohedral primitive cells have a and b out of the xy plane.
 ``ab_in_xy_plane`` and ``c_along_z`` are the one test of each, with one
 tolerance, so every caller applies the same.
@@ -53,8 +53,7 @@ tolerance, so every caller applies the same.
 A slab's atomic layers (``slab_layers``) are counted along its vacuum axis
 up from the upper edge of the vacuum, so a slab that straddles the cell
 boundary keeps its bottom layer first (#160). A cell with a second vacuum
-gap along that axis holds two slabs, as a monolayer doubled along its normal
-by an antiferromagnetic supercell does, and has no layers to count.
+gap along that axis holds two slabs and has no layers to count.
 ``checks.check_all`` and the ``fix_bottom_layers`` writer both read them, on
 the cell the writer renders.
 
@@ -64,7 +63,7 @@ every other ``analysis/`` fact.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import numpy as np
@@ -214,6 +213,21 @@ def geometry(structure: Structure) -> FieldState[GeometryFacts]:
         slab=_slab(structure, axes),
     )
     return Resolved(facts, Provenance(source="heuristic"))
+
+
+def with_vacuum_of(facts: GeometryFacts, cell: Structure) -> GeometryFacts:
+    """``facts`` of a structure with the vacuum facts of ``cell``, another
+    cell of that structure (the one an antiferromagnetic ordering writes):
+    the bond rank belongs to the structure, the vacuum widths, axes and slab
+    to the cell's lattice vectors and sites."""
+    widths = vacuum_widths(cell)
+    axes = _axes_wider_than_the_gap(widths)
+    return replace(
+        facts,
+        vacuum_axes=axes,
+        vacuum_widths_angstrom=widths,
+        slab=_slab(cell, axes),
+    )
 
 
 def vacuum_widths(structure: Structure) -> tuple[float, float, float]:

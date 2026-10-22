@@ -1,25 +1,30 @@
 """list_magnetic_orderings: enumerate, and optionally mMACE-rank, magnetic
 orderings for one structure (v2, #87).
 
-Deliberately not part of ``advise()``/``generate()``: those assume one
-already-decided ``relabeled_structure`` per calculation, but this is a
+Deliberately not part of ``advise()``/``generate()``: those decide one
+simulated cell per calculation (``MagneticCell``), but this is a
 listing capability a caller consults *before* deciding which ordering(s)
 to actually generate input files for -- "give me FM and AFM input files"
 and "let mMACE recommend one" both start here. Each listed candidate
-(``candidate_to_json``) already carries the ``structure_content``/
-``overrides`` a caller feeds straight back to ``/run`` as a brand new
-structure input to generate that exact candidate's files -- see
-``_bundle_inputs`` for why an AFM candidate needs an explicit
-``starting_magnetization`` override alongside its structure. See issue
-#87 for the full three-layer design (enumerate -> optionally rank ->
-generate) this is the first layer of.
+names itself: its ``overrides`` (``{"magnetic_ordering": label}``) sent
+with the *listed* structure to ``/run`` generate exactly that candidate,
+through the same magnetic step as ``magnetic_ordering=afm``, so its seeds
+and symmetry cannot differ from that path's (#170). A candidate used to
+carry its own CIF with seeds remapped onto the CIF's labels: seeded at the
+flat 0.1 and counted for symmetry on the spin-less CIF. See issue #87 for
+the full three-layer design (enumerate -> optionally rank -> generate)
+this is the first layer of.
 
 Enumeration never needs mMACE (it is
 ``advisors/magnetic_config.enumerate_magnetic_orderings``, the same
 enumlib-backed path the existing heuristic tier already uses, run on a
-worker process in a private directory, #136) and returns at least the
-plain ferromagnetic candidate, with a warning naming why when enumlib gives
-no antiferromagnetic one; an enumeration fault (a scratch-directory
+worker process in a private directory, #136, over the sites
+``analysis/local_moments.py`` says carry a local moment, #143, keeping only
+the orderings that keep a slab's, wire's or boxed molecule's vacuum
+vectors, #144) and returns
+at least the plain ferromagnetic candidate, with a warning naming why when
+a structure with local moments gets no antiferromagnetic one; an
+enumeration fault (a scratch-directory
 ``OSError``, a dead worker) propagates instead of looking like a
 ferromagnetic-only answer. Ranking is opt-in and can fail independently
 (checkpoint not configured, mace/e3nn/sphericart not installed, a library
@@ -32,27 +37,25 @@ naming why. A ranking process that dies (``worker_process.WorkerDied``,
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from pymatgen.core import Structure
 
-from goldilocks_core.advisors.magnetic_config import (
-    afm_unavailable_warning,
-    enumerate_magnetic_orderings,
-    magnetic_elements_in,
-    starting_magnetization_for,
-)
+from goldilocks_core.advisors.magnetic_config import enumerate_magnetic_orderings
 from goldilocks_core.advisors.magnetic_ordering_ml import (
     MagneticOrderingMlUnavailable,
     rank_orderings,
 )
-from goldilocks_core.resolution import Warning
+from goldilocks_core.analysis.local_moments import LocalMomentFacts, local_moments
+from goldilocks_core.resolution import FieldState, Warning
 
 
 @dataclass(frozen=True, slots=True)
 class MagneticOrderingCandidate:
-    """One listed candidate, ranked or not."""
+    """One listed candidate, ranked or not: ``structure`` is the listed
+    structure for ``fm``, otherwise the cell ``magnetic_ordering=<label>``
+    writes for it (``enumerate_magnetic_orderings``)."""
 
     label: str
     structure: Structure
@@ -60,8 +63,12 @@ class MagneticOrderingCandidate:
     energy_per_atom_ev: float | None
     status: str | None
     is_recommended: bool
-    structure_content: str
-    overrides: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def overrides(self) -> dict[str, str]:
+        """The setting that generates this candidate from the listed
+        structure (#170)."""
+        return {"magnetic_ordering": self.label}
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,22 +83,13 @@ def candidate_to_json(candidate: MagneticOrderingCandidate) -> dict[str, Any]:
     ``cli/_magnetic_orderings.py`` and ``server/_handlers.py`` so both
     transports report the same shape.
 
-    ``structure_content``/``structure_format`` plus ``overrides`` are
-    everything a caller needs to actually generate DFT input files for
-    *this exact* candidate: feed them straight back as a new top-level
-    structure + overrides to ``/run`` (or ``generate()`` directly), no
-    label lookup or re-enumeration required. This is deliberately a fresh
-    structure input, not a ``relabeled_structure`` override plumbed
-    through ``advise()`` for the *original* structure -- an AFM candidate
-    can be a different cell (a `MagneticStructureEnumerator` supercell)
-    from the one the caller started with, so it has to run its own
-    ``advise()``/pseudopotential selection from scratch, same as any other
-    structure upload. See ``_bundle_inputs`` for why the FM candidate
-    needs no overrides at all while every AFM candidate needs an explicit
-    ``starting_magnetization`` (CIF round-tripping silently drops
-    ``Species.spin`` -- the sign information that distinguishes the two
-    magnetic sublattices -- so it cannot be left for ``/run``'s own
-    heuristic to rediscover)."""
+    ``overrides`` is what a caller adds to its own settings to generate
+    DFT input files for *this exact* candidate: run the structure it
+    listed with them (``/run``, ``goldilocks run --set
+    magnetic_ordering=afm-3``). The run enumerates again and applies the
+    candidate of that label, numbered in the same canonical order (#170),
+    and records the applied label next to the cell's formula and atom
+    count in ``records.magnetic``."""
     return {
         "label": candidate.label,
         "formula": candidate.structure.composition.reduced_formula,
@@ -99,8 +97,6 @@ def candidate_to_json(candidate: MagneticOrderingCandidate) -> dict[str, Any]:
         "energy_per_atom_ev": candidate.energy_per_atom_ev,
         "status": candidate.status,
         "is_recommended": candidate.is_recommended,
-        "structure_content": candidate.structure_content,
-        "structure_format": "cif",
         "overrides": candidate.overrides,
     }
 
@@ -113,58 +109,29 @@ def report_to_json(report: MagneticOrderingsReport) -> dict[str, Any]:
     }
 
 
-def _bundle_inputs(label: str, structure: Structure) -> tuple[str, dict[str, Any]]:
-    """The ``(structure_content, overrides)`` pair ``candidate_to_json``
-    exposes for generating this candidate's own DFT input files.
-
-    The FM candidate is exactly the caller's original structure -- the
-    existing ``/run`` pipeline already handles it correctly with no
-    overrides at all, so it gets none. Every AFM candidate carries
-    per-site ``Species.spin`` that CIF text cannot round-trip (confirmed
-    empirically: pymatgen's own CIF writer/reader drops it, leaving every
-    site's spin ``None``); left alone, re-loading this CIF would silently
-    resolve a *ferromagnetic* ``starting_magnetization`` despite the
-    species labels still looking AFM-split. Computing the signed fraction
-    from the original, spin-decorated structure and remapping it onto the
-    labels the CIF will actually carry once re-parsed (by site order, not
-    by label string -- pymatgen's CIF writer renumbers labels, e.g.
-    ``Fe1``/``Fe2`` in memory becomes ``Fe0``/``Fe1`` on disk) keeps the
-    two magnetic sublattices correctly opposed end to end."""
-    cif = structure.to(fmt="cif")
-    if label == "fm":
-        return cif, {}
-    roundtripped = Structure.from_str(cif, fmt="cif")
-    fractions_by_original_label = starting_magnetization_for(structure)
-    return cif, {
-        "spin_polarized": True,
-        "starting_magnetization": {
-            reloaded_site.label: fractions_by_original_label[original_site.label]
-            for original_site, reloaded_site in zip(
-                structure, roundtripped, strict=True
-            )
-        },
-    }
-
-
 def _unranked(
     candidates: tuple[tuple[str, Structure], ...],
 ) -> tuple[MagneticOrderingCandidate, ...]:
-    candidates_out = []
-    for label, candidate in candidates:
-        structure_content, overrides = _bundle_inputs(label, candidate)
-        candidates_out.append(
-            MagneticOrderingCandidate(
-                label=label,
-                structure=candidate,
-                natoms=len(candidate),
-                energy_per_atom_ev=None,
-                status=None,
-                is_recommended=False,
-                structure_content=structure_content,
-                overrides=overrides,
-            )
+    return tuple(
+        MagneticOrderingCandidate(
+            label=label,
+            structure=candidate,
+            natoms=len(candidate),
+            energy_per_atom_ev=None,
+            status=None,
+            is_recommended=False,
         )
-    return tuple(candidates_out)
+        for label, candidate in candidates
+    )
+
+
+def _has_moments_to_order(moments: FieldState[LocalMomentFacts]) -> bool:
+    """Whether a ferromagnetic-only listing needs explaining: the local
+    moments are undecidable, or an element carries one, or a radical
+    does."""
+    if not moments.ok:
+        return True
+    return bool(moments.value.moment_elements) or moments.value.radical
 
 
 def list_magnetic_orderings(
@@ -181,15 +148,17 @@ def list_magnetic_orderings(
 
     Also warns (rather than silently listing "fm" alone, indistinguishable
     from "this structure genuinely has no AFM candidates") whenever
-    ``structure`` actually has a magnetic element but AFM enumeration
-    itself could not run or find one -- the common real case being
-    enumlib (``enum.x``/``multienum.x``) not installed.
+    ``structure`` has local moments but no AFM candidate came back: AFM
+    enumeration could not run or find one (the common real case being
+    enumlib not installed), no site carries a local d or f moment to order
+    (a radical such as solid O2, #143), or which sites carry one could not
+    be determined. A closed-shell structure (Si) lists "fm" alone silently.
     """
-    magnetic_elements = magnetic_elements_in(structure)
-    candidates, afm_reason = enumerate_magnetic_orderings(structure, magnetic_elements)
+    moments = local_moments(structure)
+    candidates, afm_warning = enumerate_magnetic_orderings(structure, moments)
     warnings = (
-        (afm_unavailable_warning(afm_reason),)
-        if afm_reason is not None and magnetic_elements
+        (afm_warning,)
+        if afm_warning is not None and _has_moments_to_order(moments)
         else ()
     )
 
@@ -216,21 +185,17 @@ def list_magnetic_orderings(
         )
 
     by_label = {result.label: result for result in ranked.candidates}
-    candidates_out = []
-    for label, candidate in candidates:
-        structure_content, overrides = _bundle_inputs(label, candidate)
-        candidates_out.append(
-            MagneticOrderingCandidate(
-                label=label,
-                structure=candidate,
-                natoms=len(candidate),
-                energy_per_atom_ev=by_label[label].energy_per_atom_ev,
-                status=by_label[label].status,
-                is_recommended=label == ranked.winner.label,
-                structure_content=structure_content,
-                overrides=overrides,
-            )
+    candidates_out = tuple(
+        MagneticOrderingCandidate(
+            label=label,
+            structure=candidate,
+            natoms=len(candidate),
+            energy_per_atom_ev=by_label[label].energy_per_atom_ev,
+            status=by_label[label].status,
+            is_recommended=label == ranked.winner.label,
         )
+        for label, candidate in candidates
+    )
     return MagneticOrderingsReport(
-        candidates=tuple(candidates_out), ranked=True, warnings=warnings
+        candidates=candidates_out, ranked=True, warnings=warnings
     )

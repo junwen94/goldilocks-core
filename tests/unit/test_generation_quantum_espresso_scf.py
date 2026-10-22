@@ -12,7 +12,11 @@ from goldilocks_core.advisors.cutoffs import CutoffsDecision
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.hubbard_u import HubbardU, HubbardUDecision
 from goldilocks_core.advisors.k_sampling import KSamplingDecision
-from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
+from goldilocks_core.advisors.magnetic_config import (
+    MagneticConfigFacts,
+    OrderingRecord,
+    magnetic_cell,
+)
 from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.parallelisation import (
@@ -22,6 +26,7 @@ from goldilocks_core.advisors.parallelisation import (
 from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.scf import write_qe_scf
+from goldilocks_core.resolution import Provenance, Resolved
 from goldilocks_core.step_settings import PwSettings
 from goldilocks_core.steps import ExitStatusCheck, SharedContext
 from goldilocks_core.system_settings import SystemSettings
@@ -34,17 +39,17 @@ def _magnetic(
     *,
     spin_polarized: bool = False,
     starting_magnetization: dict[str, float] | None = None,
-    tot_magnetization: float | None = None,
     spin_orbit_enabled: bool = False,
     angle1: dict[str, float] | None = None,
     angle2: dict[str, float] | None = None,
 ) -> MagneticConfigFacts:
     return MagneticConfigFacts(
-        relabeled_structure=structure,
+        cell=structure,
+        ordering=OrderingRecord(requested="fm", applied="fm", compensated=False),
         spin_polarized=spin_polarized,
         magnetic_elements=(),
         starting_magnetization=starting_magnetization,
-        tot_magnetization=tot_magnetization,
+        tot_magnetization=None,
         spin_orbit_enabled=spin_orbit_enabled,
         angle1=angle1,
         angle2=angle2,
@@ -65,11 +70,11 @@ def _system(
     return SystemSettings(
         functional=functional,
         cutoffs=CutoffsDecision(ecutwfc_ry=30.0, ecutrho_ry=120.0),
-        # z_valence=4.0 per atom below and nelec=4.0 * len(structure) agree
-        # exactly, so _charge_keywords's derived tot_charge is 0.0 (omitted)
-        # unless a test overrides electron_count itself -- these tests are
-        # about other keywords, not #34's tot_charge translation.
-        electron_count=ElectronCountDecision(nelec=4.0 * len(structure)),
+        # A neutral cell (z_valence=4.0 per atom below): no tot_charge
+        # unless a test overrides electron_count itself.
+        electron_count=ElectronCountDecision(
+            nelec=4.0 * len(structure), tot_charge=0.0
+        ),
         pseudopotentials=tuple(
             pseudo_metadata_factory(element, functional=functional, z_valence=4.0)
             for element in elements
@@ -129,19 +134,16 @@ def _step(
     )
 
 
-def test_nelec_override_translates_to_qe_s_real_tot_charge_keyword(
+def test_tot_charge_is_the_electron_count_decision_s_charge(
     silicon_structure, pseudo_metadata_factory
 ) -> None:
-    """Regression for #34 (v2 epic 9, #9): QE's real &SYSTEM namelist has
-    no ``nelec`` input keyword at all (confirmed against ASE's own
-    ALL_KEYS['pw']['system'] registry -- only ``tot_charge`` exists) --
-    a resolved ``electron_count.nelec`` different from the natural,
-    pseudopotential-summed count must translate to ``tot_charge``, the
-    deviation from neutral, not be dropped or emitted verbatim under a
-    keyword QE would reject."""
+    """QE's &SYSTEM namelist has no ``nelec`` input keyword (ASE's
+    ALL_KEYS['pw']['system'] lists ``tot_charge`` only, #34): a requested
+    count reaches pw.x as the charge the electron-count decision derived,
+    rendered verbatim."""
     system = _system(silicon_structure, pseudo_metadata_factory)
     system = dataclasses.replace(
-        system, electron_count=ElectronCountDecision(nelec=3.0)
+        system, electron_count=ElectronCountDecision(nelec=3.0, tot_charge=1.0)
     )
     step = _step()
 
@@ -151,13 +153,19 @@ def test_nelec_override_translates_to_qe_s_real_tot_charge_keyword(
     assert "nelec" not in content
 
 
-def test_no_tot_charge_keyword_when_nelec_matches_the_natural_count(
-    silicon_structure, pseudo_metadata_factory
+@pytest.mark.parametrize("nelec", [4.0, 3.0, 8.0])
+def test_a_neutral_decision_renders_no_tot_charge_whatever_the_count(
+    silicon_structure, pseudo_metadata_factory, nelec: float
 ) -> None:
-    """The default heuristic path resolves nelec to exactly the natural
-    (pseudopotential-summed) count -- tot_charge would be 0.0 and is
-    pure noise, so it must not appear at all."""
+    """The writer never derives a charge from two electron counts (#128):
+    an AFM cell counted on the uploaded cell turned the difference into
+    tot_charge = 24. Only the decision's own charge is rendered, so a
+    neutral decision renders none, however its count compares with the
+    pseudopotentials' z_valence sum (4.0 here)."""
     system = _system(silicon_structure, pseudo_metadata_factory)
+    system = dataclasses.replace(
+        system, electron_count=ElectronCountDecision(nelec=nelec, tot_charge=0.0)
+    )
     step = _step()
 
     content = write_qe_scf(system, step, _CTX)[0].files["scf.in"]
@@ -300,38 +308,69 @@ def test_spin_polarized_starting_magnetization_survives_unclobbered(
     assert "0.0" not in content.split("starting_magnetization")[1].split("\n")[0]
 
 
-def test_tot_magnetization_emitted_only_without_spin_orbit(
-    pseudo_metadata_factory,
+def _fixed(tot_magnetization: float | None) -> OccupationsDecision:
+    return OccupationsDecision(
+        occupations="fixed",
+        smearing_type=None,
+        degauss=None,
+        tot_magnetization=tot_magnetization,
+    )
+
+
+@pytest.mark.parametrize(
+    ("moment", "rendered"),
+    [(2.0, "tot_magnetization = 2.0"), (0.0, "tot_magnetization = 0.0")],
+)
+def test_a_collinear_run_renders_nspin_2_with_the_occupations_moment(
+    pseudo_metadata_factory, moment: float, rendered: str
 ) -> None:
+    """#138: the occupations decision holds the moment the run pins -- a
+    human one, or the 0 derived for a compensated ordering -- and the
+    writer renders it, zero included."""
     structure = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
     magnetic = _magnetic(
-        structure,
-        spin_polarized=True,
-        starting_magnetization={"Fe": 0.6923},
-        tot_magnetization=2.0,
+        structure, spin_polarized=True, starting_magnetization={"Fe": 0.6923}
     )
     system = _system(structure, pseudo_metadata_factory, magnetic=magnetic)
 
-    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, _step(occupations=_fixed(moment)), _CTX)[0].files[
+        "scf.in"
+    ]
 
-    assert "tot_magnetization = 2.0" in content
+    assert "nspin            = 2" in content
+    assert content.count("tot_magnetization") == 1
+    assert rendered in content
+    assert "noncolin" not in content
 
 
-def test_tot_magnetization_with_spin_orbit_is_rejected(pseudo_metadata_factory) -> None:
+def test_spin_orbit_with_fixed_occupations_renders_without_tot_magnetization(
+    pseudo_metadata_factory,
+) -> None:
+    """#146: a magnetic noncollinear run with fixed occupations needs no
+    tot_magnetization -- pw.x's "fixed occupations and lsda need
+    tot_magnetization" applies only with nspin=2 (QE 7.3
+    PW/src/input.f90:764-781) -- so the deck is noncolin/lspinorb, fixed
+    occupations and starting moments, with neither nspin nor
+    tot_magnetization."""
     structure = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
     magnetic = _magnetic(
         structure,
         spin_polarized=True,
         starting_magnetization={"Fe": 0.6923},
-        tot_magnetization=2.0,
         spin_orbit_enabled=True,
         angle1={"Fe": 0.0},
         angle2={"Fe": 0.0},
     )
     system = _system(structure, pseudo_metadata_factory, magnetic=magnetic)
 
-    with pytest.raises(GenerationError, match="tot_magnetization"):
-        write_qe_scf(system, _step(), _CTX)
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+
+    assert "occupations      = 'fixed'" in content
+    assert "noncolin         = .true." in content
+    assert "lspinorb         = .true." in content
+    assert "starting_magnetization(1) = 0.6923" in content
+    assert "nspin" not in content
+    assert "tot_magnetization" not in content
 
 
 def test_spin_orbit_magnetic_emits_noncolin_lspinorb_and_angles(
@@ -372,7 +411,13 @@ def test_spin_orbit_magnetic_emits_noncolin_lspinorb_and_angles(
     ("spin_polarized", "spin_orbit_enabled", "layout", "rendered", "absent"),
     [
         (False, False, (1, 1, 1), (), ("nspin", "noncolin", "starting_magn")),
-        (True, False, (2, 1, 2), ("nspin            = 2",), ("noncolin",)),
+        (
+            True,
+            False,
+            (2, 1, 2),
+            ("nspin            = 2",),
+            ("noncolin", "tot_magnetization"),
+        ),
         # noncolin makes pw.x run nspin=4 (QE 7.3 PW/src/input.f90:718),
         # with four magnetization components only when a starting
         # magnetization is set (input.f90:1589, set_spin_vars.f90:29-41)
@@ -474,33 +519,35 @@ def test_afm_relabeled_species_reach_atomic_species_and_positions(
     assert "Fe2  0.5" in positions
 
 
-def test_non_afm_structure_collapses_source_labels_to_one_species_per_element(
+def test_the_cell_s_species_labels_are_rendered_as_given(
     pseudo_metadata_factory,
 ) -> None:
-    """Real CIF files often carry their own per-atom label per
-    crystallographic site (e.g. ``Si1``..``Si40`` for a plain,
-    non-magnetic silicon cell) that has nothing to do with magnetism --
-    AFM species-splitting did not run here (`afm_relabeled=False`, the
-    default), so those source labels must not leak into ATOMIC_SPECIES/
-    ATOMIC_POSITIONS as if they were real, distinct QE species."""
+    """The magnetic step splits the cell into species before symmetry and
+    k-points are counted (#170); the writer renders those species and
+    never regroups them, so pw.x gets the types n_irr_k counted. Two Fe
+    species with equal seeds stay two species here."""
     structure = Structure(
-        Lattice.cubic(5.43),
-        ["Si", "Si", "Si"],
-        [[0.0, 0.0, 0.0], [0.25, 0.25, 0.25], [0.5, 0.5, 0.0]],
-        labels=["Si1", "Si7", "Si23"],
+        Lattice.cubic(2.87),
+        [Species("Fe", spin=1.0), Species("Fe", spin=-1.0)],
+        [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+        labels=["Fe1", "Fe2"],
     )
-    system = _system(structure, pseudo_metadata_factory)
+    magnetic = _magnetic(
+        structure,
+        spin_polarized=True,
+        starting_magnetization={"Fe1": 0.3, "Fe2": 0.3},
+    )
+    system = _system(structure, pseudo_metadata_factory, magnetic=magnetic)
 
     content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
 
-    assert "ntyp             = 1" in content
+    assert "ntyp             = 2" in content
     species = content.split("ATOMIC_SPECIES\n")[1].split("\n\n")[0]
-    assert species == "  Si  28.0855  Si.UPF"
-    positions = content.split("ATOMIC_POSITIONS")[1]
-    assert "Si1" not in positions
-    assert "Si7" not in positions
-    assert "Si23" not in positions
-    assert positions.count("Si  ") == 3
+    assert species == "  Fe1  55.845  Fe.UPF\n  Fe2  55.845  Fe.UPF"
+    assert "starting_magnetization(1) = 0.3" in content
+    assert "starting_magnetization(2) = 0.3" in content
+    positions = content.split("ATOMIC_POSITIONS crystal\n")[1].splitlines()
+    assert [line.split()[0] for line in positions[:2]] == ["Fe1", "Fe2"]
 
 
 def test_vdw_method_translates_to_qe_keyword(
@@ -693,12 +740,12 @@ def test_each_species_of_a_split_element_gets_the_element_s_u_line(
         Lattice.cubic(4.3),
         ["O", "O", "Fe", "Fe"],
         [[0.25, 0.25, 0.25], [0.75, 0.75, 0.75], [0, 0, 0], [0.5, 0.5, 0.5]],
-        labels=["O", "O", "Fe_down", "Fe_up"],
+        labels=["O", "O", "Fe2", "Fe1"],
     )
     magnetic = _magnetic(
         structure,
         spin_polarized=True,
-        starting_magnetization={"Fe_up": 0.5, "Fe_down": -0.5},
+        starting_magnetization={"Fe1": 0.5, "Fe2": -0.5, "O": 0.0},
     )
     system = _system(
         structure,
@@ -727,7 +774,8 @@ def test_cif_site_labels_render_one_line_per_qe_species(
 ) -> None:
     """Regression (#88): a CIF-loaded structure numbers every site (V0,
     Cl1, Cl2); the card must name the species label ATOMIC_SPECIES uses,
-    once, and never a stray label."""
+    once, and never a stray label. The magnetic step makes the cell's
+    species (#170)."""
     loaded = Structure.from_str(
         Structure(
             Lattice.cubic(4.0),
@@ -736,8 +784,11 @@ def test_cif_site_labels_render_one_line_per_qe_species(
         ).to(fmt="cif"),
         fmt="cif",
     )
+    cell = magnetic_cell(
+        loaded, Resolved("non_magnetic", Provenance(source="heuristic"))
+    ).value.structure
     system = _system(
-        loaded,
+        cell,
         pseudo_metadata_factory,
         hubbard=HubbardUDecision(u_values=(HubbardU("V", "3d", 3.25, "table"),)),
     )
@@ -783,7 +834,7 @@ def test_missing_pseudopotential_element_raises_generation_error(
     system = SystemSettings(
         functional="PBEsol",
         cutoffs=CutoffsDecision(ecutwfc_ry=30.0, ecutrho_ry=120.0),
-        electron_count=ElectronCountDecision(nelec=8.0),
+        electron_count=ElectronCountDecision(nelec=8.0, tot_charge=0.0),
         pseudopotentials=(pseudo_metadata_factory("Na"),),
         magnetic=_magnetic(structure),
         vdw=VdwFacts(use_vdw=False, method=None),
@@ -801,7 +852,7 @@ def test_pseudopotential_functional_mismatch_raises_generation_error(
     system = SystemSettings(
         functional="PBEsol",
         cutoffs=CutoffsDecision(ecutwfc_ry=30.0, ecutrho_ry=120.0),
-        electron_count=ElectronCountDecision(nelec=4.0),
+        electron_count=ElectronCountDecision(nelec=4.0, tot_charge=0.0),
         pseudopotentials=(pseudo_metadata_factory("Si", functional="LDA"),),
         magnetic=_magnetic(silicon_structure),
         vdw=VdwFacts(use_vdw=False, method=None),
@@ -823,7 +874,7 @@ def test_disordered_structure_is_rejected(pseudo_metadata_factory) -> None:
     system = SystemSettings(
         functional="PBEsol",
         cutoffs=CutoffsDecision(ecutwfc_ry=30.0, ecutrho_ry=120.0),
-        electron_count=ElectronCountDecision(nelec=4.0),
+        electron_count=ElectronCountDecision(nelec=4.0, tot_charge=0.0),
         pseudopotentials=(pseudo_metadata_factory("Si"), pseudo_metadata_factory("Ge")),
         magnetic=magnetic,
         vdw=VdwFacts(use_vdw=False, method=None),

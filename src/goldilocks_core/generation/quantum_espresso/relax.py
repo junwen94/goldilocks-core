@@ -29,12 +29,13 @@ package.
 **``if_pos`` slab-layer fixing (#44).** When ``relax.fix_bottom_layers``
 is set, this module freezes every atom of the slab's bottom N atomic
 layers, passing their indices to ``atomic_positions``. The layers are
-``analysis.geometry.slab_layers`` of ``system.magnetic.relabeled_structure``
--- the exact structure ``atomic_positions`` iterates, whose site count and
-order AFM species-splitting can change (``advisors/relax.py``'s own
-docstring). They run along the slab's one vacuum axis, whichever lattice
-vector that is, up from the upper edge of the vacuum, so a slab that
-straddles the cell boundary still has its bottom layer first (#160).
+``analysis.geometry.slab_layers`` of ``system.magnetic.cell`` (the
+simulated cell) -- the exact structure ``atomic_positions`` iterates,
+whose site count and order AFM species-splitting can change
+(``advisors/relax.py``'s own docstring). They run along the slab's one
+vacuum axis, whichever lattice vector that is, up from the upper edge of
+the vacuum, so a slab that straddles the cell boundary still has its
+bottom layer first (#160).
 ``checks.py``'s ``_fix_bottom_layers_requires_slab`` evaluates the same
 function on the same cell, so a request that passed ``check()`` always
 applies here.
@@ -53,7 +54,6 @@ from goldilocks_core.generation.quantum_espresso.namelists import render_namelis
 from goldilocks_core.generation.quantum_espresso.scf import (
     atomic_positions,
     atomic_species,
-    canonicalize_system_for_generation,
     cell_parameters,
     control_keywords,
     electrons_keywords,
@@ -80,8 +80,7 @@ def write_qe_relax(
     own type (``RelaxOptions | VcRelaxOptions | None``) cannot enforce
     that by itself.
     """
-    system = canonicalize_system_for_generation(system)
-    structure = system.magnetic.relabeled_structure
+    structure = system.magnetic.cell
     if not structure.is_ordered:
         raise GenerationError(
             "cannot generate Quantum ESPRESSO input for a disordered structure"
