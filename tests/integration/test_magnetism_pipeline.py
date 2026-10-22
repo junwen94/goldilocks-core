@@ -370,3 +370,52 @@ def test_afm_orders_the_four_fe_of_olivine_lifepo4(olivine_store: AssetStore) ->
     assert {site.label for site in magnetic.cell} == {"Li", "Fe1", "Fe2", "P", "O"}
     assert magnetic.starting_magnetization["Fe1"] == pytest.approx(5.0 / 16.0)
     assert magnetic.starting_magnetization["Fe2"] == pytest.approx(-5.0 / 16.0)
+
+
+def _bcc_chromium() -> Structure:
+    """bcc Cr (MC3D mc3d-49144), its 1-atom primitive cell."""
+    return Structure.from_spacegroup(
+        "Im-3m", Lattice.cubic(2.8145), ["Cr"], [[0, 0, 0]]
+    ).get_primitive_structure()
+
+
+@pytest.fixture
+def chromium_store(tmp_path, monkeypatch) -> AssetStore:
+    spec, registry_table = sssp_fixture_table_spec(tmp_path / "sources", {"Cr": 14.0})
+    monkeypatch.setattr(
+        "goldilocks_core.service._pseudo.load_tables",
+        lambda *a, **kw: {registry_table.id: registry_table},
+    )
+    installed = AssetStore(tmp_path / "store")
+    installed.install(spec, sssp_preparer(registry_table))
+    return installed
+
+
+@_needs_enumlib
+def test_an_afm_request_writes_an_afm_deck_for_a_non_magnetic_classification(
+    chromium_store: AssetStore,
+) -> None:
+    """#145: with the ML tier classifying bcc Cr non-magnetic,
+    magnetic_ordering=afm was dropped and the deck was byte-identical to
+    the default one, with no nspin. The request now turns spin polarization
+    on and writes the ordered cell, neutral (#128)."""
+    steps, (content,) = _run(
+        "scf",
+        _bcc_chromium(),
+        {"is_magnetic": False, "magnetic_ordering": "afm"},
+        chromium_store,
+    )
+
+    assert steps[0].analysis.is_magnetic.value == "non_magnetic"
+    magnetic = steps[0].system.magnetic.value
+    assert magnetic.ordering == OrderingRecord(requested="afm", applied="afm")
+    assert _keyword(content, "nspin") == "2"
+    assert _keyword(content, "nat") == "2"
+    assert _keyword(content, "ntyp") == "2"
+    assert _keyword(content, "tot_charge") is None
+    assert float(_keyword(content, "starting_magnetization(1)")) == pytest.approx(
+        5.0 / 14.0
+    )
+    assert float(_keyword(content, "starting_magnetization(2)")) == pytest.approx(
+        -5.0 / 14.0
+    )

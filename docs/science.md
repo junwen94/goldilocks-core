@@ -147,8 +147,12 @@ the QE spin settings. See [relativistic modes](conventions.md#relativistic-modes
 and the [table restrictions](pseudopotentials.md#choose-a-table).
 
 Set `magnetic_ordering` to `afm` to opt in to a compensated antiferromagnetic
-search instead of the ferromagnetic default. Goldilocks cannot tell you which
-magnetic ordering is the true ground state -- that needs comparing total
+search instead of the ferromagnetic default. Like `tot_magnetization` and
+`starting_magnetization`, it asks for a spin-polarized run, so it turns spin
+polarization on even for a structure the classifier calls non-magnetic; an
+explicit `spin_polarized` false wins and ignores it with the warning
+`magnetic.ordering_ignored_spin_polarized_false`. Goldilocks cannot tell you
+which magnetic ordering is the true ground state -- that needs comparing total
 energies from several actual calculations -- so this only gives one
 reasonable, deterministic starting point (the smallest compensated ordering
 found), for you to run and compare against the ferromagnetic guess yourself.

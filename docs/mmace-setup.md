@@ -149,8 +149,9 @@ apply — stop it and restart from a shell that has the export.
 Load a magnetic structure (e.g. `src/goldilocks_core/examples/structures/Fe_bcc.cif`) and
 check the **Analysis** column's "is magnetic" field: once the `ml` tier is live, its caption
 switches from "Heuristic default" to **"Goldilocks-ML prediction"**. A "Magnetic Orderings"
-column also appears automatically once a structure classifies as magnetic (it stays hidden
-for non-magnetic ones) — this is where `--rank-with-mmace` lives in the UI.
+column also appears automatically once the run is spin-polarized, whether the classifier made
+it so or a setting such as `spin_polarized` or `magnetic_ordering` did (it stays hidden for a
+spin-unpolarized run) — this is where `--rank-with-mmace` lives in the UI.
 
 Clicking **Run mMACE** there ranks the candidates in a separate process, so editing a setting
 while it runs is unaffected; a second ranking waits for the first to finish. Rankings take

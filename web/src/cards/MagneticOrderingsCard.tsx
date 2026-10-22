@@ -2,11 +2,11 @@ import { Group, Paper, Text, Title } from "@mantine/core";
 
 import { MagneticOrderingsPanel } from "../advisors/MagneticOrderingsPanel";
 
-/** Auto-shown by `Workbench` only once a structure is classified
- * magnetic -- see `App.tsx`'s `showMagneticOrderings` -- rather than
- * always present like the other four columns, since exploring
- * alternative magnetic orderings is meaningless for a non-magnetic
- * structure. */
+/** Auto-shown by `Workbench` only once the magnetic decision resolves
+ * spin-polarized -- see `App.tsx`'s `showMagneticOrderings` -- rather
+ * than always present like the other four columns, since exploring
+ * alternative magnetic orderings is meaningless for a spin-unpolarized
+ * run. */
 export function MagneticOrderingsCard({ kicker }: { readonly kicker: string }) {
   return (
     <Paper

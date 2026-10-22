@@ -266,9 +266,10 @@ _SETTING_META: dict[str, _SettingExtra] = {
         "description": (
             "Opt in to a compensated antiferromagnetic ordering search "
             "('afm') instead of the ferromagnetic default ('fm' or unset), "
-            "over the sites that carry a local d or f moment; degrades to "
-            "ferromagnetic with a warning if there are none or no ordering "
-            "can be found."
+            "over the sites that carry a local d or f moment; 'afm' turns "
+            "spin polarization on unless spin_polarized is false, which "
+            "ignores it with a warning. Degrades to ferromagnetic with a "
+            "warning if there are none or no ordering can be found."
         ),
     },
     "use_vdw": {

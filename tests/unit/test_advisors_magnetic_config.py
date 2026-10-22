@@ -592,6 +592,106 @@ def test_afm_ordering_degrades_when_enumlib_is_missing(monkeypatch) -> None:
     )
 
 
+_CLASSIFIED_NON_MAGNETIC = Resolved("non_magnetic", Provenance(source="ml"))
+"""What the ML tier answered for bcc Cr and La2CuO4 (#145)."""
+
+_BCC_CHROMIUM = Structure(
+    Lattice.cubic(2.88), ["Cr", "Cr"], [[0, 0, 0], [0.5, 0.5, 0.5]]
+)
+
+
+def test_an_afm_request_turns_spin_polarization_on_whatever_the_classifier_says(
+    afm_candidate,
+) -> None:
+    """#145: magnetic_ordering=afm is a spin request, like tot_magnetization
+    and starting_magnetization (#34). On a structure classified
+    non-magnetic it used to be accepted and dropped: no nspin, no ordering,
+    no warning."""
+    state = magnetic_cell(_ROCK_SALT_NIO, _CLASSIFIED_NON_MAGNETIC, _AFM)
+
+    assert state.value.spin_polarized is True
+    assert state.source == "human"
+    assert state.value.magnetic_elements == ("Ni",)
+    assert state.value.ordering == OrderingRecord(requested="afm", applied="afm")
+    assert len(state.value.structure) == 4
+
+
+def test_an_afm_request_that_cannot_be_ordered_still_leaves_a_record(
+    monkeypatch,
+) -> None:
+    """#145: with enumlib missing, an afm request on a structure classified
+    non-magnetic runs spin-polarized and says why it stayed
+    ferromagnetic."""
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    state = magnetic_cell(_BCC_CHROMIUM, _CLASSIFIED_NON_MAGNETIC, _AFM)
+
+    assert state.value.spin_polarized is True
+    assert state.source == "human"
+    assert state.value.ordering == OrderingRecord(requested="afm", applied="fm")
+    (warning,) = state.value.warnings
+    assert warning.code == "magnetic.afm_ordering_unavailable"
+    assert "enumlib" in warning.message
+
+
+@pytest.mark.parametrize(
+    ("magnetization", "codes"),
+    [
+        ({}, ["magnetic.ordering_ignored_spin_polarized_false"]),
+        (
+            {"tot_magnetization": 2.0},
+            [
+                "magnetic.magnetization_ignored_spin_polarized_false",
+                "magnetic.ordering_ignored_spin_polarized_false",
+            ],
+        ),
+    ],
+    ids=["ordering", "ordering+tot_magnetization"],
+)
+def test_explicit_spin_polarized_false_keeps_an_afm_request_off_and_warns(
+    magnetization: dict[str, float], codes: list[str]
+) -> None:
+    """#145: an explicit spin_polarized=false wins over magnetic_ordering=afm,
+    as it does over the magnetization keys, and says that the ordering was
+    ignored -- next to the magnetization warning when those were given
+    too."""
+    human = MagneticConfigHumanInput(
+        spin_polarized=False, magnetic_ordering="afm", **magnetization
+    )
+
+    state = magnetic_cell(_BCC_CHROMIUM, is_magnetic(_BCC_CHROMIUM), human)
+
+    assert state.value.spin_polarized is False
+    assert state.source == "human"
+    assert state.value.structure is _BCC_CHROMIUM
+    assert state.value.ordering == OrderingRecord(requested="afm", applied="fm")
+    assert sorted(warning.code for warning in state.value.warnings) == codes
+    (ignored,) = (
+        warning
+        for warning in state.value.warnings
+        if warning.code == "magnetic.ordering_ignored_spin_polarized_false"
+    )
+    assert ignored.level == "warning"
+    assert "magnetic_ordering" in ignored.message
+    assert "spin_polarized" in ignored.message
+
+
+@pytest.mark.parametrize("spin_polarized", [None, False])
+def test_an_fm_ordering_is_the_default_not_a_spin_request(
+    spin_polarized: bool | None,
+) -> None:
+    """``"fm"`` behaves exactly like an unset magnetic_ordering: it neither
+    turns spin polarization on nor conflicts with spin_polarized=false."""
+    human = MagneticConfigHumanInput(
+        spin_polarized=spin_polarized, magnetic_ordering="fm"
+    )
+
+    state = magnetic_cell(_BCC_CHROMIUM, _CLASSIFIED_NON_MAGNETIC, human)
+
+    assert state.value.spin_polarized is False
+    assert state.value.warnings == ()
+
+
 @pytest.mark.skipif(
     _ENUMLIB_MISSING,
     reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",

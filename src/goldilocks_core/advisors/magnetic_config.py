@@ -66,8 +66,11 @@ different cell from the one written.
 
 **AFM species-splitting (v2 epic 9, #9)**: the cell is the input
 `structure` unless a caller explicitly opts in with
-`human.magnetic_ordering="afm"` -- opt-in, not a new default, for the same
-reason SOC stays opt-in below (real cost: this calls out to
+`human.magnetic_ordering="afm"`, which also makes the run spin-polarized
+whatever `is_magnetic` says (an explicit `spin_polarized=false` still wins,
+with the warning `magnetic.ordering_ignored_spin_polarized_false`, #145) --
+opt-in, not a new default, for the same reason SOC stays opt-in below (real
+cost: this calls out to
 `pymatgen.analysis.magnetism.analyzer.MagneticStructureEnumerator`, which
 shells out to the external `enumlib` executables and can take seconds, not
 milliseconds; it runs on a worker process in a private directory, see
@@ -249,6 +252,17 @@ _MAGNETIZATION_IGNORED_WARNING = Warning(
     ),
 )
 
+_ORDERING_IGNORED_WARNING = Warning(
+    code="magnetic.ordering_ignored_spin_polarized_false",
+    level="warning",
+    category="magnetic",
+    message=(
+        "an antiferromagnetic magnetic_ordering was given but spin_polarized "
+        "is explicitly false; the ordering is ignored and the run is not "
+        "spin-polarized."
+    ),
+)
+
 _SOC_SUGGESTED_WARNING = Warning(
     code="magnetic.soc_suggested",
     level="info",
@@ -310,6 +324,7 @@ WARNING_CATALOGUE = (
         ),
     ),
     _MAGNETIZATION_IGNORED_WARNING,
+    _ORDERING_IGNORED_WARNING,
 )
 """Every warning code this module can emit -- ``capabilities.py``'s
 ``warnings[]`` catalogue aggregates one of these tuples per advisor. The
@@ -409,7 +424,8 @@ class MagneticConfigHumanInput(HumanInput):
     off by default because attempting ``"afm"`` calls out to an external
     process and can take seconds, and because which ordering is *actually*
     the ground state is not something this module can determine on its
-    own -- see the module docstring."""
+    own -- see the module docstring. ``"afm"`` is a request for a
+    spin-polarized run, like the two magnetization keys (#145)."""
 
 
 class MagneticConfigLlmInput(LlmInput):
@@ -543,30 +559,45 @@ def _cell_in_input_basis(
     return tuple(tuple(float(value) for value in row) for row in matrix)
 
 
+def _spin_requests(human: MagneticConfigHumanInput) -> tuple[Warning, ...]:
+    """One warning per kind of human setting that asks for a spin-polarized
+    run -- ``tot_magnetization``/``starting_magnetization`` (#34), a
+    ``magnetic_ordering`` other than the ferromagnetic default (#145) --
+    each saying that an explicit ``spin_polarized=false`` ignores it."""
+    magnetization_given = (
+        human.tot_magnetization is not None or human.starting_magnetization is not None
+    )
+    ordering_given = human.magnetic_ordering not in (None, "fm")
+    return tuple(
+        warning
+        for warning, given in (
+            (_MAGNETIZATION_IGNORED_WARNING, magnetization_given),
+            (_ORDERING_IGNORED_WARNING, ordering_given),
+        )
+        if given
+    )
+
+
 def _resolve_spin_polarized(
     is_magnetic: FieldState[Magnetism],
     human: MagneticConfigHumanInput,
     llm: MagneticConfigLlmInput,
 ) -> tuple[bool, str, tuple[Warning, ...]]:
-    magnetization_given = (
-        human.tot_magnetization is not None or human.starting_magnetization is not None
-    )
+    """Whether the run is spin-polarized, the deciding source, and the
+    warnings: an explicit human ``spin_polarized`` first, then any human
+    spin request (``_spin_requests``) as true, then the llm, then
+    ``is_magnetic``, defaulting to true when that is ``Unavailable``."""
+    requests = _spin_requests(human)
     if human.spin_polarized is not None:
-        if human.spin_polarized is False and magnetization_given:
-            # #34 (v2 epic 9, #9): an explicit spin_polarized=False wins
-            # (this is a human override, not the heuristic default), but
-            # both magnetization fields would otherwise be silently
-            # dropped a few lines below with no signal anything was
-            # ignored -- warn instead.
-            return False, "human", (_MAGNETIZATION_IGNORED_WARNING,)
-        return human.spin_polarized, "human", ()
-    if magnetization_given:
-        # #34 (v2 epic 9, #9): a human giving tot_magnetization/
-        # starting_magnetization with no spin_polarized override at all
-        # is a clear, unambiguous request for a spin-polarized
-        # calculation -- before this, both were silently dropped
-        # whenever spin_polarized otherwise resolved False (e.g. the
-        # heuristic default on a structure not flagged magnetic).
+        # An explicit spin_polarized is a human override and wins, but a
+        # request it overrides is reported, never silently dropped (#34,
+        # #145).
+        return human.spin_polarized, "human", () if human.spin_polarized else requests
+    if requests:
+        # A human request for moments or an ordering is a request for a
+        # spin-polarized run, whatever the classifier says: it used to be
+        # dropped whenever spin_polarized otherwise resolved false (#34,
+        # #145).
         return True, "human", ()
     ml_value: bool | None = None  # no ml model wired yet; stubbed until epic 11
     if ml_value is not None:
