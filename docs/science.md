@@ -97,8 +97,26 @@ that is written, not its dimensionality, so a bulk layered crystal such as
 graphite is still sampled along its stacking axis. `k_index` rungs step the
 periodic axes only.
 
+The mesh is one the crystal's point group maps onto itself: lattice vectors
+that a symmetry operation mixes get the same number of k-points, the larger
+one, so no direction is sampled more coarsely than `k_distance` asks and
+pw.x can reduce the mesh by every operation it keeps. Meshing each vector
+from its own length broke this on cells whose mixed vectors differ in length.
+Alpha-U as the Materials Project serves it (the reduced primitive cell of its
+base-centred lattice) got 11×10×6, which pw.x ran with 224 irreducible
+k-points where the denser 11×11×6 has 144. CIF noise in the seventh
+significant figure between the three equal vectors of UN's primitive cell made
+`k_index` 33 a 32×33×32 mesh. Equal counts can cost irreducible k-points at
+some spacings and save them at most others: on La2CuO4's body-centred
+primitive cell, 8×8×4 (48 irreducible k-points) becomes 8×8×8 (59) at
+0.24 Å⁻¹, and 18×18×10 (800) becomes 18×18×18 (480) at 0.10 Å⁻¹. `k_index`
+numbers the distinct meshes of this kind from the Γ-point down to 0.03 Å⁻¹,
+so its rungs are numbered differently from goldilocks-data's k-index ladder
+wherever mixed vectors differ in length.
+
 Compare results on denser meshes. Use `k_grid` or `k_distance` to override
-the default; an explicit `k_grid` is written as given, vacuum axes included.
+the default; an explicit `k_grid` is written as given, vacuum axes included,
+even where the point group does not map it onto itself.
 Setting either one only affects k-point selection; it does not change the
 separate `is_metal` heuristic used elsewhere (e.g. by occupations).
 

@@ -132,8 +132,11 @@ def test_an_isolated_molecule_is_sampled_at_gamma_only(store: AssetStore) -> Non
 
 def test_a_slab_is_sampled_once_along_its_vacuum(store: AssetStore) -> None:
     """#159: the Si(001) slab's vacuum axis c got ceil(|b_3| / k_distance)
-    k-points, 2 at the default 0.15 A^-1. It now gets one, and a and b keep
-    that formula."""
+    k-points, 2 at the default 0.15 A^-1. It now gets one. SlabGenerator's
+    in-plane basis is skewed (gamma 135 deg), and the slab's point group
+    mixes a and b, so both get ceil(|b_i| / k_distance) of the longer |b_i|:
+    16x16x1, where meshing each on its own gave 16x11x1, a mesh the group
+    does not map onto itself (#163)."""
     slab = silicon_001_slab()
     advice = advise(slab, hpc=load_hpc_profile("scarf"), store=store)
     report = check(advice)
@@ -143,10 +146,11 @@ def test_a_slab_is_sampled_once_along_its_vacuum(store: AssetStore) -> None:
 
     k_sampling = advice.step.kpoints.k_sampling.value
     b_1, b_2, _ = slab.lattice.reciprocal_lattice.abc
-    n_1, n_2 = (math.ceil(length / k_sampling.k_distance) for length in (b_1, b_2))
-    assert k_sampling.mesh == (n_1, n_2, 1)
+    n = math.ceil(max(b_1, b_2) / k_sampling.k_distance)
+    assert n == 16
+    assert k_sampling.mesh == (n, n, 1)
     assert k_sampling.k_index is not None
-    assert f"K_POINTS automatic\n  {n_1}  {n_2}  1  0  0  0\n" in content
+    assert f"K_POINTS automatic\n  {n}  {n}  1  0  0  0\n" in content
 
 
 def test_vc_relax_of_an_isolated_molecule_is_refused(store: AssetStore) -> None:

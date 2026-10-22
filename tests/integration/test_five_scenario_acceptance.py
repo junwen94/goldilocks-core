@@ -277,14 +277,17 @@ class TestScenario4Afm:
         assert ignoring_split.ok
         assert afm_n_irr_k >= ignoring_split.value
 
-        # The practically-relevant comparison -- default (FM) advice on
-        # the same input structure -- does grow a lot here, but for a
-        # different mechanistic reason: AFM needed a bigger supercell
-        # (more sites), not a rotational-symmetry loss from the species
-        # split itself.
+        # Against the default (FM) advice on the same input: the AFM
+        # cell's mesh is one its cubic group maps onto itself, n x n x n
+        # in enumlib's skewed basis, and has fewer irreducible k-points
+        # than the FM cell's. Meshing each axis on its own gave 9x10x9
+        # there, which broke the group: 230 irreducible k-points against
+        # the FM cell's 56, once read here as the cost of the bigger cell
+        # (#163).
         fm_advice = advise(rock_salt_feo, hpc=hpc)
         assert fm_advice.step.kpoints.n_irr_k.ok
-        assert afm_n_irr_k > fm_advice.step.kpoints.n_irr_k.value
+        assert len(set(advice.step.kpoints.k_sampling.value.mesh)) == 1
+        assert afm_n_irr_k < fm_advice.step.kpoints.n_irr_k.value
 
 
 class TestScenario5DosMultiStep:

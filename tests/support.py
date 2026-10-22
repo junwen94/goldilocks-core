@@ -503,6 +503,110 @@ def water_ice() -> Structure:
     return Structure.from_str(_MC3D_4573_WATER_ICE_CIF, fmt="cif")
 
 
+_MC3D_67775_SILICON_CIF = """\
+data_0
+
+loop_
+  _atom_site_label
+  _atom_site_fract_x
+  _atom_site_fract_y
+  _atom_site_fract_z
+  _atom_site_type_symbol
+         Si1  0.6666666666716649  0.3333333333433297  0.06292314380102376  Si
+         Si2  0.33333333332833526  0.6666666666566704  0.5629231437931663  Si
+         Si3  0.6666666666716649  0.3333333333433297  0.4370768562068337  Si
+         Si4  0.33333333332833526  0.6666666666566704  0.9370768561989763  Si
+_cell_angle_alpha                       90.0
+_cell_angle_beta                        90.0
+_cell_angle_gamma                       120.00000000021976
+_cell_length_a                          3.8504103266
+_cell_length_b                          3.85041032657442
+_cell_length_c                          6.3634082249
+loop_
+  _symmetry_equiv_pos_as_xyz
+         'x, y, z'
+_symmetry_int_tables_number             1
+_symmetry_space_group_name_H-M          'P 1'
+"""
+
+
+def mc3d_67775_silicon() -> Structure:
+    """Hexagonal Si, MC3D 67775, as goldilocks-data's SCF campaign ran it.
+    Its a and b differ in the last few bits of the cell file
+    (3.8504103266 against 3.85041032657442)."""
+    return Structure.from_str(_MC3D_67775_SILICON_CIF, fmt="cif")
+
+
+_MP_44_ALPHA_URANIUM_CIF = """\
+data_U
+_symmetry_space_group_name_H-M   'P 1'
+_cell_length_a   2.77075206
+_cell_length_b   3.23613745
+_cell_length_c   4.85010636
+_cell_angle_alpha   90.00000000
+_cell_angle_beta   90.00000000
+_cell_angle_gamma   115.34673871
+_symmetry_Int_Tables_number   1
+loop_
+ _symmetry_equiv_pos_site_id
+ _symmetry_equiv_pos_as_xyz
+  1  'x, y, z'
+loop_
+ _atom_site_type_symbol
+ _atom_site_label
+ _atom_site_symmetry_multiplicity
+ _atom_site_fract_x
+ _atom_site_fract_y
+ _atom_site_fract_z
+ _atom_site_occupancy
+  U  U0  1  0.09626689  0.19253377  0.75000000  1
+  U  U1  1  0.90373311  0.80746523  0.25000000  1
+"""
+
+
+def alpha_uranium() -> Structure:
+    """alpha-U (Cmcm), Materials Project mp-44, as MP serves it: the reduced
+    primitive cell of the base-centred lattice, 2 atoms, gamma 115.35 deg.
+    Its point group mixes a and b, whose reciprocal lengths differ (2.509
+    against 2.148 A^-1)."""
+    return Structure.from_str(_MP_44_ALPHA_URANIUM_CIF, fmt="cif")
+
+
+_MP_1865_URANIUM_NITRIDE_CIF = """\
+data_UN
+_symmetry_space_group_name_H-M   'P 1'
+_cell_length_a   3.44882753
+_cell_length_b   3.44882701
+_cell_length_c   3.44882695
+_cell_angle_alpha   60.00001067
+_cell_angle_beta   60.00001562
+_cell_angle_gamma   60.00000542
+_symmetry_Int_Tables_number   1
+loop_
+ _symmetry_equiv_pos_site_id
+ _symmetry_equiv_pos_as_xyz
+  1  'x, y, z'
+loop_
+ _atom_site_type_symbol
+ _atom_site_label
+ _atom_site_symmetry_multiplicity
+ _atom_site_fract_x
+ _atom_site_fract_y
+ _atom_site_fract_z
+ _atom_site_occupancy
+  U  U0  1  0.50000000  0.50000000  0.50000000  1
+  N  N1  1  0.00000000  0.00000000  0.00000000  1
+"""
+
+
+def uranium_nitride() -> Structure:
+    """UN (rock salt, Fm-3m), Materials Project mp-1865, as MP serves it:
+    the fcc primitive cell, whose three reciprocal lengths, equal by
+    symmetry, differ in the seventh significant figure from CIF noise
+    (up to 4.5e-7 A^-1)."""
+    return Structure.from_str(_MP_1865_URANIUM_NITRIDE_CIF, fmt="cif")
+
+
 def geometry_facts(
     dimensionality: Dimensionality,
     vacuum_axes: tuple[LatticeAxis, ...] = (),
