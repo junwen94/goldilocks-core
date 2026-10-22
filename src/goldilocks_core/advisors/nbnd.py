@@ -8,26 +8,30 @@ nothing upstream of it deciding what to request from QE itself
 (goldilocks-core-design.md's own note: "nbnd only computed in
 resource_estimate, no advisor produces it").
 
-**Formula is QE's own official default** (``INPUT_PW.txt``'s ``nbnd``
-entry, operator-confirmed 2026-09-14 against the current PWscf docs,
-not derived or guessed): for an insulator, ``nbnd = nelec / 2`` (the
-number of valence bands); for a metal, 20% more, with a floor of at
-least 4 more than the insulator count -- i.e.
-``max(1.2 * nelec/2, nelec/2 + 4)``, rounded up. QE's own docs also note
-explicitly that in a spin-polarized (``nspin=2``) calculation it is the
-number of *k-points* that doubles internally, not the number of bands --
-``nbnd`` itself is not doubled for ``nspin=2``, and this module does not
-double it either.
+**nbnd is pw.x's own default** (#162): a literal port of QE 7.3
+``PW/src/setup.f90:326-345``, which pw.x applies when ``nbnd`` is not
+given. It starts from the bands every spin channel needs,
+``MAX(NINT(nelec/2), NINT(nelup), NINT(neldw))``; under smearing or
+tetrahedra it pads that to ``MAX(NINT(1.2*nelec/2), NINT(1.2*nelup),
+NINT(1.2*neldw), base + 4)``, 20% more with at least 4 more; for a
+noncollinear run it doubles the padded count. ``nelup``/``neldw`` come
+from ``Modules/electrons_base.f90:376-428`` (``set_nelup_neldw``):
+``INT(nelec+1)/2`` and the rest without ``tot_magnetization``,
+``(INT(nelec) +/- tot_magnetization)/2`` with an integer one, so a
+pinned moment sizes the majority channel. ``NINT`` rounds half away
+from zero, unlike Python's ``round()``. INPUT_PW's ``nbnd`` text leaves
+out the ``nelup``/``neldw`` terms, the rounding and the order of padding
+and doubling; the code follows ``setup.f90``.
 
-**Noncollinear (``noncolin``/SOC) calculations are the one case that
-*does* need doubled ``nbnd`` (v2 epic 9, #9)**: QE's own ``nbnd`` default
-note draws this distinction explicitly -- a noncollinear band holds one
-electron (a two-component spinor), not two, so the same nominal filling
-needs ``nbnd = nelec`` (not ``nelec / 2``) before the metal/insulator
-padding above is even applied. This is a different mechanism from the
-``nspin=2`` note above (that one is about k-point handling, not band
-count) and fires only when ``magnetic.spin_orbit_enabled`` is set --
-plain spin-polarized (``nspin=2``, no SOC) still does not double.
+The spin inputs are the ones the writer renders: the spin mode
+(``MagneticConfigFacts.spin_mode``, #146) and, for a collinear run only
+(nspin=2, the one mode pw.x accepts it in), the occupations decision's
+``tot_magnetization``, the one rendered moment (#138). In a collinear
+spin-polarized run QE doubles the number of k-points it solves, not the
+number of bands: ``nbnd`` is per spin channel. A noncollinear (spin-orbit)
+band is a two-component spinor holding one electron, so ``setup.f90``
+doubles the per-spin count after padding; an odd electron count still
+gets an even band count.
 
 **Uses ``occupations`` (not ``is_metal``) to decide the metal branch.**
 ``advisors/occupations.py`` has already turned ``is_metal`` (plus any
@@ -63,12 +67,12 @@ already forces ``occupations="tetrahedra_opt"`` (aiida-quantumespresso's
 own DOS protocol default, chosen for integration-grid quality, not for
 band count) -- and ``tetrahedra_opt`` is one of this module's own
 ``_METAL_LIKE_OCCUPATIONS``, so ``nbnd()`` called for that nscf step
-takes the metal-like +20%/minimum-+4 branch regardless of the
-material's real classification, incidentally giving the nscf step real
-empty bands an insulator's own scf step gets none of (confirmed
-empirically 2026-09-24 against the bundled ``Si.cif``: scf ``nbnd=16``,
-exactly ``nelec/2``; nscf ``nbnd=20``). This is a genuine, working
-mechanism, just an accidental one -- nobody chose 20%/+4 *for* band-gap
+takes the metal-like padding (20% more per spin channel, at least 4
+more) regardless of the material's real classification, incidentally
+giving the nscf step real empty bands an insulator's own scf step gets
+none of (the bundled ``Si.cif``, nelec 32: scf ``nbnd=16``, exactly
+``nelec/2``; nscf ``nbnd=20``). This is a genuine, working mechanism,
+just an accidental one -- nobody chose 20%/+4 *for* band-gap
 visibility, it is only there because of how ``occupations`` classifies
 ``tetrahedra_opt``. It has not been checked whether that margin is
 actually enough for every case (a narrow-gap material, or a DOS/band
@@ -84,7 +88,7 @@ from dataclasses import dataclass
 
 from pydantic import Field
 
-from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
+from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts, SpinMode
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import (
@@ -99,14 +103,19 @@ from goldilocks_core.resolution import (
 
 _METAL_LIKE_OCCUPATIONS = frozenset({"smearing", "tetrahedra_opt"})
 
+_INTEGER_TOLERANCE = 1e-8
+"""QE's ``eps8``, the tolerance ``set_nelup_neldw`` treats a charge or a
+moment as an integer within."""
+
 SPIN_NOTE = Warning(
     code="nbnd.spin_channel_note",
     level="info",
     category="nbnd",
     message=(
         "nspin=2 doubles the number of k-points QE solves internally, "
-        "not the number of bands -- nbnd here is per spin channel, "
-        "unchanged from the non-spin-polarized formula."
+        "not the number of bands -- nbnd here is per spin channel, with "
+        "room for the majority channel's electrons (pw.x's own default, "
+        "QE setup.f90)."
     ),
 )
 
@@ -115,9 +124,10 @@ NONCOLLINEAR_NOTE = Warning(
     level="info",
     category="nbnd",
     message=(
-        "noncollinear/spin-orbit bands hold one electron each, not two, "
-        "so nbnd here is based on the full electron count rather than "
-        "half of it -- roughly double a comparable non-magnetic run."
+        "noncollinear/spin-orbit bands are spinors holding one electron "
+        "each, not two, so nbnd here is twice pw.x's default for the same "
+        "electron count and occupations without spin (QE setup.f90: "
+        "padded per spin channel, then doubled)."
     ),
 )
 
@@ -168,11 +178,13 @@ def nbnd(
     if not occupations.ok:
         return Blocked(by=blocked_by(occupations))
 
-    is_metal_like = occupations.value.occupations in _METAL_LIKE_OCCUPATIONS
-    noncollinear = (
-        magnetic is not None and magnetic.ok and magnetic.value.spin_orbit_enabled
+    spin_mode, tot_magnetization = _spin_inputs(occupations.value, magnetic)
+    base = _qe_default_nbnd(
+        nelec,
+        occupations.value.occupations in _METAL_LIKE_OCCUPATIONS,
+        spin_mode,
+        tot_magnetization,
     )
-    base = _formula(nelec, is_metal_like, noncollinear)
 
     if human.extra_bands is not None:
         extra, source = human.extra_bands, "human"
@@ -197,23 +209,75 @@ def nbnd(
             )
         )
 
-    warnings = _spin_note(magnetic)
+    warnings = _spin_note(spin_mode)
     decision = NbndDecision(nbnd=total, warnings=warnings)
     return Resolved(decision, Provenance(source=source))
 
 
-def _formula(nelec: float, is_metal_like: bool, noncollinear: bool) -> int:
-    valence_bands = nelec if noncollinear else nelec / 2
-    if not is_metal_like:
-        return max(1, math.ceil(valence_bands))
-    return max(1, math.ceil(max(valence_bands * 1.2, valence_bands + 4)))
+def _spin_inputs(
+    occupations: OccupationsDecision,
+    magnetic: FieldState[MagneticConfigFacts] | None,
+) -> tuple[SpinMode, float | None]:
+    """QE's spin inputs as the writer renders them: the spin mode of
+    ``magnetic`` (``none`` when there is no resolved one) and the
+    ``tot_magnetization`` of ``occupations``, written for a collinear run
+    only (module docstring)."""
+    spin_mode = (
+        magnetic.value.spin_mode if magnetic is not None and magnetic.ok else "none"
+    )
+    tot_magnetization = (
+        occupations.tot_magnetization if spin_mode == "collinear" else None
+    )
+    return spin_mode, tot_magnetization
 
 
-def _spin_note(magnetic: FieldState[MagneticConfigFacts] | None) -> tuple[Warning, ...]:
-    if magnetic is None or not magnetic.ok:
-        return ()
-    if magnetic.value.spin_orbit_enabled:
+def _qe_default_nbnd(
+    nelec: float,
+    metal_like: bool,
+    spin_mode: SpinMode,
+    tot_magnetization: float | None,
+) -> int:
+    """pw.x's default ``nbnd`` (QE 7.3 ``PW/src/setup.f90:326-345``):
+    the bands each spin channel needs, padded under smearing or
+    tetrahedra, doubled for a noncollinear run."""
+    nelup, neldw = _spin_channels(nelec, tot_magnetization)
+    bands = max(_nint(nelec / 2), _nint(nelup), _nint(neldw))
+    if metal_like:
+        bands = max(
+            _nint(1.2 * nelec / 2), _nint(1.2 * nelup), _nint(1.2 * neldw), bands + 4
+        )
+    if spin_mode == "noncollinear":
+        bands *= 2
+    return bands
+
+
+def _spin_channels(
+    nelec: float, tot_magnetization: float | None
+) -> tuple[float, float]:
+    """``nelup``/``neldw`` as QE 7.3 ``set_nelup_neldw`` sets them
+    (``Modules/electrons_base.f90:376-428``), ``INT`` truncation
+    included."""
+    integer_charge = abs(nelec - _nint(nelec)) < _INTEGER_TOLERANCE
+    if tot_magnetization is None:
+        if not integer_charge:
+            return nelec / 2, nelec / 2
+        nelup = int(nelec + 1) // 2
+        return nelup, nelec - nelup
+    integer_moment = (
+        abs(tot_magnetization - _nint(tot_magnetization)) < _INTEGER_TOLERANCE
+    )
+    charge = int(nelec) if integer_charge and integer_moment else nelec
+    return (charge + tot_magnetization) / 2, (charge - tot_magnetization) / 2
+
+
+def _nint(value: float) -> int:
+    """Fortran ``NINT``: the nearest integer, halves away from zero."""
+    return int(math.copysign(math.floor(abs(value) + 0.5), value))
+
+
+def _spin_note(spin_mode: SpinMode) -> tuple[Warning, ...]:
+    if spin_mode == "noncollinear":
         return (NONCOLLINEAR_NOTE,)
-    if magnetic.value.spin_polarized:
+    if spin_mode == "collinear":
         return (SPIN_NOTE,)
     return ()

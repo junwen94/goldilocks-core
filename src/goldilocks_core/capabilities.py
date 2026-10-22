@@ -396,13 +396,13 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "nbnd": {
         "description": (
-            "Total number of Kohn-Sham bands, overriding the formula-based "
-            "value entirely."
+            "Total number of Kohn-Sham bands, overriding pw.x's own default "
+            "(QE setup.f90) that is written otherwise."
         ),
     },
     "extra_bands": {
         "description": (
-            "Extra bands added on top of the formula-computed base band count."
+            "Extra bands added on top of pw.x's default band count (QE setup.f90)."
         ),
     },
     "conv_thr": {
