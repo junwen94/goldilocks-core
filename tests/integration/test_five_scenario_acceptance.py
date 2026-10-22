@@ -270,7 +270,10 @@ class TestScenario4Afm:
             [str(site.specie.element) for site in relabeled],
             relabeled.frac_coords,
         )
-        ignoring_split = n_irr_k(merged, advice.step.kpoints.k_sampling)
+        ignoring_split = n_irr_k(
+            dataclasses.replace(advice.system.cell.value, structure=merged),
+            advice.step.kpoints.k_sampling,
+        )
         assert ignoring_split.ok
         assert afm_n_irr_k >= ignoring_split.value
 

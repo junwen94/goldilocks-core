@@ -25,6 +25,8 @@ Use this only after Goldilocks has already selected the scientific values. The g
   tot_magnetization = <moment>        ! only with nspin = 2, when occupations pin one
   noncolin = .true.                   ! only when SOC/noncollinear is enabled
   lspinorb = .true.                   ! only when SOC is enabled
+  angle1(<i>) = <polar_deg>           ! only for a magnetic SOC run, per species
+  angle2(<i>) = <azimuth_deg>         ! only for a magnetic SOC run, per species
   assume_isolated = '<2D_or_martyna-tuckerman>'  ! '2D' for isolation='slab', 'martyna-tuckerman' for 'isolated'; omit for 'periodic'
 /
 
@@ -72,6 +74,7 @@ ecutwfc / ecutrho   -> advice.system.cutoffs.value (max across elements)
 occupations         -> advice.step.kpoints.occupations.value
 tot_magnetization   -> advice.step.kpoints.occupations.value.tot_magnetization  (None writes none)
 spin / SOC          -> advice.system.magnetic.value, advice.system.pseudo.relativistic
+moment direction    -> advice.system.magnetic.value.moment_direction (angle1/angle2)
 convergence         -> advice.step.kpoints.convergence.value
 assume_isolated     -> advice.system.boundary.value.isolation
 warnings            -> advice.warnings()

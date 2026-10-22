@@ -28,9 +28,9 @@ against the same physical scenarios (bulk Fe, with and without SOC).
   noncollinear run. Here, spin-orbit coupling and magnetism are two
   independent fields on one result; enabling SOC never clears
   `starting_magnetization`, and a magnetic, SOC-enabled result also carries
-  `angle1`/`angle2` (the moment direction QE's noncollinear mode needs) --
-  SOC without magnetism only happens when the structure is genuinely
-  non-magnetic, not because one flag silently overrode the other.
+  `angle1`/`angle2` (the moment direction QE's noncollinear mode needs, see
+  below) -- SOC without magnetism only happens when the structure is
+  genuinely non-magnetic, not because one flag silently overrode the other.
 
 Also corrects a stricter-than-QE constraint the design doc's own audit found
 elsewhere in itself (goldilocks-qe-pw-parameter-audit.md P0 finding #2):
@@ -55,6 +55,21 @@ noncollinear run's moments. The admitted value is the human request; the
 moment the input renders is the occupations decision's
 (``advisors/occupations.py``), which adds 0 under fixed occupations for an
 ordering ``OrderingRecord.compensated`` says has no net moment (#138).
+
+**Moment direction (#172).** A magnetic noncollinear run -- spin-orbit
+coupling on a spin-polarized run -- starts every moment along one
+direction, a physical choice: magnetocrystalline anisotropy, orbital
+moments and band splittings depend on it. ``MagneticCell.moment_direction``
+records it as a lattice direction [uvw] of the uploaded cell: a human
+``moment_direction``, else [001] (source ``heuristic``), with the info
+notice ``magnetic.soc_moment_direction_defaulted``. The default is a
+crystal direction, so it means the same however the cell is oriented; for
+a CIF read by pymatgen (c along z) it is QE's own default, +z. The
+starting moments are written along it: ``magnetic_config`` converts it to
+QE's ``angle1``/``angle2`` for the cell as written
+(``MagneticCell.moment_axis``), and ``advisors/n_irr_k.py`` counts the
+k-points with the same moments. Any other run ignores a
+``moment_direction`` with the warning ``magnetic.moment_direction_ignored``.
 
 **Two steps, around pseudopotential selection (#128).** ``magnetic_cell``
 decides what selection depends on, and the simulated cell: spin
@@ -156,12 +171,13 @@ silently reopen A2.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
 import spglib
-from pydantic import Field
+from pydantic import Field, field_validator
 from pymatgen.core import Structure
 from pymatgen.symmetry.groups import SpaceGroup
 
@@ -172,6 +188,7 @@ from goldilocks_core.advisors.magnetic_enumeration import (
 from goldilocks_core.advisors.species_split import split_species
 from goldilocks_core.analysis.is_magnetic import Magnetism
 from goldilocks_core.analysis.local_moments import LocalMomentFacts, local_moments
+from goldilocks_core.analysis.symmetry import SYMPREC
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import (
     Blocked,
@@ -196,10 +213,6 @@ reached."""
 _ENUMLIB_TIMEOUT_MINUTES = 0.5
 """enumlib's time limit per call, in pymatgen's unit (minutes; its default
 is 5), sized for an interactive request (#171)."""
-
-_SYMPREC = 0.01
-"""Angstrom: ``SpacegroupAnalyzer``'s default tolerance, which
-``symmetry_eff`` (``analysis/symmetry.py``) is counted with."""
 
 _ORDERING_PATTERN = r"^(fm|afm|afm-[1-9][0-9]*)$"
 """``magnetic_ordering``'s values: the ferromagnetic default, the first
@@ -310,6 +323,30 @@ _SOC_SUGGESTED_WARNING = Warning(
     ),
 )
 
+_MOMENT_DIRECTION_DEFAULTED_WARNING = Warning(
+    code="magnetic.soc_moment_direction_defaulted",
+    level="info",
+    category="magnetic",
+    message=(
+        "the moments of this spin-orbit run start along [0 0 1] of the "
+        "uploaded cell (its third lattice vector). The direction is a "
+        "physical choice -- magnetic anisotropy, orbital moments and band "
+        "splittings depend on it -- not a converged default; set "
+        "moment_direction to a lattice direction [u, v, w] of the uploaded "
+        "cell to choose another."
+    ),
+)
+
+_MOMENT_DIRECTION_IGNORED_WARNING = Warning(
+    code="magnetic.moment_direction_ignored",
+    level="warning",
+    category="magnetic",
+    message=(
+        "moment_direction was given but only a spin-polarized run with "
+        "spin_orbit_coupling has a moment direction; it is ignored."
+    ),
+)
+
 _DISORDERED_SPIN_POLARIZED = (
     "spin-polarized setup needs an ordered structure; the input has fractional "
     "site occupancies (set spin_polarized to false, or upload an ordered cell)"
@@ -361,6 +398,8 @@ WARNING_CATALOGUE = (
     ),
     _MAGNETIZATION_IGNORED_WARNING,
     _ORDERING_IGNORED_WARNING,
+    _MOMENT_DIRECTION_DEFAULTED_WARNING,
+    _MOMENT_DIRECTION_IGNORED_WARNING,
 )
 """Every warning code this module can emit -- ``capabilities.py``'s
 ``warnings[]`` catalogue aggregates one of these tuples per advisor. The
@@ -392,6 +431,17 @@ class OrderingRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class MomentDirection:
+    """The direction every moment of a magnetic noncollinear run starts
+    along (module docstring, #172): ``uvw``, a lattice direction of the
+    uploaded cell, from a human ``moment_direction`` (``source`` human) or
+    the default [001] (``source`` heuristic)."""
+
+    uvw: tuple[float, float, float]
+    source: Literal["human", "heuristic"]
+
+
+@dataclass(frozen=True, slots=True)
 class MagneticCell:
     """The simulated cell and the spin decisions taken before
     pseudopotential selection (module docstring).
@@ -415,7 +465,10 @@ class MagneticCell:
 
     ``tot_magnetization`` is the human request admitted for this run: set
     only for a collinear spin-polarized run (module docstring, #146). The
-    rendered moment is ``OccupationsDecision.tot_magnetization`` (#138)."""
+    rendered moment is ``OccupationsDecision.tot_magnetization`` (#138).
+
+    ``moment_direction`` is set exactly when the run is spin-polarized with
+    spin-orbit coupling (module docstring, #172)."""
 
     structure: Structure
     spin_polarized: bool
@@ -424,16 +477,37 @@ class MagneticCell:
     ordering: OrderingRecord
     cell_in_input_basis: tuple[tuple[float, ...], ...]
     tot_magnetization: float | None
+    moment_direction: MomentDirection | None = None
     warnings: tuple[Warning, ...] = ()
+
+    @property
+    def moment_axis(self) -> np.ndarray | None:
+        """``moment_direction`` as a Cartesian unit vector of ``structure``
+        as written, ``None`` without one. [uvw] in the input's basis is
+        ``f`` with ``f @ cell_in_input_basis == [uvw]`` in the cell's
+        basis, then ``f @ structure.lattice.matrix`` (scaled by its largest
+        component first, so no size of [uvw] under- or overflows). This
+        holds for any written frame whose lattice is ``cell_in_input_basis
+        @ input lattice`` turned rigidly, so the moment turns with it."""
+        if self.moment_direction is None:
+            return None
+        uvw = np.array(self.moment_direction.uvw)
+        fractional = np.linalg.solve(
+            np.array(self.cell_in_input_basis).T, uvw / np.abs(uvw).max()
+        )
+        cartesian = fractional @ self.structure.lattice.matrix
+        return cartesian / np.linalg.norm(cartesian)
 
 
 @dataclass(frozen=True, slots=True)
 class MagneticConfigFacts:
     """The magnetic decision the writer renders. ``cell``, ``ordering``,
-    ``spin_polarized``, ``magnetic_elements``, ``tot_magnetization`` and
-    ``spin_orbit_enabled`` are copied from the ``MagneticCell`` (``cell``
-    is the same object as ``MagneticCell.structure``); ``warnings`` are
-    the cell's plus this step's."""
+    ``spin_polarized``, ``magnetic_elements``, ``tot_magnetization``,
+    ``spin_orbit_enabled`` and ``moment_direction`` are copied from the
+    ``MagneticCell`` (``cell`` is the same object as
+    ``MagneticCell.structure``); ``warnings`` are the cell's plus this
+    step's. ``angle1``/``angle2`` are QE's angles of the moment direction
+    (``_angles``), one per species, set with it."""
 
     cell: Structure
     ordering: OrderingRecord
@@ -444,6 +518,7 @@ class MagneticConfigFacts:
     spin_orbit_enabled: bool
     angle1: dict[str, float] | None
     angle2: dict[str, float] | None
+    moment_direction: MomentDirection | None = None
     warnings: tuple[Warning, ...] = ()
 
     @property
@@ -482,6 +557,20 @@ class MagneticConfigHumanInput(HumanInput):
     spin-polarized run, like the two magnetization keys (#145): ``"fm"``
     too, so the listing's ferromagnetic candidate generates a ferromagnetic
     run (#170)."""
+    moment_direction: tuple[float, float, float] | None = None
+    """The direction the moments of a spin-polarized spin-orbit run start
+    along, as a lattice direction [u, v, w] of the uploaded cell (module
+    docstring, #172); not the zero vector. Ignored, with a warning, by any
+    other run."""
+
+    @field_validator("moment_direction")
+    @classmethod
+    def _nonzero_direction(
+        cls, value: tuple[float, float, float] | None
+    ) -> tuple[float, float, float] | None:
+        if value is not None and not any(value):
+            raise ValueError("moment_direction must be a non-zero direction [u, v, w]")
+        return value
 
 
 class MagneticConfigLlmInput(LlmInput):
@@ -496,9 +585,10 @@ def magnetic_cell(
     llm: MagneticConfigLlmInput | None = None,
 ) -> FieldState[MagneticCell]:
     """The simulated cell (module docstring): spin polarization,
-    spin-orbit coupling, the admitted ``tot_magnetization``, and
-    ``structure`` with the requested ordering applied -- the one
-    enumeration of a calculation -- split into species. ``Blocked`` when
+    spin-orbit coupling, the admitted ``tot_magnetization``, the moment
+    direction (#172), and ``structure`` with the requested ordering
+    applied -- the one enumeration of a calculation -- split into species.
+    ``Blocked`` when
     ``is_magnetic`` is, when a human ``tot_magnetization`` comes with
     spin-orbit coupling (#146), when ``magnetic_ordering`` names a
     candidate the enumeration does not produce (#170), when a human
@@ -526,6 +616,10 @@ def magnetic_cell(
     tot_magnetization = human.tot_magnetization if spin_polarized else None
     if tot_magnetization is not None and spin_orbit_enabled:
         return Blocked(by=_NONCOLLINEAR_TOT_MAGNETIZATION)
+    direction, direction_warnings = _moment_direction(
+        human.moment_direction, magnetic=spin_polarized and spin_orbit_enabled
+    )
+    warnings = (*warnings, *direction_warnings)
     requested = human.magnetic_ordering or "fm"
 
     magnetic_elements: tuple[str, ...] = ()
@@ -554,6 +648,7 @@ def magnetic_cell(
         ),
         cell_in_input_basis=_cell_in_input_basis(cell, structure),
         tot_magnetization=tot_magnetization,
+        moment_direction=direction,
         warnings=warnings,
     )
     return Resolved(facts, Provenance(source=source))
@@ -569,9 +664,9 @@ def magnetic_config(
     human ``starting_magnetization`` (already split onto the cell's
     species by ``magnetic_cell``), or the heuristic fractions, scaled by
     the selected pseudopotentials' ``z_valences`` when known -- with the
-    spin-orbit suggestion and the moment angles. Copies the cell's facts,
-    with the cell's provenance; ``Blocked`` when the cell is not
-    resolved."""
+    spin-orbit suggestion and the angles of the cell's moment direction
+    (``_angles``). Copies the cell's facts, with the cell's provenance;
+    ``Blocked`` when the cell is not resolved."""
     human = human or MagneticConfigHumanInput()
     if not cell.ok:
         return Blocked(by=blocked_by(cell))
@@ -593,9 +688,11 @@ def magnetic_config(
         warnings = (*warnings, _SOC_SUGGESTED_WARNING)
 
     angle1 = angle2 = None
-    if facts.spin_orbit_enabled and starting_magnetization is not None:
-        angle1 = dict.fromkeys(starting_magnetization, 0.0)
-        angle2 = dict.fromkeys(starting_magnetization, 0.0)
+    axis = facts.moment_axis
+    if axis is not None and starting_magnetization is not None:
+        polar, azimuth = _angles(axis)
+        angle1 = dict.fromkeys(starting_magnetization, polar)
+        angle2 = dict.fromkeys(starting_magnetization, azimuth)
 
     config = MagneticConfigFacts(
         cell=facts.structure,
@@ -607,6 +704,7 @@ def magnetic_config(
         spin_orbit_enabled=facts.spin_orbit_enabled,
         angle1=angle1,
         angle2=angle2,
+        moment_direction=facts.moment_direction,
         warnings=warnings,
     )
     return Resolved(config, cell.provenance)
@@ -695,7 +793,7 @@ def _compensated(cell: Structure) -> bool:
     then is the net moment zero by construction; balanced spin counts are
     not enough -- spinel Fe3O4's R-3m candidate has 3 Fe up and 3 down,
     but both tetrahedral Fe down, and no operation maps a tetrahedral site
-    onto an octahedral one (#138). Searched at ``_SYMPREC``, the
+    onto an octahedral one (#138). Searched at ``SYMPREC``, the
     tolerance ``symmetry_eff`` is counted with."""
     dataset = spglib.get_magnetic_symmetry(
         (
@@ -704,7 +802,7 @@ def _compensated(cell: Structure) -> bool:
             [site.specie.Z for site in cell],
             [site.specie.spin for site in cell],
         ),
-        symprec=_SYMPREC,
+        symprec=SYMPREC,
         is_axial=False,
     )
     return dataset is not None and bool(np.any(dataset["time_reversals"]))
@@ -731,6 +829,34 @@ def _cell_in_input_basis(
     ``cell.lattice.matrix == M @ structure.lattice.matrix``."""
     matrix = np.linalg.solve(structure.lattice.matrix.T, cell.lattice.matrix.T).T
     return tuple(tuple(float(value) for value in row) for row in matrix)
+
+
+def _moment_direction(
+    requested: tuple[float, float, float] | None, *, magnetic: bool
+) -> tuple[MomentDirection | None, tuple[Warning, ...]]:
+    """The moment direction of a ``magnetic`` noncollinear run (module
+    docstring, #172) and its warning: ``requested``, or [001] with the
+    defaulted notice. Any other run has none and ignores ``requested``
+    with a warning."""
+    if not magnetic:
+        ignored = () if requested is None else (_MOMENT_DIRECTION_IGNORED_WARNING,)
+        return None, ignored
+    if requested is None:
+        return MomentDirection((0.0, 0.0, 1.0), "heuristic"), (
+            _MOMENT_DIRECTION_DEFAULTED_WARNING,
+        )
+    return MomentDirection(requested, "human"), ()
+
+
+def _angles(axis: np.ndarray) -> tuple[float, float]:
+    """QE's ``angle1`` (from Cartesian z) and ``angle2`` (of the xy
+    projection, from x), in degrees, of the unit vector ``axis``.
+    Components within 1e-12 of 0 are 0, so an axis along z has angle2 0,
+    and the angles are rounded to 1e-6 degrees."""
+    x, y, z = (float(value) + 0.0 for value in np.round(axis, 12))
+    polar = round(math.degrees(math.acos(z)), 6) + 0.0
+    azimuth = round(math.degrees(math.atan2(y, x)), 6) + 0.0
+    return polar, azimuth
 
 
 def _spin_requests(human: MagneticConfigHumanInput) -> tuple[Warning, ...]:

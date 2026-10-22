@@ -13,10 +13,11 @@ resolves without it; ``nbnd`` needs its *plain* ``nelec`` (already
 resolved by phase 2) so it is ``Blocked`` outright if that failed.
 
 **Every structural input is the simulated cell** (``system.cell``, #128):
-``k_sampling`` and ``n_irr_k`` mesh its reciprocal lattice, and
-``convergence`` scales with its atom count, the same cell
-``system.electron_count`` counted and the writer renders. A blocked cell
-blocks all three; there is no fallback to the input structure.
+``k_sampling`` and ``n_irr_k`` mesh its reciprocal lattice -- ``n_irr_k``
+with its moments, for a spin-orbit run (#172) -- and ``convergence``
+scales with its atom count, the same cell ``system.electron_count``
+counted and the writer renders. A blocked cell blocks all three; there is
+no fallback to the input structure.
 """
 
 from __future__ import annotations
@@ -140,10 +141,10 @@ def _cell_sampling(
     if not system.cell.ok:
         cause = Blocked(by=blocked_by(system.cell))
         return cause, cause, cause
-    cell = system.cell.value.structure
+    cell = system.cell.value
     k_sampling_state = k_sampling(
         analysis.is_metal,
-        cell,
+        cell.structure,
         occupations_state,
         overrides.k_sampling,
         overrides.k_sampling_llm,
@@ -152,7 +153,7 @@ def _cell_sampling(
         k_sampling_state,
         n_irr_k(cell, k_sampling_state, overrides.n_irr_k),
         convergence(
-            len(cell),
+            len(cell.structure),
             hubbard=system.hubbard,
             geometry=analysis.geometry,
             human=overrides.convergence,

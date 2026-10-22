@@ -177,6 +177,26 @@ not only the elements. Enabling it changes the required pseudopotentials and
 the QE spin settings. See [relativistic modes](conventions.md#relativistic-modes)
 and the [table restrictions](pseudopotentials.md#choose-a-table).
 
+A spin-polarized run with SOC is noncollinear: every moment starts along one
+direction, and that direction is a physical choice, since magnetic
+anisotropy, orbital moments and band splittings depend on it. Set
+`moment_direction` to a lattice direction [u, v, w] of the uploaded cell
+(`--set 'moment_direction=[1,1,0]'`). Unset, the moments start along
+[0, 0, 1], the uploaded cell's third lattice vector, with the info notice
+`magnetic.soc_moment_direction_defaulted`; for a CIF that is the c axis,
+which pymatgen puts along Cartesian z, QE's own default. The direction is a
+crystal direction, so it keeps its meaning whatever cell is written, an
+antiferromagnetic one included. `records.magnetic.moment_direction` shows it
+and whether you set it, and the input carries it as `angle1`/`angle2`, the
+same for every species (the sign stays in `starting_magnetization`). Any
+other run ignores `moment_direction` with the warning
+`magnetic.moment_direction_ignored`. The irreducible k-points of such a run
+are counted the way pw.x counts them: with only the symmetry operations
+that keep every moment, alone or combined with time reversal, and no
+k -> -k pairing. Cubic B2 FeCo with moments along [001] keeps 16 of its 48
+operations, so a 10x10x10 mesh has 126 irreducible k-points rather than
+56, and `npool` and the memory estimate follow that count.
+
 Set `magnetic_ordering` to `afm` to opt in to a compensated antiferromagnetic
 ordering instead of the ferromagnetic default, or to the label of one
 candidate `goldilocks magnetic-orderings` lists (`afm-3`). Like

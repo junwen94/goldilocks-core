@@ -18,7 +18,10 @@ into the same species (#170). Runs on a synthetic SSSP-shaped Ni/O table
 Spin-orbit coupling makes a run noncollinear, where pw.x has no
 ``tot_magnetization`` and fixed occupations need none (#146). The CrI3
 monolayer (MC2D mc2d-da9644c9) runs on a synthetic fully relativistic Cr/I
-table (z_valence 14 and 7) and needs no enumlib.
+table (z_valence 14 and 7) and needs no enumlib. B2 FeCo (MC3D mc3d-60258)
+runs on a synthetic fully relativistic Fe/Co table (z_valence 16 and 17):
+its moment direction is a setting, and its k-points are counted with the
+moments as pw.x counts them (#172).
 
 Olivine LiFePO4 (MC3D mc3d-52501) has 28 sites but only 4 Fe for enumlib to
 order, so ``magnetic_ordering=afm`` orders them (#171); it runs on a
@@ -363,6 +366,77 @@ def test_an_ignored_tot_magnetization_never_reaches_a_spin_orbit_deck(
     assert _keyword(content, "noncolin") == ".true."
     assert "starting_magnetization" not in content
     assert _keyword(content, "tot_magnetization") is None
+
+
+def _b2_feco() -> Structure:
+    """B2 FeCo (Pm-3m, MC3D mc3d-60258)."""
+    return Structure(
+        Lattice.cubic(2.80), ["Fe", "Co"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
+    )
+
+
+@pytest.fixture
+def feco_spin_orbit_store(tmp_path, monkeypatch) -> AssetStore:
+    """A fully relativistic Fe/Co table, the one a spin-orbit run selects."""
+    spec, registry_table = sssp_fixture_table_spec(
+        tmp_path / "sources", {"Fe": 16.0, "Co": 17.0}, relativistic="full"
+    )
+    monkeypatch.setattr(
+        "goldilocks_core.service._pseudo.load_tables",
+        lambda *a, **kw: {registry_table.id: registry_table},
+    )
+    installed = AssetStore(tmp_path / "store")
+    installed.install(spec, sssp_preparer(registry_table))
+    return installed
+
+
+_FECO_SPIN_ORBIT = {"spin_orbit_coupling": True, "k_grid": [10, 10, 10]}
+
+
+def test_spin_orbit_moments_start_along_c_and_count_k_points_as_pw_x_does(
+    feco_spin_orbit_store: AssetStore,
+) -> None:
+    """#172: a magnetic spin-orbit run's moment direction is a physical
+    choice. Unset, the moments start along [001] of the uploaded cell,
+    which records.magnetic reports with its source and an info notice
+    names. n_irr_k counts the operations that keep those moments: pw.x 7.5
+    ran this 10x10x10 FeCo deck with 16 operations and 126 k-points; the
+    structural count of 56 sized npool and memory for too few."""
+    steps, (content,) = _run("scf", _b2_feco(), _FECO_SPIN_ORBIT, feco_spin_orbit_store)
+
+    advice = steps[0]
+    assert advice.step.kpoints.n_irr_k.value == 126
+    record = advice.records()["magnetic"].value
+    assert record["moment_direction"] == {"uvw": [0.0, 0.0, 1.0], "source": "heuristic"}
+    codes = {warning["code"] for warning in advice.warnings()}
+    assert "magnetic.soc_moment_direction_defaulted" in codes
+    for species in (1, 2):
+        assert float(_keyword(content, f"angle1({species})")) == 0.0
+        assert float(_keyword(content, f"angle2({species})")) == 0.0
+
+
+def test_a_moment_direction_setting_is_written_as_qe_s_angles(
+    feco_spin_orbit_store: AssetStore,
+) -> None:
+    """#172: moment_direction is a setting: [110] of the cubic cell is
+    written as angle1 = 90 and angle2 = 45 for every species, and the
+    k-points are counted for that direction (8 operations keep it)."""
+    steps, (content,) = _run(
+        "scf",
+        _b2_feco(),
+        {**_FECO_SPIN_ORBIT, "moment_direction": [1, 1, 0]},
+        feco_spin_orbit_store,
+    )
+
+    advice = steps[0]
+    record = advice.records()["magnetic"].value
+    assert record["moment_direction"] == {"uvw": [1.0, 1.0, 0.0], "source": "human"}
+    codes = {warning["code"] for warning in advice.warnings()}
+    assert "magnetic.soc_moment_direction_defaulted" not in codes
+    for species in (1, 2):
+        assert float(_keyword(content, f"angle1({species})")) == 90.0
+        assert float(_keyword(content, f"angle2({species})")) == 45.0
+    assert advice.step.kpoints.n_irr_k.value == 186
 
 
 def _olivine_lifepo4() -> Structure:

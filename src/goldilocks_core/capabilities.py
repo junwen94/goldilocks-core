@@ -278,6 +278,16 @@ _SETTING_META: dict[str, _SettingExtra] = {
             "is no candidate; an 'afm-<n>' that is not listed is refused."
         ),
     },
+    "moment_direction": {
+        "description": (
+            "Direction the moments of a spin-polarized spin_orbit_coupling run "
+            "start along, as a lattice direction [u, v, w] of the uploaded "
+            "cell (non-zero), written as QE's angle1/angle2 and used to count "
+            "the k-points by magnetic symmetry. A physical choice: unset, the "
+            "moments start along [0, 0, 1], with a notice. Ignored with a "
+            "warning by any other run."
+        ),
+    },
     "use_vdw": {
         "description": (
             "Force whether a van der Waals dispersion correction is applied. "

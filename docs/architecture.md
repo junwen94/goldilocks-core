@@ -109,10 +109,11 @@ Inside `advise()` itself, the three phases are:
   including pseudopotential-table selection via `advisors/pseudo_selection.py`
   and `service/_pseudo.py`. It starts with the simulated cell
   (`service/_magnetic.py`): `magnetic_config.magnetic_cell` resolves spin
-  polarization and spin-orbit coupling and applies the requested magnetic
-  ordering, the only enumlib call, which can replace the input with a
-  different cell. Table selection then reads the cell's spin-orbit switch,
-  and `magnetic_config.magnetic_config` seeds the cell's moments from the
+  polarization, spin-orbit coupling and a magnetic spin-orbit run's moment
+  direction, and applies the requested magnetic ordering, the only enumlib
+  call, which can replace the input with a different cell. Table selection
+  then reads the cell's spin-orbit switch, and
+  `magnetic_config.magnetic_config` seeds the cell's moments from the
   selected z_valence. Everything after that -- the electron count, the step
   advice, the gate and the writer -- reads that one cell object, so no count
   describes a cell other than the one written.

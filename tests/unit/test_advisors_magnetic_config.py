@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import shutil
 
 import numpy as np
@@ -13,6 +14,7 @@ from support import magnetic_decision
 from goldilocks_core.advisors import magnetic_config as magnetic_config_module
 from goldilocks_core.advisors.magnetic_config import (
     MagneticConfigHumanInput,
+    MomentDirection,
     OrderingRecord,
     enumerate_magnetic_orderings,
     magnetic_cell,
@@ -427,6 +429,141 @@ def test_soc_is_never_auto_enabled_even_when_needs_soc_says_yes() -> None:
     assert any(
         "consider enabling" in warning.message for warning in state.value.warnings
     )
+
+
+_HCP_COBALT = Structure.from_spacegroup(
+    "P6_3/mmc", Lattice.hexagonal(2.507, 4.070), ["Co"], [[1 / 3, 2 / 3, 0.25]]
+)
+
+
+def _codes(state) -> set[str]:
+    return {warning.code for warning in state.value.warnings}
+
+
+def test_a_moment_direction_is_a_lattice_direction_of_the_uploaded_cell() -> None:
+    """#172: moment_direction is a direction [uvw] of the uploaded cell,
+    written as QE's angle1 (from Cartesian z) and angle2 (from x, in the
+    xy plane) for every species. In pymatgen's hcp setting b + c is
+    (-a/2, a*sqrt(3)/2, c): angle1 = atan(a/c), angle2 = 120 degrees. The
+    old hard-wired angle1 = angle2 = 0 put every moment along +z."""
+    state = magnetic_decision(
+        _HCP_COBALT,
+        is_magnetic(_HCP_COBALT),
+        human=MagneticConfigHumanInput(
+            spin_orbit_coupling=True, moment_direction=(0, 1, 1)
+        ),
+    )
+
+    facts = state.value
+    assert facts.moment_direction == MomentDirection(
+        uvw=(0.0, 1.0, 1.0), source="human"
+    )
+    assert facts.angle1 == pytest.approx({"Co": math.degrees(math.atan2(2.507, 4.070))})
+    assert facts.angle2 == pytest.approx({"Co": 120.0})
+    assert "magnetic.soc_moment_direction_defaulted" not in _codes(state)
+
+
+def test_the_default_moment_direction_is_the_uploaded_cell_s_c_axis() -> None:
+    """#172: without moment_direction, a magnetic spin-orbit run starts its
+    moments along [001] of the uploaded cell -- a crystal direction, so it
+    keeps its meaning however the cell is oriented -- with an info notice
+    that the direction is a physical choice. This FePt cell has c along
+    +y, so the moments are written at angle1 = angle2 = 90 degrees, not
+    along Cartesian +z (QE's own default, which was hard-wired)."""
+    a, c = 2.729, 3.71
+    fept = Structure(
+        Lattice([[a, 0, 0], [0, 0, -a], [0, c, 0]]),
+        ["Fe", "Pt"],
+        [[0, 0, 0], [0.5, 0.5, 0.5]],
+    )
+
+    state = magnetic_decision(
+        fept,
+        is_magnetic(fept),
+        human=MagneticConfigHumanInput(spin_orbit_coupling=True),
+    )
+
+    facts = state.value
+    assert facts.moment_direction == MomentDirection(
+        uvw=(0.0, 0.0, 1.0), source="heuristic"
+    )
+    assert facts.angle1 == {"Fe": 90.0, "Pt": 90.0}
+    assert facts.angle2 == {"Fe": 90.0, "Pt": 90.0}
+    (notice,) = (
+        warning
+        for warning in facts.warnings
+        if warning.code == "magnetic.soc_moment_direction_defaulted"
+    )
+    assert notice.level == "info"
+    assert "[0 0 1]" in notice.message
+    assert "moment_direction" in notice.message
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {},
+        {"spin_orbit_coupling": True, "spin_polarized": False},
+    ],
+    ids=["collinear", "spin-orbit-non-magnetic"],
+)
+def test_a_moment_direction_without_magnetic_spin_orbit_coupling_is_ignored(
+    settings: dict[str, object],
+) -> None:
+    """#172: only a magnetic noncollinear run has a moment direction; a
+    collinear or non-magnetic run ignores one with a warning."""
+    state = magnetic_decision(
+        _IRON,
+        is_magnetic(_IRON),
+        human=MagneticConfigHumanInput(moment_direction=(1, 0, 0), **settings),
+    )
+
+    assert state.value.moment_direction is None
+    assert state.value.angle1 is None
+    assert state.value.angle2 is None
+    assert "magnetic.moment_direction_ignored" in _codes(state)
+    assert "magnetic.soc_moment_direction_defaulted" not in _codes(state)
+
+
+@pytest.mark.parametrize("scale", [1e-200, 3.0, 1e200])
+def test_a_moment_direction_is_a_direction_whatever_its_length(scale: float) -> None:
+    """#172: only the direction of [uvw] counts, however small or large
+    its components."""
+    state = magnetic_decision(
+        _HCP_COBALT,
+        is_magnetic(_HCP_COBALT),
+        human=MagneticConfigHumanInput(
+            spin_orbit_coupling=True, moment_direction=(0.0, scale, 0.0)
+        ),
+    )
+
+    assert state.value.angle1 == {"Co": 90.0}
+    assert state.value.angle2 == {"Co": 120.0}
+
+
+def test_a_moment_along_z_within_rounding_noise_has_no_azimuth() -> None:
+    """#172: a c axis along z up to rounding noise in its y component
+    (1e-14 A) is written as angle1 = angle2 = 0, not with the arbitrary
+    azimuth of the noise."""
+    noisy = Structure(
+        Lattice([[2.87, 0, 0], [0, 2.87, 0], [0, 1e-14, 2.87]]),
+        ["Fe", "Fe"],
+        [[0, 0, 0], [0.5, 0.5, 0.5]],
+    )
+
+    state = magnetic_decision(
+        noisy,
+        is_magnetic(noisy),
+        human=MagneticConfigHumanInput(spin_orbit_coupling=True),
+    )
+
+    assert state.value.angle1 == {"Fe": 0.0}
+    assert state.value.angle2 == {"Fe": 0.0}
+
+
+def test_a_zero_moment_direction_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="moment_direction"):
+        MagneticConfigHumanInput(moment_direction=(0, 0, 0))
 
 
 def _same_sites(cell: Structure, structure: Structure) -> bool:
@@ -1523,3 +1660,51 @@ def test_enumerate_magnetic_orderings_finds_the_same_split_relabeling_does() -> 
     for label, candidate in afm_candidates:
         assert label.startswith("afm-")
         assert len(set(candidate.species)) > len(set(_ROCK_SALT_FEO.species))
+
+
+def test_a_moment_direction_keeps_its_meaning_on_an_applied_ordering(
+    monkeypatch,
+) -> None:
+    """#172: [uvw] belongs to the uploaded cell. An ordering whose cell has
+    another basis (a + b, -a + b, c) writes the moment along the input's b,
+    converted through cell_in_input_basis, not along the written cell's
+    own second vector (-a + b)."""
+    supercell = _ROCK_SALT_NIO.copy()
+    supercell.make_supercell([[1, 1, 0], [-1, 1, 0], [0, 0, 1]])
+    spins = iter((5.0, -5.0))
+    candidate = Structure(
+        supercell.lattice,
+        [
+            Species("Ni", spin=next(spins))
+            if site.specie.symbol == "Ni"
+            else site.specie
+            for site in supercell
+        ],
+        supercell.frac_coords,
+    )
+    monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
+    monkeypatch.setattr(
+        magnetic_config_module, "enumerate_orderings", _enumerating((candidate, "afm"))
+    )
+
+    state = magnetic_decision(
+        _ROCK_SALT_NIO,
+        is_magnetic(_ROCK_SALT_NIO),
+        human=MagneticConfigHumanInput(
+            magnetic_ordering="afm",
+            spin_orbit_coupling=True,
+            moment_direction=(0, 1, 0),
+        ),
+    )
+
+    b = _ROCK_SALT_NIO.lattice.matrix[1] / np.linalg.norm(
+        _ROCK_SALT_NIO.lattice.matrix[1]
+    )
+    labels = ("Ni1", "Ni2", "O")
+    assert state.value.ordering.applied == "afm-1"
+    assert state.value.angle1 == pytest.approx(
+        dict.fromkeys(labels, math.degrees(math.acos(b[2])))
+    )
+    assert state.value.angle2 == pytest.approx(
+        dict.fromkeys(labels, math.degrees(math.atan2(b[1], b[0])))
+    )

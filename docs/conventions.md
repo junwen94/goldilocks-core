@@ -176,4 +176,8 @@ otherwise spin-polarized advice produces a collinear `nspin = 2` run.
 it without `nspin = 2`: it is refused before generation together with
 `spin_orbit_coupling`, and ignored with a warning when `spin_polarized` is
 explicitly false. A noncollinear run with fixed occupations needs no
-`tot_magnetization`; its moments come from `starting_magnetization`.
+`tot_magnetization`; its moments come from `starting_magnetization`. A
+magnetic noncollinear run also writes `angle1`/`angle2` for every species:
+the direction of `moment_direction`, a lattice direction of the uploaded
+cell, [0, 0, 1] by default (see
+[Check magnetism and spin-orbit coupling](science.md#check-magnetism-and-spin-orbit-coupling)).
