@@ -1054,13 +1054,13 @@ def test_the_written_cell_is_seeded_once_from_the_selected_table(
         pytest.param(
             {},
             {"formula": "Ni1 O1", "nat": 2},
-            {"requested": "fm", "applied": "fm"},
+            {"requested": "fm", "applied": "fm", "compensated": False},
             id="fm",
         ),
         pytest.param(
             {"magnetic_ordering": "afm"},
             {"formula": "Ni2 O2", "nat": 4},
-            {"requested": "afm", "applied": "afm-1"},
+            {"requested": "afm", "applied": "afm-1", "compensated": True},
             id="afm",
         ),
     ],
@@ -1071,7 +1071,7 @@ def test_the_magnetic_record_shows_the_written_cell_and_its_ordering(
     """#128: goldilocks.json records the cell the input is written for, as
     its formula and atom count (any Structure in a record projects to
     those, never to host-specific or bulky data), next to the ordering
-    asked for and the one applied."""
+    asked for, the one applied and whether it is compensated (#138)."""
     advice = advise(
         _rock_salt_nio(),
         hpc=hpc,

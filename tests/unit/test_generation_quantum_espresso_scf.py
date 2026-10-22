@@ -39,18 +39,17 @@ def _magnetic(
     *,
     spin_polarized: bool = False,
     starting_magnetization: dict[str, float] | None = None,
-    tot_magnetization: float | None = None,
     spin_orbit_enabled: bool = False,
     angle1: dict[str, float] | None = None,
     angle2: dict[str, float] | None = None,
 ) -> MagneticConfigFacts:
     return MagneticConfigFacts(
         cell=structure,
-        ordering=OrderingRecord(requested="fm", applied="fm"),
+        ordering=OrderingRecord(requested="fm", applied="fm", compensated=False),
         spin_polarized=spin_polarized,
         magnetic_elements=(),
         starting_magnetization=starting_magnetization,
-        tot_magnetization=tot_magnetization,
+        tot_magnetization=None,
         spin_orbit_enabled=spin_orbit_enabled,
         angle1=angle1,
         angle2=angle2,
@@ -309,23 +308,38 @@ def test_spin_polarized_starting_magnetization_survives_unclobbered(
     assert "0.0" not in content.split("starting_magnetization")[1].split("\n")[0]
 
 
-def test_a_collinear_run_renders_nspin_2_with_its_tot_magnetization(
-    pseudo_metadata_factory,
+def _fixed(tot_magnetization: float | None) -> OccupationsDecision:
+    return OccupationsDecision(
+        occupations="fixed",
+        smearing_type=None,
+        degauss=None,
+        tot_magnetization=tot_magnetization,
+    )
+
+
+@pytest.mark.parametrize(
+    ("moment", "rendered"),
+    [(2.0, "tot_magnetization = 2.0"), (0.0, "tot_magnetization = 0.0")],
+)
+def test_a_collinear_run_renders_nspin_2_with_the_occupations_moment(
+    pseudo_metadata_factory, moment: float, rendered: str
 ) -> None:
+    """#138: the occupations decision holds the moment the run pins -- a
+    human one, or the 0 derived for a compensated ordering -- and the
+    writer renders it, zero included."""
     structure = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
     magnetic = _magnetic(
-        structure,
-        spin_polarized=True,
-        starting_magnetization={"Fe": 0.6923},
-        tot_magnetization=2.0,
+        structure, spin_polarized=True, starting_magnetization={"Fe": 0.6923}
     )
     system = _system(structure, pseudo_metadata_factory, magnetic=magnetic)
 
-    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+    content = write_qe_scf(system, _step(occupations=_fixed(moment)), _CTX)[0].files[
+        "scf.in"
+    ]
 
     assert "nspin            = 2" in content
     assert content.count("tot_magnetization") == 1
-    assert "tot_magnetization = 2.0" in content
+    assert rendered in content
     assert "noncolin" not in content
 
 

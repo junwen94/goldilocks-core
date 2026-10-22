@@ -296,7 +296,7 @@ def system_keywords(
         "nbnd": step.nbnd.nbnd,
     }
     keywords.update(_occupations_keywords(step))
-    keywords.update(_magnetic_keywords(system, species_index))
+    keywords.update(_magnetic_keywords(system, step, species_index))
     keywords.update(_charge_keywords(system))
     if system.vdw.use_vdw:
         if system.vdw.method not in _QE_VDW_CORR:
@@ -323,13 +323,14 @@ def _occupations_keywords(step: PwSettings) -> dict[str, object]:
 
 
 def _magnetic_keywords(
-    system: SystemSettings, species_index: dict[str, int]
+    system: SystemSettings, step: PwSettings, species_index: dict[str, int]
 ) -> dict[str, object]:
     """The keywords of ``magnetic.spin_mode`` (#146): ``noncollinear``
     writes ``noncolin``/``lspinorb``, ``collinear`` writes ``nspin = 2``
-    and the admitted ``tot_magnetization`` (``magnetic_config`` sets one
-    in no other mode), ``none`` writes neither; then the starting moments
-    and angles, by species label."""
+    and the moment the occupations decision pins
+    (``OccupationsDecision.tot_magnetization``, 0 included: the one
+    rendered moment, #138), ``none`` writes neither; then the starting
+    moments and angles, by species label."""
     magnetic = system.magnetic
     keywords: dict[str, object] = {}
     if magnetic.spin_mode == "noncollinear":
@@ -337,8 +338,9 @@ def _magnetic_keywords(
         keywords["lspinorb"] = True
     elif magnetic.spin_mode == "collinear":
         keywords["nspin"] = 2
-        if magnetic.tot_magnetization is not None:
-            keywords["tot_magnetization"] = magnetic.tot_magnetization
+        moment = step.occupations.tot_magnetization
+        if moment is not None:
+            keywords["tot_magnetization"] = moment
     for field_name, values in (
         ("starting_magnetization", magnetic.starting_magnetization),
         ("angle1", magnetic.angle1),

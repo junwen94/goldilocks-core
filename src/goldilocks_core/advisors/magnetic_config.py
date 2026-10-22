@@ -51,7 +51,10 @@ pw.x stops on it without nspin=2 (``input.f90:761-762``). An explicit
 ``spin_polarized=false`` drops a requested one with the ignored warning,
 with or without spin-orbit coupling; otherwise spin-orbit coupling refuses
 it (``Blocked``), since the starting magnetization alone sets a
-noncollinear run's moments.
+noncollinear run's moments. The admitted value is the human request; the
+moment the input renders is the occupations decision's
+(``advisors/occupations.py``), which adds 0 under fixed occupations for an
+ordering ``OrderingRecord.compensated`` says has no net moment (#138).
 
 **Two steps, around pseudopotential selection (#128).** ``magnetic_cell``
 decides what selection depends on, and the simulated cell: spin
@@ -157,6 +160,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
+import spglib
 from pydantic import Field
 from pymatgen.core import Structure
 from pymatgen.symmetry.groups import SpaceGroup
@@ -192,6 +196,10 @@ reached."""
 _ENUMLIB_TIMEOUT_MINUTES = 0.5
 """enumlib's time limit per call, in pymatgen's unit (minutes; its default
 is 5), sized for an interactive request (#171)."""
+
+_SYMPREC = 0.01
+"""Angstrom: ``SpacegroupAnalyzer``'s default tolerance, which
+``symmetry_eff`` (``analysis/symmetry.py``) is counted with."""
 
 _ORDERING_PATTERN = r"^(fm|afm|afm-[1-9][0-9]*)$"
 """``magnetic_ordering``'s values: the ferromagnetic default, the first
@@ -371,10 +379,16 @@ class OrderingRecord:
     the one applied: the label of the antiferromagnetic candidate that replaced
     the input cell (``"afm-1"`` for ``"afm"``), as the listing numbers it,
     otherwise ``"fm"`` -- the input cell kept (the FM identity
-    pass-through, as for every spin-unpolarized run)."""
+    pass-through, as for every spin-unpolarized run).
+
+    ``compensated``: the applied candidate's cell, split by its
+    starting-magnetization classes, has an operation that maps every site
+    onto one of the opposite class (``_compensated``), so its net moment
+    is zero by symmetry (#138). Always false for ``"fm"``."""
 
     requested: str
     applied: str
+    compensated: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -400,7 +414,8 @@ class MagneticCell:
     it cannot decide or the run is not spin-polarized (#143).
 
     ``tot_magnetization`` is the human request admitted for this run: set
-    only for a collinear spin-polarized run (module docstring, #146)."""
+    only for a collinear spin-polarized run (module docstring, #146). The
+    rendered moment is ``OccupationsDecision.tot_magnetization`` (#138)."""
 
     structure: Structure
     spin_polarized: bool
@@ -532,7 +547,11 @@ def magnetic_cell(
         spin_polarized=spin_polarized,
         spin_orbit_enabled=spin_orbit_enabled,
         magnetic_elements=magnetic_elements,
-        ordering=OrderingRecord(requested=requested, applied=applied),
+        ordering=OrderingRecord(
+            requested=requested,
+            applied=applied,
+            compensated=applied != "fm" and _compensated(cell),
+        ),
         cell_in_input_basis=_cell_in_input_basis(cell, structure),
         tot_magnetization=tot_magnetization,
         warnings=warnings,
@@ -665,6 +684,30 @@ def _seeded_split(
     return split_species(
         ordered.base, [override.get(site.label, 0.0) for site in ordered.base]
     )
+
+
+def _compensated(cell: Structure) -> bool:
+    """Whether an operation of the split ``cell`` maps every site onto a
+    site of the same element whose starting-magnetization class
+    (``Species.spin``) is the negative of its own: spglib's magnetic
+    symmetry of the classes as collinear moments, which spatial operations
+    leave unchanged (``is_axial=False``), has a time-reversed operation. Only
+    then is the net moment zero by construction; balanced spin counts are
+    not enough -- spinel Fe3O4's R-3m candidate has 3 Fe up and 3 down,
+    but both tetrahedral Fe down, and no operation maps a tetrahedral site
+    onto an octahedral one (#138). Searched at ``_SYMPREC``, the
+    tolerance ``symmetry_eff`` is counted with."""
+    dataset = spglib.get_magnetic_symmetry(
+        (
+            cell.lattice.matrix,
+            cell.frac_coords,
+            [site.specie.Z for site in cell],
+            [site.specie.spin for site in cell],
+        ),
+        symprec=_SYMPREC,
+        is_axial=False,
+    )
+    return dataset is not None and bool(np.any(dataset["time_reversals"]))
 
 
 def _spin_signs(candidate: Structure) -> tuple[float, ...]:

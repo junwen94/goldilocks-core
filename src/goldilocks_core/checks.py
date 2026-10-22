@@ -40,9 +40,12 @@ is now where that decision belongs.
    density a prior ``scf`` step already converged and does not re-derive
    this constraint (goldilocks-core-design.md:3417, "per-step
    constraint").
-   ``advisors/occupations.py`` already flags this combination with an
-   informational warning when it produces ``fixed``, but only *this*
-   module owns the actual numeric check and the decision to block.
+   The moment checked is the occupations decision's
+   (``OccupationsDecision.tot_magnetization``), the one the writer
+   renders (#138). ``advisors/occupations.py`` picks fixed for a
+   collinear run only with a moment that passes, so this rule fires only
+   for an explicit ``occupations='fixed'``, which that advisor flags with
+   a warning; only *this* module blocks.
 
 3. Its sibling rule, found empirically 2026-09-16 against real QE 7.3
    source (``PW/src/iweights.f90``'s ``iweights_only``): ``occupations
@@ -64,7 +67,9 @@ is now where that decision belongs.
    and the rule applies to it too. Only a spin-polarized noncollinear run,
    which breaks time reversal, is exempt (#146). Same
    ``plan.SCF_LIKE_PURPOSES`` scoping as
-   rule 2, same reasoning.
+   rule 2, same reasoning; like rule 2 it is reachable only from an
+   explicit ``occupations='fixed'``, since the advisor's default for an odd
+   count is smearing (#138).
 
 4. A user ``ndiag`` whose s x s diagonalization grid cannot distribute
    ``nbnd`` bands (#133), s = isqrt(min(ndiag, ntasks/npool)): pw.x
@@ -99,7 +104,10 @@ from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
 from goldilocks_core.advisors.nbnd import NbndDecision
-from goldilocks_core.advisors.occupations import OccupationsDecision
+from goldilocks_core.advisors.occupations import (
+    OccupationsDecision,
+    whole_spin_channels,
+)
 from goldilocks_core.advisors.parallelisation import (
     ParallelisationDecision,
     diag_grid_side,
@@ -119,14 +127,9 @@ from goldilocks_core.resolution import Blocked, FieldState
 
 _MISSING_TOT_MAGNETIZATION = (
     "occupations='fixed' with a spin-polarized system requires an explicit "
-    "integer tot_magnetization, but none was set."
+    "integer tot_magnetization, but none was set; set tot_magnetization, or "
+    "use occupations='smearing'."
 )
-_EVEN_ELECTRON_COUNT_TOLERANCE = 1e-6
-"""Matches QE's own ``eps8``-scale tolerance (``PW/src/setup.f90``'s odd
--electron check) for treating a heuristically-summed ``nelec`` as an
-integer despite floating-point noise, without also treating a
-genuinely fractional ``nelec`` (e.g. a disordered/partial-occupancy
-structure) as spuriously even."""
 _TWO_D_CELL_DOFREE = frozenset({"2Dxy", "2Dshape", "ibrav+2Dxy", "ibrav+2Dshape"})
 """``cell_dofree`` values that move only the x and y components of a and b.
 The 'ibrav+' forms act as the plain ones under the writer's ``ibrav = 0``
@@ -241,7 +244,7 @@ def _fixed_occupations_needs_integer_moment(
         or magnetic.value.spin_mode != "collinear"
     ):
         return None
-    tot = magnetic.value.tot_magnetization
+    tot = occupations.value.tot_magnetization
     if tot is None:
         return _MISSING_TOT_MAGNETIZATION
     if tot != int(tot):
@@ -249,19 +252,21 @@ def _fixed_occupations_needs_integer_moment(
             "occupations='fixed' with a spin-polarized system requires an "
             f"integer tot_magnetization; got {tot!r}."
         )
-    if electron_count is not None and electron_count.ok:
-        # nelup = (nelec + tot) / 2, neldw = (nelec - tot) / 2 (#70): both
-        # need to be integers, which needs tot_magnetization and nelec to
-        # share parity -- an integer tot_magnetization alone is not
-        # sufficient (e.g. nelec=3, tot=2 gives nelup=2.5/neldw=0.5).
-        nelup = (electron_count.value.nelec + tot) / 2
-        if abs(round(nelup) - nelup) > _EVEN_ELECTRON_COUNT_TOLERANCE:
-            return (
-                "occupations='fixed' requires tot_magnetization to share "
-                "parity with the electron count, so nelup/neldw are both "
-                f"integers; got tot_magnetization={tot!r}, "
-                f"nelec={electron_count.value.nelec!r}."
-            )
+    # nelup = (nelec + tot) / 2, neldw = (nelec - tot) / 2 (#70): both need
+    # to be integers, which needs tot_magnetization and nelec to share
+    # parity -- an integer tot_magnetization alone is not sufficient (e.g.
+    # nelec=3, tot=2 gives nelup=2.5/neldw=0.5).
+    if (
+        electron_count is not None
+        and electron_count.ok
+        and not whole_spin_channels(electron_count.value.nelec, tot)
+    ):
+        return (
+            "occupations='fixed' requires tot_magnetization to share "
+            "parity with the electron count, so nelup/neldw are both "
+            f"integers; got tot_magnetization={tot!r}, "
+            f"nelec={electron_count.value.nelec!r}."
+        )
     return None
 
 
@@ -287,7 +292,7 @@ def _fixed_occupations_needs_even_electron_count(
     if occupations.value.occupations != "fixed" or magnetic.value.spin_polarized:
         return None
     nelec = electron_count.value.nelec
-    if abs(round(nelec / 2) - nelec / 2) > _EVEN_ELECTRON_COUNT_TOLERANCE:
+    if not whole_spin_channels(nelec, 0.0):
         return (
             "occupations='fixed' with a non-spin-polarized system requires "
             f"an even electron count; got nelec={nelec!r}, which likely means "

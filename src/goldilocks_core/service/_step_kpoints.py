@@ -7,9 +7,10 @@ split across two files (the same import-surface ceiling reason
 
 Ordering follows the real dependency chain (each function's own
 signature, not a convention invented here): ``occupations`` before
-``k_sampling`` before ``n_irr_k``; ``nbnd`` needs
-``system.electron_count``'s *plain* ``nelec`` (already resolved by
-phase 2) so it is ``Blocked`` outright if that failed.
+``k_sampling`` before ``n_irr_k``; ``occupations`` reads
+``system.electron_count`` for fixed occupations' parity (#138) and
+resolves without it; ``nbnd`` needs its *plain* ``nelec`` (already
+resolved by phase 2) so it is ``Blocked`` outright if that failed.
 
 **Every structural input is the simulated cell** (``system.cell``, #128):
 ``k_sampling`` and ``n_irr_k`` mesh its reciprocal lattice, and
@@ -97,8 +98,9 @@ def electronic_step_advice(
     occupations_state = occupations(
         analysis.is_metal,
         system.magnetic,
-        overrides.occupations,
-        overrides.occupations_llm,
+        system.electron_count,
+        human=overrides.occupations,
+        llm=overrides.occupations_llm,
     )
     k_sampling_state, n_irr_k_state, convergence_state = _cell_sampling(
         analysis, system, occupations_state, overrides

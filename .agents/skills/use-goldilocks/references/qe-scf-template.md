@@ -22,6 +22,7 @@ Use this only after Goldilocks has already selected the scientific values. The g
   smearing = '<smearing_type>'        ! omit if fixed occupations
   degauss = <smearing_width_ry>       ! omit if fixed occupations
   nspin = 2                           ! only for collinear spin-polarized non-SOC
+  tot_magnetization = <moment>        ! only with nspin = 2, when occupations pin one
   noncolin = .true.                   ! only when SOC/noncollinear is enabled
   lspinorb = .true.                   ! only when SOC is enabled
   assume_isolated = '<2D_or_martyna-tuckerman>'  ! '2D' for isolation='slab', 'martyna-tuckerman' for 'isolated'; omit for 'periodic'
@@ -69,6 +70,7 @@ k-shift             -> advice.step.kpoints.k_sampling.value.shift
 pseudos             -> advice.system.pseudo.metadata.value  (one entry per element)
 ecutwfc / ecutrho   -> advice.system.cutoffs.value (max across elements)
 occupations         -> advice.step.kpoints.occupations.value
+tot_magnetization   -> advice.step.kpoints.occupations.value.tot_magnetization  (None writes none)
 spin / SOC          -> advice.system.magnetic.value, advice.system.pseudo.relativistic
 convergence         -> advice.step.kpoints.convergence.value
 assume_isolated     -> advice.system.boundary.value.isolation

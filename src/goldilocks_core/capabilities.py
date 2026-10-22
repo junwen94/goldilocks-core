@@ -252,7 +252,9 @@ _SETTING_META: dict[str, _SettingExtra] = {
             "Total per-cell magnetization target of a collinear spin-polarized "
             "run (nspin=2); refused with spin_orbit_coupling, whose noncollinear "
             "run takes starting_magnetization instead, and ignored when "
-            "spin_polarized is false."
+            "spin_polarized is false. Fixed occupations need an integer of the "
+            "electron count's parity; a non-metal gets them by default only "
+            "then, and smearing otherwise."
         ),
     },
     "starting_magnetization": {
@@ -325,7 +327,15 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "occupations": {
         "description": (
-            "Electronic-occupation scheme (fixed, smearing, or tetrahedra_opt)."
+            "Electronic-occupation scheme (fixed, smearing, or tetrahedra_opt). "
+            "Default: smearing for a metal or unconfirmed metallicity; fixed for "
+            "a non-metal where fixed occupations can run -- an even electron "
+            "count without spin polarization (spin_orbit_coupling or not), any "
+            "count on a spin-polarized spin_orbit_coupling run, and, for a "
+            "collinear spin-polarized run, an integer tot_magnetization of the "
+            "count's parity (one set, or 0 for a magnetic_ordering compensated "
+            "by symmetry) -- and smearing otherwise. An explicit fixed on a "
+            "collinear run with no such moment is refused."
         ),
     },
     "smearing_type": {

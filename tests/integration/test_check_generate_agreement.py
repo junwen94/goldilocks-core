@@ -14,8 +14,11 @@ warning exactly when a card is rendered.
 
 A request no input can express is refused by ``check`` itself, where
 ``/explain`` shows it, and never reaches a writer: spin-orbit coupling
-with a ``tot_magnetization``, which pw.x accepts only with nspin=2 (#146).
-Spin-orbit scenarios select a second, fully relativistic table.
+with a ``tot_magnetization``, which pw.x accepts only with nspin=2 (#146),
+and an explicit ``occupations=fixed`` on a collinear spin-polarized run with
+no moment to pin (#138). A default never is: a spin-polarized non-metal
+without a known moment gets smearing. Spin-orbit scenarios select a second,
+fully relativistic table.
 
 Add a scenario here whenever another rule can let ``check`` pass while a
 writer refuses.
@@ -139,6 +142,11 @@ _SCENARIOS = {
     "UO2": _Scenario(lambda: _fluorite("U", 5.47), ("U  U-5f  4",)),
     # La gets no U, so only Cu does.
     "LaCuO3": _Scenario(lambda: _perovskite("La", "Cu", 3.82), ("U  Cu-3d  4",)),
+    # A spin-polarized non-metal without a known moment runs on smearing
+    # (#138).
+    "NiO is_metal false": _Scenario(
+        lambda: _rock_salt("Ni", 4.17), ("U  Ni-3d  6.2",), {"is_metal": False}
+    ),
     # Overrides.
     "TiO2 u_by_element": _Scenario(
         _rutile_tio2, ("U  Ti-3d  4",), {"u_by_element": {"Ti": 4.0}}
@@ -196,9 +204,16 @@ _REFUSALS = {
         {"spin_orbit_coupling": True, "tot_magnetization": 3.0},
         "tot_magnetization",
     ),
+    # fixed occupations on nspin=2 need an integer tot_magnetization, which
+    # nothing gives a ferromagnetic start (#138).
+    "NiO occupations fixed": _Refusal(
+        lambda: _rock_salt("Ni", 4.17),
+        {"occupations": "fixed"},
+        "integer tot_magnetization",
+    ),
 }
 
-_MULTI_TASK_SCENARIOS = ("NiO", "LaCuO3", "TiO2")
+_MULTI_TASK_SCENARIOS = ("NiO", "LaCuO3", "TiO2", "NiO is_metal false")
 
 _FROZEN_NS = "convergence.mixing_fixed_ns_freezes_hubbard_occupations"
 

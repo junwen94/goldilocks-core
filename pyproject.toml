@@ -47,6 +47,9 @@ dependencies = [
     # OpenAPI/capabilities schema generation) -- promoted from the http/mcp
     # extras to a core dependency (goldilocks-core-design.md S12, already decided).
     "pydantic>=2.12",
+    # Imported directly for magnetic symmetry (get_magnetic_symmetry), which
+    # pymatgen does not wrap; the floor is pymatgen-core's own.
+    "spglib>=2.5",
 ]
 
 [project.optional-dependencies]

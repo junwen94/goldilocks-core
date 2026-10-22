@@ -23,6 +23,12 @@ table (z_valence 14 and 7) and needs no enumlib.
 Olivine LiFePO4 (MC3D mc3d-52501) has 28 sites but only 4 Fe for enumlib to
 order, so ``magnetic_ordering=afm`` orders them (#171); it runs on a
 synthetic Li/Fe/P/O table (z_valence 3, 16, 5 and 6) with the real enumlib.
+
+A spin-polarized non-metal used to get fixed occupations without the
+integer ``tot_magnetization`` pw.x needs for them on nspin=2, so the gate
+refused the default for LiFePO4 and for NiO classified non-metal (#138).
+Such a run now gets smearing, unless the applied ordering is compensated
+by symmetry: then fixed occupations pin ``tot_magnetization = 0``.
 """
 
 from __future__ import annotations
@@ -409,7 +415,9 @@ def test_afm_orders_the_four_fe_of_olivine_lifepo4(olivine_store: AssetStore) ->
     assert len(labels) > 1
     assert listing.warnings == ()
     magnetic = advice.system.magnetic.value
-    assert magnetic.ordering == OrderingRecord(requested="afm", applied="afm-1")
+    assert magnetic.ordering == OrderingRecord(
+        requested="afm", applied="afm-1", compensated=True
+    )
     assert len(magnetic.cell) == 28
     assert {site.label for site in magnetic.cell} == {"Li", "Fe1", "Fe2", "P", "O"}
     assert magnetic.starting_magnetization["Fe1"] == pytest.approx(5.0 / 16.0)
@@ -452,7 +460,9 @@ def test_an_afm_request_writes_an_afm_deck_for_a_non_magnetic_classification(
 
     assert steps[0].analysis.is_magnetic.value == "non_magnetic"
     magnetic = steps[0].system.magnetic.value
-    assert magnetic.ordering == OrderingRecord(requested="afm", applied="afm-1")
+    assert magnetic.ordering == OrderingRecord(
+        requested="afm", applied="afm-1", compensated=True
+    )
     assert _keyword(content, "nspin") == "2"
     assert _keyword(content, "nat") == "2"
     assert _keyword(content, "ntyp") == "2"
@@ -463,3 +473,60 @@ def test_an_afm_request_writes_an_afm_deck_for_a_non_magnetic_classification(
     assert float(_keyword(content, "starting_magnetization(2)")) == pytest.approx(
         -5.0 / 14.0
     )
+
+
+@pytest.mark.parametrize(
+    ("structure", "store_fixture"),
+    [(_olivine_lifepo4, "olivine_store"), (_primitive_nio, "store")],
+    ids=["LiFePO4", "NiO"],
+)
+def test_a_magnetic_insulator_s_default_passes_the_gate_on_smearing(
+    structure: Callable[[], Structure],
+    store_fixture: str,
+    request: pytest.FixtureRequest,
+) -> None:
+    """#138: LiFePO4 and NiO classified non-metal got occupations='fixed'
+    on nspin=2 with no tot_magnetization, which pw.x stops on (QE 7.3
+    PW/src/input.f90:764-778), so check refused the default (a 422 on
+    /run). Nothing knows their moment, so they get smearing."""
+    steps, (content,) = _run(
+        "scf",
+        structure(),
+        {"is_metal": False},
+        request.getfixturevalue(store_fixture),
+    )
+
+    advice = steps[0]
+    assert advice.analysis.is_metal.value == "non_metal"
+    assert advice.system.magnetic.value.spin_mode == "collinear"
+    assert advice.step.kpoints.occupations.value.occupations == "smearing"
+    assert _keyword(content, "occupations") == "'smearing'"
+    assert _keyword(content, "nspin") == "2"
+    assert _keyword(content, "tot_magnetization") is None
+
+
+@_needs_enumlib
+@pytest.mark.parametrize("task", ["scf", "relax"])
+def test_a_compensated_afm_insulator_pins_a_zero_moment_on_fixed_occupations(
+    task: str, store: AssetStore
+) -> None:
+    """#138: the engine-built AFM-II NiO cell has an operation reversing
+    every spin, so its moment is 0 by symmetry: fixed occupations with
+    tot_magnetization = 0, both spin channels holding 24 electrons, and a
+    neutral cell (#128). The request itself carries no moment."""
+    steps, (content,) = _run(
+        task, _primitive_nio(), {"magnetic_ordering": "afm", "is_metal": False}, store
+    )
+
+    magnetic = steps[0].system.magnetic.value
+    occupations = steps[0].step.kpoints.occupations.value
+    assert magnetic.ordering == OrderingRecord(
+        requested="afm", applied="afm-1", compensated=True
+    )
+    assert magnetic.tot_magnetization is None
+    assert occupations.occupations == "fixed"
+    assert occupations.tot_magnetization == 0.0
+    assert _keyword(content, "occupations") == "'fixed'"
+    assert float(_keyword(content, "tot_magnetization")) == 0.0
+    assert _keyword(content, "nbnd") == "24"
+    assert _keyword(content, "tot_charge") is None

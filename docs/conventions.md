@@ -66,7 +66,7 @@ k-point across its vacuum and a molecule in a box the Γ-point alone, for any
 | Hubbard +U (d/f compounds with O or F)        | Built-in Dudarev U_eff table, see [Check Hubbard +U](science.md#check-hubbard-u) |
 | Fixed Hubbard occupations (+U)                | `mixing_fixed_ns` unset (QE's 0)                               |
 | Confirmed metal, or metallicity unconfirmed   | `smearing`, `cold`, `degauss` `0.01` Ry                        |
-| Confirmed non-metal                           | `fixed`, no width                                              |
+| Confirmed non-metal                           | `fixed`, no width, where it can run; otherwise `smearing` as above |
 
 `conv_thr`/`etot_conv_thr` scale with the structure's atom count `nat`, not a
 fixed constant: for Si (`nat=8`) this gives `conv_thr = 1.6e-9` Ry and
@@ -87,6 +87,14 @@ non-metal gets `fixed` occupations; a confirmed metal, or a structure where
 composition alone cannot confirm metallic character (`is_metal` is
 `Unavailable`), gets `smearing`. This is deliberate -- a wrong-but-plausible
 fixed-occupations run is worse than an unnecessary but correct smearing run.
+A non-metal gets `fixed` only where both spin channels hold a whole number of
+electrons: an even electron count without spin polarization (with or without
+spin-orbit coupling), any count on a spin-polarized spin-orbit run, or a
+collinear spin-polarized run with an integer
+`tot_magnetization` of the electron count's parity (one you set, or 0 for a
+`magnetic_ordering` compensated by symmetry). Otherwise it gets `smearing`,
+so no default is refused before generation; see
+[Check electronic occupations](science.md#check-electronic-occupations).
 
 Each per-step advisor module under `src/goldilocks_core/advisors/` documents
 and owns its own heuristic default (e.g. `occupations.py` for smearing,

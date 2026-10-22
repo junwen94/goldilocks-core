@@ -33,19 +33,35 @@ from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailabl
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
 
-_FIXED = Resolved(
-    OccupationsDecision(occupations="fixed", smearing_type=None, degauss=None),
-    Provenance(source="heuristic"),
-)
+
+def _fixed(tot_magnetization: float | None = None):
+    """Fixed occupations pinning ``tot_magnetization`` -- the moment the
+    gate checks and the writer renders (#138)."""
+    return Resolved(
+        OccupationsDecision(
+            occupations="fixed",
+            smearing_type=None,
+            degauss=None,
+            tot_magnetization=tot_magnetization,
+        ),
+        Provenance(source="heuristic"),
+    )
+
+
+_FIXED = _fixed()
 _SMEARING = Resolved(
-    OccupationsDecision(occupations="smearing", smearing_type="cold", degauss=0.01),
+    OccupationsDecision(
+        occupations="smearing",
+        smearing_type="cold",
+        degauss=0.01,
+        tot_magnetization=2.5,
+    ),
     Provenance(source="heuristic"),
 )
 
 
 def _magnetic(
     spin_polarized: bool,
-    tot_magnetization: float | None,
     structure: Structure = _IRON,
     *,
     spin_orbit_enabled: bool = False,
@@ -53,11 +69,11 @@ def _magnetic(
     angles = {"Fe": 0.0} if spin_polarized and spin_orbit_enabled else None
     facts = MagneticConfigFacts(
         cell=structure,
-        ordering=OrderingRecord(requested="fm", applied="fm"),
+        ordering=OrderingRecord(requested="fm", applied="fm", compensated=False),
         spin_polarized=spin_polarized,
         magnetic_elements=("Fe",) if spin_polarized else (),
         starting_magnetization={"Fe": 0.1} if spin_polarized else None,
-        tot_magnetization=tot_magnetization,
+        tot_magnetization=None,
         spin_orbit_enabled=spin_orbit_enabled,
         angle1=angles,
         angle2=angles,
@@ -90,7 +106,7 @@ def test_check_all_surfaces_a_blocked_field_state() -> None:
 
 
 def test_fixed_occupations_with_non_integer_moment_blocks() -> None:
-    report = check_all(occupations=_FIXED, magnetic=_magnetic(True, 2.5), purpose="scf")
+    report = check_all(occupations=_fixed(2.5), magnetic=_magnetic(True), purpose="scf")
 
     assert not report.ok
     assert "integer tot_magnetization" in report.blocking[0]
@@ -98,39 +114,48 @@ def test_fixed_occupations_with_non_integer_moment_blocks() -> None:
 
 
 def test_fixed_occupations_with_missing_moment_blocks() -> None:
-    report = check_all(
-        occupations=_FIXED, magnetic=_magnetic(True, None), purpose="scf"
-    )
+    report = check_all(occupations=_FIXED, magnetic=_magnetic(True), purpose="scf")
 
     assert not report.ok
     assert "none was set" in report.blocking[0]
+    assert "occupations='smearing'" in report.blocking[0]
 
 
 def test_fixed_occupations_with_integer_moment_is_ok() -> None:
-    report = check_all(occupations=_FIXED, magnetic=_magnetic(True, 2.0), purpose="scf")
+    report = check_all(occupations=_fixed(2.0), magnetic=_magnetic(True), purpose="scf")
 
     assert report.ok
 
 
-def test_smearing_occupations_never_triggers_the_moment_check() -> None:
-    report = check_all(
-        occupations=_SMEARING, magnetic=_magnetic(True, 2.5), purpose="scf"
+def test_the_moment_rule_reads_the_occupations_decision_not_the_request() -> None:
+    """#138: the occupations decision holds the moment the input pins, the
+    one the writer renders: the 0 it derives for a compensated ordering
+    passes, though no moment was requested."""
+    derived = check_all(
+        occupations=_fixed(0.0),
+        magnetic=_magnetic(True),
+        electron_count=_electron_count(48.0),
+        purpose="scf",
     )
+
+    assert derived.ok, derived.blocking
+
+
+def test_smearing_occupations_never_triggers_the_moment_check() -> None:
+    report = check_all(occupations=_SMEARING, magnetic=_magnetic(True), purpose="scf")
 
     assert report.ok
 
 
 def test_non_magnetic_system_never_triggers_the_moment_check() -> None:
-    report = check_all(
-        occupations=_FIXED, magnetic=_magnetic(False, None), purpose="scf"
-    )
+    report = check_all(occupations=_FIXED, magnetic=_magnetic(False), purpose="scf")
 
     assert report.ok
 
 
 def test_the_moment_check_is_scoped_to_the_scf_step_only() -> None:
     report = check_all(
-        occupations=_FIXED, magnetic=_magnetic(True, 2.5), purpose="nscf"
+        occupations=_fixed(2.5), magnetic=_magnetic(True), purpose="nscf"
     )
 
     assert report.ok
@@ -142,7 +167,7 @@ def test_the_moment_check_also_applies_to_relax_and_vc_relax() -> None:
     -converged density/spin."""
     for purpose in ("relax", "vc-relax"):
         report = check_all(
-            occupations=_FIXED, magnetic=_magnetic(True, 2.5), purpose=purpose
+            occupations=_fixed(2.5), magnetic=_magnetic(True), purpose=purpose
         )
 
         assert not report.ok, purpose
@@ -168,7 +193,7 @@ def test_fixed_occupations_non_spin_polarized_odd_electron_count_blocks() -> Non
     check existed."""
     report = check_all(
         occupations=_FIXED,
-        magnetic=_magnetic(False, None),
+        magnetic=_magnetic(False),
         electron_count=_electron_count(3.0),
         purpose="scf",
     )
@@ -181,7 +206,7 @@ def test_fixed_occupations_non_spin_polarized_odd_electron_count_blocks() -> Non
 def test_fixed_occupations_non_spin_polarized_even_electron_count_is_ok() -> None:
     report = check_all(
         occupations=_FIXED,
-        magnetic=_magnetic(False, None),
+        magnetic=_magnetic(False),
         electron_count=_electron_count(4.0),
         purpose="scf",
     )
@@ -192,7 +217,7 @@ def test_fixed_occupations_non_spin_polarized_even_electron_count_is_ok() -> Non
 def test_smearing_occupations_never_triggers_the_electron_count_check() -> None:
     report = check_all(
         occupations=_SMEARING,
-        magnetic=_magnetic(False, None),
+        magnetic=_magnetic(False),
         electron_count=_electron_count(3.0),
         purpose="scf",
     )
@@ -204,8 +229,8 @@ def test_spin_polarized_system_never_triggers_the_electron_count_check() -> None
     """An odd-electron, spin-polarized system is the sibling
     integer-moment check's territory instead."""
     report = check_all(
-        occupations=_FIXED,
-        magnetic=_magnetic(True, 1.0),
+        occupations=_fixed(1.0),
+        magnetic=_magnetic(True),
         electron_count=_electron_count(3.0),
         purpose="scf",
     )
@@ -216,7 +241,7 @@ def test_spin_polarized_system_never_triggers_the_electron_count_check() -> None
 def test_the_electron_count_check_is_scoped_to_the_scf_step_only() -> None:
     report = check_all(
         occupations=_FIXED,
-        magnetic=_magnetic(False, None),
+        magnetic=_magnetic(False),
         electron_count=_electron_count(3.0),
         purpose="nscf",
     )
@@ -228,7 +253,7 @@ def test_the_electron_count_check_also_applies_to_relax_and_vc_relax() -> None:
     for purpose in ("relax", "vc-relax"):
         report = check_all(
             occupations=_FIXED,
-            magnetic=_magnetic(False, None),
+            magnetic=_magnetic(False),
             electron_count=_electron_count(3.0),
             purpose=purpose,
         )
@@ -243,8 +268,8 @@ def test_moment_and_electron_count_must_share_parity() -> None:
     be integers, which needs matching parity (nelec=3, tot=2 gives
     nelup=2.5/neldw=0.5)."""
     report = check_all(
-        occupations=_FIXED,
-        magnetic=_magnetic(True, 2.0),
+        occupations=_fixed(2.0),
+        magnetic=_magnetic(True),
         electron_count=_electron_count(3.0),
         purpose="scf",
     )
@@ -255,8 +280,8 @@ def test_moment_and_electron_count_must_share_parity() -> None:
 
 def test_moment_and_electron_count_with_matching_parity_is_ok() -> None:
     report = check_all(
-        occupations=_FIXED,
-        magnetic=_magnetic(True, 1.0),
+        occupations=_fixed(1.0),
+        magnetic=_magnetic(True),
         electron_count=_electron_count(3.0),
         purpose="scf",
     )
@@ -274,7 +299,7 @@ def test_a_magnetic_spin_orbit_run_needs_no_moment_or_even_count() -> None:
     so an odd count can fill whole bands and neither rule applies."""
     report = check_all(
         occupations=_FIXED,
-        magnetic=_magnetic(True, None, spin_orbit_enabled=True),
+        magnetic=_magnetic(True, spin_orbit_enabled=True),
         electron_count=_electron_count(3.0),
         purpose="scf",
     )
@@ -290,13 +315,13 @@ def test_a_non_magnetic_spin_orbit_run_needs_an_even_count() -> None:
     removes the truncation, not the half-filled band."""
     odd = check_all(
         occupations=_FIXED,
-        magnetic=_magnetic(False, None, spin_orbit_enabled=True),
+        magnetic=_magnetic(False, spin_orbit_enabled=True),
         electron_count=_electron_count(9.0),
         purpose="scf",
     )
     even = check_all(
         occupations=_FIXED,
-        magnetic=_magnetic(False, None, spin_orbit_enabled=True),
+        magnetic=_magnetic(False, spin_orbit_enabled=True),
         electron_count=_electron_count(8.0),
         purpose="scf",
     )
@@ -314,7 +339,7 @@ def test_moment_parity_check_is_unaffected_when_electron_count_is_missing() -> N
     """Existing callers that don't pass electron_count (pre-#70) keep
     exactly their previous behaviour: integer tot_magnetization alone
     is accepted."""
-    report = check_all(occupations=_FIXED, magnetic=_magnetic(True, 2.0), purpose="scf")
+    report = check_all(occupations=_fixed(2.0), magnetic=_magnetic(True), purpose="scf")
 
     assert report.ok
 

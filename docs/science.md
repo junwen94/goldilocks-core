@@ -19,7 +19,8 @@ analysis fact:
 | `is_metal` result                                     | Default occupations                              |
 | ------------------------------------------------------ | ------------------------------------------------- |
 | `metal`, or unavailable (composition couldn't confirm) | Smearing (`smearing_type='cold'`, `degauss=0.01` Ry) |
-| `non_metal`                                            | Fixed occupations, without smearing               |
+| `non_metal`, where fixed occupations can run (below)  | Fixed occupations, without smearing               |
+| `non_metal`, otherwise                                 | Smearing, as for a metal                          |
 
 Ahead of the heuristic, a published CGCNN classifier (installed by default as
 `models/is-metal-classifier`) can resolve `is_metal` directly from structure;
@@ -35,6 +36,26 @@ assuming "fixed" on an undetected metal risks silent non-convergence. A
 confident `non_metal` result is reachable via a human override, the ML
 classifier, or an LLM override. Neither the heuristic nor the ML model
 determines a band structure.
+
+Fixed occupations fill whole bands in each spin channel: pw.x puts
+(nelec + `tot_magnetization`)/2 electrons in the spin-up channel and
+(nelec - `tot_magnetization`)/2 in the spin-down one. A non-metal therefore
+gets fixed occupations only where both are whole numbers: a run without spin
+polarization and an even electron count, with or without spin-orbit coupling
+(without moments, time reversal pairs every spin-orbit band with a degenerate
+partner, so an odd count half-fills one); a spin-polarized spin-orbit run,
+which has no `tot_magnetization` and fills single-electron bands; or a collinear
+spin-polarized run with an integer `tot_magnetization` of the electron
+count's parity, either one you set or 0 when the applied `magnetic_ordering`
+is compensated by symmetry (see below). Any other non-metal gets smearing.
+LiFePO4, or NiO classified as a non-metal, therefore runs spin-polarized on
+smearing instead of being refused. The occupations record's
+`tot_magnetization` is the moment the input pins: the one you set, with any
+occupations, or the derived 0 under fixed occupations. If you set
+`occupations` to `fixed` on a collinear spin-polarized run with no such
+moment, it gets the warning
+`occupations.fixed_spin_polarized_needs_integer_tot_magnetization` and is
+refused before generation: set `tot_magnetization` too, or use smearing.
 
 Check the `is_metal` record's `status`, `source`, and `reason` (via
 `goldilocks explain --json` or the published `goldilocks.json`'s
@@ -176,7 +197,14 @@ Pt, whose moment Fe induces. Those sites are seeded up and down with the
 calibrated value (5 Bohr magnetons over the pseudopotential's valence for
 Ni, 5/18 with an 18-electron pseudopotential); every other species starts
 at 0, as in QE's own antiferromagnetic examples, so the start carries no
-net moment. `records.magnetic` records the label applied.
+net moment. `records.magnetic` records the label applied, and whether the
+ordering is compensated: whether some symmetry operation of its cell maps
+every spin onto an opposite one, so its net moment is zero by construction.
+NiO's AFM-II cell is compensated. Spinel Fe3O4's R-3m candidate is not: it
+has 3 Fe up and 3 down, but both tetrahedral Fe point down, so it is a
+ferrimagnet. A compensated non-metal gets fixed occupations with
+`tot_magnetization = 0`. Starting magnetizations you set on the applied
+cell decide this in place of the heuristic signs.
 A structure with no such site (closed-shell Si, or solid O2, whose moment
 belongs to the O2 molecule) keeps the ferromagnetic default with the warning
 `magnetic.afm_no_open_shell_sites`; to try an antiferromagnetic pattern

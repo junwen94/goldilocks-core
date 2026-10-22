@@ -543,7 +543,7 @@ def written_cell(structure: Structure) -> Resolved[MagneticConfigFacts]:
     of ``checks.check_all`` read."""
     facts = MagneticConfigFacts(
         cell=structure,
-        ordering=OrderingRecord(requested="fm", applied="fm"),
+        ordering=OrderingRecord(requested="fm", applied="fm", compensated=False),
         spin_polarized=False,
         magnetic_elements=(),
         starting_magnetization=None,

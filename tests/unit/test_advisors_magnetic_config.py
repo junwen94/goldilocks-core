@@ -449,7 +449,9 @@ def test_the_cell_is_the_input_structure_by_default() -> None:
 
     assert _same_sites(state.value.structure, _IRON)
     assert _spins(state.value.structure, "Fe") == {1.0}
-    assert state.value.ordering == OrderingRecord(requested="fm", applied="fm")
+    assert state.value.ordering == OrderingRecord(
+        requested="fm", applied="fm", compensated=False
+    )
     assert np.allclose(state.value.cell_in_input_basis, np.eye(3))
 
 
@@ -499,13 +501,17 @@ def test_an_applied_ordering_is_the_cell_with_its_basis_in_the_input(
 ) -> None:
     """#128: the applied candidate is the cell everything downstream reads,
     labelled by sublattice, with the ordering asked for and applied, and
-    its lattice in the input's basis -- here a doubling along c."""
+    its lattice in the input's basis -- here a doubling along c. A
+    translation maps its up Ni onto the down one, so its net moment is
+    zero by symmetry: it is compensated (#138)."""
     state = magnetic_cell(_ROCK_SALT_NIO, is_magnetic(_ROCK_SALT_NIO), _AFM)
 
     cell = state.value
     assert len(cell.structure) == 4
     assert sorted({site.label for site in cell.structure}) == ["Ni1", "Ni2", "O"]
-    assert cell.ordering == OrderingRecord(requested="afm", applied="afm-1")
+    assert cell.ordering == OrderingRecord(
+        requested="afm", applied="afm-1", compensated=True
+    )
     assert np.allclose(cell.cell_in_input_basis, np.diag([1.0, 1.0, 2.0]))
     assert np.allclose(
         cell.structure.lattice.matrix,
@@ -560,6 +566,93 @@ def test_a_human_starting_magnetization_is_checked_against_the_applied_cell(
     assert "Ni2" in refused.root_cause()
 
 
+def test_balanced_spin_counts_without_a_spin_reversing_operation_are_not_compensated(
+    monkeypatch,
+) -> None:
+    """One up and one down Ni, but one O moved towards the up Ni: no
+    operation maps the up site onto the down one, so the moment is not
+    zero by symmetry, however the spins count up."""
+    candidate = _afm_rock_salt(_ROCK_SALT_NIO)
+    oxygen = next(
+        index for index, site in enumerate(candidate) if site.specie.symbol == "O"
+    )
+    candidate.translate_sites([oxygen], [0.0, 0.0, 0.02])
+    monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
+    monkeypatch.setattr(
+        magnetic_config_module, "enumerate_orderings", _enumerating((candidate, "afm"))
+    )
+
+    state = magnetic_cell(_ROCK_SALT_NIO, is_magnetic(_ROCK_SALT_NIO), _AFM)
+
+    spins = [site.specie.spin for site in state.value.structure if site.label != "O"]
+    assert sorted(spins) == [-1.0, 1.0]
+    assert state.value.ordering.applied == "afm-1"
+    assert state.value.ordering.compensated is False
+
+
+@pytest.mark.parametrize(
+    ("seeds", "compensated"),
+    [({"Ni1": 0.5, "Ni2": -0.5}, True), ({"Ni1": 0.5, "Ni2": -0.3}, False)],
+)
+def test_compensation_is_decided_on_the_seeds_the_cell_is_split_by(
+    afm_candidate, seeds: dict[str, float], compensated: bool
+) -> None:
+    """A human starting_magnetization on the applied cell replaces its
+    spin signs, so it decides whether the start is compensated."""
+    state = magnetic_cell(
+        _ROCK_SALT_NIO,
+        is_magnetic(_ROCK_SALT_NIO),
+        MagneticConfigHumanInput(magnetic_ordering="afm", starting_magnetization=seeds),
+    )
+
+    assert state.value.ordering.compensated is compensated
+
+
+def _spinel_fe3o4() -> Structure:
+    """Spinel Fe3O4 (Fd-3m, origin choice 1): tetrahedral Fe at 8a,
+    octahedral Fe at 16d, O at 32e; its primitive cell has 14 sites, 6 of
+    them Fe."""
+    return Structure.from_spacegroup(
+        "Fd-3m",
+        Lattice.cubic(8.396),
+        ["Fe", "Fe", "O"],
+        [[0, 0, 0], [0.625, 0.625, 0.625], [0.380, 0.380, 0.380]],
+    ).get_primitive_structure()
+
+
+@pytest.mark.skipif(
+    _ENUMLIB_MISSING,
+    reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
+)
+def test_a_ferrimagnetic_candidate_with_balanced_spins_is_not_compensated() -> None:
+    """#138: spinel's R-3m candidate has 3 Fe up and 3 down, but both
+    tetrahedral Fe point down: no operation maps a tetrahedral site onto
+    an octahedral one, so it is a ferrimagnet, not compensated. Every
+    NiO candidate is."""
+    spinel = _spinel_fe3o4()
+    candidates, _warning = enumerate_magnetic_orderings(spinel, local_moments(spinel))
+    [label] = [
+        label
+        for label, cell in candidates
+        if label != "fm" and cell.get_space_group_info()[0] == "R-3m"
+    ]
+
+    ferrimagnet = magnetic_cell(
+        spinel, is_magnetic(spinel), MagneticConfigHumanInput(magnetic_ordering=label)
+    ).value
+    nio = magnetic_cell(_ROCK_SALT_NIO, is_magnetic(_ROCK_SALT_NIO), _AFM).value
+
+    assert len(ferrimagnet.structure) == 14
+    iron_spins = [
+        site.specie.spin for site in ferrimagnet.structure if site.specie.symbol == "Fe"
+    ]
+    assert sorted(iron_spins) == [-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]
+    assert ferrimagnet.ordering.compensated is False
+    assert nio.ordering == OrderingRecord(
+        requested="afm", applied="afm-1", compensated=True
+    )
+
+
 def _afm_8_site_rock_salt(structure: Structure) -> Structure:
     """A spin-decorated 8-site candidate of a 2-site rock-salt input."""
     supercell = structure * (2, 2, 1)
@@ -601,9 +694,15 @@ def test_afm_applies_the_first_listed_candidate_and_records_its_label(
 
     afm, first, second = cell("afm"), cell("afm-1"), cell("afm-2")
 
-    assert afm.ordering == OrderingRecord(requested="afm", applied="afm-1")
-    assert first.ordering == OrderingRecord(requested="afm-1", applied="afm-1")
-    assert second.ordering == OrderingRecord(requested="afm-2", applied="afm-2")
+    assert afm.ordering == OrderingRecord(
+        requested="afm", applied="afm-1", compensated=True
+    )
+    assert first.ordering == OrderingRecord(
+        requested="afm-1", applied="afm-1", compensated=True
+    )
+    assert second.ordering == OrderingRecord(
+        requested="afm-2", applied="afm-2", compensated=True
+    )
     assert afm.structure == first.structure
     assert [site.label for site in afm.structure] == [
         site.label for site in first.structure
@@ -778,7 +877,9 @@ def test_afm_ordering_degrades_when_enumlib_is_missing(monkeypatch) -> None:
 
     assert state.ok
     assert state.value.structure == _ROCK_SALT_FEO
-    assert state.value.ordering == OrderingRecord(requested="afm", applied="fm")
+    assert state.value.ordering == OrderingRecord(
+        requested="afm", applied="fm", compensated=False
+    )
     assert any(
         warning.code == "magnetic.afm_ordering_unavailable"
         and "enumlib" in warning.message
@@ -806,7 +907,9 @@ def test_an_afm_request_turns_spin_polarization_on_whatever_the_classifier_says(
     assert state.value.spin_polarized is True
     assert state.source == "human"
     assert state.value.magnetic_elements == ("Ni",)
-    assert state.value.ordering == OrderingRecord(requested="afm", applied="afm-1")
+    assert state.value.ordering == OrderingRecord(
+        requested="afm", applied="afm-1", compensated=True
+    )
     assert len(state.value.structure) == 4
 
 
@@ -822,7 +925,9 @@ def test_an_afm_request_that_cannot_be_ordered_still_leaves_a_record(
 
     assert state.value.spin_polarized is True
     assert state.source == "human"
-    assert state.value.ordering == OrderingRecord(requested="afm", applied="fm")
+    assert state.value.ordering == OrderingRecord(
+        requested="afm", applied="fm", compensated=False
+    )
     (warning,) = state.value.warnings
     assert warning.code == "magnetic.afm_ordering_unavailable"
     assert "enumlib" in warning.message
@@ -858,7 +963,9 @@ def test_explicit_spin_polarized_false_keeps_an_afm_request_off_and_warns(
     assert state.value.spin_polarized is False
     assert state.source == "human"
     assert state.value.structure == _BCC_CHROMIUM
-    assert state.value.ordering == OrderingRecord(requested="afm", applied="fm")
+    assert state.value.ordering == OrderingRecord(
+        requested="afm", applied="fm", compensated=False
+    )
     assert sorted(warning.code for warning in state.value.warnings) == codes
     (ignored,) = (
         warning
@@ -920,7 +1027,9 @@ def test_afm_on_a_54_site_supercell_of_a_one_fe_cell_is_applied() -> None:
 
     state = magnetic_cell(supercell, is_magnetic(supercell), _AFM)
 
-    assert state.value.ordering == OrderingRecord(requested="afm", applied="afm-1")
+    assert state.value.ordering == OrderingRecord(
+        requested="afm", applied="afm-1", compensated=True
+    )
     assert any(
         warning.code == "magnetic.afm_ordering_applied"
         for warning in state.value.warnings
@@ -987,7 +1096,9 @@ def test_afm_refuses_more_than_eight_magnetic_sites_in_the_primitive_cell(
     state = magnetic_cell(supercell, is_magnetic(supercell), _AFM)
 
     assert _same_sites(state.value.structure, supercell)
-    assert state.value.ordering == OrderingRecord(requested="afm", applied="fm")
+    assert state.value.ordering == OrderingRecord(
+        requested="afm", applied="fm", compensated=False
+    )
     [warning] = _afm_warnings(state.value.warnings)
     assert warning.code == "magnetic.afm_ordering_unavailable"
     assert warning.message == (
@@ -1045,7 +1156,9 @@ def test_afm_seeds_the_sublattice_whatever_moments_the_upload_carries() -> None:
 
     state = magnetic_cell(nio, is_magnetic(nio), _AFM)
 
-    assert state.value.ordering == OrderingRecord(requested="afm", applied="afm-1")
+    assert state.value.ordering == OrderingRecord(
+        requested="afm", applied="afm-1", compensated=True
+    )
     assert _spins(state.value.structure, "Ni") == {1.0, -1.0}
 
 
@@ -1134,7 +1247,9 @@ def test_afm_orders_the_open_shell_cu_of_la2cuo4_and_never_la() -> None:
 
     cell = state.value
     assert cell.magnetic_elements == ("Cu",)
-    assert cell.ordering == OrderingRecord(requested="afm", applied="afm-1")
+    assert cell.ordering == OrderingRecord(
+        requested="afm", applied="afm-1", compensated=True
+    )
     assert _spins(cell.structure, "Cu") == {1.0, -1.0}
     assert _spins(cell.structure, "La") == {0.0}
     assert {site.label for site in cell.structure} == {"Cu1", "Cu2", "La", "O"}
@@ -1190,7 +1305,9 @@ def test_afm_without_a_moment_bearing_site_is_refused_before_enumlib(
     assert state.ok
     assert _same_sites(state.value.structure, structure)
     assert state.value.magnetic_elements == ()
-    assert state.value.ordering == OrderingRecord(requested="afm", applied="fm")
+    assert state.value.ordering == OrderingRecord(
+        requested="afm", applied="fm", compensated=False
+    )
     [warning] = _afm_warnings(state.value.warnings)
     assert warning.code == "magnetic.afm_no_open_shell_sites"
     assert warning.level == "warning"
@@ -1214,7 +1331,9 @@ def test_afm_with_undecidable_local_moments_reports_why(monkeypatch) -> None:
     assert state.ok
     assert state.value.spin_polarized is True
     assert state.value.magnetic_elements == ()
-    assert state.value.ordering == OrderingRecord(requested="afm", applied="fm")
+    assert state.value.ordering == OrderingRecord(
+        requested="afm", applied="fm", compensated=False
+    )
     [warning] = _afm_warnings(state.value.warnings)
     assert warning.code == "magnetic.afm_ordering_unavailable"
     assert "could not be determined" in warning.message
