@@ -120,6 +120,69 @@ even where the point group does not map it onto itself.
 Setting either one only affects k-point selection; it does not change the
 separate `is_metal` heuristic used elsewhere (e.g. by occupations).
 
+## Check the written cell
+
+Quantum ESPRESSO does not search a cell for its symmetry. pw.x tests 32 fixed
+Cartesian rotations, the 24 of a cube with its axes along x, y and z and 8 for
+a hexagonal axis along z, and keeps those that map the cell as written onto
+itself within 1e-5 in crystal coordinates, with a fractional translation of 0
+or ±1/n (n = 2, 3, 4 or 6) only, and none at all in a cell that is a supercell
+of a smaller one. A cell in pymatgen's frame (c along z, a in the xz plane)
+shows it only part of its point group: diamond Si's primitive cell shows 4 of
+its 48 operations, so pw.x ran 282 k-points of a 10×10×10 mesh where the full
+group gives 47, and `npool` and the memory estimate were sized for 47.
+
+Goldilocks therefore writes the cell in the frame where pw.x keeps the most of
+its point group, which is all of it except possibly for the sheets, the cells
+that keep their orientation and the supercells described below, and counts
+`n_irr_k` with pw.x's rules on the cell it writes. The cell is the uploaded one
+(or the cell of an antiferromagnetic ordering), idealized to the space group
+spglib finds within 1e-3 Å, which moves atoms of a CIF by about 1e-5 Å, and:
+
+- a cell without vacuum is turned rigidly into its standard orientation (cubic
+  axes along x, y and z; a hexagonal a along x and c along z) when pw.x would
+  miss operations otherwise, as it does for fcc, bcc and rhombohedral
+  primitive cells;
+- a slab with its vacuum along c is turned rigidly so that a lies along +x,
+  a and b lie in the xy plane and c points to positive z, the frame Quantum
+  ESPRESSO's 2D cell constraint and 2D Coulomb truncation assume. There pw.x
+  keeps an in-plane 2-fold axis or mirror only where it lies at a multiple of
+  30° or 45° from x, so a sheet whose in-plane axes lie elsewhere relative to a
+  loses them: a centred-rectangular sheet given in its primitive basis (a = b,
+  γ not 60°, 90° or 120°) has them along a ± b and keeps half its operations,
+  and `n_irr_k` counts the extra k-points pw.x then runs. A slab with its
+  vacuum along a or b, a wire and a molecule in a box keep their orientation;
+- the origin moves to a symmetry centre when an off-centre mirror or screw
+  axis would give pw.x a fractional translation it rejects, as on the CeTe3
+  monolayer, preferring the shift that keeps a slab in one piece inside the
+  cell.
+
+The lattice vectors are the uploaded ones, turned, so fractional coordinates
+(up to the origin shift), the k-point grid, `k_index`, species labels,
+`starting_magnetization`, Hubbard labels, `fix_bottom_layers` and
+`moment_direction` keep their meaning, and the energy does not change. The
+input keeps `ibrav = 0` with an explicit `CELL_PARAMETERS` card.
+`records.magnetic.frame` records the rotation (`rotation`, R with written
+lattice vectors = uploaded ones × Rᵀ), the origin shift, the largest
+displacement and the number of operations pw.x keeps. A turn that moves no
+lattice vector by more than 1e-3 Å only undoes a tilt the idealization gave
+the cell; it is recorded as no rotation and counted in the displacement. The
+info notice `magnetic.cell_framed` names the rotation, shift and
+displacement when the cell was turned, its origin moved, or an atom moved by
+1e-4 Å or more.
+The `geometry` record describes the uploaded cell. The dipole notice and the
+`vc-relax` default for `cell_dofree` read the vacuum and frame of the written
+cell, so a slab uploaded tilted shows `xy_frame` false in that record and is
+still written, and relaxed with `'2Dxy'`, in the xy frame.
+A `cell_dofree` that holds or frees Cartesian components (`a`, `b`, `c`, `x`,
+`y`, `z`, `xy`, `xz`, `yz`, `xyz`) is refused on a turned cell, whose x, y and
+z are not the uploaded cell's; `all`, `shape` and `fixa`, `fixb` or `fixc`
+keep their meaning.
+
+A supercell, such as the 8-atom conventional cell of diamond, gets no
+fractional translations in pw.x, so it keeps only the operations that need
+none (24 of diamond's 48), and is counted that way.
+
 ## Check pseudopotentials and cutoffs
 
 A pseudopotential replaces the core-electron potential with an effective
@@ -219,10 +282,13 @@ anisotropy, orbital moments and band splittings depend on it. Set
 `moment_direction` to a lattice direction [u, v, w] of the uploaded cell
 (`--set 'moment_direction=[1,1,0]'`). Unset, the moments start along
 [0, 0, 1], the uploaded cell's third lattice vector, with the info notice
-`magnetic.soc_moment_direction_defaulted`; for a CIF that is the c axis,
-which pymatgen puts along Cartesian z, QE's own default. The direction is a
-crystal direction, so it keeps its meaning whatever cell is written, an
-antiferromagnetic one included. `records.magnetic.moment_direction` shows it
+`magnetic.soc_moment_direction_defaulted`; for a CIF that is the c axis. The
+direction is a crystal direction, so it keeps its meaning whatever cell is
+written, an antiferromagnetic one or one turned into pw.x's frame (see
+[the written cell](#check-the-written-cell)) included. It is QE's own
+default, Cartesian z, only where c is written along z, which a cell turned
+into pw.x's frame (an fcc, bcc or rhombohedral primitive cell) is not, so
+`angle1` is not 0 there. `records.magnetic.moment_direction` shows it
 and whether you set it, and the input carries it as `angle1`/`angle2`, the
 same for every species (the sign stays in `starting_magnetization`). Any
 other run ignores `moment_direction` with the warning
@@ -420,14 +486,16 @@ the vacuum, and Goldilocks adds the `boundary.dipole_correction_suggested`
 notice. It names Quantum ESPRESSO's dipole correction (`tefield` and
 `dipfield` with `eamp = 0`) along the vacuum axis (`edir`), with the
 sawtooth's drop (`emaxpos`, `eopreg`) in the middle of the vacuum, where QE
-requires it; the `geometry` record's `slab` field locates the vacuum
-(`vacuum_center`, `vacuum_fraction`). The notice offers `isolation='slab'`
-only when the slab meets every precondition of that setting (the `slab`
-field's `fits_2d_truncation`). It does not set the
+requires it. The notice offers `isolation='slab'` only when the slab meets
+every precondition of that setting. It does not set the
 correction itself, because pw.x then uses no symmetry and computes no stress.
 The notice describes the cell that is written, which an antiferromagnetic
 `magnetic_ordering` writes with the uploaded vacuum (see
-[magnetism](#check-magnetism-and-spin-orbit-coupling)).
+[magnetism](#check-magnetism-and-spin-orbit-coupling)), turned and with its
+origin moved as [the written cell](#check-the-written-cell) describes. The
+`geometry` record's `slab` field (`vacuum_center`, `vacuum_fraction`,
+`fits_2d_truncation`) describes the uploaded cell, so it can differ from the
+written one when the cell was turned or its origin moved.
 Symmetric monolayers and bulk crystals get no notice: a bulk layered crystal
 such as graphite classifies as `2d` but has no vacuum.
 
@@ -537,11 +605,14 @@ The `vc-relax` default for `cell_dofree` comes from the vacuum, not from
 dimensionality. A cell without vacuum gets `'all'`, so the stacking axis of a
 bulk layered crystal such as graphite relaxes too. `'2Dxy'` moves only the x
 and y components of a and b and holds c fixed, so a slab gets it only when its
-vacuum lies along c and a and b lie in the Cartesian xy plane. The `geometry`
-record's `slab` field shows the vacuum axis and whether the slab is in that
-frame (`xy_frame`). A wire, or a slab in any other orientation, has no
-default: Goldilocks refuses the `vc-relax` until you set `cell_dofree` or
-reorient the cell. Whatever its source, `'2Dxy'` or `'2Dshape'` is refused
+vacuum lies along c and a and b lie in the Cartesian xy plane, the frame every
+slab with its vacuum along c is written in (see
+[the written cell](#check-the-written-cell)). The `geometry` record's `slab`
+field shows the vacuum axis and whether the uploaded cell is in that frame
+(`xy_frame`); the default is decided on the written cell. A wire, or a slab
+with its vacuum along a or b, has no default:
+Goldilocks refuses the `vc-relax` until you set `cell_dofree` or reorient the
+cell. Whatever its source, `'2Dxy'` or `'2Dshape'` is refused
 unless a and b lie in the xy plane and any vacuum lies along c. Otherwise
 pw.x would distort the cell, or move a vacuum vector while holding a vector
 of the sheet fixed.

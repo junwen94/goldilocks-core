@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import pytest
 from pymatgen.core import Lattice, Structure
+from support import mc3d_42058_silicon
 
 from goldilocks_core.advisors.k_sampling import KSamplingDecision
 from goldilocks_core.advisors.magnetic_config import (
     MagneticCell,
     MagneticConfigHumanInput,
+    framed_cell,
     magnetic_cell,
 )
 from goldilocks_core.advisors.n_irr_k import NIrrKHumanInput, n_irr_k
@@ -72,6 +74,31 @@ def test_reduces_a_mesh_by_symmetry(
 
     assert state.ok
     assert state.value == irreducible
+
+
+def test_counts_the_k_points_pw_x_runs_on_the_cell_as_written() -> None:
+    """#140: pw.x tests 32 fixed Cartesian rotations, so diamond Si's
+    primitive cell in pymatgen's frame (MC3D mc3d-42058) shows it 4 of its
+    48 operations and pw.x 7.5 ran 282 k-points of the 10x10x10 mesh,
+    where spglib's full group gave the 47 n_irr_k reported. Written in
+    pw.x's frame, the cell shows all 48 and pw.x runs 47."""
+    cell = _cell(mc3d_42058_silicon())
+    mesh = _k_sampling((10, 10, 10))
+
+    assert n_irr_k(cell, mesh).value == 282
+    assert n_irr_k(framed_cell(cell), mesh).value == 47
+
+
+def test_a_supercell_is_counted_without_fractional_translations() -> None:
+    """#140: pw.x finds a pure translation in a supercell and then allows no
+    fractional translation (QE 7.3 symm_base.f90 sgam_at), so hcp Mg doubled
+    along a loses its screw and glide operations: 80 k-points of a 6^3
+    mesh, where its whole space group gives 64."""
+    hcp = Structure.from_spacegroup(
+        "P6_3/mmc", Lattice.hexagonal(3.21, 5.21), ["Mg"], [[1 / 3, 2 / 3, 0.25]]
+    ).make_supercell([2, 1, 1], in_place=False)
+
+    assert n_irr_k(_cell(hcp), _k_sampling((6, 6, 6))).value == 80
 
 
 def test_gamma_only_mesh_has_exactly_one_irreducible_kpoint() -> None:

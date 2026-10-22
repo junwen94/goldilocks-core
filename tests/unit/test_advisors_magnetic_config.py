@@ -9,7 +9,7 @@ from numpy.linalg import LinAlgError
 from pydantic import ValidationError
 from pymatgen.core import Lattice, Species, Structure
 from pymatgen.electronic_structure.core import Magmom
-from support import magnetic_decision
+from support import magnetic_decision, molybdenum_disulfide_monolayer
 
 from goldilocks_core.advisors import magnetic_config as magnetic_config_module
 from goldilocks_core.advisors.magnetic_config import (
@@ -17,6 +17,7 @@ from goldilocks_core.advisors.magnetic_config import (
     MomentDirection,
     OrderingRecord,
     enumerate_magnetic_orderings,
+    framed_cell,
     magnetic_cell,
     magnetic_config,
 )
@@ -2273,3 +2274,58 @@ def test_a_molecule_in_a_box_keeps_its_cell() -> None:
     assert len(cell.structure) == 4
     assert np.array_equal(cell.structure.lattice.matrix, molecule.lattice.matrix)
     assert _spins(cell.structure, "Fe") == {1.0, -1.0}
+
+
+def _non_magnetic_cell(structure: Structure):
+    return magnetic_cell(
+        structure, Resolved("non_magnetic", Provenance(source="heuristic"))
+    ).value
+
+
+def _frame_notices(cell) -> list[str]:
+    return [
+        warning.message
+        for warning in cell.warnings
+        if warning.code == "magnetic.cell_framed"
+    ]
+
+
+@pytest.mark.parametrize(("lift", "noticed"), [(4e-4, True), (1e-4, False)])
+def test_the_frame_notice_starts_at_a_tenth_of_a_milliangstrom(
+    lift: float, noticed: bool
+) -> None:
+    """#140: idealizing a MoS2 sheet whose top S is lifted moves both S
+    atoms by half the lift. CIF rounding moves atoms by about 1e-5 A, so a
+    notice on every movement would fire on almost every run; one at 1e-4 A
+    or more names it."""
+    sheet = molybdenum_disulfide_monolayer()
+    lifted = sheet.frac_coords + np.array([[0, 0, 0], [0, 0, lift / 20.0], [0, 0, 0]])
+
+    cell = framed_cell(
+        _non_magnetic_cell(Structure(sheet.lattice, sheet.species, lifted))
+    )
+
+    assert cell.frame.max_displacement_angstrom == pytest.approx(lift / 2, abs=1e-6)
+    assert not cell.frame.rotated
+    assert bool(_frame_notices(cell)) is noticed
+
+
+def test_an_origin_shift_is_noticed_without_a_rotation() -> None:
+    """#140: a MoS2 sheet with its Mo mirror at fractional z = 0.37 is written
+    with the mirror at 1/2; every written coordinate moves by the shift, so
+    the notice names it, and only a turned cell refuses Cartesian
+    cell_dofree masks."""
+    sheet = molybdenum_disulfide_monolayer()
+    off_centre = Structure(
+        sheet.lattice, sheet.species, sheet.frac_coords + np.array([0, 0, -0.13])
+    )
+
+    cell = framed_cell(_non_magnetic_cell(off_centre))
+
+    (notice,) = _frame_notices(cell)
+    assert notice.startswith(
+        "the cell is written with its origin moved by [0, 0, 0.13] (crystal "
+        "coordinates); pw.x"
+    )
+    assert "keeps 12 symmetry operations" in notice
+    assert "cell_dofree" not in notice

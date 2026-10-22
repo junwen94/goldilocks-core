@@ -554,10 +554,12 @@ _SETTING_META: dict[str, _SettingExtra] = {
         "default": "all",
         "description": (
             "Which cell degrees of freedom vc-relax may move. Default 'all'; "
-            "'2Dxy' for a slab with its vacuum along c and a, b in the xy "
-            "plane. A wire or a slab in another orientation has no default. "
-            "'2Dxy' and '2Dshape' are refused unless a and b lie in the xy "
-            "plane and any vacuum lies along c."
+            "'2Dxy' for a slab with its vacuum along c, which is written with a "
+            "along x and a, b in the xy plane. A wire or a slab with its vacuum "
+            "along a or b has no default. '2Dxy' and '2Dshape' are refused unless "
+            "a and b lie in the xy plane and any vacuum lies along c; the masks "
+            "of Cartesian components ('a', 'b', 'c', 'x', 'y', 'z', 'xy', 'xz', "
+            "'yz', 'xyz') are refused when the cell is written rotated."
         ),
     },
     "press": {

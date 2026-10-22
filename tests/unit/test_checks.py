@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 from pymatgen.core import Lattice, Structure
 from support import (
@@ -10,6 +12,7 @@ from support import (
     graphene_with_vacuum_along_a,
     graphene_with_vacuum_along_x,
     graphite,
+    mc3d_42058_silicon,
     molybdenum_disulfide_monolayer,
     rhombohedral_bismuth_selenide,
     rotated_about_x,
@@ -29,6 +32,7 @@ from goldilocks_core.advisors.parallelisation import ParallelisationDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.checks import check_all, collect_blocked
+from goldilocks_core.pw_symmetry import pw_frame
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
@@ -718,6 +722,66 @@ def test_other_cell_constraints_are_not_checked_against_the_frame(
 def test_the_frame_check_is_skipped_without_the_written_cell() -> None:
     report = check_all(relax=_vc_relax_with_cell_dofree("2Dxy"), purpose="vc-relax")
 
+    assert report.ok
+
+
+def _framed(structure: Structure):
+    """The written cell of ``structure`` with the frame it was written in."""
+    framed, frame = pw_frame(structure)
+    facts = written_cell(framed).value
+    return Resolved(
+        dataclasses.replace(facts, frame=frame), Provenance(source="heuristic")
+    )
+
+
+@pytest.mark.parametrize(
+    "cell_dofree",
+    ["a", "b", "c", "x", "y", "z", "xy", "xz", "yz", "xyz", "ibrav+z"],
+)
+def test_a_cartesian_cell_constraint_on_a_turned_cell_blocks(cell_dofree: str) -> None:
+    """#140: QE masks Cartesian components of the lattice vectors (QE 7.3
+    Modules/cell_base.f90:710-830). Diamond Si's primitive cell is written
+    turned into cubic axes, so 'z' would hold another component than the
+    uploaded cell's z."""
+    report = check_all(
+        relax=_vc_relax_with_cell_dofree(cell_dofree),
+        magnetic=_framed(mc3d_42058_silicon()),
+        purpose="vc-relax",
+    )
+
+    assert len(report.blocking) == 1
+    (reason,) = report.blocking
+    assert f"cell_dofree={cell_dofree!r}" in reason
+    assert "rotated by 56.6003 degrees about [-0.7693, -0.2445, -0.5903]" in reason
+    assert "cell_dofree='all' or 'shape'" in reason
+    assert "'fixa', 'fixb' or 'fixc'" in reason
+
+
+@pytest.mark.parametrize("cell_dofree", ["all", "shape", "fixc", "epitaxial_ab"])
+def test_a_constraint_of_whole_lattice_vectors_on_a_turned_cell_passes(
+    cell_dofree: str,
+) -> None:
+    report = check_all(
+        relax=_vc_relax_with_cell_dofree(cell_dofree),
+        magnetic=_framed(mc3d_42058_silicon()),
+        purpose="vc-relax",
+    )
+
+    assert report.ok
+
+
+def test_a_cartesian_cell_constraint_on_an_unturned_cell_passes() -> None:
+    """Rock salt in pymatgen's cubic cell is already in pw.x's frame."""
+    sodium_chloride = Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(5.64), ["Na", "Cl"], [[0, 0, 0], [0.5, 0.5, 0.5]]
+    )
+    cell = _framed(sodium_chloride)
+
+    report = check_all(
+        relax=_vc_relax_with_cell_dofree("z"), magnetic=cell, purpose="vc-relax"
+    )
+
+    assert not cell.value.frame.rotated
     assert report.ok
 
 

@@ -37,10 +37,13 @@ from goldilocks_core.analysis.geometry import LATTICE_AXES, LatticeAxis
 from goldilocks_core.resolution import FieldState, Provenance, Resolved, Unavailable
 
 SYMPREC = 0.01
-"""Angstrom: the one tolerance core searches symmetry with --
+"""Angstrom: the tolerance core searches a crystal's symmetry with --
 ``SpacegroupAnalyzer``'s default -- for the space group here (and so
-``symmetry_eff``), the k-point counts of ``advisors/n_irr_k.py`` and the
-compensated-ordering test of ``advisors/magnetic_config.py``."""
+``symmetry_eff``), the axes ``kmesh.py`` meshes alike and the
+compensated-ordering test of ``advisors/magnetic_config.py``. The
+k-point count of ``advisors/n_irr_k.py`` is pw.x's, with pw.x's own
+tolerances, and the cell is idealized at ``pw_symmetry.FRAME_TOLERANCE``
+before it is written (#140)."""
 
 
 @dataclass(frozen=True, slots=True)

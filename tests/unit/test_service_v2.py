@@ -7,10 +7,11 @@ import functools
 import json
 
 import pytest
+import spglib
 from pymatgen.core import Lattice, Species as SpinSpecies, Structure
-from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from support import (
     SSSP_FIXTURE_UPF as _UPF,
+    mc3d_42058_silicon,
     sssp_fixture_table_spec as _sssp_table_spec,
 )
 
@@ -1131,22 +1132,84 @@ def test_the_magnetic_record_shows_the_written_cell_and_its_ordering(
     assert json.loads(json.dumps(record))["cell"] == cell
 
 
+def test_the_magnetic_record_shows_the_frame_the_cell_is_written_in(hpc) -> None:
+    """#140: diamond Si's primitive cell as MC3D serves it (c along z) shows
+    pw.x 4 of its 48 operations, so it is written turned into cubic axes:
+    the record carries the rotation, the notice names it, and every count
+    reads the turned cell."""
+    advice = advise(mc3d_42058_silicon(), hpc=hpc)
+
+    record = advice.records()["magnetic"].value
+    frame = json.loads(json.dumps(record))["frame"]
+    (notice,) = [
+        warning["message"]
+        for warning in advice.warnings()
+        if warning["code"] == "magnetic.cell_framed"
+    ]
+    assert frame == {
+        "rotated": True,
+        "rotation": [
+            [0.816496580928, 0.57735026919, 0.0],
+            [-0.408248290464, 0.57735026919, 0.707106781187],
+            [0.408248290464, -0.57735026919, 0.707106781187],
+        ],
+        "origin_shift": [0.0, 0.0, 0.0],
+        "max_displacement_angstrom": 0.0,
+        "operations": 48,
+    }
+    assert notice.startswith(
+        "the cell is written rotated by 56.6003 degrees about "
+        "[-0.7693, -0.2445, -0.5903]; pw.x"
+    )
+    assert "keeps 48 symmetry operations" in notice
+    assert "Cartesian cell_dofree masks would not" in notice
+    assert advice.system.cell.value.structure is advice.system.magnetic.value.cell
+    assert advice.system.symmetry_eff.value.space_group_number == 227
+
+
+def test_a_cell_already_in_pw_x_s_frame_is_written_unturned_without_a_notice(
+    hpc,
+) -> None:
+    """#140: the frame is always recorded; the notice fires only when the
+    cell is turned, its origin moves or an atom moves 1e-4 A or more."""
+    cubic = Structure.from_spacegroup(
+        "Fd-3m", Lattice.cubic(5.431), ["Si"], [[0.0, 0.0, 0.0]]
+    )
+
+    advice = advise(cubic, hpc=hpc)
+
+    frame = advice.records()["magnetic"].value["frame"]
+    assert frame["rotated"] is False
+    assert frame["operations"] == 24
+    assert "magnetic.cell_framed" not in {
+        warning["code"] for warning in advice.warnings()
+    }
+
+
 def test_advise_reduces_only_the_chosen_mesh_by_symmetry(hpc, monkeypatch) -> None:
     """Regression for #155: labelling the chosen mesh with its ``k_index``
     rebuilt the whole ladder with one spglib reduction per rung -- 73
     reductions for this cell, seconds of them on a low-symmetry one.
-    ``n_irr_k`` is the one reduction left, of the mesh the step uses."""
+    ``n_irr_k`` is the one reduction left, of the mesh the step uses, by
+    the operations pw.x keeps (#140). Counted at spglib's two mesh
+    reductions as the ``spglib`` module holds them when called, which is
+    how ``pw_symmetry`` calls ``get_stabilized_reciprocal_mesh`` and
+    pymatgen's ``SpacegroupAnalyzer`` calls ``get_ir_reciprocal_mesh``: a
+    per-rung reduction through either is seen, whatever module makes it."""
     bcc_iron = Structure(
         Lattice.cubic(2.87), ["Fe", "Fe"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
     )
     reduced_meshes = []
-    reduce = SpacegroupAnalyzer.get_ir_reciprocal_mesh
 
-    def counting_reduce(self, mesh, *args, **kwargs):
-        reduced_meshes.append(tuple(mesh))
-        return reduce(self, mesh, *args, **kwargs)
+    def counting(reduce):
+        def counted_reduce(mesh, *args, **kwargs):
+            reduced_meshes.append(tuple(int(n) for n in mesh))
+            return reduce(mesh, *args, **kwargs)
 
-    monkeypatch.setattr(SpacegroupAnalyzer, "get_ir_reciprocal_mesh", counting_reduce)
+        return counted_reduce
+
+    for name in ("get_stabilized_reciprocal_mesh", "get_ir_reciprocal_mesh"):
+        monkeypatch.setattr(spglib, name, counting(getattr(spglib, name)))
 
     advice = advise(bcc_iron, hpc=hpc)
 

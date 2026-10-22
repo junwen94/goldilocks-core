@@ -94,6 +94,18 @@ is now where that decision belongs.
    nbnd, so nbnd > (s-1)^2 rules out both, for every purpose and on
    every profile.
 
+6. A vc-relax ``cell_dofree`` that masks Cartesian components of the
+   lattice vectors ('a', 'b', 'c', 'x', 'y', 'z', 'xy', 'xz', 'yz', 'xyz'
+   and their 'ibrav+' forms: QE 7.3 ``Modules/cell_base.f90:710-830``'s
+   ``iforceh(i, j)`` is Cartesian component i of lattice vector j) on a
+   cell the magnetic step wrote rotated (``MagneticConfigFacts.frame``,
+   ``pw_symmetry.pw_frame``, #140): its x, y and z are no longer the
+   uploaded cell's, so the mask would hold other components than the ones
+   asked for. Masks of whole lattice vectors ('fixa', 'fixb', 'fixc', the
+   'epitaxial' forms), 'all' and 'shape' keep their meaning; '2Dxy' and
+   '2Dshape' are left to the 2D-frame rule, since they act on a and b in
+   the plane they span once that plane is xy, however it got there.
+
 **Everything else in the design doc's "constraint check table"** is
 not a rule here. Memory overflow is a warning, not a block
 (``job.memory_exceeds_node`` in ``advisors/job_resources.py``), like a
@@ -148,6 +160,13 @@ _TWO_D_CELL_DOFREE = frozenset({"2Dxy", "2Dshape", "ibrav+2Dxy", "ibrav+2Dshape"
 """``cell_dofree`` values that move only the x and y components of a and b.
 The 'ibrav+' forms act as the plain ones under the writer's ``ibrav = 0``
 (QE 7.3 Modules/latgen.f90:749-752)."""
+_CARTESIAN_CELL_DOFREE = frozenset(
+    prefix + mask
+    for prefix in ("", "ibrav+")
+    for mask in ("a", "b", "c", "x", "y", "z", "xy", "xz", "yz", "xyz")
+)
+"""``cell_dofree`` values that hold or free single Cartesian components of
+the lattice vectors (rule 6 of the module docstring)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +250,7 @@ def check_all(
         _vc_relax_forbids_isolated_boundary(boundary, purpose),
         _slab_vc_relax_needs_2d_cell_dofree(boundary, relax),
         _two_d_cell_dofree_needs_xy_frame(relax, magnetic),
+        _cartesian_cell_dofree_needs_unrotated_cell(relax, magnetic),
         _dispersion_needs_parameterised_functional(vdw, functional),
         _fix_bottom_layers_requires_slab(relax, magnetic),
         _npool_must_divide_ntasks(job, parallel),
@@ -554,6 +574,30 @@ def _two_d_cell_dofree_needs_xy_frame(
         "a and b and holds c fixed, so it needs a and b in the Cartesian xy plane "
         "and any vacuum along c, but the cell to be written has "
         f"{' and '.join(found)}. Set cell_dofree='all', or reorient the cell."
+    )
+
+
+def _cartesian_cell_dofree_needs_unrotated_cell(
+    relax: FieldState[RelaxOptions | VcRelaxOptions] | None,
+    magnetic: FieldState[MagneticConfigFacts] | None,
+) -> str | None:
+    """Rule 6 of this module's docstring, whatever the source of
+    ``cell_dofree``."""
+    if relax is None or magnetic is None or not (relax.ok and magnetic.ok):
+        return None
+    options = relax.value
+    frame = magnetic.value.frame
+    if not isinstance(options, VcRelaxOptions) or frame is None or not frame.rotated:
+        return None
+    if options.cell_dofree not in _CARTESIAN_CELL_DOFREE:
+        return None
+    return (
+        f"cell_dofree={options.cell_dofree!r} holds or frees single Cartesian "
+        "components of the lattice vectors, but the cell to be written is the "
+        f"uploaded one {frame.describe_rotation()} into pw.x's frame, so its x, "
+        "y and z are not the uploaded cell's. Set "
+        "cell_dofree='all' or 'shape', or fix whole lattice vectors with 'fixa', "
+        "'fixb' or 'fixc'."
     )
 
 

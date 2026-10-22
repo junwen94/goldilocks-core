@@ -537,6 +537,39 @@ def mc3d_67775_silicon() -> Structure:
     return Structure.from_str(_MC3D_67775_SILICON_CIF, fmt="cif")
 
 
+_MC3D_42058_SILICON_CIF = """\
+data_0
+
+loop_
+  _atom_site_label
+  _atom_site_fract_x
+  _atom_site_fract_y
+  _atom_site_fract_z
+  _atom_site_type_symbol
+         Si1       0.5       0.5       0.5       Si
+         Si2       0.7500000000092051  0.7500000000092051  0.7500000000092051  Si
+_cell_angle_alpha                       59.99999999999999
+_cell_angle_beta                        59.99999999999999
+_cell_angle_gamma                       59.99999999999999
+_cell_length_a                          3.8408466174999094
+_cell_length_b                          3.8408466174999094
+_cell_length_c                          3.8408466174999094
+loop_
+  _symmetry_equiv_pos_as_xyz
+         'x, y, z'
+_symmetry_int_tables_number             1
+_symmetry_space_group_name_H-M          'P 1'
+"""
+
+
+def mc3d_42058_silicon() -> Structure:
+    """Diamond Si, MC3D mc3d-42058: the 2-atom fcc primitive cell, which
+    pymatgen writes with c along z and a in the xz plane. pw.x 7.5 found 4
+    of its 48 symmetry operations in that frame and ran 282 k-points of a
+    10x10x10 mesh (#140)."""
+    return Structure.from_str(_MC3D_42058_SILICON_CIF, fmt="cif")
+
+
 _MP_44_ALPHA_URANIUM_CIF = """\
 data_U
 _symmetry_space_group_name_H-M   'P 1'

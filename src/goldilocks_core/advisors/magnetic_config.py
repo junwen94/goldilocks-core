@@ -153,6 +153,19 @@ sign on an applied ordering's sublattice and 0 on its other sites. The
 split happens here, before `symmetry_eff` and `n_irr_k` are counted, so
 they see the species pw.x is given; the writer renders them unchanged.
 
+**The written frame (#140).** pw.x finds symmetry by testing fixed
+Cartesian rotations against the cell as written, so `framed_cell` -- the
+last part of the cell step, run by `service/_magnetic.py` -- writes the
+split cell in the frame where pw.x keeps the most of its point group
+(`pw_symmetry.pw_frame`): idealized, and turned rigidly or with its origin
+moved when that is what it takes; a slab with its vacuum along c is always
+turned so that a lies along +x, a and b in the xy plane and c above it,
+which costs a sheet the in-plane axes pw.x cannot represent there.
+The lattice basis stays, so `cell_in_input_basis` stays, and the moment
+direction, a crystal direction, turns with the cell. `MagneticCell.frame`
+records the frame; the notice `magnetic.cell_framed` names it when the
+cell was turned or shifted or an atom moved by 1e-4 A or more.
+
 SOC stays opt-in, matching v1's own policy: `needs_soc` only ever produces a
 warning recommending it be considered, never enables it automatically --
 enabling SOC changes cost and setup, which is a human's call.
@@ -200,7 +213,7 @@ magnetons, which sizes a collinear smearing run's majority spin channel
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import numpy as np
@@ -219,6 +232,7 @@ from goldilocks_core.analysis.is_magnetic import Magnetism
 from goldilocks_core.analysis.local_moments import LocalMomentFacts, local_moments
 from goldilocks_core.analysis.symmetry import SYMPREC
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
+from goldilocks_core.pw_symmetry import PwFrame, pw_frame
 from goldilocks_core.resolution import (
     Blocked,
     FieldState,
@@ -409,6 +423,14 @@ _NO_OPEN_SHELL_SITES_WARNING = Warning(
     ),
 )
 
+_FRAME_NOTICE_ANGSTROM = 1e-4
+"""Idealization that moves an atom or lattice vector by this much or more
+earns the ``magnetic.cell_framed`` notice (#140). CIF rounding moves most
+cells by about 1e-5 A, which would make the notice fire on almost every
+run."""
+
+_CELL_FRAMED = "magnetic.cell_framed"
+
 WARNING_CATALOGUE = (
     _SOC_SUGGESTED_WARNING,
     Warning(
@@ -443,14 +465,28 @@ WARNING_CATALOGUE = (
     _ORDERING_IGNORED_WARNING,
     _MOMENT_DIRECTION_DEFAULTED_WARNING,
     _MOMENT_DIRECTION_IGNORED_WARNING,
+    Warning(
+        code=_CELL_FRAMED,
+        level="info",
+        category="magnetic",
+        message=(
+            "the cell is written turned rigidly, with its origin moved, or "
+            "idealized to its space group, in the frame where pw.x, which tests "
+            "fixed Cartesian rotations only, keeps the most of its symmetry "
+            "operations (a slab with its vacuum along c always with a along "
+            "+x); the rotation, shift, largest displacement and number of "
+            "operations kept are named and recorded as magnetic.frame."
+        ),
+    ),
 )
 """Every warning code this module can emit -- ``capabilities.py``'s
 ``warnings[]`` catalogue aggregates one of these tuples per advisor. The
 real, per-occurrence messages for
-``magnetic.magnetism_unknown_defaulted_spin_polarized`` and
-``magnetic.afm_ordering_unavailable`` name the actual reason (built at
-their call sites in ``_resolve_spin_polarized`` and
-``_afm_unavailable`` below); these are the generic descriptions,
+``magnetic.magnetism_unknown_defaulted_spin_polarized``,
+``magnetic.afm_ordering_unavailable`` and ``magnetic.cell_framed`` name
+the actual reason (built at their call sites in
+``_resolve_spin_polarized``, ``_afm_unavailable`` and ``_frame_notice``
+below); these are the generic descriptions,
 for a caller that has not seen them fire."""
 
 
@@ -504,10 +540,16 @@ class MagneticCell:
     human value of its label, else the heuristic sign (+1, -1 or 0).
     ``cell_in_input_basis`` is its
     lattice in the input's basis, rows being lattice vectors:
-    ``structure.lattice.matrix == cell_in_input_basis @ input.lattice.matrix``.
-    That is an integer supercell matrix for a primitive input, but
-    fractional when enumeration reduced a conventional input to a smaller
-    cell (determinant 1/2 for rock-salt's 8-atom cell).
+    ``structure.lattice.matrix == cell_in_input_basis @ input.lattice.matrix
+    @ R.T``, with R the rotation of ``frame`` (the identity until
+    ``framed_cell`` writes the cell in pw.x's frame) and equality to within
+    the frame's idealization. That is an integer supercell matrix for a
+    primitive input, but fractional when enumeration reduced a conventional
+    input to a smaller cell (determinant 1/2 for rock-salt's 8-atom cell).
+
+    ``frame`` is how ``framed_cell`` wrote ``structure`` in pw.x's frame
+    and how many operations pw.x keeps there (``pw_symmetry.pw_frame``,
+    #140); ``None`` before.
 
     ``magnetic_elements`` is the antiferromagnetic sublattice: the
     elements ``local_moments`` says carry a local d or f moment, empty when
@@ -528,6 +570,7 @@ class MagneticCell:
     cell_in_input_basis: tuple[tuple[float, ...], ...]
     tot_magnetization: float | None
     moment_direction: MomentDirection | None = None
+    frame: PwFrame | None = None
     warnings: tuple[Warning, ...] = ()
 
     @property
@@ -538,7 +581,8 @@ class MagneticCell:
         basis, then ``f @ structure.lattice.matrix`` (scaled by its largest
         component first, so no size of [uvw] under- or overflows). This
         holds for any written frame whose lattice is ``cell_in_input_basis
-        @ input lattice`` turned rigidly, so the moment turns with it."""
+        @ input lattice`` turned rigidly, so the moment turns with the frame
+        ``framed_cell`` writes (#140)."""
         if self.moment_direction is None:
             return None
         uvw = np.array(self.moment_direction.uvw)
@@ -555,7 +599,8 @@ class MagneticConfigFacts:
     ``spin_polarized``, ``magnetic_elements``, ``tot_magnetization``,
     ``spin_orbit_enabled`` and ``moment_direction`` are copied from the
     ``MagneticCell`` (``cell`` is the same object as
-    ``MagneticCell.structure``); ``warnings`` are the cell's plus this
+    ``MagneticCell.structure``), and so is ``frame``, the record of how
+    the cell is written (#140); ``warnings`` are the cell's plus this
     step's. ``angle1``/``angle2`` are QE's angles of the moment direction
     (``_angles``), one per species, set with it.
 
@@ -578,6 +623,7 @@ class MagneticConfigFacts:
     angle2: dict[str, float] | None
     seeded_moment: float | None = None
     moment_direction: MomentDirection | None = None
+    frame: PwFrame | None = None
     warnings: tuple[Warning, ...] = ()
 
     @property
@@ -772,9 +818,59 @@ def magnetic_config(
             facts.structure, starting_magnetization, z_valences
         ),
         moment_direction=facts.moment_direction,
+        frame=facts.frame,
         warnings=warnings,
     )
     return Resolved(config, cell.provenance)
+
+
+def framed_cell(cell: MagneticCell) -> MagneticCell:
+    """``cell`` written in the frame where pw.x keeps the most of its
+    point group (``pw_symmetry.pw_frame``, #140), with the ``PwFrame``
+    recorded and the ``magnetic.cell_framed`` notice added when the cell
+    was turned, its origin moved, or an atom or lattice vector moved by
+    ``_FRAME_NOTICE_ANGSTROM`` or more. ``cell_in_input_basis`` is kept:
+    the frame keeps the lattice basis and turns it rigidly, so
+    ``moment_axis`` turns with it."""
+    structure, frame = pw_frame(cell.structure)
+    warnings = cell.warnings
+    if (
+        frame.rotated
+        or any(frame.origin_shift)
+        or frame.max_displacement_angstrom >= _FRAME_NOTICE_ANGSTROM
+    ):
+        warnings = (*warnings, _frame_notice(frame))
+    return replace(cell, structure=structure, frame=frame, warnings=warnings)
+
+
+def _frame_notice(frame: PwFrame) -> Warning:
+    """The ``magnetic.cell_framed`` notice for ``frame``."""
+    changes = [frame.describe_rotation()] if frame.rotated else []
+    if any(frame.origin_shift):
+        shift = ", ".join(f"{value:.6g}" for value in frame.origin_shift)
+        changes.append(f"with its origin moved by [{shift}] (crystal coordinates)")
+    if frame.max_displacement_angstrom > 0.0:
+        changes.append(
+            "idealized to its space group, no atom or lattice vector moving more "
+            f"than {frame.max_displacement_angstrom:.2g} Å"
+        )
+    turned = (
+        " Cartesian cell_dofree masks would not, and are refused."
+        if frame.rotated
+        else ""
+    )
+    return Warning(
+        code=_CELL_FRAMED,
+        level="info",
+        category="magnetic",
+        message=(
+            f"the cell is written {', '.join(changes)}; pw.x, which tests fixed "
+            f"Cartesian rotations only, keeps {frame.operations} symmetry "
+            "operations in it. Fractional "
+            "coordinates (up to the origin shift), labels, the k-point grid and "
+            f"moment directions keep their meaning.{turned}"
+        ),
+    )
 
 
 @dataclass(frozen=True, slots=True)

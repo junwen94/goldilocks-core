@@ -29,11 +29,11 @@ they affect rather than silently worked around:
   fields that are genuinely independent of the pseudopotential chain.
 - Scenario 4's "``n_irr_k`` strictly greater" does not hold for classic
   collinear AFM orderings: they only ever break translational
-  symmetry, and ``get_ir_reciprocal_mesh()`` depends only on the
-  rotational point group -- confirmed for real below by recomputing
-  ``n_irr_k`` on the identical relabeled cell/mesh with the spin
-  distinction merged back out (unchanged), corrected to "never
-  decreases", decided with the user 2026-09-14 (v2 epic 9 module 3).
+  symmetry, and the k-point count depends only on the rotations pw.x
+  keeps -- confirmed for real below by recomputing ``n_irr_k`` on the
+  identical relabeled cell/mesh with the spin distinction merged back
+  out (unchanged), corrected to "never decreases", decided with the user
+  2026-09-14 (v2 epic 9 module 3).
 
 Scenario 2 also exposed a genuine, undocumented granularity gap: the
 design doc's "source=human only on mixing_beta, siblings keep
@@ -53,10 +53,12 @@ from __future__ import annotations
 import dataclasses
 import io
 import json
+import re
 
 import pytest
 from pymatgen.core import Lattice, Structure
-from support import run_cli, sssp_fixture_table_spec
+from pymatgen.io.ase import AseAtomsAdaptor
+from support import mc3d_42058_silicon, run_cli, sssp_fixture_table_spec
 
 from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
 from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
@@ -65,6 +67,7 @@ from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.examples.structures import structure as example_structure
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
+from goldilocks_core.pw_symmetry import irreducible_kpoint_count, pw_rotations
 from goldilocks_core.resolution import Blocked
 from goldilocks_core.service import (
     RunOverrides,
@@ -76,6 +79,7 @@ from goldilocks_core.service import (
     generate,
     generate_dos,
 )
+from goldilocks_core.set_overrides import build_overrides
 from goldilocks_core.step_settings import DosSettings
 from goldilocks_core.steps import SharedContext
 
@@ -129,6 +133,72 @@ class TestScenario1PlainScf:
         assert len(steps) == 1
         atoms = read_espresso_in(io.StringIO(steps[0].files["scf.in"]))
         assert atoms.get_chemical_formula() == "Si2"
+
+
+def _card(content: str, header: str, rows: int) -> list[str]:
+    lines = content.splitlines()
+    start = lines.index(header) + 1
+    return [line.strip() for line in lines[start : start + rows]]
+
+
+class TestWrittenFrame:
+    """#140: the cell pw.x is given is the cell n_irr_k counts. MC3D's
+    diamond Si (mc3d-42058) comes in pymatgen's frame, where pw.x keeps 4
+    of its 48 operations and ran 282 k-points of a 10x10x10 mesh against
+    the 47 recorded; it is now written in cubic axes."""
+
+    def test_the_written_cell_is_the_cell_counted(self, tmp_path, monkeypatch) -> None:
+        from ase.io.espresso import read_espresso_in
+
+        store = _installed_store(tmp_path, monkeypatch)
+        advice = advise(
+            mc3d_42058_silicon(),
+            hpc=_hpc(),
+            overrides=build_overrides({"k_grid": [10, 10, 10]}),
+            store=store,
+        )
+        report = check(advice)
+        assert report.ok, report.blocking
+
+        (step,) = generate(advice, report)
+
+        content = step.files["scf.in"]
+        # cubic axes, rows of the (a/2)(1, 0, 1) type; the rotation's 1e-17
+        # residues are written as exact zeros
+        assert _card(content, "CELL_PARAMETERS angstrom", 3) == [
+            "2.715888689  0  2.715888689",
+            "2.715888689  2.715888689  0",
+            "0  2.715888689  2.715888689",
+        ]
+        assert _card(content, "ATOMIC_POSITIONS crystal", 2) == [
+            "Si  0.5  0.5  0.5",
+            "Si  0.75  0.75  0.75",
+        ]
+        assert re.search(r"^\s*ibrav\s*=\s*0\s*$", content, re.M)
+        written = AseAtomsAdaptor.get_structure(read_espresso_in(io.StringIO(content)))
+        rotations = pw_rotations(written)
+        assert len(rotations) == 48
+        assert advice.records()["n_irr_k"].value == 47
+        assert irreducible_kpoint_count(rotations, (10, 10, 10), (0, 0, 0)) == 47
+
+    def test_the_scf_and_nscf_of_a_dos_task_write_one_cell(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The nscf step reads the scf step's charge density from the shared
+        outdir, so both must be written in the same frame."""
+        store = _installed_store(tmp_path, monkeypatch)
+        advice = advise_dos(mc3d_42058_silicon(), hpc=_hpc(), store=store)
+        report = check_dos(advice)
+        assert report.ok, report.blocking
+
+        scf, nscf, _dos = generate_dos(advice, report)
+
+        decks = [scf.files["scf.in"], nscf.files["nscf.in"]]
+        cells = [_card(deck, "CELL_PARAMETERS angstrom", 3) for deck in decks]
+        positions = [_card(deck, "ATOMIC_POSITIONS crystal", 2) for deck in decks]
+        assert cells[0] == cells[1]
+        assert positions[0] == positions[1]
+        assert advice.records()["magnetic"].value["frame"]["rotated"] is True
 
 
 class TestScenario2ExplicitFieldOverride:
@@ -259,12 +329,13 @@ class TestScenario4Afm:
 
         # Corrected assertion (v2 epic 9 module 3, decided with the
         # user): "never decreases", not "strictly greater". Proven
-        # directly: recompute n_irr_k on the *same* relabeled cell and
-        # the *same* mesh, only merging Fe1/Fe2's spin distinction back
-        # into plain "Fe" -- isolating species-splitting as the only
-        # variable shows it does not change the irreducible count at
-        # all, because rock-salt AFM only breaks translational
-        # symmetry, and get_ir_reciprocal_mesh() is rotation-only.
+        # directly: recompute n_irr_k on the *same* written cell and the
+        # *same* mesh, only merging Fe1/Fe2's spin distinction back into
+        # plain "Fe" -- isolating species-splitting as the only variable.
+        # The merged cell is a supercell, where pw.x allows no fractional
+        # translation (#140), but this group is symmorphic, so it keeps
+        # every rotation and the count does not change: the AFM ordering
+        # only breaks translational symmetry.
         merged = Structure(
             relabeled.lattice,
             [str(site.specie.element) for site in relabeled],

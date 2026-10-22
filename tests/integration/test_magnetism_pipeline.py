@@ -264,7 +264,10 @@ def test_a_listed_candidate_and_plain_afm_write_the_same_seeds_and_symmetry(
     (Fm-3m), while magnetic_ordering=afm seeded the same AFM-II cell at
     5/18 (R-3m). Both are now one magnetic step: the candidate is its
     label, the deck seeds the Ni sublattice from z_valence and leaves O at
-    0, and symmetry_eff is the split cell's."""
+    0, and symmetry_eff is the split cell's. The two paths also wrote the
+    cell in different orientations, where pw.x found 2 and 4 operations;
+    both now write one cell, in the frame where pw.x keeps all 12 of R-3m's
+    and n_irr_k counts them (#140)."""
     nio = _primitive_nio()
     afm_steps, (afm_deck,) = _run("scf", nio, {"magnetic_ordering": "afm"}, store)
     applied = afm_steps[0].system.magnetic.value.ordering.applied
@@ -289,6 +292,24 @@ def test_a_listed_candidate_and_plain_afm_write_the_same_seeds_and_symmetry(
     species = afm_deck.split("ATOMIC_SPECIES\n")[1].split("\n\n")[0]
     assert [line.split()[0] for line in species.splitlines()] == ["Ni1", "Ni2", "O"]
     assert float(_keyword(afm_deck, "starting_magnetization(3)")) == 0.0
+    for card in ("CELL_PARAMETERS", "ATOMIC_POSITIONS"):
+        assert _card(afm_deck, card) == _card(listed_deck, card)
+    frames = [
+        steps[0].system.magnetic.value.frame for steps in (afm_steps, listed_steps)
+    ]
+    assert [frame.operations for frame in frames] == [12, 12]
+    assert (
+        afm_steps[0].step.kpoints.n_irr_k.value
+        == listed_steps[0].step.kpoints.n_irr_k.value
+    )
+
+
+def _card(content: str, header: str) -> list[str]:
+    """The rows of the card ``header`` opens, up to the blank line after it."""
+    lines = content.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith(header)) + 1
+    end = next(i for i in range(start, len(lines)) if not lines[i].strip())
+    return lines[start:end]
 
 
 def _cri3_monolayer() -> Structure:
@@ -751,7 +772,9 @@ def test_afm_on_a_monolayer_keeps_one_sheet_for_the_slab_gates(
     cell = advice.system.magnetic.value.cell
     assert advice.system.magnetic.value.ordering.applied == "afm-1"
     assert len(cell) == 6
-    assert np.array_equal(cell.lattice.matrix[2], gdi2.lattice.matrix[2])
+    # The written cell is turned about its normal to put a along x (#140),
+    # which leaves c where it was.
+    assert np.allclose(cell.lattice.matrix[2], gdi2.lattice.matrix[2], atol=1e-12)
     assert vacuum_axes(cell) == advice.analysis.geometry.value.vacuum_axes == ("c",)
     assert len(slab_layers(cell)) == 3
     assert advice.step.kpoints.convergence.value.mixing_mode == "local-TF"
@@ -853,7 +876,7 @@ def test_the_dipole_notice_of_a_polar_afm_slab_describes_the_written_cell() -> N
     edir, emaxpos, eopreg = _sawtooth(_dipole_notice(advice))
     assert advice.system.magnetic.value.ordering.applied == "afm-1"
     assert len(cell) == 6
-    assert np.array_equal(cell.lattice.matrix[2], janus.lattice.matrix[2])
+    assert np.allclose(cell.lattice.matrix[2], janus.lattice.matrix[2], atol=1e-12)
     assert edir == 3
     assert _drop_in_vacuum(cell, edir, emaxpos, eopreg)
     assert "isolation='slab'" in _dipole_notice(advice)
