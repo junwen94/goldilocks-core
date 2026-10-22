@@ -191,7 +191,10 @@ which is why the decision is the two steps above: `magnetic_config` takes
 yet), every element still gets `DEFAULT_MAGNETIZATION_FRACTION` (aiida's own
 flat default, not this package's invention) rather than either guessing a
 `z_valence` or leaving `starting_magnetization` empty -- the latter would
-silently reopen A2.
+silently reopen A2. The same `z_valences` turn the seeds back into the net
+moment they start from, `MagneticConfigFacts.seeded_moment` in Bohr
+magnetons, which sizes a collinear smearing run's majority spin channel
+(`advisors/nbnd.py`, #131); without them that moment is unknown.
 """
 
 from __future__ import annotations
@@ -554,7 +557,15 @@ class MagneticConfigFacts:
     ``MagneticCell`` (``cell`` is the same object as
     ``MagneticCell.structure``); ``warnings`` are the cell's plus this
     step's. ``angle1``/``angle2`` are QE's angles of the moment direction
-    (``_angles``), one per species, set with it."""
+    (``_angles``), one per species, set with it.
+
+    ``seeded_moment`` is the net moment the starting magnetization seeds,
+    in Bohr magnetons per cell: each site's ``starting_magnetization``
+    times its element's ``z_valence``, summed over ``cell``
+    (``_seeded_moment``). ``None`` without seeds (a run without spin
+    polarization) or without a z_valence for every element. ``nbnd``
+    sizes the majority spin channel of a collinear smearing run from it
+    (#131)."""
 
     cell: Structure
     ordering: OrderingRecord
@@ -565,6 +576,7 @@ class MagneticConfigFacts:
     spin_orbit_enabled: bool
     angle1: dict[str, float] | None
     angle2: dict[str, float] | None
+    seeded_moment: float | None = None
     moment_direction: MomentDirection | None = None
     warnings: tuple[Warning, ...] = ()
 
@@ -715,9 +727,10 @@ def magnetic_config(
     human ``starting_magnetization`` (already split onto the cell's
     species by ``magnetic_cell``), or the heuristic fractions, scaled by
     the selected pseudopotentials' ``z_valences`` when known -- with the
-    spin-orbit suggestion and the angles of the cell's moment direction
-    (``_angles``). Copies the cell's facts, with the cell's provenance;
-    ``Blocked`` when the cell is not resolved."""
+    net moment they seed (``_seeded_moment``), the spin-orbit suggestion
+    and the angles of the cell's moment direction (``_angles``). Copies
+    the cell's facts, with the cell's provenance; ``Blocked`` when the
+    cell is not resolved."""
     human = human or MagneticConfigHumanInput()
     if not cell.ok:
         return Blocked(by=blocked_by(cell))
@@ -755,6 +768,9 @@ def magnetic_config(
         spin_orbit_enabled=facts.spin_orbit_enabled,
         angle1=angle1,
         angle2=angle2,
+        seeded_moment=_seeded_moment(
+            facts.structure, starting_magnetization, z_valences
+        ),
         moment_direction=facts.moment_direction,
         warnings=warnings,
     )
@@ -1423,3 +1439,20 @@ def _seeds(
             spin if given else spin * _fraction_for(site.specie.symbol, z_valences)
         )
     return seeds
+
+
+def _seeded_moment(
+    cell: Structure,
+    seeds: dict[str, float] | None,
+    z_valences: dict[str, float] | None,
+) -> float | None:
+    """The net moment ``seeds`` start ``cell`` from, in Bohr magnetons:
+    QE's ``starting_magnetization`` is a fraction of the species'
+    valence charge, so each site contributes its label's fraction times
+    its element's z_valence. ``None`` without seeds or without a
+    z_valence for one of the cell's elements."""
+    if seeds is None or z_valences is None:
+        return None
+    if any(site.specie.symbol not in z_valences for site in cell):
+        return None
+    return sum(seeds[site.label] * z_valences[site.specie.symbol] for site in cell)

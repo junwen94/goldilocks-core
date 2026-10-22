@@ -1015,3 +1015,115 @@ def test_unresolved_bands_never_add_the_ndiag_reason() -> None:
 
     assert blocked.blocking == ("electron count undecided",)
     assert unavailable.ok
+
+
+# #131: pw.x stops in setup when nbnd cannot hold every electron of a spin
+# channel (QE 7.3 PW/src/setup.f90:349-356): nbnd >= NINT(nelec/2),
+# NINT(nelup) and NINT(neldw), and NINT(nelec) for noncolin. The default
+# never falls below these; a human nbnd or extra_bands can.
+_TWO_SITE_IRON = Structure(
+    Lattice.cubic(2.87), ["Fe", "Fe"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
+)
+
+
+def _band_check(
+    nbnd: int,
+    nelec: float,
+    occupations=_FIXED,
+    *,
+    spin_polarized: bool = False,
+    spin_orbit_enabled: bool = False,
+    purpose: str = "scf",
+):
+    return check_all(
+        occupations=occupations,
+        magnetic=_magnetic(
+            spin_polarized, _TWO_SITE_IRON, spin_orbit_enabled=spin_orbit_enabled
+        ),
+        electron_count=_electron_count(nelec),
+        nbnd=_bands(nbnd),
+        purpose=purpose,
+    )
+
+
+def test_too_few_spin_up_bands_for_the_pinned_moment_blocks() -> None:
+    """The LiFePO4 deck from #131: tot_magnetization 16 on 192 electrons
+    puts 104 in the spin-up channel, and 96 bands made pw.x stop with
+    'too few spin up bands' after check() had passed."""
+    report = _band_check(96, 192.0, _fixed(16.0), spin_polarized=True)
+
+    assert report.blocking == (
+        "nbnd=96 cannot hold 104 spin-up electrons: pw.x stops in setup with "
+        "'too few spin up bands'. Set nbnd to at least 104, or unset nbnd and "
+        "extra_bands for the default.",
+    )
+
+
+def test_enough_bands_for_the_pinned_moment_pass() -> None:
+    assert _band_check(104, 192.0, _fixed(16.0), spin_polarized=True).ok
+
+
+def test_the_band_reason_names_pw_x_first_error_and_the_count_that_passes() -> None:
+    """90 bands fail pw.x's first check, NINT(nelec/2) = 96, but only 104
+    pass the spin-up one too."""
+    report = _band_check(90, 192.0, _fixed(16.0), spin_polarized=True)
+
+    (reason,) = report.blocking
+    assert reason.startswith("nbnd=90 cannot hold 192 electrons, two per band")
+    assert "'too few bands'" in reason
+    assert "at least 104" in reason
+
+
+def test_too_few_spin_down_bands_for_a_negative_moment_blocks() -> None:
+    report = _band_check(6, 12.0, _fixed(-2.0), spin_polarized=True)
+
+    (reason,) = report.blocking
+    assert "'too few spin dw bands'" in reason
+    assert "at least 7" in reason
+
+
+def test_too_few_bands_for_the_electron_count_blocks() -> None:
+    """nbnd=2 on 8 electrons passed check() and stopped pw.x with 'too few
+    bands'."""
+    report = _band_check(2, 8.0)
+
+    (reason,) = report.blocking
+    assert reason.startswith("nbnd=2 cannot hold")
+    assert "'too few bands'" in reason
+    assert "at least 4" in reason
+
+
+def test_a_noncollinear_run_needs_a_band_per_electron() -> None:
+    """Spinor bands hold one electron each (setup.f90:355-356)."""
+    blocked = _band_check(13, 14.0, _SMEARING, spin_orbit_enabled=True)
+    passed = _band_check(14, 14.0, _SMEARING, spin_orbit_enabled=True)
+
+    (reason,) = blocked.blocking
+    assert "'too few bands'" in reason
+    assert "at least 14" in reason
+    assert passed.ok
+
+
+@pytest.mark.parametrize("purpose", ["scf", "relax", "vc-relax", "nscf"])
+def test_the_band_rule_holds_for_every_purpose(purpose: str) -> None:
+    """An nscf step needs every occupied band too, to place the Fermi
+    level."""
+    report = _band_check(2, 8.0, purpose=purpose)
+
+    assert any("'too few bands'" in reason for reason in report.blocking)
+
+
+def test_a_blocked_nbnd_is_reported_once() -> None:
+    report = check_all(
+        occupations=_FIXED,
+        magnetic=_magnetic(False, _TWO_SITE_IRON),
+        electron_count=_electron_count(8.0),
+        nbnd=Blocked(by="electron count undecided"),
+    )
+
+    assert report.blocking == ("electron count undecided",)
+
+
+def test_the_band_rule_needs_occupations_and_the_electron_count() -> None:
+    assert check_all(nbnd=_bands(2), electron_count=_electron_count(8.0)).ok
+    assert check_all(nbnd=_bands(2), occupations=_FIXED).ok

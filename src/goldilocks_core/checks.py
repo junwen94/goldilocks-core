@@ -71,7 +71,21 @@ is now where that decision belongs.
    explicit ``occupations='fixed'``, since the advisor's default for an odd
    count is smearing (#138).
 
-4. A user ``ndiag`` whose s x s diagonalization grid cannot distribute
+4. ``nbnd`` must hold every electron of each spin channel (#131): pw.x
+   stops in setup below ``NINT(nelec/2)`` ("too few bands"), below
+   ``NINT(nelup)`` or ``NINT(neldw)`` ("too few spin up/dw bands") and, for
+   a noncollinear run, below ``NINT(nelec)`` (QE 7.3
+   ``PW/src/setup.f90:349-356``), with nelup/neldw from the occupations
+   decision's ``tot_magnetization`` (``advisors/nbnd.py``'s
+   ``band_floors``). The default never falls below these, so this refuses
+   a human ``nbnd`` or a human or llm ``extra_bands``: ``nbnd=2`` on 8
+   electrons, or 96 bands for LiFePO4 with ``tot_magnetization=16``, whose
+   spin-up channel holds 104 electrons, used to pass and stop pw.x after
+   the job had queued. pw.x checks only scf-like runs, but an nscf step
+   needs every occupied band too, to place the Fermi level, so this
+   applies to every purpose.
+
+5. A user ``ndiag`` whose s x s diagonalization grid cannot distribute
    ``nbnd`` bands (#133), s = isqrt(min(ndiag, ntasks/npool)): pw.x
    aborts at startup when s > nbnd (QE 7.3
    ``Modules/set_para_diag.f90:54-55``), and ScaLAPACK's block layout
@@ -103,7 +117,7 @@ from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
-from goldilocks_core.advisors.nbnd import NbndDecision
+from goldilocks_core.advisors.nbnd import NbndDecision, band_floors
 from goldilocks_core.advisors.occupations import (
     OccupationsDecision,
     whole_spin_channels,
@@ -211,6 +225,7 @@ def check_all(
         _fixed_occupations_needs_even_electron_count(
             occupations, magnetic, electron_count, purpose
         ),
+        _nbnd_holds_every_electron(nbnd, occupations, magnetic, electron_count),
         _vc_relax_requires_bfgs_ion_dynamics(relax, purpose),
         _isolation_matches_written_cell(boundary, magnetic),
         _vc_relax_forbids_isolated_boundary(boundary, purpose),
@@ -302,6 +317,37 @@ def _fixed_occupations_needs_even_electron_count(
     return None
 
 
+def _nbnd_holds_every_electron(
+    nbnd: FieldState[NbndDecision] | None,
+    occupations: FieldState[OccupationsDecision] | None,
+    magnetic: FieldState[MagneticConfigFacts] | None,
+    electron_count: FieldState[ElectronCountDecision] | None,
+) -> str | None:
+    """Rule 4 of this module's docstring: the first of pw.x's band floors
+    ``nbnd`` falls below, with the fewest bands that pass them all."""
+    if (
+        nbnd is None
+        or occupations is None
+        or magnetic is None
+        or electron_count is None
+    ):
+        return None
+    if not (nbnd.ok and occupations.ok and magnetic.ok and electron_count.ok):
+        return None  # already surfaced via collect_blocked, or genuinely unknown
+    bands = nbnd.value.nbnd
+    floors = band_floors(electron_count.value.nelec, occupations.value, magnetic)
+    short = [floor for floor in floors if bands < floor.bands]
+    if not short:
+        return None
+    floor = short[0]
+    return (
+        f"nbnd={bands} cannot hold {floor.electrons:.10g} {floor.held}: pw.x "
+        f"stops in setup with '{floor.error}'. Set nbnd to at least "
+        f"{max(each.bands for each in floors)}, or unset nbnd and extra_bands "
+        "for the default."
+    )
+
+
 def _npool_must_divide_ntasks(
     job: FieldState[JobDecision] | None,
     parallel: FieldState[ParallelisationDecision] | None,
@@ -330,7 +376,7 @@ def _ndiag_grid_must_distribute_bands(
     parallel: FieldState[ParallelisationDecision] | None,
     nbnd: FieldState[NbndDecision] | None,
 ) -> str | None:
-    """Rule 4 of this module's docstring. ``parallelisation()`` never
+    """Rule 5 of this module's docstring. ``parallelisation()`` never
     sets ``ndiag`` itself, so this only fires for a human override; like
     a bad ``npool``, such a layout fails only after queueing, or hangs a
     node until the walltime runs out."""

@@ -161,6 +161,21 @@ review it for your calculation. Neither tier predicts magnetic *order* (see
 `magnetic_ordering` below for that). Override either tier with
 `spin_polarized`.
 
+Bands are counted per spin channel, and the default follows pw.x's own rule
+(QE setup.f90), sized so the majority channel holds (nelec + |M|)/2 electrons.
+M is `tot_magnetization` when the moment is pinned, as in pw.x. On a collinear
+smearing run without one, where pw.x would split the electrons evenly, M is
+the net moment the starting magnetization seeds (each species' fraction times
+its pseudopotential's valence electrons, `records.magnetic.seeded_moment`),
+so the default can exceed pw.x's own count. pw.x holds a smearing run's
+moment at 2 × `nbnd` − nelec Bohr magnetons without an error: with pw.x's
+default 22 bands, hcp Gd converged to 8 instead of 15.5 Bohr magnetons per
+cell; Goldilocks gives it 28. An oversized seed only adds
+bands. An `nbnd` or `extra_bands` that leaves fewer bands than pw.x accepts
+-- the electrons of each spin channel, or one band per electron with
+spin-orbit coupling -- is refused before generation, and one that holds the
+moment below its seed gets the warning `nbnd.moment_capped`.
+
 A `starting_magnetization` you set is keyed by site label and replaces the
 heuristic seeds; labels you leave out start at 0. The input has one species
 per element and starting value, whatever labels your file gave its sites

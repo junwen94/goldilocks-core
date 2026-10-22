@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from pymatgen.core import Lattice, Structure
 from support import magnetic_decision
@@ -9,7 +11,12 @@ from goldilocks_core.advisors.magnetic_config import (
     MagneticConfigHumanInput,
     SpinMode,
 )
-from goldilocks_core.advisors.nbnd import NbndHumanInput, NbndLlmInput, nbnd
+from goldilocks_core.advisors.nbnd import (
+    NbndHumanInput,
+    NbndLlmInput,
+    band_floors,
+    nbnd,
+)
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.analysis.is_magnetic import is_magnetic
 from goldilocks_core.resolution import Blocked, FieldState, Provenance, Resolved
@@ -199,7 +206,8 @@ def _spin_facts(mode: SpinMode) -> FieldState[MagneticConfigFacts]:
         human = MagneticConfigHumanInput(spin_orbit_coupling=mode == "noncollinear")
         facts = magnetic_decision(_FEPT, is_magnetic(_FEPT), human=human)
     assert facts.value.spin_mode == mode
-    return facts
+    # No net seed: the spin channels are QE's own (#131).
+    return Resolved(replace(facts.value, seeded_moment=0.0), facts.provenance)
 
 
 def _occupations(
@@ -268,8 +276,9 @@ def _occupations(
         pytest.param(36.0, "smearing", "collinear", -14.0, 30, id="collinear-tot--14"),
         # nelup = 5, neldw = 7; MAX(6, 5, 7) = 7.
         pytest.param(12.0, "fixed", "collinear", -2.0, 7, id="fixed-tot--2"),
-        # Without tot_magnetization nspin=2 sizes like nspin=1:
-        # nelup = 7, neldw = 6, as soc-odd-13 without the doubling.
+        # Without tot_magnetization and with no net seed (#131) nspin=2
+        # sizes like nspin=1: nelup = 7, neldw = 6, as soc-odd-13 without
+        # the doubling.
         pytest.param(13.0, "smearing", "collinear", None, 11, id="collinear-13"),
     ],
 )
@@ -299,3 +308,275 @@ def test_the_moment_counts_only_where_the_writer_renders_it() -> None:
     collinear = nbnd(192.0, occupations, magnetic=_spin_facts("collinear"))
 
     assert (unpolarized.value.nbnd, collinear.value.nbnd) == (96, 104)
+
+
+# #131: a collinear spin-polarized run on smearing or tetrahedra without
+# tot_magnetization sizes its majority channel for the seeded moment M
+# (MagneticConfigFacts.seeded_moment): nelup = MAX(QE's nelup,
+# (nelec + |M|)/2), neldw = nelec - nelup, then pw.x's own default. pw.x
+# holds such a run's moment at 2*nbnd - nelec: hcp Gd's default 22 bands
+# held it at 8 uB on SCARF instead of 15.5.
+_HCP_GADOLINIUM = Structure.from_spacegroup(
+    "P6_3/mmc", Lattice.hexagonal(3.642, 5.902), ["Gd"], [[1 / 3, 2 / 3, 0.25]]
+)
+_GD_NELEC = 36.0  # two Gd with an 18-electron pseudopotential
+
+
+def _gadolinium(*, z_valence_known: bool = True) -> FieldState[MagneticConfigFacts]:
+    """hcp Gd's magnetic decision: spin-polarized, seeded at 5/18 per
+    site with an 18-electron pseudopotential, 10 uB per cell -- unknown
+    without its z_valence."""
+    return magnetic_decision(
+        _HCP_GADOLINIUM,
+        is_magnetic(_HCP_GADOLINIUM),
+        z_valences={"Gd": 18.0} if z_valence_known else None,
+    )
+
+
+def test_a_smearing_magnet_s_majority_channel_has_room_for_its_seed() -> None:
+    """nelup = (36 + 10)/2 = 23, neldw = 13; base MAX(18, 23, 13) = 23;
+    MAX(NINT(21.6)=22, NINT(27.6)=28, NINT(15.6)=16, 23+4) = 28, so
+    2*28 - 36 = 20 uB of room against the 10 uB seed, where pw.x's
+    default 22 bands leave 8."""
+    state = nbnd(_GD_NELEC, _occupations("smearing"), magnetic=_gadolinium())
+
+    assert state.value.nbnd == 28
+    assert 2 * state.value.nbnd - _GD_NELEC > 10.0
+    assert state.source == "heuristic"
+    assert [warning.code for warning in state.value.warnings] == [
+        "nbnd.spin_channel_note"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("nelec", "seed", "expected"),
+    [
+        # bcc Fe, one 16-electron site seeded 5 uB: nelup = 10.5, neldw =
+        # 5.5; base MAX(8, NINT(10.5)=11, NINT(5.5)=6) = 11;
+        # MAX(NINT(9.6)=10, NINT(12.6)=13, NINT(6.6)=7, 11+4) = 15.
+        pytest.param(16.0, 5.0, 15, id="bcc-Fe"),
+        # LiFePO4's ferromagnetic seed, 4 x 5 uB on Fe plus 0.1 on every
+        # Li, P and O electron: 32.8 uB. nelup = 112.4, neldw = 79.6;
+        # base 112; MAX(NINT(115.2)=115, NINT(134.88)=135, 96, 116) = 135.
+        pytest.param(192.0, 32.8, 135, id="LiFePO4"),
+        # A negative net seed fills the minority channel the same way.
+        pytest.param(16.0, -5.0, 15, id="negative-seed"),
+        # A seed below QE's own nelup - neldw changes nothing: nelec 13
+        # gives nelup 7, neldw 6 without it.
+        pytest.param(13.0, 0.5, 11, id="seed-below-qe-split"),
+    ],
+)
+def test_the_seed_sizes_the_majority_channel(
+    nelec: float, seed: float, expected: int
+) -> None:
+    magnetic = _spin_facts("collinear")
+    seeded = Resolved(replace(magnetic.value, seeded_moment=seed), magnetic.provenance)
+
+    state = nbnd(nelec, _occupations("smearing"), magnetic=seeded)
+
+    assert state.value.nbnd == expected
+
+
+def test_tetrahedra_size_for_the_seed_like_smearing() -> None:
+    tetrahedra = Resolved(
+        OccupationsDecision(
+            occupations="tetrahedra_opt", smearing_type=None, degauss=None
+        ),
+        Provenance(source="heuristic"),
+    )
+
+    state = nbnd(_GD_NELEC, tetrahedra, magnetic=_gadolinium())
+
+    assert state.value.nbnd == 28
+
+
+def test_a_pinned_moment_sizes_the_channels_instead_of_the_seed() -> None:
+    """tot_magnetization pins the moment, so the seed no longer decides
+    it: Gd with tot 2 sizes from nelup = 19, neldw = 17; base 19;
+    MAX(22, NINT(22.8)=23, NINT(20.4)=20, 19+4) = 23."""
+    state = nbnd(_GD_NELEC, _occupations("smearing", 2.0), magnetic=_gadolinium())
+
+    assert state.value.nbnd == 23
+
+
+def test_fixed_occupations_ignore_the_seed() -> None:
+    """Fixed occupations of a collinear run fill the pinned nelup/neldw
+    (the gate refuses them without a moment), so the seed adds nothing."""
+    state = nbnd(_GD_NELEC, _occupations("fixed"), magnetic=_gadolinium())
+
+    assert state.value.nbnd == 18
+
+
+def test_a_noncollinear_magnet_ignores_the_seed() -> None:
+    """A spinor band holds one electron of any spin direction, so there is
+    no majority channel to cap: SOC FePt keeps pw.x's doubled default
+    (nelup = neldw = 17; 2 * MAX(20, 20, 20, 21) = 42), seeded or not."""
+    human = MagneticConfigHumanInput(spin_orbit_coupling=True)
+    magnetic = magnetic_decision(
+        _FEPT, is_magnetic(_FEPT), z_valences={"Fe": 16.0, "Pt": 10.0}, human=human
+    )
+    assert magnetic.value.seeded_moment == pytest.approx(10.0)
+
+    state = nbnd(34.0, _occupations("smearing"), magnetic=magnetic)
+
+    assert state.value.nbnd == 42
+
+
+def test_a_smearing_magnet_without_a_seeded_moment_is_blocked() -> None:
+    """Without z_valences the seed has no size in Bohr magnetons, so the
+    majority channel cannot be sized; nbnd says why instead of guessing."""
+    magnetic = _gadolinium(z_valence_known=False)
+
+    state = nbnd(_GD_NELEC, _occupations("smearing"), magnetic=magnetic)
+
+    assert isinstance(state, Blocked)
+    assert isinstance(state.by, str)
+    assert "seeded moment" in state.root_cause()
+    assert "z_valence" in state.root_cause()
+
+
+def test_a_human_nbnd_that_holds_the_moment_below_its_seed_is_warned() -> None:
+    """pw.x accepts 22 bands for Gd but holds the moment at 2*22 - 36 = 8
+    uB, below the 10 uB seed, without an error: the human value stands,
+    with a warning naming both (and no note on how the default is
+    sized)."""
+    state = nbnd(
+        _GD_NELEC,
+        _occupations("smearing"),
+        magnetic=_gadolinium(),
+        human=NbndHumanInput(nbnd=22),
+    )
+
+    assert state.value.nbnd == 22
+    assert state.source == "human"
+    (capped,) = state.value.warnings
+    assert capped.code == "nbnd.moment_capped"
+    assert capped.level == "warning"
+    assert capped.message == (
+        "nbnd=22 leaves room for at most 2*nbnd - nelec = 8 Bohr magnetons per "
+        "cell in this collinear smearing run, below the 10 its starting "
+        "magnetization seeds; pw.x holds the moment there without an error. "
+        "Use nbnd >= 28, the default for this seed, or unset nbnd and "
+        "extra_bands."
+    )
+
+
+def test_an_llm_extra_bands_that_caps_the_moment_is_warned() -> None:
+    state = nbnd(
+        _GD_NELEC,
+        _occupations("smearing"),
+        magnetic=_gadolinium(),
+        llm=NbndLlmInput(extra_bands=-6),
+    )
+
+    assert state.value.nbnd == 22
+    assert state.source == "llm"
+    assert "nbnd.moment_capped" in [w.code for w in state.value.warnings]
+
+
+def test_a_human_nbnd_with_room_for_the_seed_is_not_warned() -> None:
+    """2*23 - 36 = 10 uB holds the 10 uB seed exactly."""
+    state = nbnd(
+        _GD_NELEC,
+        _occupations("smearing"),
+        magnetic=_gadolinium(),
+        human=NbndHumanInput(nbnd=23),
+    )
+
+    assert "nbnd.moment_capped" not in [w.code for w in state.value.warnings]
+
+
+@pytest.mark.parametrize(
+    ("nelec", "scheme", "mode", "tot_magnetization", "floors"),
+    [
+        # setup.f90:349-356: NINT(nelec/2), NINT(nelup), NINT(neldw), in
+        # that order, and NINT(nelec) for noncolin.
+        pytest.param(
+            192.0,
+            "fixed",
+            "collinear",
+            16.0,
+            (
+                (96, "too few bands"),
+                (104, "too few spin up bands"),
+                (88, "too few spin dw bands"),
+            ),
+            id="LiFePO4-tot-16",
+        ),
+        pytest.param(
+            12.0,
+            "fixed",
+            "collinear",
+            -2.0,
+            (
+                (6, "too few bands"),
+                (5, "too few spin up bands"),
+                (7, "too few spin dw bands"),
+            ),
+            id="O2-tot--2",
+        ),
+        # Without a moment nelup = INT(nelec+1)/2: 4 and 4 for nelec 8.
+        pytest.param(
+            8.0,
+            "fixed",
+            "none",
+            None,
+            (
+                (4, "too few bands"),
+                (4, "too few spin up bands"),
+                (4, "too few spin dw bands"),
+            ),
+            id="Si-8",
+        ),
+        # Under smearing the floors are unpadded; the moment is not seeded.
+        pytest.param(
+            36.0,
+            "smearing",
+            "collinear",
+            None,
+            (
+                (18, "too few bands"),
+                (18, "too few spin up bands"),
+                (18, "too few spin dw bands"),
+            ),
+            id="Gd-smearing",
+        ),
+        pytest.param(
+            14.0,
+            "smearing",
+            "noncollinear",
+            None,
+            (
+                (7, "too few bands"),
+                (7, "too few spin up bands"),
+                (7, "too few spin dw bands"),
+                (14, "too few bands"),
+            ),
+            id="Pb-soc-14",
+        ),
+    ],
+)
+def test_band_floors_are_pw_x_own_checks(
+    nelec: float,
+    scheme: str,
+    mode: SpinMode,
+    tot_magnetization: float | None,
+    floors: tuple[tuple[int, str], ...],
+) -> None:
+    found = band_floors(
+        nelec, _occupations(scheme, tot_magnetization).value, _spin_facts(mode)
+    )
+
+    assert tuple((floor.bands, floor.error) for floor in found) == floors
+
+
+def test_band_floors_name_the_electrons_each_one_holds() -> None:
+    found = band_floors(
+        192.0, _occupations("fixed", 16.0).value, _spin_facts("collinear")
+    )
+
+    assert [(floor.electrons, floor.held) for floor in found] == [
+        (192.0, "electrons, two per band"),
+        (104.0, "spin-up electrons"),
+        (88.0, "spin-down electrons"),
+    ]

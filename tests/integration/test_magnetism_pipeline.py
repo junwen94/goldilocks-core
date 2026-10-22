@@ -42,6 +42,10 @@ cell (#144). Hematite Fe2O3 is written by its listed label, and the record
 names the label, the criterion and the other candidates of its size. GdI2
 runs on a synthetic Gd/I table (z_valence 18 and 7), Fe2O3 on Fe/O (16
 and 6).
+
+A collinear smearing magnet's bands leave its majority channel room for
+the moment its starting magnetization seeds (#131); hcp Gd runs on the
+Gd/I table.
 """
 
 from __future__ import annotations
@@ -758,6 +762,33 @@ def test_afm_on_a_monolayer_keeps_one_sheet_for_the_slab_gates(
     fixed = [row for row in rows if row[-3:] == ["0", "0", "0"]]
     assert [row[0] for row in fixed] == ["I", "I"]
     assert {round(float(row[3]) % 1.0, 4) for row in fixed} == {0.9007}
+
+
+def test_a_smearing_magnet_s_bands_hold_its_seeded_moment(
+    gdi2_store: AssetStore,
+) -> None:
+    """#131: pw.x's own 22 bands held hcp Gd's moment at 2*22 - 36 = 8
+    Bohr magnetons on SCARF instead of 15.5. The deck now sizes the
+    majority channel for the moment the written seeds carry, 2 x 5/18 x 18
+    = 10 from the selected pseudopotential's z_valence: nelup = (36 + 10)/2
+    = 23, padded to NINT(1.2 x 23) = 28 bands."""
+    gadolinium = Structure.from_spacegroup(
+        "P6_3/mmc", Lattice.hexagonal(3.642, 5.902), ["Gd"], [[1 / 3, 2 / 3, 0.25]]
+    )
+
+    steps, (content,) = _run("scf", gadolinium, {}, gdi2_store)
+
+    magnetic = steps[0].system.magnetic.value
+    assert steps[0].step.kpoints.occupations.value.occupations == "smearing"
+    assert magnetic.spin_mode == "collinear"
+    assert magnetic.seeded_moment == pytest.approx(10.0)
+    assert _keyword(content, "nspin") == "2"
+    assert _keyword(content, "tot_magnetization") is None
+    assert float(_keyword(content, "starting_magnetization(1)")) == pytest.approx(
+        5.0 / 18.0
+    )
+    assert _keyword(content, "nbnd") == "28"
+    assert steps[0].records()["magnetic"].value["seeded_moment"] == pytest.approx(10.0)
 
 
 def _janus_vsse(c: float = 20.0) -> Structure:

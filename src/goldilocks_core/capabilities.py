@@ -396,13 +396,20 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "nbnd": {
         "description": (
-            "Total number of Kohn-Sham bands, overriding pw.x's own default "
-            "(QE setup.f90) that is written otherwise."
+            "Total number of Kohn-Sham bands (per spin channel with nspin=2), "
+            "overriding the default written otherwise: pw.x's setup.f90 rule, "
+            "with a collinear smearing run's majority channel raised for its "
+            "seeded moment. Refused when below the electrons a "
+            "spin channel holds (pw.x's 'too few bands'); a count that holds "
+            "the moment below its seed gets a warning."
         ),
     },
     "extra_bands": {
         "description": (
-            "Extra bands added on top of pw.x's default band count (QE setup.f90)."
+            "Extra bands added on top of the default band count (pw.x's "
+            "setup.f90 rule, with a collinear smearing run's majority channel "
+            "raised for its seeded moment); a total below the electrons a spin "
+            "channel holds is refused."
         ),
     },
     "conv_thr": {

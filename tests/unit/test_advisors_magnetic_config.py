@@ -85,6 +85,88 @@ def test_starting_magnetization_uses_moment_target_when_z_valence_known() -> Non
     assert state.value.starting_magnetization == {"Fe": 5.0 / 16.0}
 
 
+_HCP_GADOLINIUM = Structure.from_spacegroup(
+    "P6_3/mmc", Lattice.hexagonal(3.642, 5.902), ["Gd"], [[1 / 3, 2 / 3, 0.25]]
+)
+
+
+def test_the_seeded_moment_is_the_net_moment_the_seeds_start_from() -> None:
+    """#131: ``seeded_moment`` converts the seeds back to Bohr magnetons
+    with the same z_valences, summed over sites: hcp Gd's two sites at
+    5/18 of 18 electrons start from 10 uB per cell."""
+    state = magnetic_decision(
+        _HCP_GADOLINIUM, is_magnetic(_HCP_GADOLINIUM), z_valences={"Gd": 18.0}
+    )
+
+    assert state.value.starting_magnetization == {"Gd": 5.0 / 18.0}
+    assert state.value.seeded_moment == pytest.approx(10.0)
+
+
+def test_the_ferromagnetic_seeded_moment_counts_every_species() -> None:
+    """aiida's +0.1 on species without a moment target is part of the
+    seed: rock-salt FeO starts from Fe's 5 uB plus O's 0.1 x 6."""
+    state = magnetic_decision(
+        _ROCK_SALT_FEO, is_magnetic(_ROCK_SALT_FEO), z_valences={"Fe": 16.0, "O": 6.0}
+    )
+
+    assert state.value.seeded_moment == pytest.approx(5.6)
+
+
+def test_the_seeded_moment_needs_every_element_s_z_valence() -> None:
+    """Without a z_valence for an element its seed has no size in Bohr
+    magnetons (the flat 0.1 fraction applies to any valence), so the
+    moment is unknown rather than guessed."""
+    without = magnetic_decision(_ROCK_SALT_FEO, is_magnetic(_ROCK_SALT_FEO))
+    partial = magnetic_decision(
+        _ROCK_SALT_FEO, is_magnetic(_ROCK_SALT_FEO), z_valences={"Fe": 16.0}
+    )
+
+    assert without.value.spin_polarized and partial.value.spin_polarized
+    assert without.value.seeded_moment is None
+    assert partial.value.seeded_moment is None
+
+
+def test_a_human_starting_magnetization_seeds_its_own_moment() -> None:
+    """A human fraction is scaled by the same z_valence; a label left out
+    starts at 0, so one bcc Fe site at 0.5 of 16 electrons seeds 8 uB, and
+    opposite fractions cancel."""
+    two_iron_sites = Structure(
+        Lattice.cubic(2.87),
+        ["Fe", "Fe"],
+        [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+        labels=["Fe0", "Fe1"],
+    )
+    one_site = MagneticConfigHumanInput(starting_magnetization={"Fe0": 0.5})
+    opposite = MagneticConfigHumanInput(
+        starting_magnetization={"Fe0": 0.5, "Fe1": -0.5}
+    )
+
+    seeded = magnetic_decision(
+        two_iron_sites,
+        is_magnetic(two_iron_sites),
+        z_valences={"Fe": 16.0},
+        human=one_site,
+    )
+    cancelled = magnetic_decision(
+        two_iron_sites,
+        is_magnetic(two_iron_sites),
+        z_valences={"Fe": 16.0},
+        human=opposite,
+    )
+
+    assert seeded.value.seeded_moment == pytest.approx(8.0)
+    assert cancelled.value.seeded_moment == pytest.approx(0.0)
+
+
+def test_a_run_without_spin_polarization_seeds_no_moment() -> None:
+    state = magnetic_decision(
+        _DIAMOND_SILICON, is_magnetic(_DIAMOND_SILICON), z_valences={"Si": 4.0}
+    )
+
+    assert not state.value.spin_polarized
+    assert state.value.seeded_moment is None
+
+
 def test_starting_magnetization_is_keyed_by_the_cell_s_species_labels() -> None:
     """Regression for #32 (v2 epic 9, #9): a real structure's per-site
     labels are not always identical to its element symbols -- pymatgen's
@@ -685,6 +767,22 @@ def test_seeds_are_set_on_the_applied_cell_once_z_valence_is_known(
     }
     assert ferromagnetic.value.starting_magnetization == {"Ni": 5.0 / 18.0, "O": 0.1}
     assert state.source == cell.source
+
+
+def test_a_compensated_ordering_seeds_no_net_moment(afm_candidate) -> None:
+    """Only the sublattice is seeded on an applied ordering (#170), so
+    NiO's AFM-II cell starts from 5 uB up, 5 down and nothing on O (#131);
+    the ferromagnetic default seeds the O too."""
+    z_valences = {"Ni": 18.0, "O": 6.0}
+    cell = magnetic_cell(_ROCK_SALT_NIO, is_magnetic(_ROCK_SALT_NIO), _AFM)
+
+    ordered = magnetic_config(cell, z_valences=z_valences, human=_AFM)
+    ferromagnetic = magnetic_decision(
+        _ROCK_SALT_NIO, is_magnetic(_ROCK_SALT_NIO), z_valences=z_valences
+    )
+
+    assert ordered.value.seeded_moment == pytest.approx(0.0, abs=1e-12)
+    assert ferromagnetic.value.seeded_moment == pytest.approx(5.6)
 
 
 def test_a_human_starting_magnetization_is_checked_against_the_applied_cell(

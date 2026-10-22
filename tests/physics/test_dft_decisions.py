@@ -20,13 +20,16 @@ the rendering of it.
 
 from __future__ import annotations
 
+import pytest
 from pymatgen.core import Lattice, Structure
 from support import magnetic_decision
 
 from goldilocks_core.advisors.convergence import ConvergenceHumanInput, convergence
+from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.functional import DEFAULT_FUNCTIONAL
 from goldilocks_core.advisors.hubbard_u import hubbard_u
 from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
+from goldilocks_core.advisors.nbnd import NbndDecision, nbnd
 from goldilocks_core.advisors.occupations import occupations
 from goldilocks_core.advisors.pseudo_selection import (
     PseudoRequirements,
@@ -35,11 +38,13 @@ from goldilocks_core.advisors.pseudo_selection import (
 )
 from goldilocks_core.analysis.composition import composition
 from goldilocks_core.analysis.is_magnetic import is_magnetic
-from goldilocks_core.analysis.is_metal import is_metal
+from goldilocks_core.analysis.is_metal import IsMetalHumanInput, is_metal
 from goldilocks_core.analysis.needs_correlation import needs_correlation
 from goldilocks_core.analysis.needs_soc import needs_soc
 from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 from goldilocks_core.assets.records import AssetFile, AssetSpec
+from goldilocks_core.checks import check_all
+from goldilocks_core.resolution import FieldState, Provenance, Resolved
 
 
 def _table(
@@ -199,6 +204,72 @@ def test_soc_does_not_silently_discard_a_magnetic_structures_magnetism() -> None
     assert magnetism.value.spin_polarized is True
     assert magnetism.value.spin_orbit_enabled is True
     assert magnetism.value.starting_magnetization
+
+
+def _electron_count(nelec: float) -> Resolved[ElectronCountDecision]:
+    return Resolved(
+        ElectronCountDecision(nelec=nelec, tot_charge=0.0),
+        Provenance(source="heuristic"),
+    )
+
+
+def test_a_smearing_magnet_has_bands_for_its_seeded_moment() -> None:
+    """#131: pw.x holds the moment of a smearing run at 2*nbnd - nelec
+    without an error, so a band count without room in the majority channel
+    converges to a capped moment: hcp Gd's 22 bands held it at 8.00 uB per
+    cell on SCARF, 4.19 eV above the 15.5 uB state 32 bands reached. The
+    bands are sized for the moment the starting magnetization seeds."""
+    gadolinium = Structure.from_spacegroup(
+        "P6_3/mmc", Lattice.hexagonal(3.642, 5.902), ["Gd"], [[1 / 3, 2 / 3, 0.25]]
+    )
+    nelec = 36.0  # 18-electron Gd pseudopotential, as SSSP's
+    magnetism = magnetic_decision(
+        gadolinium, is_magnetic(gadolinium), z_valences={"Gd": 18.0}
+    )
+    scheme = occupations(is_metal(gadolinium), magnetism, _electron_count(nelec))
+
+    bands = nbnd(nelec, scheme, magnetic=magnetism)
+
+    assert scheme.value.occupations == "smearing"
+    assert magnetism.value.seeded_moment == pytest.approx(10.0)
+    assert 2 * bands.value.nbnd - nelec > magnetism.value.seeded_moment
+
+
+def test_a_pinned_moment_gets_bands_for_its_majority_channel() -> None:
+    """#131: solid O2 (one molecule, 12 electrons) as a non-metal with
+    tot_magnetization 2 runs on fixed occupations with 7 spin-up
+    electrons. 6 bands made pw.x stop with 'too few spin up bands' after
+    check() had passed; the default holds them, and the gate refuses
+    fewer."""
+    oxygen = Structure(
+        Lattice.from_parameters(3.512, 3.512, 4.280, 67.257, 112.743, 115.955),
+        ["O", "O"],
+        [[0.9105, 0.0895, 0.8544], [0.0895, 0.9105, 0.1456]],
+    )
+    nelec = 12.0
+    magnetism = magnetic_decision(
+        oxygen,
+        is_magnetic(oxygen),
+        z_valences={"O": 6.0},
+        human=MagneticConfigHumanInput(tot_magnetization=2.0),
+    )
+    count = _electron_count(nelec)
+    scheme = occupations(
+        is_metal(oxygen, IsMetalHumanInput(is_metal=False)), magnetism, count
+    )
+    bands = nbnd(nelec, scheme, magnetic=magnetism)
+
+    def gate(state: FieldState[NbndDecision]) -> tuple[str, ...]:
+        return check_all(
+            occupations=scheme, magnetic=magnetism, electron_count=count, nbnd=state
+        ).blocking
+
+    assert scheme.value.occupations == "fixed"
+    assert scheme.value.tot_magnetization == 2.0
+    assert bands.value.nbnd == 7
+    assert gate(bands) == ()
+    (reason,) = gate(Resolved(NbndDecision(nbnd=6), Provenance(source="human")))
+    assert "'too few spin up bands'" in reason
 
 
 def test_hubbard_u_input_leaves_the_occupation_matrix_free_to_converge() -> None:

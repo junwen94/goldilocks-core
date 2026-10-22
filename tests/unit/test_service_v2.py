@@ -172,6 +172,26 @@ class TestAdviseEndToEnd:
         assert not report.ok
         assert any("npool=7" in reason for reason in report.blocking)
 
+    @pytest.mark.parametrize(
+        "setting", [{"nbnd": 2}, {"extra_bands": -6}], ids=["nbnd", "extra_bands"]
+    )
+    def test_a_human_band_count_below_the_electron_count_is_refused(
+        self, silicon, hpc, installed_table, setting
+    ) -> None:
+        """#131: 2 bands, set outright or as the 8-band default less 6,
+        cannot hold the fixture cell's 8 electrons, and pw.x stops in setup
+        with 'too few bands'; check() refuses it before generation
+        instead."""
+        store, _ = installed_table
+        overrides = build_overrides(setting)
+
+        advice = advise(silicon, hpc=hpc, overrides=overrides, store=store)
+        assert advice.step.kpoints.nbnd.value.nbnd == 2
+        report = check(advice)
+
+        assert not report.ok
+        assert any("'too few bands'" in reason for reason in report.blocking)
+
     def test_human_overrides_flow_through_to_generated_input(
         self, silicon, hpc, installed_table
     ) -> None:

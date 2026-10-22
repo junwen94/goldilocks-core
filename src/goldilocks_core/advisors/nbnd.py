@@ -1,4 +1,5 @@
-"""nbnd: number of Kohn-Sham bands to compute, from nelec and occupations.
+"""nbnd: number of Kohn-Sham bands to compute, from nelec, occupations
+and the spin channels the run fills.
 
 New in v2 (v2 epic 6, #6). Fourth of five per-step advisors
 (``occupations -> k_sampling -> n_irr_k -> nbnd -> convergence``,
@@ -8,9 +9,10 @@ nothing upstream of it deciding what to request from QE itself
 (goldilocks-core-design.md's own note: "nbnd only computed in
 resource_estimate, no advisor produces it").
 
-**nbnd is pw.x's own default** (#162): a literal port of QE 7.3
-``PW/src/setup.f90:326-345``, which pw.x applies when ``nbnd`` is not
-given. It starts from the bands every spin channel needs,
+**nbnd follows pw.x's own default rule** (#162): a literal port of QE
+7.3 ``PW/src/setup.f90:326-345``, which pw.x applies when ``nbnd`` is not
+given, departing from pw.x's own count only for the seeded moment below
+(#131). It starts from the bands every spin channel needs,
 ``MAX(NINT(nelec/2), NINT(nelup), NINT(neldw))``; under smearing or
 tetrahedra it pads that to ``MAX(NINT(1.2*nelec/2), NINT(1.2*nelup),
 NINT(1.2*neldw), base + 4)``, 20% more with at least 4 more; for a
@@ -32,6 +34,34 @@ number of bands: ``nbnd`` is per spin channel. A noncollinear (spin-orbit)
 band is a two-component spinor holding one electron, so ``setup.f90``
 doubles the per-spin count after padding; an odd electron count still
 gets an even band count.
+
+**The majority channel has room for the seeded moment (#131).** Without
+``tot_magnetization`` pw.x's ``nelup``/``neldw`` split the electrons
+evenly, and under smearing or tetrahedra it then holds the moment at
+``2*nbnd - nelec``, converging to it without an error: hcp Gd's default
+22 bands held it at 8 Bohr magnetons per cell on SCARF, 4.19 eV above the
+15.5 its 32-band run reached. A collinear smearing or tetrahedra run
+without ``tot_magnetization`` therefore sizes its majority channel for
+the net moment its starting magnetization seeds,
+``MagneticConfigFacts.seeded_moment`` (M): ``nelup`` becomes
+``(nelec + |M|)/2`` where that is larger than QE's own and ``neldw`` the
+rest, before the padding above, so the default always leaves
+``2*nbnd - nelec > |M|`` (Gd: 28 bands). The seeds are
+``magnetic_config``'s (aiida's maximal targets, +0.1 on every other
+species of a ferromagnetic start), so an oversized seed over-pads, which
+costs only compute; a compensated one changes nothing. Without a seeded
+moment (no z_valence for an element) such a run is ``Blocked``. A human
+``nbnd``, or a human or llm ``extra_bands``, that holds the moment below
+its seed resolves with ``nbnd.moment_capped``. Fixed occupations fill the
+pinned channels exactly, and a noncollinear spinor band holds either
+spin, so neither reads the seed.
+
+**pw.x's own floors are the gate's (``band_floors``).** pw.x stops in
+setup when a given ``nbnd`` is below ``NINT(nelec/2)``, ``NINT(nelup)``
+or ``NINT(neldw)``, or ``NINT(nelec)`` for a noncollinear run
+(``setup.f90:349-356``), with the same ``nelup``/``neldw``;
+``checks.check_all`` refuses such a count from any source. The default is
+never below them.
 
 **Uses ``occupations`` (not ``is_metal``) to decide the metal branch.**
 ``advisors/occupations.py`` has already turned ``is_metal`` (plus any
@@ -107,15 +137,26 @@ _INTEGER_TOLERANCE = 1e-8
 """QE's ``eps8``, the tolerance ``set_nelup_neldw`` treats a charge or a
 moment as an integer within."""
 
+_SEEDED_MOMENT_UNKNOWN = (
+    "nbnd sizes the majority spin channel of a collinear smearing run "
+    "without tot_magnetization for the seeded moment, the net moment its "
+    "starting magnetization seeds, but that is unknown: it needs the "
+    "z_valence of every element, from the selected pseudopotentials. Set "
+    "tot_magnetization or nbnd."
+)
+
 SPIN_NOTE = Warning(
     code="nbnd.spin_channel_note",
     level="info",
     category="nbnd",
     message=(
         "nspin=2 doubles the number of k-points QE solves internally, "
-        "not the number of bands -- nbnd here is per spin channel, with "
-        "room for the majority channel's electrons (pw.x's own default, "
-        "QE setup.f90)."
+        "not the number of bands -- nbnd here is per spin channel, pw.x's "
+        "default rule (QE setup.f90) for a majority channel holding "
+        "nelup = (nelec + |M|)/2 electrons, M being tot_magnetization or, "
+        "on a smearing or tetrahedra run without one, the net moment the "
+        "starting magnetization seeds, where pw.x itself would split the "
+        "electrons evenly."
     ),
 )
 
@@ -131,15 +172,42 @@ NONCOLLINEAR_NOTE = Warning(
     ),
 )
 
-WARNING_CATALOGUE = (SPIN_NOTE, NONCOLLINEAR_NOTE)
+MOMENT_CAPPED_WARNING = Warning(
+    code="nbnd.moment_capped",
+    level="warning",
+    category="nbnd",
+    message=(
+        "nbnd leaves the majority spin channel of a collinear smearing run "
+        "no room for the moment its starting magnetization seeds: pw.x holds "
+        "the moment at 2*nbnd - nelec Bohr magnetons per cell without an "
+        "error. Raise nbnd, or unset nbnd and extra_bands."
+    ),
+)
+
+WARNING_CATALOGUE = (SPIN_NOTE, NONCOLLINEAR_NOTE, MOMENT_CAPPED_WARNING)
 """Every warning code this module can emit -- ``capabilities.py``'s
-``warnings[]`` catalogue aggregates one of these tuples per advisor."""
+``warnings[]`` catalogue aggregates one of these tuples per advisor. The
+real, per-occurrence ``nbnd.moment_capped`` message names the numbers
+(built in ``_moment_capped``); this is the generic description."""
 
 
 @dataclass(frozen=True, slots=True)
 class NbndDecision:
     nbnd: int
     warnings: tuple[Warning, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class BandFloor:
+    """One of pw.x's lower bounds on ``nbnd`` (QE 7.3
+    ``PW/src/setup.f90:349-356``): ``bands`` is the fewest it accepts,
+    room for ``electrons`` electrons described by ``held``, and ``error``
+    the message pw.x stops in setup with below it."""
+
+    bands: int
+    electrons: float
+    held: str
+    error: str
 
 
 class NbndHumanInput(HumanInput):
@@ -149,7 +217,8 @@ class NbndHumanInput(HumanInput):
     ``Resolved`` success. ``extra_bands`` stays unconstrained here
     (it is a signed adjustment to the heuristic base, legitimately
     negative) -- the combined total is checked in ``nbnd()`` below,
-    where the heuristic base is actually known."""
+    where the heuristic base is actually known. A total below what pw.x
+    accepts (``band_floors``) is refused by ``checks.check_all``."""
 
     nbnd: int | None = Field(default=None, gt=0)
     extra_bands: int | None = None
@@ -157,6 +226,15 @@ class NbndHumanInput(HumanInput):
 
 class NbndLlmInput(LlmInput):
     extra_bands: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _Sizing:
+    """pw.x's default ``nbnd`` for the run, and the seeded moment it was
+    sized for (``None`` when the seed does not size it)."""
+
+    default: int
+    seeded_moment: float | None
 
 
 def nbnd(
@@ -167,80 +245,143 @@ def nbnd(
     human: NbndHumanInput | None = None,
     llm: NbndLlmInput | None = None,
 ) -> FieldState[NbndDecision]:
+    """The band count: a human ``nbnd``, else pw.x's default for the
+    run's spin channels (``_sizing``, module docstring) plus any human or
+    llm ``extra_bands``, with its spin note. ``Blocked`` when
+    ``occupations`` is, or when a collinear smearing run's seeded moment
+    is unknown, unless a human ``nbnd`` is given; a total that is not
+    positive is ``Unavailable``. A total that holds the moment below its
+    seed carries ``nbnd.moment_capped``."""
     human = human or NbndHumanInput()
     llm = llm or NbndLlmInput()
 
-    if human.nbnd is not None:
-        return Resolved(NbndDecision(nbnd=human.nbnd), Provenance(source="human"))
-
-    if isinstance(occupations, Blocked):
-        return Blocked(by=occupations)
     if not occupations.ok:
+        if human.nbnd is not None:
+            return Resolved(NbndDecision(nbnd=human.nbnd), Provenance(source="human"))
         return Blocked(by=blocked_by(occupations))
 
-    spin_mode, tot_magnetization = _spin_inputs(occupations.value, magnetic)
-    base = _qe_default_nbnd(
-        nelec,
-        occupations.value.occupations in _METAL_LIKE_OCCUPATIONS,
-        spin_mode,
-        tot_magnetization,
+    spin_mode, tot_magnetization, seeded_moment = _spin_inputs(
+        occupations.value, magnetic
     )
-
-    if human.extra_bands is not None:
-        extra, source = human.extra_bands, "human"
-    elif llm.extra_bands is not None:
-        extra, source = llm.extra_bands, "llm"
+    sizing = _sizing(
+        nelec, occupations.value, spin_mode, tot_magnetization, seeded_moment
+    )
+    if human.nbnd is not None:
+        total, source, notes = human.nbnd, "human", ()
+    elif isinstance(sizing, str):
+        return Blocked(by=sizing)
     else:
-        extra, source = 0, "heuristic"
-
-    total = base + extra
-    if total <= 0:
-        # #35 (v2 epic 9, #9): extra_bands is a legitimately-signed
-        # adjustment (Field(gt=0) on it alone would reject valid
-        # negative reductions), but the combined total must still be a
-        # physically meaningful band count -- before this, a
-        # sufficiently negative extra_bands silently produced a
-        # zero/negative &SYSTEM nbnd card, reported as a resolved
-        # success.
-        return Unavailable(
-            reason=(
-                f"heuristic nbnd={base} + extra_bands={extra} = {total}, which "
-                "is not a valid number of bands (must be positive)"
+        extra, source = _extra_bands(human, llm)
+        total, notes = sizing.default + extra, _spin_note(spin_mode)
+        if total <= 0:
+            # #35 (v2 epic 9, #9): extra_bands is a legitimately-signed
+            # adjustment (Field(gt=0) on it alone would reject valid
+            # negative reductions), but the combined total must still be a
+            # physically meaningful band count -- before this, a
+            # sufficiently negative extra_bands silently produced a
+            # zero/negative &SYSTEM nbnd card, reported as a resolved
+            # success.
+            return Unavailable(
+                reason=(
+                    f"heuristic nbnd={sizing.default} + extra_bands={extra} = "
+                    f"{total}, which is not a valid number of bands (must be "
+                    "positive)"
+                )
             )
-        )
 
-    warnings = _spin_note(spin_mode)
+    warnings = (*notes, *_moment_capped(total, nelec, sizing))
     decision = NbndDecision(nbnd=total, warnings=warnings)
     return Resolved(decision, Provenance(source=source))
+
+
+def band_floors(
+    nelec: float,
+    occupations: OccupationsDecision,
+    magnetic: FieldState[MagneticConfigFacts] | None,
+) -> tuple[BandFloor, ...]:
+    """pw.x's lower bounds on ``nbnd`` for ``nelec`` electrons, in the
+    order QE 7.3 ``PW/src/setup.f90:349-356`` checks them: ``NINT(nelec/2)``,
+    ``NINT(nelup)`` and ``NINT(neldw)``, then ``NINT(nelec)`` for a
+    noncollinear run, with the spin inputs ``nbnd`` sizes from. pw.x
+    applies them to a given ``nbnd``; its default never falls below
+    them."""
+    spin_mode, tot_magnetization, _ = _spin_inputs(occupations, magnetic)
+    nelup, neldw = _spin_channels(nelec, tot_magnetization)
+    floors = (
+        BandFloor(_nint(nelec / 2), nelec, "electrons, two per band", "too few bands"),
+        BandFloor(_nint(nelup), nelup, "spin-up electrons", "too few spin up bands"),
+        BandFloor(_nint(neldw), neldw, "spin-down electrons", "too few spin dw bands"),
+    )
+    if spin_mode == "noncollinear":
+        spinor = BandFloor(
+            _nint(nelec), nelec, "electrons, one per spinor band", "too few bands"
+        )
+        return (*floors, spinor)
+    return floors
 
 
 def _spin_inputs(
     occupations: OccupationsDecision,
     magnetic: FieldState[MagneticConfigFacts] | None,
-) -> tuple[SpinMode, float | None]:
+) -> tuple[SpinMode, float | None, float | None]:
     """QE's spin inputs as the writer renders them: the spin mode of
-    ``magnetic`` (``none`` when there is no resolved one) and the
-    ``tot_magnetization`` of ``occupations``, written for a collinear run
-    only (module docstring)."""
-    spin_mode = (
-        magnetic.value.spin_mode if magnetic is not None and magnetic.ok else "none"
-    )
-    tot_magnetization = (
-        occupations.tot_magnetization if spin_mode == "collinear" else None
-    )
-    return spin_mode, tot_magnetization
+    ``magnetic`` (``none`` when there is no resolved one), and for a
+    collinear run only (module docstring) the ``tot_magnetization`` of
+    ``occupations`` and the seeded moment of ``magnetic``."""
+    if magnetic is None or not magnetic.ok:
+        return "none", None, None
+    facts = magnetic.value
+    if facts.spin_mode != "collinear":
+        return facts.spin_mode, None, None
+    return "collinear", occupations.tot_magnetization, facts.seeded_moment
+
+
+def _sizing(
+    nelec: float,
+    occupations: OccupationsDecision,
+    spin_mode: SpinMode,
+    tot_magnetization: float | None,
+    seeded_moment: float | None,
+) -> _Sizing | str:
+    """pw.x's default for the spin channels the run fills (module
+    docstring): QE's own ``nelup``/``neldw``, the majority channel raised
+    to hold the seeded moment on a collinear smearing or tetrahedra run
+    without ``tot_magnetization`` (#131). The reason it cannot be sized,
+    when that seed is unknown."""
+    metal_like = occupations.occupations in _METAL_LIKE_OCCUPATIONS
+    channels = _spin_channels(nelec, tot_magnetization)
+    seeded = spin_mode == "collinear" and metal_like and tot_magnetization is None
+    if seeded:
+        if seeded_moment is None:
+            return _SEEDED_MOMENT_UNKNOWN
+        channels = _seeded_channels(nelec, channels, seeded_moment)
+    nelup, neldw = channels
+    default = _qe_default_nbnd(nelec, nelup, neldw, metal_like, spin_mode)
+    return _Sizing(default, seeded_moment if seeded else None)
+
+
+def _seeded_channels(
+    nelec: float, channels: tuple[float, float], seeded_moment: float
+) -> tuple[float, float]:
+    """``channels`` with the majority one holding ``(nelec + |M|)/2``
+    electrons for the seeded moment M, where QE's own ``nelup`` is
+    smaller."""
+    nelup = (nelec + abs(seeded_moment)) / 2
+    if nelup <= channels[0]:
+        return channels
+    return nelup, nelec - nelup
 
 
 def _qe_default_nbnd(
     nelec: float,
+    nelup: float,
+    neldw: float,
     metal_like: bool,
     spin_mode: SpinMode,
-    tot_magnetization: float | None,
 ) -> int:
     """pw.x's default ``nbnd`` (QE 7.3 ``PW/src/setup.f90:326-345``):
     the bands each spin channel needs, padded under smearing or
     tetrahedra, doubled for a noncollinear run."""
-    nelup, neldw = _spin_channels(nelec, tot_magnetization)
     bands = max(_nint(nelec / 2), _nint(nelup), _nint(neldw))
     if metal_like:
         bands = max(
@@ -275,9 +416,47 @@ def _nint(value: float) -> int:
     return int(math.copysign(math.floor(abs(value) + 0.5), value))
 
 
+def _extra_bands(human: NbndHumanInput, llm: NbndLlmInput) -> tuple[int, str]:
+    """The ``extra_bands`` added to the default and its source: human,
+    then llm, else none."""
+    if human.extra_bands is not None:
+        return human.extra_bands, "human"
+    if llm.extra_bands is not None:
+        return llm.extra_bands, "llm"
+    return 0, "heuristic"
+
+
 def _spin_note(spin_mode: SpinMode) -> tuple[Warning, ...]:
     if spin_mode == "noncollinear":
         return (NONCOLLINEAR_NOTE,)
     if spin_mode == "collinear":
         return (SPIN_NOTE,)
     return ()
+
+
+def _moment_capped(
+    total: int, nelec: float, sizing: _Sizing | str
+) -> tuple[Warning, ...]:
+    """``nbnd.moment_capped`` when ``total`` bands hold a seeded moment
+    below its seed: pw.x fills at most ``total`` bands per spin channel,
+    so the moment of a smearing run stays within ``2*total - nelec``. The
+    default always has room (module docstring)."""
+    if isinstance(sizing, str) or sizing.seeded_moment is None:
+        return ()
+    seed = abs(sizing.seeded_moment)
+    cap = 2 * total - nelec
+    if cap >= seed:
+        return ()
+    message = (
+        f"nbnd={total} leaves room for at most 2*nbnd - nelec = {_number(cap)} "
+        "Bohr magnetons per cell in this collinear smearing run, below the "
+        f"{_number(seed)} its starting magnetization seeds; pw.x holds the "
+        f"moment there without an error. Use nbnd >= {sizing.default}, the "
+        "default for this seed, or unset nbnd and extra_bands."
+    )
+    return (MOMENT_CAPPED_WARNING.model_copy(update={"message": message}),)
+
+
+def _number(value: float) -> str:
+    """``value`` to two decimals, without trailing zeros."""
+    return f"{round(value, 2):g}"
