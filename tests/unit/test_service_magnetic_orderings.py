@@ -6,23 +6,30 @@ import pytest
 from pymatgen.core import Lattice, Species, Structure
 
 from goldilocks_core.advisors import magnetic_config as magnetic_config_module
+from goldilocks_core.advisors.magnetic_config import (
+    MagneticConfigHumanInput,
+    magnetic_cell,
+)
 from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
 from goldilocks_core.advisors.magnetic_ordering_ml import (
     MagneticOrderingMlUnavailable,
     OrderingCandidate,
     OrderingMlResult,
 )
+from goldilocks_core.resolution import Provenance, Resolved
 from goldilocks_core.service import _magnetic_orderings as magnetic_orderings_module
-from goldilocks_core.service._magnetic_orderings import list_magnetic_orderings
+from goldilocks_core.service._magnetic_orderings import (
+    candidate_to_json,
+    list_magnetic_orderings,
+)
 
 _ROCK_SALT_FEO = Structure(
     Lattice.cubic(4.3), ["Fe", "O"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]
 )
 
 # Mimics a real `enumerate_orderings` candidate: two Fe sites carrying
-# opposite `Species.spin`, the sign information `_label_by_spin` splits into
-# distinct QE labels (Fe1/Fe2) and `_bundle_inputs` must preserve through a
-# CIF round-trip (see test_afm_overrides_preserve_sublattice_sign below).
+# opposite `Species.spin`, which the magnetic step splits into two species
+# (Fe1/Fe2).
 _SPIN_SPLIT_AFM_FEO = Structure(
     Lattice.cubic(4.3),
     [Species("Fe", spin=5.0), Species("Fe", spin=-5.0), "O", "O"],
@@ -93,13 +100,17 @@ def test_ranked_listing_marks_the_lowest_energy_candidate_as_recommended(
     assert by_label["afm-1"].is_recommended is True
 
 
-def test_afm_overrides_preserve_sublattice_sign(monkeypatch) -> None:
-    """Regression for the CIF-round-trip trap `_bundle_inputs` documents:
-    naively handing a candidate's structure_content back to `/run` with no
-    overrides would silently resolve a ferromagnetic starting_magnetization
-    (CIF drops `Species.spin`) despite the species labels still looking
-    AFM-split. The override must carry both signs, keyed by whatever labels
-    the structure_content will actually reload as."""
+def test_every_candidate_is_generated_by_its_label_on_the_listed_structure(
+    monkeypatch,
+) -> None:
+    """#170: a candidate used to carry its own CIF and starting
+    magnetizations remapped onto the CIF's labels, seeded at the flat 0.1
+    and with symmetry computed on the spin-less CIF, while
+    magnetic_ordering=afm seeded the same cell from z_valence. A candidate
+    now names itself: run the listed structure with its overrides and the
+    one magnetic step writes it, spin-polarized -- the fm candidate too,
+    whose label alone used to leave a structure classified non-magnetic
+    unpolarized once the Workbench dropped the draft's own spin request."""
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
         magnetic_config_module,
@@ -109,17 +120,19 @@ def test_afm_overrides_preserve_sublattice_sign(monkeypatch) -> None:
 
     report = list_magnetic_orderings(_ROCK_SALT_FEO)
 
-    fm = next(candidate for candidate in report.candidates if candidate.label == "fm")
-    assert fm.overrides == {}
-
-    afm = next(
-        candidate for candidate in report.candidates if candidate.label == "afm-1"
-    )
-    assert afm.overrides["spin_polarized"] is True
-    fractions = afm.overrides["starting_magnetization"]
-    reloaded = Structure.from_str(afm.structure_content, fmt="cif")
-    assert set(fractions) == {site.label for site in reloaded}
-    assert {value > 0 for value in fractions.values()} == {True, False}
+    assert [candidate.label for candidate in report.candidates] == ["fm", "afm-1"]
+    for candidate in report.candidates:
+        assert candidate.overrides == {"magnetic_ordering": candidate.label}
+        assert "structure_content" not in candidate_to_json(candidate)
+        assert "structure_format" not in candidate_to_json(candidate)
+        cell = magnetic_cell(
+            _ROCK_SALT_FEO,
+            Resolved("non_magnetic", Provenance(source="ml")),
+            MagneticConfigHumanInput(**candidate.overrides),
+        ).value
+        assert cell.spin_polarized is True, candidate.label
+        assert cell.ordering.applied == candidate.label
+        assert len(cell.structure) == candidate.natoms
 
 
 def test_ranking_unavailable_falls_back_to_unranked_with_a_warning(monkeypatch) -> None:
@@ -217,7 +230,7 @@ def test_every_listed_la2cuo4_candidate_compensates_cu_and_leaves_la_unspun() ->
     afm = [candidate for candidate in report.candidates if candidate.label != "fm"]
     assert afm
     for candidate in afm:
-        assert _spins(candidate.structure, "Cu") == {5.0, -5.0}, candidate.label
+        assert _spins(candidate.structure, "Cu") == {1.0, -1.0}, candidate.label
         assert _spins(candidate.structure, "La") == {0.0}, candidate.label
     assert report.warnings == ()
 
@@ -232,7 +245,7 @@ def test_no_listed_fept_candidate_is_the_two_site_fe_against_pt_cell() -> None:
     assert afm
     for candidate in afm:
         assert candidate.natoms >= 4, candidate.label
-        assert _spins(candidate.structure, "Fe") == {5.0, -5.0}, candidate.label
+        assert _spins(candidate.structure, "Fe") == {1.0, -1.0}, candidate.label
         assert _spins(candidate.structure, "Pt") == {0.0}, candidate.label
 
 

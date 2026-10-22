@@ -20,10 +20,11 @@ element, so it is the same for the cell.
 
 **``symmetry_eff`` (v2 epic 9, #9)**: ``AnalysisFacts.symmetry`` (phase 1)
 is computed from the plain input ``structure``, before magnetism is
-decided at all. Once the cell exists (identical to ``structure`` unless an
-antiferromagnetic ordering was applied), symmetry needs recomputing
-against *that* cell -- goldilocks-core-design.md:3116-3126's "symmetry must
-be recomputed once after species-splitting, not reused from phase 1".
+decided at all. Once the cell exists (the input's sites unless an
+antiferromagnetic ordering was applied, split into the species pw.x is
+given, #170), symmetry needs recomputing against *that* cell --
+goldilocks-core-design.md:3116-3126's "symmetry must be recomputed once
+after species-splitting, not reused from phase 1".
 ``n_irr_k``/``k_sampling`` (``_step_kpoints.py``) read ``cell`` directly
 rather than this field's own value; ``symmetry_eff`` exists as its own
 named, independently-checkable fact (not only an internal step of

@@ -11,9 +11,9 @@ or ``-48.0`` (8-atom input).
 
 The control is the written cell passed in directly, with its spins removed
 (spin-decorated species never reach the analysis tier) and the AFM run's
-own seeds as ``starting_magnetization``, so the writer splits it into the
-same species. Runs on a synthetic SSSP-shaped Ni/O table (z_valence 18 and
-6) with the real enumlib.
+own seeds as ``starting_magnetization``, so the magnetic step splits it
+into the same species (#170). Runs on a synthetic SSSP-shaped Ni/O table
+(z_valence 18 and 6) with the real enumlib.
 
 Spin-orbit coupling makes a run noncollinear, where pw.x has no
 ``tot_magnetization`` and fixed occupations need none (#146). The CrI3
@@ -221,6 +221,50 @@ def test_nelec_for_the_uploaded_cell_is_refused_once_the_ordering_resizes_it(
     assert reason in report.blocking
 
 
+def _starting_magnetization_lines(content: str) -> list[str]:
+    return [
+        line.strip()
+        for line in content.splitlines()
+        if line.strip().startswith("starting_magnetization(")
+    ]
+
+
+@_needs_enumlib
+def test_a_listed_candidate_and_plain_afm_write_the_same_seeds_and_symmetry(
+    store: AssetStore,
+) -> None:
+    """#170: a /magnetic-orderings candidate fed to a run seeded Ni at the
+    flat 0.1 with O at +0.1, its symmetry counted on a spin-less CIF
+    (Fm-3m), while magnetic_ordering=afm seeded the same AFM-II cell at
+    5/18 (R-3m). Both are now one magnetic step: the candidate is its
+    label, the deck seeds the Ni sublattice from z_valence and leaves O at
+    0, and symmetry_eff is the split cell's."""
+    nio = _primitive_nio()
+    afm_steps, (afm_deck,) = _run("scf", nio, {"magnetic_ordering": "afm"}, store)
+    applied = afm_steps[0].system.magnetic.value.ordering.applied
+    [candidate] = [
+        candidate
+        for candidate in list_magnetic_orderings(nio).candidates
+        if candidate.label == applied
+    ]
+    listed_steps, (listed_deck,) = _run("scf", nio, dict(candidate.overrides), store)
+
+    assert applied == "afm-1"
+    assert candidate.overrides == {"magnetic_ordering": "afm-1"}
+    assert _starting_magnetization_lines(afm_deck) == _starting_magnetization_lines(
+        listed_deck
+    )
+    for steps in (afm_steps, listed_steps):
+        magnetic = steps[0].system.magnetic.value
+        assert magnetic.starting_magnetization == pytest.approx(
+            {"Ni1": 5.0 / 18.0, "Ni2": -5.0 / 18.0, "O": 0.0}
+        )
+        assert steps[0].system.symmetry_eff.value.space_group_symbol == "R-3m"
+    species = afm_deck.split("ATOMIC_SPECIES\n")[1].split("\n\n")[0]
+    assert [line.split()[0] for line in species.splitlines()] == ["Ni1", "Ni2", "O"]
+    assert float(_keyword(afm_deck, "starting_magnetization(3)")) == 0.0
+
+
 def _cri3_monolayer() -> Structure:
     """MC2D's CrI3 monolayer (mc2d-da9644c9), layer group p-31m: a Cr
     honeycomb between two iodine planes, 18.1 A between layers."""
@@ -365,7 +409,7 @@ def test_afm_orders_the_four_fe_of_olivine_lifepo4(olivine_store: AssetStore) ->
     assert len(labels) > 1
     assert listing.warnings == ()
     magnetic = advice.system.magnetic.value
-    assert magnetic.ordering == OrderingRecord(requested="afm", applied="afm")
+    assert magnetic.ordering == OrderingRecord(requested="afm", applied="afm-1")
     assert len(magnetic.cell) == 28
     assert {site.label for site in magnetic.cell} == {"Li", "Fe1", "Fe2", "P", "O"}
     assert magnetic.starting_magnetization["Fe1"] == pytest.approx(5.0 / 16.0)
@@ -408,7 +452,7 @@ def test_an_afm_request_writes_an_afm_deck_for_a_non_magnetic_classification(
 
     assert steps[0].analysis.is_magnetic.value == "non_magnetic"
     magnetic = steps[0].system.magnetic.value
-    assert magnetic.ordering == OrderingRecord(requested="afm", applied="afm")
+    assert magnetic.ordering == OrderingRecord(requested="afm", applied="afm-1")
     assert _keyword(content, "nspin") == "2"
     assert _keyword(content, "nat") == "2"
     assert _keyword(content, "ntyp") == "2"

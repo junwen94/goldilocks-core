@@ -104,7 +104,9 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
             "lowest energy-per-atom one as recommended; degrades to an "
             "unranked listing, with a warning, if that is not configured on "
             "the server. Lists candidates only -- does not generate any "
-            "input file."
+            "input file: generate one by calling run or explain on the same "
+            "structure with the candidate's overrides "
+            "({'magnetic_ordering': '<label>'})."
         )
     )
     async def magnetic_orderings(

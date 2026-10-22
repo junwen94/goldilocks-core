@@ -19,10 +19,9 @@ per step.
 
 **The estimate reads the cell the writer renders**: the simulated cell,
 ``MagneticConfigFacts.cell`` (an AFM candidate can be a different cell
-from the input, #128), one species per (element, starting magnetization)
-pair as ``canonicalize_system_for_generation`` in
-``generation/quantum_espresso/scf.py`` splits them, each species'
-projector counts from its pseudopotential's PP_HEADER
+from the input, #128), one species per site label -- the species the
+magnetic step split the cell into and the writer renders (#170) -- each
+species' projector counts from its pseudopotential's PP_HEADER
 (``_pseudo.upf_projectors``), the +U manifolds the writer renders, and
 each step's mixing mode.
 
@@ -171,11 +170,7 @@ def _written_species(system: SystemAdvice) -> tuple[Species, ...] | Unavailable:
         return projectors
     ultrasoft = {item.element: item.pseudo_type in ("USPP", "PAW") for item in metadata}
     hubbard_l = _hubbard_angular_momenta(system)
-    magnetization = magnetic.starting_magnetization or {}
-    atoms = Counter(
-        (site.specie.symbol, magnetization.get(site.label, 0.0))
-        for site in magnetic.cell
-    )
+    atoms = Counter((site.label, site.specie.symbol) for site in magnetic.cell)
     return tuple(
         Species(
             atoms=count,
@@ -184,7 +179,7 @@ def _written_species(system: SystemAdvice) -> tuple[Species, ...] | Unavailable:
             ultrasoft=ultrasoft[element],
             hubbard_l=hubbard_l.get(element),
         )
-        for (element, _magnetization), count in atoms.items()
+        for (_label, element), count in atoms.items()
     )
 
 

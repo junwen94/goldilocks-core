@@ -377,10 +377,16 @@ export function createWorkspace(
       magneticOrderingsOperation: rankWithMmace ? "rank" : "list",
       magneticOrderingsError: null,
     });
+    // A listing belongs to the structure it was requested for: one that
+    // returns after another structure was opened is dropped, so its
+    // labels never reach a structure they were not listed for (#170).
+    const listed = snapshot.structureInput;
     try {
       const magneticOrderings = await core.magneticOrderings(request);
+      if (store.getState().structureInput !== listed) return;
       store.setState({ magneticOrderings, magneticOrderingsOperation: null });
     } catch (error) {
+      if (store.getState().structureInput !== listed) return;
       store.setState({
         magneticOrderingsOperation: null,
         magneticOrderingsError: magneticOrderingsErrorMessage(error),
@@ -388,10 +394,15 @@ export function createWorkspace(
     }
   }
 
-  /** Generates and downloads each selected candidate's own DFT input
-   * bundle -- one `runArchive` call per candidate (each is a fresh
-   * top-level structure + its own overrides, not a variant of the
-   * currently reviewed structure), one browser download per archive. */
+  /** Generates and downloads each selected candidate's DFT input bundle
+   * -- one `runArchive` call per candidate, one browser download per
+   * archive. A candidate is the listed structure (the current one: a
+   * listing for another is dropped on arrival) with the draft's
+   * overrides plus its own `magnetic_ordering` label (#170), which asks
+   * for a spin-polarized run, `fm` included. The draft's
+   * `starting_magnetization` is left out of every candidate: it is keyed
+   * by the uploaded cell's site labels, which an ordered cell does not
+   * have, so each candidate starts from its own ordering's seeds. */
   async function downloadSelectedOrderings(
     labels: readonly string[],
   ): Promise<void> {
@@ -414,17 +425,19 @@ export function createWorkspace(
       const selected = magneticOrderings.candidates.filter((candidate) =>
         labels.includes(candidate.label),
       );
+      const overrides = Object.fromEntries(
+        Object.entries(draft.overrides).filter(
+          ([key]) => key !== "starting_magnetization",
+        ),
+      );
       const archives = await Promise.all(
         selected.map((candidate) =>
           core.runArchive({
-            structure_content: candidate.structure_content,
+            ...toComputeRequest(structureInput, {
+              ...draft,
+              overrides: { ...overrides, ...candidate.overrides },
+            }),
             structure_name: `${structureInput.structure_name}-${candidate.label}`,
-            structure_format: candidate.structure_format,
-            code: draft.code,
-            task: draft.task,
-            hpc: draft.hpc,
-            overrides: { ...draft.overrides, ...candidate.overrides },
-            fetch_missing: draft.fetchMissing,
           }),
         ),
       );

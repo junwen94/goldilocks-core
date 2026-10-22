@@ -201,14 +201,11 @@ export interface RunResult {
 
 // ---------------------------------------------------------------------
 // POST /magnetic-orderings -- mirrors service/_magnetic_orderings.py's
-// `report_to_json`/`candidate_to_json`. `structure_content`/`overrides`
-// are everything needed to generate *this exact* candidate's own input
-// files: feed them straight back as a brand new top-level structure +
-// overrides to `run`/`runArchive`, merged on top of the current draft's
-// own overrides (see `_bundle_inputs`'s docstring for why an AFM
-// candidate needs an explicit `starting_magnetization` override -- CIF
-// text cannot round-trip the sign that distinguishes its two magnetic
-// sublattices).
+// `report_to_json`/`candidate_to_json`. A candidate carries no structure
+// of its own: its `overrides` (`{magnetic_ordering: label}`), merged on
+// top of the draft's, generate it from the structure that was listed
+// (`run`/`runArchive`), through the same magnetic step as
+// `magnetic_ordering=afm` (#170).
 // ---------------------------------------------------------------------
 
 export interface MagneticOrderingCandidate {
@@ -218,8 +215,6 @@ export interface MagneticOrderingCandidate {
   readonly energy_per_atom_ev: number | null;
   readonly status: string | null;
   readonly is_recommended: boolean;
-  readonly structure_content: string;
-  readonly structure_format: "cif";
   readonly overrides: Readonly<Record<string, unknown>>;
 }
 

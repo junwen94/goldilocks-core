@@ -137,8 +137,9 @@ def _seed_moments(candidate: Structure, limits: dict[str, float]) -> np.ndarray:
     oxidation-state heuristic for every candidate (so the energy comparison
     is apples to apples), sign from whatever spin decoration the candidate
     already carries -- all-positive for the plain ferromagnetic guess,
-    alternating for an enumerator-produced antiferromagnetic candidate, per
-    ``magnetic_config._label_by_spin``'s own convention."""
+    alternating for an antiferromagnetic candidate, whose sites
+    ``magnetic_config.enumerate_magnetic_orderings`` decorates with their
+    spin sign."""
     from goldilocks_ml.models.magnetism.magnetic_moments.fm_fim_relax import (
         seed_moments as seed_moments_module,
     )

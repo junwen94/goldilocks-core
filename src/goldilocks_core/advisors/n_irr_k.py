@@ -8,6 +8,13 @@ call on the mesh ``advisors/k_sampling.py`` picked. The ladder
 (``kmesh.build_gamma_kmesh_entries``) carries no reduced counts;
 reducing every rung of it cost seconds per ``advise()`` (#155).
 
+**Counted on the cell's species.** pw.x keeps only the operations that
+map every atom onto one of its own species, and a spin-polarized cell
+holds one species per element and starting-magnetization class
+(``advisors/species_split.py``), each carried as ``Species.spin`` so
+spglib sees the same types (#170). A cell whose sublattices start with
+opposite moments therefore reduces less than its bare elements would.
+
 **Not guarded** against a structure ``SpacegroupAnalyzer`` cannot
 handle, and pymatgen is a required dependency, so there is no import
 fallback either. The irreducible count and the full mesh size are both

@@ -15,6 +15,7 @@ from goldilocks_core.advisors.k_sampling import KSamplingDecision
 from goldilocks_core.advisors.magnetic_config import (
     MagneticConfigFacts,
     OrderingRecord,
+    magnetic_cell,
 )
 from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
@@ -25,6 +26,7 @@ from goldilocks_core.advisors.parallelisation import (
 from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.generation.errors import GenerationError
 from goldilocks_core.generation.quantum_espresso.scf import write_qe_scf
+from goldilocks_core.resolution import Provenance, Resolved
 from goldilocks_core.step_settings import PwSettings
 from goldilocks_core.steps import ExitStatusCheck, SharedContext
 from goldilocks_core.system_settings import SystemSettings
@@ -503,33 +505,35 @@ def test_afm_relabeled_species_reach_atomic_species_and_positions(
     assert "Fe2  0.5" in positions
 
 
-def test_non_afm_structure_collapses_source_labels_to_one_species_per_element(
+def test_the_cell_s_species_labels_are_rendered_as_given(
     pseudo_metadata_factory,
 ) -> None:
-    """Real CIF files often carry their own per-atom label per
-    crystallographic site (e.g. ``Si1``..``Si40`` for a plain,
-    non-magnetic silicon cell) that has nothing to do with magnetism --
-    AFM species-splitting did not run here (`afm_relabeled=False`, the
-    default), so those source labels must not leak into ATOMIC_SPECIES/
-    ATOMIC_POSITIONS as if they were real, distinct QE species."""
+    """The magnetic step splits the cell into species before symmetry and
+    k-points are counted (#170); the writer renders those species and
+    never regroups them, so pw.x gets the types n_irr_k counted. Two Fe
+    species with equal seeds stay two species here."""
     structure = Structure(
-        Lattice.cubic(5.43),
-        ["Si", "Si", "Si"],
-        [[0.0, 0.0, 0.0], [0.25, 0.25, 0.25], [0.5, 0.5, 0.0]],
-        labels=["Si1", "Si7", "Si23"],
+        Lattice.cubic(2.87),
+        [Species("Fe", spin=1.0), Species("Fe", spin=-1.0)],
+        [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+        labels=["Fe1", "Fe2"],
     )
-    system = _system(structure, pseudo_metadata_factory)
+    magnetic = _magnetic(
+        structure,
+        spin_polarized=True,
+        starting_magnetization={"Fe1": 0.3, "Fe2": 0.3},
+    )
+    system = _system(structure, pseudo_metadata_factory, magnetic=magnetic)
 
     content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
 
-    assert "ntyp             = 1" in content
+    assert "ntyp             = 2" in content
     species = content.split("ATOMIC_SPECIES\n")[1].split("\n\n")[0]
-    assert species == "  Si  28.0855  Si.UPF"
-    positions = content.split("ATOMIC_POSITIONS")[1]
-    assert "Si1" not in positions
-    assert "Si7" not in positions
-    assert "Si23" not in positions
-    assert positions.count("Si  ") == 3
+    assert species == "  Fe1  55.845  Fe.UPF\n  Fe2  55.845  Fe.UPF"
+    assert "starting_magnetization(1) = 0.3" in content
+    assert "starting_magnetization(2) = 0.3" in content
+    positions = content.split("ATOMIC_POSITIONS crystal\n")[1].splitlines()
+    assert [line.split()[0] for line in positions[:2]] == ["Fe1", "Fe2"]
 
 
 def test_vdw_method_translates_to_qe_keyword(
@@ -722,12 +726,12 @@ def test_each_species_of_a_split_element_gets_the_element_s_u_line(
         Lattice.cubic(4.3),
         ["O", "O", "Fe", "Fe"],
         [[0.25, 0.25, 0.25], [0.75, 0.75, 0.75], [0, 0, 0], [0.5, 0.5, 0.5]],
-        labels=["O", "O", "Fe_down", "Fe_up"],
+        labels=["O", "O", "Fe2", "Fe1"],
     )
     magnetic = _magnetic(
         structure,
         spin_polarized=True,
-        starting_magnetization={"Fe_up": 0.5, "Fe_down": -0.5},
+        starting_magnetization={"Fe1": 0.5, "Fe2": -0.5, "O": 0.0},
     )
     system = _system(
         structure,
@@ -756,7 +760,8 @@ def test_cif_site_labels_render_one_line_per_qe_species(
 ) -> None:
     """Regression (#88): a CIF-loaded structure numbers every site (V0,
     Cl1, Cl2); the card must name the species label ATOMIC_SPECIES uses,
-    once, and never a stray label."""
+    once, and never a stray label. The magnetic step makes the cell's
+    species (#170)."""
     loaded = Structure.from_str(
         Structure(
             Lattice.cubic(4.0),
@@ -765,8 +770,11 @@ def test_cif_site_labels_render_one_line_per_qe_species(
         ).to(fmt="cif"),
         fmt="cif",
     )
+    cell = magnetic_cell(
+        loaded, Resolved("non_magnetic", Provenance(source="heuristic"))
+    ).value.structure
     system = _system(
-        loaded,
+        cell,
         pseudo_metadata_factory,
         hubbard=HubbardUDecision(u_values=(HubbardU("V", "3d", 3.25, "table"),)),
     )

@@ -137,6 +137,16 @@ review it for your calculation. Neither tier predicts magnetic *order* (see
 `magnetic_ordering` below for that). Override either tier with
 `spin_polarized`.
 
+A `starting_magnetization` you set is keyed by site label and replaces the
+heuristic seeds; labels you leave out start at 0. The input has one species
+per element and starting value, whatever labels your file gave its sites
+(`Si1`..`Si40` are one `Si`), and sites of one element with different values
+become separate species (`Fe0` at 0.5 and `Fe1` at -0.5 are written as `Fe1`
+and `Fe2`). Symmetry and the irreducible k-points are counted on those
+species, the way pw.x counts them: that bcc Fe pair is simple cubic (Pm-3m),
+not body-centred. `records.magnetic.starting_magnetization` is keyed by the
+written species, not by your file's site labels.
+
 Spin-orbit coupling (SOC) couples electron spin to orbital motion. Goldilocks
 flags elements at or above Rb (Z=37) whose valence character is p, d, or f for
 consideration, but does not enable SOC unless you request it -- heavy s-block
@@ -147,18 +157,26 @@ the QE spin settings. See [relativistic modes](conventions.md#relativistic-modes
 and the [table restrictions](pseudopotentials.md#choose-a-table).
 
 Set `magnetic_ordering` to `afm` to opt in to a compensated antiferromagnetic
-search instead of the ferromagnetic default. Like `tot_magnetization` and
-`starting_magnetization`, it asks for a spin-polarized run, so it turns spin
+ordering instead of the ferromagnetic default, or to the label of one
+candidate `goldilocks magnetic-orderings` lists (`afm-3`). Like
+`tot_magnetization` and
+`starting_magnetization`, any `magnetic_ordering`, `fm` included, asks for a
+spin-polarized run, so it turns spin
 polarization on even for a structure the classifier calls non-magnetic; an
 explicit `spin_polarized` false wins and ignores it with the warning
 `magnetic.ordering_ignored_spin_polarized_false`. Goldilocks cannot tell you
 which magnetic ordering is the true ground state -- that needs comparing total
-energies from several actual calculations -- so this only gives one
-reasonable, deterministic starting point (the smallest compensated ordering
-found), for you to run and compare against the ferromagnetic guess yourself.
-Only the sites the heuristic above says carry a local d or f moment are
-ordered and compensated against each other: the Cu2+ ions of La2CuO4 but
-not its La3+ (4f0), the Fe of FePt but not its Pt, whose moment Fe induces.
+energies from several actual calculations -- so `afm` only gives one
+reasonable, deterministic starting point (`afm-1`, the smallest and most
+symmetric compensated ordering found), for you to run and compare against
+the ferromagnetic guess yourself. Only the sites the heuristic above says
+carry a local d or f moment are ordered and compensated against each other:
+the Cu2+ ions of La2CuO4 but not its La3+ (4f0), the Fe of FePt but not its
+Pt, whose moment Fe induces. Those sites are seeded up and down with the
+calibrated value (5 Bohr magnetons over the pseudopotential's valence for
+Ni, 5/18 with an 18-electron pseudopotential); every other species starts
+at 0, as in QE's own antiferromagnetic examples, so the start carries no
+net moment. `records.magnetic` records the label applied.
 A structure with no such site (closed-shell Si, or solid O2, whose moment
 belongs to the O2 molecule) keeps the ferromagnetic default with the warning
 `magnetic.afm_no_open_shell_sites`; to try an antiferromagnetic pattern
@@ -174,14 +192,22 @@ convergence threshold, k-points and the job's memory) is counted on it;
 `records.magnetic` names it by formula and atom count. A `nelec` you set
 counts the electrons of the cell you uploaded, so it is refused together
 with an ordering that changes the cell's size.
+pymatgen keeps at most 16 of enumlib's orderings, smallest cells first;
+goldilocks has it read enumlib's output in enumlib's own numbering, so the
+same 16 are kept wherever the structure is enumerated again with the same
+pymatgen-core, spglib and enumlib versions. They are numbered in one order
+that depends on the cells alone -- smallest first, then most symmetric --
+so a label means the same cell there too; a label
+past the listed candidates is refused.
 This needs the external `enumlib` executables (`enum.x` or `multienum.x`,
 plus `makeStr.py`, `makestr.x` or `makeStr.x`) on `PATH`. Its cost grows with
 the number of moment-bearing sites in your structure's primitive cell, which
 is what enumlib orders, not with the atom count: 28-site LiFePO4 has 4 Fe.
 Without enumlib, with more than 8 such sites, when enumlib finds no ordering
 or a call runs past its 30 s limit, or if no compensated ordering exists for
-your structure, it degrades to the ferromagnetic default with a warning; any
-other enumeration error fails the request. Magnetic moments your file carries
+your structure, `afm` degrades to the ferromagnetic default with a warning,
+and an `afm-<n>` label is refused with the same reason; any other enumeration
+error fails the request. Magnetic moments your file carries
 (a magCIF's) are not read; only the seeds above are. Enumeration runs in a
 separate worker process, inside a private scratch directory, so it writes
 nothing to the current directory and concurrent requests cannot disturb each
@@ -189,8 +215,9 @@ other.
 
 `uv run goldilocks magnetic-orderings` lists every candidate this same
 enumeration finds -- the ferromagnetic guess plus any compensated
-antiferromagnetic ones -- for you to inspect or generate inputs from
-directly, optionally ranked by relaxing each on a frozen mMACE potential
+antiferromagnetic ones, by label -- for you to inspect or generate inputs
+from with `magnetic_ordering=<label>` on the same structure, optionally
+ranked by relaxing each on a frozen mMACE potential
 energy surface (`--rank-with-mmace`) rather than picking the ferromagnetic
 guess by default. It warns the same way when a structure with a moment gets
 no antiferromagnetic candidate, and lists a closed-shell structure's

@@ -48,13 +48,14 @@ K_POINTS automatic
   <nk1>  <nk2>  <nk3>  <s1>  <s2>  <s3>
 ```
 
-`<species_label>` is the QE species name (e.g. `Fe1`/`Fe2` for an
-AFM-relabeled structure), which is the real element (`Fe`) except when
-`magnetic_ordering="afm"` split one element into several oppositely-spinned
-species. The input is written for the simulated cell
-(`advice.system.cell.value.structure`): the uploaded structure, or the cell
-of the applied antiferromagnetic ordering, which can hold a different number
-of atoms. `write_qe_scf` (`generation/quantum_espresso/scf.py`) already
+`<species_label>` is the QE species name: the real element (`Fe`), or the
+element numbered (`Fe1`/`Fe2`) when its sites start with different
+magnetizations -- an applied `magnetic_ordering`, or a
+`starting_magnetization` giving them different values. The input is written
+for the simulated cell (`advice.system.cell.value.structure`): the uploaded
+structure, or the cell of the applied antiferromagnetic ordering, which can
+hold a different number of atoms. Its site labels are already those species
+(the uploaded file's own site labels are not kept). `write_qe_scf` (`generation/quantum_espresso/scf.py`) already
 handles this distinction -- this template documents what it produces, it is
 not something to reimplement by hand.
 

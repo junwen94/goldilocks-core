@@ -5,6 +5,7 @@ import shutil
 import numpy as np
 import pytest
 from numpy.linalg import LinAlgError
+from pydantic import ValidationError
 from pymatgen.core import Lattice, Species, Structure
 from pymatgen.electronic_structure.core import Magmom
 from support import magnetic_decision
@@ -20,6 +21,7 @@ from goldilocks_core.advisors.magnetic_config import (
 from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
 from goldilocks_core.analysis.is_magnetic import is_magnetic
 from goldilocks_core.analysis.local_moments import local_moments
+from goldilocks_core.analysis.symmetry import symmetry
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
@@ -80,7 +82,7 @@ def test_starting_magnetization_uses_moment_target_when_z_valence_known() -> Non
     assert state.value.starting_magnetization == {"Fe": 5.0 / 16.0}
 
 
-def test_starting_magnetization_is_keyed_by_site_label_not_element_symbol() -> None:
+def test_starting_magnetization_is_keyed_by_the_cell_s_species_labels() -> None:
     """Regression for #32 (v2 epic 9, #9): a real structure's per-site
     labels are not always identical to its element symbols -- pymatgen's
     own CIF writer/reader already assigns distinct labels like
@@ -89,8 +91,9 @@ def test_starting_magnetization_is_keyed_by_site_label_not_element_symbol() -> N
     (composition(structure).value.elements), which no longer matched
     generation/quantum_espresso/scf.py's label-keyed species_index once
     #27 made that label-keyed -- a bare KeyError on every bundled example
-    structure. Two same-element, same-spin sites with distinct labels
-    must both appear, with the same (positive) fraction."""
+    structure. The seeds are keyed by the cell's species labels: two
+    same-element, same-spin sites are one species, whatever labels the
+    upload gave them (#170)."""
     two_iron_sites = Structure(
         Lattice.cubic(2.87),
         ["Fe", "Fe"],
@@ -101,7 +104,8 @@ def test_starting_magnetization_is_keyed_by_site_label_not_element_symbol() -> N
     state = magnetic_decision(two_iron_sites, is_magnetic(two_iron_sites))
 
     assert state.ok
-    assert state.value.starting_magnetization == {"Fe0": 0.1, "Fe1": 0.1}
+    assert [site.label for site in state.value.cell] == ["Fe", "Fe"]
+    assert state.value.starting_magnetization == {"Fe": 0.1}
 
 
 def test_starting_magnetization_override_with_an_unknown_label_is_blocked() -> None:
@@ -147,7 +151,7 @@ def test_starting_magnetization_override_with_real_labels_is_accepted() -> None:
     )
 
     assert state.ok
-    assert state.value.starting_magnetization == {"Fe0": 0.5, "Fe1": -0.5}
+    assert state.value.starting_magnetization == {"Fe1": 0.5, "Fe2": -0.5}
 
 
 def test_starting_magnetization_covers_every_element_not_just_magnetic_candidates() -> (
@@ -425,21 +429,37 @@ def test_soc_is_never_auto_enabled_even_when_needs_soc_says_yes() -> None:
     )
 
 
+def _same_sites(cell: Structure, structure: Structure) -> bool:
+    """Whether ``cell`` has ``structure``'s lattice, elements and
+    positions, in order -- the FM identity pass-through, whatever species
+    and labels the split gave its sites."""
+    return (
+        np.allclose(cell.lattice.matrix, structure.lattice.matrix)
+        and np.allclose(cell.frac_coords, structure.frac_coords)
+        and [site.specie.symbol for site in cell]
+        == [site.specie.symbol for site in structure]
+    )
+
+
 def test_the_cell_is_the_input_structure_by_default() -> None:
     """AFM species-splitting (v2 epic 9, #9) is opt-in via
-    ``magnetic_ordering="afm"`` -- without it, the cell stays the FM
-    identity pass-through, same as before that feature existed."""
+    ``magnetic_ordering="afm"`` -- without it, the cell keeps the input's
+    sites (the FM identity pass-through), every one seeded positive."""
     state = magnetic_cell(_IRON, is_magnetic(_IRON))
 
-    assert state.value.structure is _IRON
+    assert _same_sites(state.value.structure, _IRON)
+    assert _spins(state.value.structure, "Fe") == {1.0}
     assert state.value.ordering == OrderingRecord(requested="fm", applied="fm")
     assert np.allclose(state.value.cell_in_input_basis, np.eye(3))
 
 
-def _afm_rock_salt(structure: Structure) -> Structure:
+def _afm_rock_salt(structure: Structure, axis: int = 2) -> Structure:
     """A spin-decorated 4-site cell of a 2-site rock-salt input, its two
-    Ni up and down along the doubled c, as the enumerator returns one."""
-    supercell = structure * (1, 1, 2)
+    Ni up and down along the doubled lattice vector ``axis`` (c by
+    default), as the enumerator returns one."""
+    scaling = [1, 1, 1]
+    scaling[axis] = 2
+    supercell = structure * scaling
     spins = iter((5.0, -5.0))
     return Structure(
         supercell.lattice,
@@ -485,7 +505,7 @@ def test_an_applied_ordering_is_the_cell_with_its_basis_in_the_input(
     cell = state.value
     assert len(cell.structure) == 4
     assert sorted({site.label for site in cell.structure}) == ["Ni1", "Ni2", "O"]
-    assert cell.ordering == OrderingRecord(requested="afm", applied="afm")
+    assert cell.ordering == OrderingRecord(requested="afm", applied="afm-1")
     assert np.allclose(cell.cell_in_input_basis, np.diag([1.0, 1.0, 2.0]))
     assert np.allclose(
         cell.structure.lattice.matrix,
@@ -498,18 +518,24 @@ def test_seeds_are_set_on_the_applied_cell_once_z_valence_is_known(
 ) -> None:
     """The second step scales the cell's sublattice seeds by the selected
     pseudopotential's z_valence: Ni's 5 Bohr magneton target over 18
-    electrons, with opposite signs on the two Ni sublattices."""
+    electrons, with opposite signs on the two Ni sublattices. O, off the
+    sublattice, starts at 0 as in QE's own AFM references (#170); aiida's
+    +0.1 on every species is the ferromagnetic default only."""
     cell = magnetic_cell(_ROCK_SALT_NIO, is_magnetic(_ROCK_SALT_NIO), _AFM)
 
     state = magnetic_config(cell, z_valences={"Ni": 18.0, "O": 6.0}, human=_AFM)
+    ferromagnetic = magnetic_decision(
+        _ROCK_SALT_NIO, is_magnetic(_ROCK_SALT_NIO), z_valences={"Ni": 18.0}
+    )
 
     assert state.value.cell is cell.value.structure
     assert state.value.ordering == cell.value.ordering
     assert state.value.starting_magnetization == {
         "Ni1": 5.0 / 18.0,
         "Ni2": -5.0 / 18.0,
-        "O": 0.1,
+        "O": 0.0,
     }
+    assert ferromagnetic.value.starting_magnetization == {"Ni": 5.0 / 18.0, "O": 0.1}
     assert state.source == cell.source
 
 
@@ -532,6 +558,174 @@ def test_a_human_starting_magnetization_is_checked_against_the_applied_cell(
     assert isinstance(refused, Blocked)
     assert "Ni1" in refused.root_cause()
     assert "Ni2" in refused.root_cause()
+
+
+def _afm_8_site_rock_salt(structure: Structure) -> Structure:
+    """A spin-decorated 8-site candidate of a 2-site rock-salt input."""
+    supercell = structure * (2, 2, 1)
+    spins = iter((5.0, -5.0, -5.0, 5.0))
+    return Structure(
+        supercell.lattice,
+        [
+            Species("Ni", spin=next(spins))
+            if site.specie.symbol == "Ni"
+            else site.specie
+            for site in supercell
+        ],
+        supercell.frac_coords,
+    )
+
+
+def test_afm_applies_the_first_listed_candidate_and_records_its_label(
+    monkeypatch,
+) -> None:
+    """#170: plain afm and the label the listing gives the same candidate
+    write the same cell, so a listed candidate fed back to a run cannot
+    diverge from the afm path. afm-1 is the smallest candidate, wherever
+    the enumerator put it."""
+    small = _afm_rock_salt(_ROCK_SALT_NIO)
+    large = _afm_8_site_rock_salt(_ROCK_SALT_NIO)
+    monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
+    monkeypatch.setattr(
+        magnetic_config_module,
+        "enumerate_orderings",
+        _enumerating((large, "afm"), (small, "afm")),
+    )
+
+    def cell(ordering: str):
+        return magnetic_cell(
+            _ROCK_SALT_NIO,
+            is_magnetic(_ROCK_SALT_NIO),
+            MagneticConfigHumanInput(magnetic_ordering=ordering),
+        ).value
+
+    afm, first, second = cell("afm"), cell("afm-1"), cell("afm-2")
+
+    assert afm.ordering == OrderingRecord(requested="afm", applied="afm-1")
+    assert first.ordering == OrderingRecord(requested="afm-1", applied="afm-1")
+    assert second.ordering == OrderingRecord(requested="afm-2", applied="afm-2")
+    assert afm.structure == first.structure
+    assert [site.label for site in afm.structure] == [
+        site.label for site in first.structure
+    ]
+    assert len(first.structure) == 4
+    assert len(second.structure) == 8
+
+
+def test_afm_labels_follow_a_canonical_order_not_the_enumerator_s(
+    monkeypatch,
+) -> None:
+    """#170: pymatgen orders candidates of one size and space group by
+    the order enumlib's output files are read in, which can differ between
+    the host that lists and the one that runs. afm-<n> names the same cell
+    whatever order the enumerator returns them in."""
+    along_a = _afm_rock_salt(_ROCK_SALT_NIO, axis=0)
+    along_c = _afm_rock_salt(_ROCK_SALT_NIO, axis=2)
+    monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))
+
+    listings = []
+    for order in ((along_a, along_c), (along_c, along_a)):
+        monkeypatch.setattr(
+            magnetic_config_module,
+            "enumerate_orderings",
+            _enumerating(*((candidate, "afm") for candidate in order)),
+        )
+        candidates, _warning = enumerate_magnetic_orderings(
+            _ROCK_SALT_NIO, local_moments(_ROCK_SALT_NIO)
+        )
+        listings.append(
+            {label: cell.lattice.matrix.round(6).tolist() for label, cell in candidates}
+        )
+
+    assert list(listings[0]) == ["fm", "afm-1", "afm-2"]
+    assert listings[0] == listings[1]
+
+
+def test_an_unknown_afm_label_is_blocked_and_names_the_available_ones(
+    afm_candidate,
+) -> None:
+    """#170: a label names one listed candidate; one this structure does
+    not have is refused rather than written as another cell."""
+    state = magnetic_cell(
+        _ROCK_SALT_NIO,
+        is_magnetic(_ROCK_SALT_NIO),
+        MagneticConfigHumanInput(magnetic_ordering="afm-2"),
+    )
+
+    assert isinstance(state, Blocked)
+    assert "'afm-2'" in state.root_cause()
+    assert "fm, afm-1" in state.root_cause()
+
+
+def test_a_listed_label_is_blocked_with_the_reason_none_can_be_listed(
+    monkeypatch,
+) -> None:
+    """#170: plain afm degrades to ferromagnetic order with a warning, but
+    a request for one listed candidate cannot be met by writing another."""
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    state = magnetic_cell(
+        _ROCK_SALT_NIO,
+        is_magnetic(_ROCK_SALT_NIO),
+        MagneticConfigHumanInput(magnetic_ordering="afm-1"),
+    )
+
+    assert isinstance(state, Blocked)
+    assert "'afm-1'" in state.root_cause()
+    assert "enumlib" in state.root_cause()
+
+
+@pytest.mark.parametrize("value", ["afm-0", "afm-01", "AFM", "afm1", "ferri"])
+def test_magnetic_ordering_takes_fm_afm_or_a_listed_label(value: str) -> None:
+    with pytest.raises(ValidationError):
+        MagneticConfigHumanInput(magnetic_ordering=value)
+
+
+def test_a_human_split_is_a_species_split_of_the_cell_symmetry_sees() -> None:
+    """#170: two Fe given opposite starting magnetizations are two pw.x
+    species, so the cell symmetry_eff and n_irr_k read must hold them as
+    two types (simple cubic B2, Pm-3m), not bcc Im-3m with the split
+    applied only by the writer."""
+    two_iron_sites = Structure(
+        Lattice.cubic(2.87),
+        ["Fe", "Fe"],
+        [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+        labels=["Fe0", "Fe1"],
+    )
+
+    state = magnetic_decision(
+        two_iron_sites,
+        is_magnetic(two_iron_sites),
+        human=MagneticConfigHumanInput(
+            starting_magnetization={"Fe0": 0.5, "Fe1": -0.5}
+        ),
+    )
+
+    cell = state.value.cell
+    assert [site.label for site in cell] == ["Fe1", "Fe2"]
+    assert state.value.starting_magnetization == {"Fe1": 0.5, "Fe2": -0.5}
+    assert symmetry(cell).value.space_group_symbol == "Pm-3m"
+    assert symmetry(two_iron_sites).value.space_group_symbol == "Im-3m"
+
+
+def test_the_cell_has_one_species_per_element_whatever_the_upload_s_labels() -> None:
+    """Many CIFs label every site (Si1..Si40) with no physical meaning: the
+    cell carries one species per element, so neither symmetry nor the
+    writer sees them as distinct (moved from the writer, #170)."""
+    labelled = Structure(
+        Lattice.cubic(5.43),
+        ["Si", "Si", "Si"],
+        [[0.0, 0.0, 0.0], [0.25, 0.25, 0.25], [0.5, 0.5, 0.0]],
+        labels=["Si1", "Si7", "Si23"],
+    )
+
+    state = magnetic_cell(
+        labelled,
+        is_magnetic(labelled),
+        MagneticConfigHumanInput(spin_polarized=False),
+    )
+
+    assert [site.label for site in state.value.structure] == ["Si", "Si", "Si"]
 
 
 def test_a_blocked_cell_blocks_the_starting_moments() -> None:
@@ -612,7 +806,7 @@ def test_an_afm_request_turns_spin_polarization_on_whatever_the_classifier_says(
     assert state.value.spin_polarized is True
     assert state.source == "human"
     assert state.value.magnetic_elements == ("Ni",)
-    assert state.value.ordering == OrderingRecord(requested="afm", applied="afm")
+    assert state.value.ordering == OrderingRecord(requested="afm", applied="afm-1")
     assert len(state.value.structure) == 4
 
 
@@ -663,7 +857,7 @@ def test_explicit_spin_polarized_false_keeps_an_afm_request_off_and_warns(
 
     assert state.value.spin_polarized is False
     assert state.source == "human"
-    assert state.value.structure is _BCC_CHROMIUM
+    assert state.value.structure == _BCC_CHROMIUM
     assert state.value.ordering == OrderingRecord(requested="afm", applied="fm")
     assert sorted(warning.code for warning in state.value.warnings) == codes
     (ignored,) = (
@@ -676,19 +870,41 @@ def test_explicit_spin_polarized_false_keeps_an_afm_request_off_and_warns(
     assert "spin_polarized" in ignored.message
 
 
-@pytest.mark.parametrize("spin_polarized", [None, False])
-def test_an_fm_ordering_is_the_default_not_a_spin_request(
-    spin_polarized: bool | None,
-) -> None:
-    """``"fm"`` behaves exactly like an unset magnetic_ordering: it neither
-    turns spin polarization on nor conflicts with spin_polarized=false."""
-    human = MagneticConfigHumanInput(
-        spin_polarized=spin_polarized, magnetic_ordering="fm"
+def test_an_fm_ordering_is_a_spin_request_on_the_input_cell() -> None:
+    """#170: ``"fm"`` is the listing's ferromagnetic candidate, generated
+    from the listed structure by its label alone. Like an afm label it asks
+    for a spin-polarized run, on the input cell; read as the unset default,
+    it wrote an unpolarized deck for a structure classified non-magnetic."""
+    human = MagneticConfigHumanInput(magnetic_ordering="fm")
+
+    state = magnetic_cell(_BCC_CHROMIUM, _CLASSIFIED_NON_MAGNETIC, human)
+
+    assert state.value.spin_polarized is True
+    assert state.source == "human"
+    assert _same_sites(state.value.structure, _BCC_CHROMIUM)
+    assert (state.value.ordering.requested, state.value.ordering.applied) == (
+        "fm",
+        "fm",
     )
+    assert state.value.warnings == ()
+
+
+def test_explicit_spin_polarized_false_ignores_an_fm_ordering_and_warns() -> None:
+    human = MagneticConfigHumanInput(spin_polarized=False, magnetic_ordering="fm")
 
     state = magnetic_cell(_BCC_CHROMIUM, _CLASSIFIED_NON_MAGNETIC, human)
 
     assert state.value.spin_polarized is False
+    assert [warning.code for warning in state.value.warnings] == [
+        "magnetic.ordering_ignored_spin_polarized_false"
+    ]
+
+
+def test_an_unset_ordering_leaves_spin_polarization_to_the_classifier() -> None:
+    state = magnetic_cell(_BCC_CHROMIUM, _CLASSIFIED_NON_MAGNETIC)
+
+    assert state.value.spin_polarized is False
+    assert state.source == "heuristic"
     assert state.value.warnings == ()
 
 
@@ -704,7 +920,7 @@ def test_afm_on_a_54_site_supercell_of_a_one_fe_cell_is_applied() -> None:
 
     state = magnetic_cell(supercell, is_magnetic(supercell), _AFM)
 
-    assert state.value.ordering == OrderingRecord(requested="afm", applied="afm")
+    assert state.value.ordering == OrderingRecord(requested="afm", applied="afm-1")
     assert any(
         warning.code == "magnetic.afm_ordering_applied"
         for warning in state.value.warnings
@@ -770,7 +986,7 @@ def test_afm_refuses_more_than_eight_magnetic_sites_in_the_primitive_cell(
 
     state = magnetic_cell(supercell, is_magnetic(supercell), _AFM)
 
-    assert state.value.structure is supercell
+    assert _same_sites(state.value.structure, supercell)
     assert state.value.ordering == OrderingRecord(requested="afm", applied="fm")
     [warning] = _afm_warnings(state.value.warnings)
     assert warning.code == "magnetic.afm_ordering_unavailable"
@@ -829,8 +1045,8 @@ def test_afm_seeds_the_sublattice_whatever_moments_the_upload_carries() -> None:
 
     state = magnetic_cell(nio, is_magnetic(nio), _AFM)
 
-    assert state.value.ordering == OrderingRecord(requested="afm", applied="afm")
-    assert _spins(state.value.structure, "Ni") == {5.0, -5.0}
+    assert state.value.ordering == OrderingRecord(requested="afm", applied="afm-1")
+    assert _spins(state.value.structure, "Ni") == {1.0, -1.0}
 
 
 def test_afm_ordering_degrades_when_no_compensated_ordering_is_found(
@@ -918,8 +1134,8 @@ def test_afm_orders_the_open_shell_cu_of_la2cuo4_and_never_la() -> None:
 
     cell = state.value
     assert cell.magnetic_elements == ("Cu",)
-    assert cell.ordering == OrderingRecord(requested="afm", applied="afm")
-    assert _spins(cell.structure, "Cu") == {5.0, -5.0}
+    assert cell.ordering == OrderingRecord(requested="afm", applied="afm-1")
+    assert _spins(cell.structure, "Cu") == {1.0, -1.0}
     assert _spins(cell.structure, "La") == {0.0}
     assert {site.label for site in cell.structure} == {"Cu1", "Cu2", "La", "O"}
 
@@ -938,9 +1154,9 @@ def test_afm_on_fept_splits_fe_in_a_doubled_cell_not_fe_against_pt() -> None:
 
     cell = state.value
     assert cell.magnetic_elements == ("Fe",)
-    assert cell.ordering.applied == "afm"
+    assert cell.ordering.applied == "afm-1"
     assert len(cell.structure) == 4
-    assert _spins(cell.structure, "Fe") == {5.0, -5.0}
+    assert _spins(cell.structure, "Fe") == {1.0, -1.0}
     assert _spins(cell.structure, "Pt") == {0.0}
     assert {site.label for site in cell.structure} == {"Fe1", "Fe2", "Pt"}
 
@@ -972,7 +1188,7 @@ def test_afm_without_a_moment_bearing_site_is_refused_before_enumlib(
     state = magnetic_cell(structure, is_magnetic(structure), human)
 
     assert state.ok
-    assert state.value.structure is structure
+    assert _same_sites(state.value.structure, structure)
     assert state.value.magnetic_elements == ()
     assert state.value.ordering == OrderingRecord(requested="afm", applied="fm")
     [warning] = _afm_warnings(state.value.warnings)
@@ -1009,7 +1225,7 @@ def test_afm_with_undecidable_local_moments_reports_why(monkeypatch) -> None:
 def test_enumerate_magnetic_orderings_is_just_fm_when_enumlib_is_missing(
     monkeypatch,
 ) -> None:
-    """#87's listing capability degrades the same way ``_attempt_afm_relabeling``
+    """#87's listing capability degrades the same way ``magnetic_cell``
     does: no enumlib means no antiferromagnetic candidates, not an error."""
     monkeypatch.setattr(shutil, "which", lambda _name: None)
 
@@ -1023,7 +1239,7 @@ def test_enumerate_magnetic_orderings_is_just_fm_when_enumlib_is_missing(
 
 
 def test_enumerate_magnetic_orderings_never_picks_a_winner(monkeypatch) -> None:
-    """Unlike ``_attempt_afm_relabeling``, listing every candidate is the
+    """Unlike ``magnetic_cell``, listing every candidate is the
     whole point -- #87's mMACE ranking (or a human) picks the winner, not
     this function."""
     monkeypatch.setattr(shutil, "which", _on_path("enum.x", "makeStr.py"))

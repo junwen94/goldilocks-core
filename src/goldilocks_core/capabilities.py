@@ -257,19 +257,23 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "starting_magnetization": {
         "description": (
-            "Per-element starting spin-polarization fraction (each value in "
-            "[-1, 1]) fed directly to the generated input, bypassing the "
-            "valence-electron-based heuristic."
+            "Starting spin-polarization fraction (each value in [-1, 1]) per "
+            "site label -- the uploaded structure's labels, or Ni1/Ni2/O-style "
+            "labels of an applied magnetic_ordering -- replacing the "
+            "valence-electron-based heuristic; labels left out start at 0, and "
+            "sites with different values become separate species."
         ),
     },
     "magnetic_ordering": {
         "description": (
-            "Opt in to a compensated antiferromagnetic ordering search "
-            "('afm') instead of the ferromagnetic default ('fm' or unset), "
-            "over the sites that carry a local d or f moment; 'afm' turns "
-            "spin polarization on unless spin_polarized is false, which "
-            "ignores it with a warning. Degrades to ferromagnetic with a "
-            "warning if there are none or no ordering can be found."
+            "Opt in to a compensated antiferromagnetic ordering instead of the "
+            "ferromagnetic default ('fm' or unset), over the sites that carry "
+            "a local d or f moment: 'afm' applies the first candidate the "
+            "magnetic-orderings listing gives, 'afm-<n>' the listed candidate "
+            "of that label. Any value, 'fm' included, turns spin polarization "
+            "on unless spin_polarized is false, which ignores it with a "
+            "warning. 'afm' degrades to ferromagnetic with a warning if there "
+            "is no candidate; an 'afm-<n>' that is not listed is refused."
         ),
     },
     "use_vdw": {

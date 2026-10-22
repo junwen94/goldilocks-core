@@ -163,10 +163,17 @@ Lists a ferromagnetic guess plus any compensated antiferromagnetic
 candidates `enumlib` finds (see [Check magnetism and spin-orbit
 coupling](science.md#check-magnetism-and-spin-orbit-coupling)) for a
 human or agent to choose among before generating any input file. Each
-listed candidate's `--json` output carries its own `structure_content`
-and `overrides` (a fresh CIF, plus a remapped `starting_magnetization`
-for AFM candidates), enough to hand straight to `goldilocks run`/`explain`
-without re-deriving anything.
+candidate is named by its label (`fm`, `afm-1`, `afm-2`, ...), and its
+`--json` `overrides` generate it, spin-polarized, from the same structure
+file:
+
+```bash
+uv run goldilocks run structure.cif --hpc scarf --set magnetic_ordering=afm-2
+```
+
+The run enumerates again, applies the candidate of that label through the
+same steps as `magnetic_ordering=afm` (which applies `afm-1`), and records
+the label in `records.magnetic` next to the cell's formula and atom count.
 
 `--rank-with-mmace` relaxes every candidate's magnetic moments on a frozen
 mMACE potential energy surface and recommends the lowest energy-per-atom

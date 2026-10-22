@@ -746,7 +746,9 @@ class TestAfmRelabeling:
         advice = advise(rock_salt_feo, hpc=hpc)
 
         assert advice.system.magnetic.ok
-        assert advice.system.magnetic.value.cell is rock_salt_feo
+        cell = advice.system.magnetic.value.cell
+        assert [site.label for site in cell] == ["Fe", "O"]
+        assert cell.frac_coords.tolist() == rock_salt_feo.frac_coords.tolist()
         assert advice.system.symmetry_eff.value == advice.analysis.symmetry.value
 
 
@@ -1021,8 +1023,9 @@ def test_the_written_cell_is_seeded_once_from_the_selected_table(
 ) -> None:
     """#128: the starting moments are set once, on the written cell, after
     table selection -- Ni's 5 Bohr magneton target over the table's
-    z_valence of 18, opposite on the two Ni sublattices. A table that is
-    not installed yet leaves aiida's flat 0.1."""
+    z_valence of 18, opposite on the two Ni sublattices, with O off the
+    sublattice at 0 (#170). A table that is not installed yet leaves
+    aiida's flat 0.1."""
     overrides = build_overrides({"magnetic_ordering": "afm"})
 
     installed = advise(
@@ -1035,13 +1038,13 @@ def test_the_written_cell_is_seeded_once_from_the_selected_table(
     assert installed.system.magnetic.value.starting_magnetization == {
         "Ni1": 5.0 / 18.0,
         "Ni2": -5.0 / 18.0,
-        "O": 0.1,
+        "O": 0.0,
     }
     assert isinstance(not_installed.system.pseudo.metadata, Unavailable)
     assert not_installed.system.magnetic.value.starting_magnetization == {
         "Ni1": 0.1,
         "Ni2": -0.1,
-        "O": 0.1,
+        "O": 0.0,
     }
 
 
@@ -1057,7 +1060,7 @@ def test_the_written_cell_is_seeded_once_from_the_selected_table(
         pytest.param(
             {"magnetic_ordering": "afm"},
             {"formula": "Ni2 O2", "nat": 4},
-            {"requested": "afm", "applied": "afm"},
+            {"requested": "afm", "applied": "afm-1"},
             id="afm",
         ),
     ],

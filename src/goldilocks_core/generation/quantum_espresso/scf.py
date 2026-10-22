@@ -38,7 +38,12 @@ multi-step task must be generated from the *same* cell, or a later step's
 as a separate parameter would let a caller pass a different (unlabeled)
 structure by mistake; reading it off ``system`` makes that impossible by
 construction. Every count rendered here (``nbnd``, ``conv_thr``, the
-charge) was decided on that same cell (#128).
+charge) was decided on that same cell (#128). Its species are rendered as
+the cell carries them, one ``ATOMIC_SPECIES`` entry per site label: the
+magnetic step splits the cell into species (``advisors/species_split.py``)
+before symmetry and k-points are counted, so this writer never regroups
+sites -- regrouping here once let the counted symmetry describe other
+species than the ones written (#170).
 
 **v1 bugs this fixes (issue #7, section (c)):**
 
@@ -97,10 +102,8 @@ resolved Hubbard decision renders (#135).
 from __future__ import annotations
 
 import re
-from dataclasses import replace
 from typing import Literal
 
-from pymatgen.core import Structure
 from pymatgen.core.periodic_table import Element
 
 from goldilocks_core.advisors.boundary import BoundaryFacts, Isolation
@@ -130,106 +133,6 @@ PW/src/input.f90:1332-1359). 'periodic' writes no keyword, QE's default
 _SAFE_FILENAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
 
 
-def canonicalize_system_for_generation(system: SystemSettings) -> SystemSettings:
-    """The ``SystemSettings`` to actually render QE cards from: one QE
-    species label per *(element, starting_magnetization value)* pair
-    genuinely present, not one per whatever raw per-atom label the input
-    structure happened to carry.
-
-    Real input files often carry their own per-atom labels that have
-    nothing to do with magnetism or with each other -- many CIFs assign
-    one crystallographic label per site (``Si1``..``Si40`` for a plain,
-    non-magnetic 40-atom silicon cell, or ``Fe0``/``Fe1`` for a 2-atom BCC
-    iron cell, are real examples seen in practice, not hypotheticals).
-    Naively trusting ``site.label`` -- or gating on whether AFM relabeling
-    ran -- both under- and over-split: a non-magnetic structure's labels
-    are pure noise (should always collapse to one label per element,
-    regardless of magnetism), while a *spin-polarized but non-AFM*
-    structure's default heuristic gives every site of one element the
-    identical value (``advisors/magnetic_config.py``'s
-    ``_starting_magnetization_by_label`` docstring is explicit about
-    this) and should collapse too -- but a human-supplied override that
-    hands two of that same real structure's labels genuinely different
-    values, without ever opting into AFM, must **not** collapse. Grouping
-    by the actual resolved value (same algorithm as
-    ``magnetic_config._label_by_spin`` uses for AFM candidates --
-    most-positive value first, deterministic) handles all three cases
-    uniformly, with no need to know *why* two sites differ.
-
-    Re-keys ``starting_magnetization``/``angle1``/``angle2`` to match the
-    new labels in the same pass, so ``_magnetic_keywords`` below (which
-    looks values up by ``species_index``'s own label) never sees a label
-    it doesn't recognise. Shared by ``write_qe_scf`` and ``write_qe_relax``
-    (``relax.py``) so the two don't drift."""
-    magnetic = system.magnetic
-    structure = magnetic.cell
-    if not structure.is_ordered:
-        # A disordered structure has no single `site.specie` to group by --
-        # leave it untouched and let the caller's own `is_ordered` check
-        # (immediately after this call) raise its real, clean error instead
-        # of an unrelated crash from here.
-        return system
-
-    old_to_new_label = _species_relabeling(structure, magnetic.starting_magnetization)
-    relabeled = Structure(
-        structure.lattice,
-        structure.species,
-        structure.frac_coords,
-        labels=[old_to_new_label[site.label] for site in structure],
-        site_properties=structure.site_properties,
-    )
-
-    def _rekeyed(values: dict[str, float] | None) -> dict[str, float] | None:
-        if not values:
-            return values
-        return {old_to_new_label[label]: value for label, value in values.items()}
-
-    return replace(
-        system,
-        magnetic=replace(
-            magnetic,
-            cell=relabeled,
-            starting_magnetization=_rekeyed(magnetic.starting_magnetization),
-            angle1=_rekeyed(magnetic.angle1),
-            angle2=_rekeyed(magnetic.angle2),
-        ),
-    )
-
-
-def _species_relabeling(
-    structure: Structure, magnetization: dict[str, float] | None
-) -> dict[str, str]:
-    """Map each real (old) site label to the QE species label it should
-    use instead: one per *(element, resolved value)* pair actually
-    present, most-positive value numbered first when an element needs
-    more than one (same convention as ``magnetic_config._label_by_spin``).
-    A missing/empty ``magnetization`` defaults every site to ``0.0``,
-    which collapses every element to one label -- exactly the plain,
-    non-spin-polarized case."""
-    magnetization = magnetization or {}
-    values_by_element: dict[str, list[float]] = {}
-    for site in structure:
-        value = magnetization.get(site.label, 0.0)
-        seen = values_by_element.setdefault(site.specie.symbol, [])
-        if value not in seen:
-            seen.append(value)
-
-    label_by_key: dict[tuple[str, float], str] = {}
-    for element, values in values_by_element.items():
-        if len(values) == 1:
-            label_by_key[(element, values[0])] = element
-            continue
-        for index, value in enumerate(sorted(values, reverse=True), start=1):
-            label_by_key[(element, value)] = f"{element}{index}"
-
-    return {
-        site.label: label_by_key[
-            (site.specie.symbol, magnetization.get(site.label, 0.0))
-        ]
-        for site in structure
-    }
-
-
 def write_qe_scf(
     system: SystemSettings,
     step: PwSettings,
@@ -244,7 +147,6 @@ def write_qe_scf(
     once ``dos``'s nscf step became a second real caller; ``scf`` stays
     the default so every existing caller is unaffected.
     """
-    system = canonicalize_system_for_generation(system)
     structure = system.magnetic.cell
     if not structure.is_ordered:
         raise GenerationError(
@@ -493,8 +395,8 @@ def atomic_species(
     pseudo_by_element: dict[str, object],
 ) -> str:
     """One line per QE species *label* (``Fe1``/``Fe2``/``O``), not per
-    real element -- an AFM-relabeled structure needs two ``ATOMIC_SPECIES``
-    entries for one physical element, both pointing at the same
+    real element -- an element the cell splits into two species needs two
+    ``ATOMIC_SPECIES`` entries, both pointing at the same
     pseudopotential file (mass/pseudopotential lookup still needs the real
     element underneath; ``Element("Fe1")`` isn't a real periodic-table
     symbol)."""

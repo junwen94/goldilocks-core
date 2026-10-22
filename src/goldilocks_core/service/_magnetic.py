@@ -5,13 +5,15 @@ These decisions depend on one another in a fixed order:
 
 1. the functional and ``magnetic_cell`` -- spin polarization, spin-orbit
    coupling, and the requested magnetic ordering applied to the structure,
-   which is the calculation's only enumlib call;
+   which is the calculation's only enumlib call, split into one species per
+   element and starting-magnetization class (#170);
 2. pseudopotential table selection, which reads the functional and the
    cell's spin-orbit switch (the relativistic requirement);
 3. ``magnetic_config``, the starting moments on the cell, scaled by the
    selected pseudopotentials' z_valence.
 
-``symmetry_eff`` is the cell's own symmetry. Every later decision -- the
+``symmetry_eff`` is the cell's own symmetry, counted on those species as
+pw.x counts it. Every later decision -- the
 electron count, bands, k-points, convergence, resources, the gate and the
 writer -- reads the same cell object (``MagneticCell.structure``), and the
 input structure stops here: no count can describe a cell other than the
