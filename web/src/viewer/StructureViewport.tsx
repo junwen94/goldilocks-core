@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { StructureInspection } from "../api/coreClient";
 import { StructureFallback } from "./StructureFallback";
+import { formatSiteCount } from "./siteCount";
 import {
   attachStructureViewer,
   type StructureViewer,
@@ -108,7 +109,7 @@ export function StructureViewport({
         <Group pos="absolute" top={10} left={10} align="baseline" gap={6}>
           <Title order={3}>{inspection.structure.reduced_formula}</Title>
           <Text size="xs" c="dimmed">
-            {inspection.structure.site_count} atomic sites
+            {formatSiteCount(inspection.structure.site_count, "atomic site")}
           </Text>
         </Group>
       </Box>

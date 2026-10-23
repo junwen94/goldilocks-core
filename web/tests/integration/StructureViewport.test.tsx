@@ -107,6 +107,33 @@ describe("StructureViewport", () => {
     expect(fallback).not.toBeVisible();
   });
 
+  it("counts a one-site cell's atomic sites in the singular", () => {
+    const createViewer: StructureViewerFactory = () => ({
+      show: vi.fn(),
+      refreshTheme: vi.fn(),
+      dispose: vi.fn(),
+    });
+    const { rerender } = render(
+      <StructureViewport inspection={inspection} createViewer={createViewer} />,
+    );
+    expect(
+      screen.getByText("1 atomic site", { exact: true }),
+    ).toBeInTheDocument();
+
+    rerender(
+      <StructureViewport
+        inspection={{
+          ...inspection,
+          structure: { ...inspection.structure, site_count: 2 },
+        }}
+        createViewer={createViewer}
+      />,
+    );
+    expect(
+      screen.getByText("2 atomic sites", { exact: true }),
+    ).toBeInTheDocument();
+  });
+
   it("exposes canonical mixed and partial occupancies before computation", async () => {
     const user = userEvent.setup();
     const createViewer: StructureViewerFactory = () => ({

@@ -11,6 +11,7 @@ import {
 import { Upload } from "lucide-react";
 
 import type { StructureInput, StructureInspection } from "../api/coreClient";
+import { formatSiteCount } from "../viewer/siteCount";
 
 export function StructureSourceControls({
   source,
@@ -69,7 +70,7 @@ export function StructureSourceControls({
   let sourceHelp = "CIF or POSCAR · 5 MB maximum file size";
   if (source !== null) sourceHelp = "Inspecting structure";
   if (inspection !== null) {
-    sourceHelp = `${String(inspection.structure.site_count)} sites · parsed`;
+    sourceHelp = `${formatSiteCount(inspection.structure.site_count, "site")} · parsed`;
   }
 
   const dropzoneProps = {

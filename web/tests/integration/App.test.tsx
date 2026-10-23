@@ -732,6 +732,7 @@ describe("Goldilocks Workbench", () => {
     expect(
       screen.getByLabelText("Crystal structure viewer"),
     ).toBeInTheDocument();
+    expect(screen.getByText("1 site · parsed")).toBeInTheDocument();
     expect(core.inspectedInputs).toEqual([
       {
         structure_content: "data_Si",

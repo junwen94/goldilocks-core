@@ -524,7 +524,8 @@ test("prepares a real Core recommendation from POSCAR", async ({ page }) => {
   });
 
   await expect(page.getByLabel("Crystal structure viewer")).toBeVisible();
-  await expect(page.getByText("1 atomic sites")).toBeVisible();
+  await expect(page.getByText("1 atomic site", { exact: true })).toBeVisible();
+  await expect(page.getByText("1 site · parsed")).toBeVisible();
   await expandAdvisorGroup(page, "Pseudopotential table");
   await page
     .getByRole("combobox", { name: "Pseudopotential table", exact: true })
