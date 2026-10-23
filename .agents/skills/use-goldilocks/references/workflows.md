@@ -38,8 +38,11 @@ print(advice.warnings())
 
 `advise()` always returns -- diagnosis degrades field-by-field
 (`Resolved`/`Unavailable`/`Blocked`) rather than raising. `advice.records()`
-returns every decision keyed by name, already JSON-safe; `advice.warnings()`
-flattens every advisor's warnings into one list.
+returns every decision keyed by name, as the advisors' typed values;
+`goldilocks_core.resolution.records_document(records)` projects them to the
+JSON the CLI, HTTP, MCP and `goldilocks.json` publish. `advice.warnings()`
+flattens every record's warnings into one list, each naming the record it came
+from in `record`.
 
 ## Generate and publish a runnable input
 

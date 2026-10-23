@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 from pymatgen.core import Lattice, Structure
 from support import sssp_fixture_table_spec
 
@@ -9,7 +11,7 @@ from goldilocks_core.advisors.relax import RelaxHumanInput, VcRelaxOptions
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
-from goldilocks_core.resolution import Blocked
+from goldilocks_core.resolution import Blocked, Provenance, Resolved, Warning
 from goldilocks_core.service import (
     RelaxOverrides,
     RunOverrides,
@@ -161,6 +163,33 @@ class TestAdviseRelaxDegradation:
             "relax.fix_bottom_layers=9 exceeds the 8 atomic layers of the slab to "
             "be written. Set fix_bottom_layers to at most 8, or unset it."
         ) in report.blocking
+
+
+class TestRelaxWarnings:
+    def test_warnings_list_the_relax_record_s_own(self) -> None:
+        """#152: ``relax`` reached ``records()`` as a raw decision next to
+        the shared records' dict projections, and the dict-only collector
+        skipped it, so the vc-relax notice 1T-PtSe2 (MC2D mc2d-fe145b4f)
+        carried never reached ``warnings``. Every warning a relax decision
+        carries now does, naming the record it came from."""
+        advice = advise_relax(_silicon(), calculation="vc-relax", hpc=_hpc())
+        notice = Warning(
+            code="relax.notice",
+            level="warning",
+            category="relax",
+            message="a notice the relax decision carries.",
+        )
+        advice = dataclasses.replace(
+            advice,
+            relax=Resolved(
+                VcRelaxOptions(warnings=(notice,)), Provenance(source="heuristic")
+            ),
+        )
+
+        warnings = advice.warnings()
+
+        assert notice.message in [warning["message"] for warning in warnings]
+        assert {**notice.model_dump(), "record": "relax"} in warnings
 
 
 class TestGenerateRelaxEndToEnd:

@@ -706,6 +706,7 @@ describe("Goldilocks Workbench", () => {
             level: "warning",
             category: "occupations",
             message: "Review smearing before production use.",
+            record: "occupations",
           },
         ],
       }),

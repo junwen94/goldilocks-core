@@ -12,14 +12,9 @@ this module only three local origins.
 
 from __future__ import annotations
 
-import dataclasses
 from dataclasses import dataclass, field
 
-from pydantic import BaseModel
-from pymatgen.core import Structure
-
-from goldilocks_core.resolution import FieldState, Resolved
-from goldilocks_core.serialization import to_portable
+from goldilocks_core.resolution import FieldState, collect_warnings
 from goldilocks_core.service._analysis import AnalysisFacts, AnalysisOverrides
 from goldilocks_core.service._step import StepAdvice, StepOverrides
 from goldilocks_core.service._system import SystemAdvice, SystemOverrides
@@ -70,71 +65,22 @@ class Advice:
         object. No such key set is codified anywhere else in the
         codebase; this is epic 8's own convention.
 
-        Every value is passed through ``_json_safe_state`` first:
-        advisor decisions are plain (non-pydantic) frozen dataclasses --
-        ``bundle.py``'s ``ResolvedField``/``bundle_files`` never had to
-        serialize one of these to JSON before, since no orchestrator fed
-        it real advisor output until this epic. Dataclasses become dicts
-        field by field (including nested ones like ``PseudoTable.asset``,
-        and tuples of them like ``pseudopotentials``); a pymatgen
-        ``Structure`` -- ``MagneticConfigFacts.cell``, the simulated cell,
-        which can differ from the uploaded structure (#128) -- is
-        published as its formula and atom count (``serialization``'s
-        ``to_portable``).
-        """
-        merged = {
+        The values are the advisors' own typed ``FieldState``s, as
+        ``RelaxAdvice``/``DosAdvice`` add theirs: they are projected to
+        JSON once, at the boundary (``resolution.records_document``), so
+        no record reaches an output by a second path (#152)."""
+        return {
             **self.analysis.records(),
             **self.system.records(),
             **self.step.records(),
         }
-        return {name: _json_safe_state(state) for name, state in merged.items()}
 
     def warnings(self) -> list[dict[str, object]]:
-        """Every advisor decision's own ``resolution.Warning`` tuple,
-        flattened into one machine-actionable list -- goldilocks-agent
-        -design.md's "tool return value must carry a warnings array,
-        the agent must relay it verbatim" requirement. Each entry is
-        already a plain ``{"code", "level", "category", "message"}``
-        dict (``_json_safe_value`` below converts every ``Warning``
-        instance on the way into ``records()``), so a caller can
-        filter/group by ``code``/``category`` without parsing text --
-        the actual, literal ask, not just prose relayed verbatim."""
-        return warnings_from_records(self.records())
-
-
-def warnings_from_records(
-    records: dict[str, FieldState[object]],
-) -> list[dict[str, object]]:
-    """``Advice.warnings()``'s own body, pulled out so ``_dos.py``'s
-    ``DosAdvice.warnings()`` (v2 epic 9, #9, #28) can reuse it against
-    its own differently-shaped, three-``Advice``-merged records dict
-    rather than re-deriving the same "walk records, pull each
-    ``warnings`` list out" logic a second time."""
-    collected: list[dict[str, object]] = []
-    for _name, state in sorted(records.items()):
-        if isinstance(state, Resolved) and isinstance(state.value, dict):
-            collected.extend(state.value.get("warnings") or ())
-    return collected
-
-
-def _json_safe_value(value: object) -> object:
-    if isinstance(value, Structure):
-        return to_portable(value)
-    if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return {
-            item.name: _json_safe_value(getattr(value, item.name))
-            for item in dataclasses.fields(value)
-        }
-    if isinstance(value, BaseModel):
-        return value.model_dump()
-    if isinstance(value, dict):
-        return {key: _json_safe_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe_value(item) for item in value]
-    return value
-
-
-def _json_safe_state(state: FieldState[object]) -> FieldState[object]:
-    if isinstance(state, Resolved):
-        return Resolved(_json_safe_value(state.value), state.provenance)
-    return state
+        """Every record's own ``resolution.Warning``s, flattened into one
+        machine-actionable list (``resolution.collect_warnings``), each
+        tagged with the ``record`` it came from -- goldilocks-agent
+        -design.md's "tool return value must carry a warnings array, the
+        agent must relay it verbatim" requirement, as plain dicts a caller
+        can filter/group by ``code``/``category``/``record`` without
+        parsing text."""
+        return collect_warnings(self.records())

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Annotated
+
 import pytest
 from pydantic import BaseModel
+from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.inputs.overrides import HumanInput
 from goldilocks_core.resolution import (
@@ -12,8 +16,12 @@ from goldilocks_core.resolution import (
     Resolved,
     ResolvedField,
     Unavailable,
+    Warning,
     blocked_by,
+    collect_warnings,
+    records_document,
 )
+from goldilocks_core.serialization import Portable
 
 
 def test_resolved_carries_value_and_source() -> None:
@@ -165,6 +173,96 @@ class TestResolvedFieldBoundaryProjection:
         )
 
         assert projection.model_dump_json()
+
+
+@dataclass(frozen=True, slots=True)
+class _Decision:
+    """A record value shaped like every advisor decision: a frozen
+    dataclass carrying its own ``warnings`` tuple."""
+
+    value: float
+    cell: Structure | None = None
+    host_path: Annotated[str | None, Portable()] = None
+    warnings: tuple[Warning, ...] = ()
+
+
+def _notice(code: str, message: str) -> Warning:
+    return Warning(
+        code=code, level="info", category=code.split(".")[0], message=message
+    )
+
+
+class TestRecordsDocument:
+    """#152: the one projection of a records mapping, shared by the
+    responses, the CLI and goldilocks.json."""
+
+    def test_projects_each_record_value_for_publication_in_name_order(self) -> None:
+        cell = Structure(
+            Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]]
+        )
+        records = {
+            "vdw": Blocked(by="geometry blocked upstream"),
+            "decision": Resolved(
+                _Decision(0.5, cell=cell, host_path="/home/someone/run"),
+                Provenance(source="heuristic"),
+            ),
+            "hubbard": Unavailable(reason="no correlated elements"),
+        }
+
+        document = records_document(records)
+
+        assert list(document) == ["decision", "hubbard", "vdw"]
+        assert document["decision"] == {
+            "status": "resolved",
+            "value": {
+                "value": 0.5,
+                "cell": {"formula": "Si2", "nat": 2},
+                "warnings": [],
+            },
+            "source": "heuristic",
+            "field_sources": None,
+            "reason": None,
+            "blocked_by": None,
+        }
+        assert document["hubbard"]["reason"] == "no correlated elements"
+        assert document["vdw"]["blocked_by"] == "geometry blocked upstream"
+
+
+class TestCollectWarnings:
+    """#152: one collector over the typed records, so no record shape can
+    slip past it."""
+
+    def test_tags_every_warning_with_its_record_in_record_name_order(self) -> None:
+        scf = _notice("parallelisation.npool_load_imbalance", "npool=32 ...")
+        nscf = _notice("parallelisation.npool_load_imbalance", "npool=64 ...")
+        job = _notice("job.walltime_defaulted", "walltime not specified.")
+        records = {
+            "parallelisation": Resolved(
+                _Decision(1.0, warnings=(scf,)), Provenance(source="heuristic")
+            ),
+            "nscf_parallelisation": Resolved(
+                _Decision(2.0, warnings=(nscf,)), Provenance(source="heuristic")
+            ),
+            "job": Resolved(
+                _Decision(3.0, warnings=(job,)), Provenance(source="human")
+            ),
+        }
+
+        assert collect_warnings(records) == [
+            {**job.model_dump(), "record": "job"},
+            {**nscf.model_dump(), "record": "nscf_parallelisation"},
+            {**scf.model_dump(), "record": "parallelisation"},
+        ]
+
+    def test_skips_values_without_warnings_and_unresolved_records(self) -> None:
+        records = {
+            "is_metal": Resolved("metal", Provenance(source="heuristic")),
+            "pseudopotentials": Resolved((), Provenance(source="heuristic")),
+            "vdw": Blocked(by="geometry blocked upstream"),
+            "hubbard": Unavailable(reason="no correlated elements"),
+        }
+
+        assert collect_warnings(records) == []
 
 
 # --- Worked example: contract declaration -> resolution -> pydantic serialization ---

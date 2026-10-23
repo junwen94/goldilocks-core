@@ -36,8 +36,8 @@ from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.bundle import BundleInput
 from goldilocks_core.checks import CheckReport
 from goldilocks_core.inputs.hpc import HpcProfile
-from goldilocks_core.resolution import FieldState
-from goldilocks_core.service._advice import Advice, RunOverrides, warnings_from_records
+from goldilocks_core.resolution import FieldState, collect_warnings
+from goldilocks_core.service._advice import Advice, RunOverrides
 from goldilocks_core.service._bundle import assemble_bundle_input, render_submission
 from goldilocks_core.service._generate import AdviceIncomplete, generate
 from goldilocks_core.service._magnetic import cell_geometry
@@ -60,7 +60,7 @@ class RelaxAdvice:
         return merged
 
     def warnings(self) -> list[dict[str, object]]:
-        return warnings_from_records(self.records())
+        return collect_warnings(self.records())
 
 
 def advise_relax(
@@ -153,4 +153,5 @@ def to_bundle_input_relax(
         submission_script,
         ctx,
         advice.records(),
+        advice.warnings(),
     )

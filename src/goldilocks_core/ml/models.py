@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Annotated, Any, cast, get_args
 
 from goldilocks_core.assets.records import AssetFile, AssetSpec
-from goldilocks_core.serialization import Portable, portable_record, to_portable
-from goldilocks_core.types import JsonDict, ModelType, PathLike
+from goldilocks_core.serialization import Portable
+from goldilocks_core.types import ModelType, PathLike
 
 
 @dataclass(slots=True)
@@ -24,11 +24,6 @@ class ModelSpec:
     licence: str | None = None
     licence_text: Annotated[str | None, Portable()] = None
     citation: str | None = None
-
-
-@to_portable.register(ModelSpec)
-def _model_spec_portable(spec: ModelSpec) -> JsonDict:
-    return portable_record(spec, ModelSpec)
 
 
 MODEL_REGISTRY_ENV = "GOLDILOCKS_MODEL_REGISTRY"

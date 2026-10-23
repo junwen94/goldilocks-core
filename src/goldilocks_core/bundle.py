@@ -19,12 +19,11 @@ are all required ``TypedDict`` fields -- there is no way to represent
 -state model epic 2 introduced). ``BundleInput.records`` is instead
 ``dict[str, FieldState[Any]]``: each named record is independently
 ``Resolved``/``Unavailable``/``Blocked``, projected into the manifest
-through ``resolution.ResolvedField.from_state`` -- the exact
-serializable projection that primitive already exists for. No real
-end-to-end pipeline produces a partially-resolved set of records yet
-(epic 8's job); this is exercised here with hand-built ``FieldState``
-fixtures, the same standalone-testing pattern every prior epic in this
-rewrite uses.
+through ``resolution.records_document`` -- the same projection every
+transport's response uses. No real end-to-end pipeline produces a
+partially-resolved set of records yet (epic 8's job); this is exercised
+here with hand-built ``FieldState`` fixtures, the same standalone-testing
+pattern every prior epic in this rewrite uses.
 
 **Completion-marker protocol, replacing v1's ctypes atomic rename**
 (goldilocks-core-design.md:4231-4274, "the three publish guarantees").
@@ -79,7 +78,7 @@ from typing import Any, Literal, TypedDict
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from goldilocks_core.generation.files import InputArtifact
-from goldilocks_core.resolution import FieldState, Resolved, ResolvedField
+from goldilocks_core.resolution import FieldState, records_document
 
 _COMPLETE_MARKER = ".complete"
 _SCHEMA_VERSION = 1
@@ -95,13 +94,18 @@ class Publication(TypedDict):
 class BundleInput:
     """Everything one calculation's published output needs -- content
     (``artifacts``), the facts/decisions behind it (``records``, tri
-    -state), and legal attribution (``citations``). Deliberately not
-    code/task-specific: a QE bundle and a future VASP bundle both build
-    one of these the same way.
+    -state), the warnings about them, and legal attribution
+    (``citations``). Deliberately not code/task-specific: a QE bundle and
+    a future VASP bundle both build one of these the same way.
+
+    ``warnings`` is the list the transports return for the same advice
+    (``advice.warnings()``, each tagged with its ``record``); the
+    manifest carries it unchanged rather than collecting its own (#152).
     """
 
     artifacts: tuple[InputArtifact, ...]
     records: dict[str, FieldState[Any]]
+    warnings: tuple[dict[str, object], ...]
     citations: tuple[str, ...] = ()
 
 
@@ -129,19 +133,6 @@ def _validate_destination(path: str | Path) -> None:
         raise ValueError("output destination must be a non-empty path")
 
 
-def _warnings(records: dict[str, FieldState[Any]]) -> list[dict[str, object]]:
-    """Every record's own structured ``resolution.Warning`` list,
-    flattened -- the same logic ``service.Advice.warnings()`` applies to
-    a live ``Advice``, needed again here since ``goldilocks.json`` (the
-    published manifest) must carry the same top-level ``warnings`` array
-    every transport's own response shape does, not just per-record."""
-    collected: list[dict[str, object]] = []
-    for _name, state in sorted(records.items()):
-        if isinstance(state, Resolved) and isinstance(state.value, dict):
-            collected.extend(state.value.get("warnings") or ())
-    return collected
-
-
 def bundle_files(bundle_input: BundleInput) -> tuple[InputArtifact, ...]:
     """Assemble every artifact, plus ``CITATIONS.md``/``README.md``/
     ``goldilocks.json``, hashing as it goes -- the exact bytes returned
@@ -158,11 +149,8 @@ def bundle_files(bundle_input: BundleInput) -> tuple[InputArtifact, ...]:
 
     manifest = {
         "schema_version": _SCHEMA_VERSION,
-        "records": {
-            name: ResolvedField.from_state(state).model_dump()
-            for name, state in sorted(bundle_input.records.items())
-        },
-        "warnings": _warnings(bundle_input.records),
+        "records": records_document(bundle_input.records),
+        "warnings": list(bundle_input.warnings),
         "citations": list(bundle_input.citations),
         "files": {
             path: {

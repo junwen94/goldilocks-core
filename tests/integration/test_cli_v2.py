@@ -546,7 +546,7 @@ class TestRunAndExplainAgainstRealAssets:
             for warning in document["warnings"]
         )
         assert all(
-            warning.keys() == {"code", "level", "category", "message"}
+            warning.keys() == {"code", "level", "category", "message", "record"}
             for warning in document["warnings"]
         )
 

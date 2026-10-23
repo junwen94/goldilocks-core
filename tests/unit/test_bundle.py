@@ -13,6 +13,7 @@ from support import strict_json
 
 from goldilocks_core.advisors.k_sampling import KSamplingHumanInput, k_sampling
 from goldilocks_core.analysis.is_metal import is_metal
+from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.bundle import (
     ArchiveOutput,
     BundleInput,
@@ -38,6 +39,7 @@ def _bundle_input(**overrides) -> BundleInput:
         "records": {
             "functional": Resolved("PBEsol", Provenance(source="heuristic")),
         },
+        "warnings": (),
         "citations": ("A citation.",),
     }
     defaults.update(overrides)
@@ -111,43 +113,58 @@ def test_manifest_records_are_tri_state_aware(tmp_path: Path) -> None:
     assert records["vdw"]["blocked_by"] == "geometry blocked upstream"
 
 
-def test_manifest_carries_a_top_level_warnings_array(tmp_path: Path) -> None:
-    """v2 epic 8's "warnings array in every ... response" requirement
-    extends to the published ``goldilocks.json`` manifest, not just
-    HTTP/MCP/CLI transport responses -- flattened from every record's
-    own structured warnings, the same way ``service.Advice.warnings()``
-    does for a live pipeline run."""
+def test_manifest_warnings_are_the_bundle_input_s_verbatim() -> None:
+    """#152: goldilocks.json carries the very list the transports return
+    (``BundleInput.warnings``, from ``advice.warnings()``), each warning
+    tagged with its record, not a second collection over its own records,
+    which skipped every record that was not a dict."""
+    warnings = (
+        {
+            "code": "parallelisation.npool_load_imbalance",
+            "level": "info",
+            "category": "parallelisation",
+            "message": "npool=64 does not divide the 286 k-point/spin pairs evenly.",
+            "record": "nscf_parallelisation",
+        },
+    )
+    bundle_input = _bundle_input(warnings=warnings)
+
+    files = {item["path"]: item["content"] for item in bundle_files(bundle_input)}
+    manifest = json.loads(files["goldilocks.json"])
+
+    assert manifest["warnings"] == list(warnings)
+
+
+def test_manifest_records_project_typed_decisions_without_host_paths() -> None:
+    """#152: records reach the bundle as the advisors' typed decisions and
+    the manifest projects them once: a pseudopotential record names its
+    file, not the path it was read from on this machine."""
+    metadata = PseudoMetadata(
+        filepath="/home/someone/.local/share/goldilocks/assets/pseudos/Si.upf",
+        filename="Si.upf",
+        header_format="upf2",
+        element="Si",
+        z_valence=4.0,
+        pseudo_info={"citation": "a citation"},
+    )
     bundle_input = _bundle_input(
         records={
-            "functional": Resolved("PBEsol", Provenance(source="human")),
-            "job": Resolved(
-                {
-                    "partition": "scarf",
-                    "warnings": [
-                        {
-                            "code": "job.walltime_defaulted",
-                            "level": "warning",
-                            "category": "job",
-                            "message": "walltime not specified.",
-                        }
-                    ],
-                },
-                Provenance(source="heuristic"),
-            ),
+            "pseudopotentials": Resolved((metadata,), Provenance(source="heuristic"))
         }
     )
 
     files = {item["path"]: item["content"] for item in bundle_files(bundle_input)}
     manifest = json.loads(files["goldilocks.json"])
 
-    assert manifest["warnings"] == [
-        {
-            "code": "job.walltime_defaulted",
-            "level": "warning",
-            "category": "job",
-            "message": "walltime not specified.",
-        }
-    ]
+    (entry,) = manifest["records"]["pseudopotentials"]["value"]
+    assert (entry["filename"], entry["element"], entry["z_valence"]) == (
+        "Si.upf",
+        "Si",
+        4.0,
+    )
+    assert "filepath" not in entry
+    assert "pseudo_info" not in entry
+    assert b"/home/someone" not in files["goldilocks.json"]
 
 
 def test_manifest_is_strict_json_for_a_gamma_only_mesh() -> None:

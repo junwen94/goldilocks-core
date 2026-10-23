@@ -18,7 +18,7 @@ from typing import Annotated, Any, TypedDict
 from pymatgen.core import Element
 
 from goldilocks_core.functionals import normalize_functional_label
-from goldilocks_core.serialization import Portable, portable_record, to_portable
+from goldilocks_core.serialization import Portable
 from goldilocks_core.types import (
     JsonDict,
     PseudoAccuracy,
@@ -161,11 +161,6 @@ class PseudoMetadata:
                     value = float(value)
                 normalized[field_name] = value
             object.__setattr__(self, "cutoffs", normalized)
-
-
-@to_portable.register(PseudoMetadata)
-def _pseudo_metadata_portable(metadata: PseudoMetadata) -> JsonDict:
-    return portable_record(metadata, PseudoMetadata)
 
 
 def _clean_string(value: object) -> str | None:

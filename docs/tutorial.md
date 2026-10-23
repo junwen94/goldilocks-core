@@ -53,8 +53,11 @@ This prints the selected functional, the source tier that picked it
 values can change with the installed model; review warnings and check
 convergence rather than treating the recommendation as a verified result.
 `advice.records()` returns every decision as a plain `{name: FieldState}`
-dict, and `advice.warnings()` flattens every advisor's warnings into one
-list, if you want to inspect everything at once instead of field by field.
+dict of the advisors' typed values (`resolution.records_document` turns it
+into the JSON the CLI, HTTP and `goldilocks.json` publish), and
+`advice.warnings()` flattens every record's warnings into one list, each
+naming the record it came from in `record`, if you want to inspect
+everything at once instead of field by field.
 
 ## Choose settings yourself
 

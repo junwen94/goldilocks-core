@@ -30,7 +30,7 @@ from goldilocks_core.assets.pseudopotentials.upf import parse_upf_metadata
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.bundle import DirectoryOutput, is_complete, publish
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
-from goldilocks_core.resolution import Blocked, Unavailable
+from goldilocks_core.resolution import Blocked, Unavailable, records_document
 from goldilocks_core.service import (
     AdviceIncomplete,
     ResourceOverrides,
@@ -148,10 +148,13 @@ class TestAdviseEndToEnd:
         warnings = advice.warnings()
         assert warnings  # scarf's own missing-walltime warning always fires
         assert all(
-            warning.keys() == {"code", "level", "category", "message"}
+            warning.keys() == {"code", "level", "category", "message", "record"}
             for warning in warnings
         )
-        assert any(warning["code"] == "job.walltime_defaulted" for warning in warnings)
+        assert any(
+            (warning["code"], warning["record"]) == ("job.walltime_defaulted", "job")
+            for warning in warnings
+        )
 
     def test_npool_not_dividing_ntasks_blocks_end_to_end(
         self, silicon, hpc, installed_table
@@ -861,10 +864,10 @@ def test_hubbard_record_lists_each_applied_u_with_its_source(
     from, instead of a plan name and a bare element-to-U map."""
     advice = advise(_rock_salt_nio(), hpc=hpc, store=correlated_store)
 
-    record = advice.records()["hubbard"]
-    assert record.status == "resolved"
-    (entry,) = record.value["u_values"]
-    assert set(record.value) == {"u_values", "warnings"}
+    record = records_document(advice.records())["hubbard"]
+    assert record["status"] == "resolved"
+    (entry,) = record["value"]["u_values"]
+    assert set(record["value"]) == {"u_values", "warnings"}
     assert {key: entry[key] for key in ("element", "manifold", "u_ev")} == {
         "element": "Ni",
         "manifold": "3d",
@@ -886,8 +889,8 @@ def test_user_u_by_element_reaches_the_generated_card(hpc, correlated_store) -> 
     report = check(advice)
 
     assert report.ok, report.blocking
-    (entry,) = advice.records()["hubbard"].value["u_values"]
-    assert (entry["value_source"], entry["citation"], entry["doi"]) == (
+    (entry,) = advice.records()["hubbard"].value.u_values
+    assert (entry.value_source, entry.citation, entry.doi) == (
         "human",
         None,
         None,
@@ -1173,7 +1176,7 @@ def test_the_magnetic_record_shows_the_written_cell_and_its_ordering(
         store=correlated_store,
     )
 
-    record = advice.records()["magnetic"].value
+    record = records_document(advice.records())["magnetic"]["value"]
     assert record["cell"] == cell
     assert record["ordering"] == ordering
     assert json.loads(json.dumps(record))["cell"] == cell
@@ -1186,7 +1189,7 @@ def test_the_magnetic_record_shows_the_frame_the_cell_is_written_in(hpc) -> None
     reads the turned cell."""
     advice = advise(mc3d_42058_silicon(), hpc=hpc)
 
-    record = advice.records()["magnetic"].value
+    record = records_document(advice.records())["magnetic"]["value"]
     frame = json.loads(json.dumps(record))["frame"]
     (notice,) = [
         warning["message"]
@@ -1225,9 +1228,9 @@ def test_a_cell_already_in_pw_x_s_frame_is_written_unturned_without_a_notice(
 
     advice = advise(cubic, hpc=hpc)
 
-    frame = advice.records()["magnetic"].value["frame"]
-    assert frame["rotated"] is False
-    assert frame["operations"] == 24
+    frame = advice.records()["magnetic"].value.frame
+    assert frame.rotated is False
+    assert frame.operations == 24
     assert "magnetic.cell_framed" not in {
         warning["code"] for warning in advice.warnings()
     }

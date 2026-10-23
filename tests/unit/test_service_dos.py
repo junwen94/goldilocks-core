@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 from pymatgen.core import Lattice, Structure
 from support import sssp_fixture_table_spec
@@ -10,7 +12,7 @@ from goldilocks_core.advisors.k_sampling import KSamplingHumanInput
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
-from goldilocks_core.resolution import Blocked
+from goldilocks_core.resolution import Blocked, Resolved, Warning
 from goldilocks_core.service import (
     KpointsOverrides,
     RunOverrides,
@@ -182,8 +184,42 @@ class TestOneJobForTheTask:
         records = advise_dos(_diamond_silicon(), hpc=_hpc(), store=store).records()
 
         assert "nscf_job" not in records
-        assert records["job"].value["max_seconds_by_step"].keys() == {"scf", "nscf"}
+        assert records["job"].value.max_seconds_by_step.keys() == {"scf", "nscf"}
         assert "nscf_parallelisation" in records
+
+    def test_warnings_list_the_nscf_step_s_own_notices(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """#152: the nscf step's records reached ``records()`` as raw
+        decisions next to the scf step's dict projections, and the
+        dict-only collector skipped them, so the npool notice of the nscf
+        step that ``submit.sh`` runs never reached ``warnings``. Every
+        warning now names the record it came from."""
+        store = _installed_store(tmp_path, monkeypatch)
+        advice = advise_dos(_diamond_silicon(), hpc=_hpc(), store=store)
+        notice = Warning(
+            code="parallelisation.npool_load_imbalance",
+            level="info",
+            category="parallelisation",
+            message="npool=64 does not divide the 286 k-point/spin pairs evenly.",
+        )
+        parallelisation = advice.nscf.step.resources.parallelisation
+        resources = dataclasses.replace(
+            advice.nscf.step.resources,
+            parallelisation=Resolved(
+                dataclasses.replace(parallelisation.value, warnings=(notice,)),
+                parallelisation.provenance,
+            ),
+        )
+        step = dataclasses.replace(advice.nscf.step, resources=resources)
+        advice = dataclasses.replace(
+            advice, nscf=dataclasses.replace(advice.nscf, step=step)
+        )
+
+        warnings = advice.warnings()
+
+        assert notice.message in [warning["message"] for warning in warnings]
+        assert {**notice.model_dump(), "record": "nscf_parallelisation"} in warnings
 
     @pytest.mark.parametrize("unresolved", ["scf", "nscf"])
     def test_one_step_s_unresolved_input_blocks_the_job_of_both_steps(

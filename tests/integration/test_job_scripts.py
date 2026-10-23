@@ -228,14 +228,14 @@ def test_dos_task_splits_one_walltime_across_its_pw_x_steps(
     records = advice.records()
     assert "nscf_job" not in records
     job = records["job"].value
-    assert job["max_seconds_by_step"] == seconds
+    assert job.max_seconds_by_step == seconds
     script = render_submission_dos(advice, hpc, "quantum_espresso", steps)
     lines = script.splitlines()
-    assert f"#SBATCH --partition={job['partition']}" in lines
-    assert f"#SBATCH --nodes={job['nodes']}" in lines
-    assert f"#SBATCH --ntasks={job['ntasks']}" in lines
-    assert f"#SBATCH --ntasks-per-node={job['ntasks_per_node']}" in lines
-    assert job["walltime_h"] == 4
+    assert f"#SBATCH --partition={job.partition}" in lines
+    assert f"#SBATCH --nodes={job.nodes}" in lines
+    assert f"#SBATCH --ntasks={job.ntasks}" in lines
+    assert f"#SBATCH --ntasks-per-node={job.ntasks_per_node}" in lines
+    assert job.walltime_h == 4
     assert "#SBATCH --time=4:00:00" in lines
 
 

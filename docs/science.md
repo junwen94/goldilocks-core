@@ -659,7 +659,11 @@ by itself mark the whole convergence decision `human`-sourced. Advisors precise
 enough to track that instead populate an opt-in `field_sources` map naming
 which individual scalar was overridden, alongside the decision's own overall
 `source`. Per-decision warnings live inside that decision's own value (e.g.
-`job.warnings`, `cutoffs.warnings`), and every run also carries one aggregated
-top-level `warnings` list. There is no `confidence`, `details`, or "asset
-identity" field in this shape today. Read analysis and selection warnings as
+`job.warnings`, `cutoffs.warnings`), and every run, whatever its task, also
+carries one aggregated top-level `warnings` list: every record's warnings, in
+record-name order, each naming the record it came from in `record`. A `dos`
+task's nscf step keeps its own, under `nscf_`-prefixed records: a notice on
+`nscf_parallelisation` is about the nscf step's npool, not the scf step's.
+There is no `confidence`, `details`, or "asset identity" field in this shape
+today. Read analysis and selection warnings as
 well as advice; do not treat a `resolved` status as scientific validation.

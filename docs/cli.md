@@ -76,7 +76,10 @@ an output flag: without `-o/--out` it prints `{"files": [...], "records":
 "kind": "directory"|"archive", "path": "..."}`. `explain --json` prints
 `{"records": {...}, "warnings": [...], "blocking": [...]}`, where `blocking`
 lists the distinct reasons `run` would refuse to generate an input and is empty
-when its checks pass.
+when its checks pass. `warnings` holds every record's warnings, for every task,
+each as `{"code", "level", "category", "message", "record"}`, where `record`
+names the record it came from (`nscf_parallelisation` for a `dos` task's nscf
+step); `goldilocks.json` carries the same list.
 
 `--json` output and the published `goldilocks.json` are strict JSON: a value
 with no finite number is `null`, never `Infinity` or `NaN`. For example, the

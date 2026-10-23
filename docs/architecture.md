@@ -61,7 +61,10 @@ A `run` (or `explain`) request follows this path:
    a `bundle.BundleInput`: the rendered input file(s), the pseudopotential
    bytes read straight off disk for each selected element, the submission
    script, every advisor decision as a tri-state record (`advice.records()`),
-   and citations pulled from the pseudopotentials' own registry metadata.
+   the advice's warnings (`advice.warnings()`), and citations pulled from the
+   pseudopotentials' own registry metadata. Records stay typed until they are
+   published: `resolution.records_document` projects them once, for the
+   HTTP/MCP responses, CLI `--json` and `goldilocks.json` alike.
 7. `bundle.publish(bundle_input, output)` / `bundle.bundle_files(bundle_input)`
    / `bundle.archive_bytes(bundle_input)` write a directory (`DirectoryOutput`)
    or ZIP (`ArchiveOutput`), or return an in-memory preview.

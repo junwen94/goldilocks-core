@@ -118,7 +118,8 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
         description=(
             "Run analysis, advisors and run's checks, without generating any "
             "files. Returns every decision (with its source), a warnings "
-            "array the caller must relay verbatim, and a blocking array "
+            "array the caller must relay verbatim (each warning names the "
+            "decision it came from in 'record'), and a blocking array "
             "listing the reasons run would refuse to generate an input "
             "(empty when those checks pass). task='dos' explains all three "
             "of the density-of-states task's steps (scf, nscf, dos.x); "

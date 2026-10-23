@@ -17,7 +17,7 @@ from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.bundle import BundleInput, bundle_files
 from goldilocks_core.inputs.hpc import resolve_hpc_profile
 from goldilocks_core.inputs.structure import InlineStructureSource, normalize_structure
-from goldilocks_core.resolution import FieldState, ResolvedField
+from goldilocks_core.resolution import records_document
 from goldilocks_core.server.documents import (
     ComputeRequestDocument,
     InlineStructureDocument,
@@ -64,19 +64,6 @@ def _structure_source(document: InlineStructureDocument) -> InlineStructureSourc
         content=document.structure_content,
         format=document.structure_format,
     )
-
-
-def _records_document(records: dict[str, FieldState[object]]) -> dict[str, Any]:
-    """Plain ``dict``s, not ``ResolvedField`` instances: ``server/http.py``
-    returns these documents as ``JSONResponse``, which encodes with
-    ``json.dumps`` and knows nothing of pydantic models. ``model_dump()``
-    leaves floats as they are, so the document is strict JSON only because
-    no record holds a non-finite float; ``JSONResponse`` raises on one
-    (#137)."""
-    return {
-        name: ResolvedField.from_state(state).model_dump()
-        for name, state in records.items()
-    }
 
 
 def inspect(document: InlineStructureDocument) -> dict[str, Any]:
@@ -128,7 +115,7 @@ def explain(document: ComputeRequestDocument) -> dict[str, Any]:
         )
         report = check(advice)
     return {
-        "records": _records_document(advice.records()),
+        "records": records_document(advice.records()),
         "warnings": advice.warnings(),
         "blocking": list(dict.fromkeys(report.blocking)),
     }
@@ -186,7 +173,7 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
         records, adv_warnings = advice.records(), advice.warnings()
     summary = {
         "files": [file["path"] for file in bundle_files(bundle_input)],
-        "records": _records_document(records),
+        "records": records_document(records),
         "warnings": adv_warnings,
     }
     return summary, bundle_input

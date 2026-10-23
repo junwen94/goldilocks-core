@@ -198,7 +198,7 @@ class TestWrittenFrame:
         positions = [_card(deck, "ATOMIC_POSITIONS crystal", 2) for deck in decks]
         assert cells[0] == cells[1]
         assert positions[0] == positions[1]
-        assert advice.records()["magnetic"].value["frame"]["rotated"] is True
+        assert advice.records()["magnetic"].value.frame.rotated is True
 
 
 class TestScenario2ExplicitFieldOverride:

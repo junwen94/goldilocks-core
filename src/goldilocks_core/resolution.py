@@ -50,10 +50,13 @@ exempt, for the reason above: they have no single owning domain.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel
+
+from goldilocks_core.serialization import to_portable
 
 Status = Literal["resolved", "unavailable", "blocked"]
 
@@ -223,7 +226,9 @@ class ResolvedField[T](BaseModel):
     object. Build one with ``ResolvedField.from_state``, not the
     constructor directly, so the fields below can't be filled in an
     inconsistent combination (e.g. a ``status`` of ``"blocked"`` next
-    to a non-``None`` ``value``)."""
+    to a non-``None`` ``value``). ``from_state`` stores the value as
+    ``serialization.to_portable`` projects it: plain JSON, without
+    host-local fields."""
 
     status: Status
     value: T | None = None
@@ -240,10 +245,50 @@ class ResolvedField[T](BaseModel):
         if isinstance(state, Resolved):
             return cls(
                 status=state.status,
-                value=state.value,
+                value=to_portable(state.value),
                 source=state.source,
                 field_sources=state.provenance.field_sources,
             )
         if isinstance(state, Unavailable):
             return cls(status=state.status, reason=state.reason)
         return cls(status=state.status, blocked_by=state.root_cause())
+
+
+def records_document(
+    records: Mapping[str, FieldState[object]],
+) -> dict[str, dict[str, Any]]:
+    """The published form of a records mapping (``Advice.records()``), in
+    record-name order: each record's ``ResolvedField`` projection as a
+    plain dict. The one projection the HTTP/MCP responses, CLI ``--json``
+    and ``goldilocks.json`` share (#152).
+
+    Plain dicts, because HTTP returns these documents as ``JSONResponse``,
+    which encodes with ``json.dumps`` and knows nothing of pydantic
+    models. Floats stay as they are: the document is strict JSON only
+    because no record holds a non-finite float, and ``JSONResponse``, CLI
+    ``--json`` and ``goldilocks.json`` all raise on one (#137)."""
+    return {
+        name: ResolvedField.from_state(state).model_dump()
+        for name, state in sorted(records.items())
+    }
+
+
+def collect_warnings(
+    records: Mapping[str, FieldState[object]],
+) -> list[dict[str, object]]:
+    """Every ``Warning`` the resolved records carry, in record-name order,
+    each as ``{"code", "level", "category", "message", "record"}``:
+    ``record`` names the record it came from, which tells apart the same
+    code raised by two records (a ``dos`` task's ``parallelisation`` and
+    ``nscf_parallelisation``).
+
+    Reads the ``warnings`` tuple of each resolved value, before any
+    projection, so every record shape is collected alike (#152). Values
+    without one (composition, symmetry, the pseudopotentials tuple, plain
+    strings) and unresolved records contribute nothing."""
+    return [
+        {**warning.model_dump(), "record": name}
+        for name, state in sorted(records.items())
+        if isinstance(state, Resolved)
+        for warning in getattr(state.value, "warnings", ())
+    ]

@@ -20,7 +20,8 @@ from pymatgen.core import Structure
 
 from goldilocks_core.inputs.hpc import HpcProfile, resolve_hpc_profile
 from goldilocks_core.inputs.structure import PathStructureSource, normalize_structure
-from goldilocks_core.resolution import Blocked, FieldState, Resolved, ResolvedField
+from goldilocks_core.resolution import Blocked, FieldState, Resolved, records_document
+from goldilocks_core.serialization import to_portable
 from goldilocks_core.service import RunOverrides
 from goldilocks_core.set_overrides import (
     build_overrides,
@@ -91,16 +92,18 @@ def format_field_state(state: FieldState[object]) -> str:
     """Tri-state-aware rendering -- directly fixes this epic's evidence
     #2 (v1's print layer collapsed "not computed", "not applicable",
     and "genuinely off" into one falsy-string fallback like
-    ``'unresolved'``/``'none'``/``'any'``)."""
+    ``'unresolved'``/``'none'``/``'any'``). A resolved value prints as
+    published (``serialization.to_portable``)."""
     if isinstance(state, Resolved):
-        return f"{state.value!r} (source={state.source})"
+        return f"{to_portable(state.value)!r} (source={state.source})"
     if isinstance(state, Blocked):
         return f"blocked by: {state.root_cause()}"
     return f"unavailable: {state.reason}"
 
 
 def records_to_json(records: dict[str, FieldState[object]]) -> dict[str, object]:
-    return {
-        name: ResolvedField.from_state(state).model_dump()
-        for name, state in sorted(records.items())
-    }
+    """The ``records`` object of ``explain``/``run --json``:
+    ``resolution.records_document``, the projection HTTP, MCP and
+    ``goldilocks.json`` use, reached through this module so ``cli._run``
+    stays within its import ceiling (``scripts/check_complexity.py``)."""
+    return records_document(records)

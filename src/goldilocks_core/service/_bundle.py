@@ -34,10 +34,16 @@ def to_bundle_input(
     actual pseudopotential file bytes each step's ``ATOMIC_SPECIES``
     card references (read off disk from ``PseudoMetadata.filepath`` --
     neither epic 5 nor epic 7 did this file-assembly step; see
-    ``service/_pseudo.py``'s own docstring), the submission script, and
-    every advisor decision as a tri-state record."""
+    ``service/_pseudo.py``'s own docstring), the submission script,
+    every advisor decision as a tri-state record, and the advice's
+    warnings."""
     return assemble_bundle_input(
-        advice.system.pseudo.metadata, steps, submission_script, ctx, advice.records()
+        advice.system.pseudo.metadata,
+        steps,
+        submission_script,
+        ctx,
+        advice.records(),
+        advice.warnings(),
     )
 
 
@@ -47,12 +53,15 @@ def assemble_bundle_input(
     submission_script: str,
     ctx: SharedContext,
     records: dict[str, FieldState[object]],
+    warnings: list[dict[str, object]],
 ) -> BundleInput:
     """Shared by ``to_bundle_input`` above and ``_dos.py``'s
     ``to_bundle_input_dos`` -- the actual file-assembly logic never
     differs between a single-step and a ``dos`` task's bundle, only
     which pseudopotential ``FieldState``/records dict feeds it (v2
-    epic 9, #9, #28)."""
+    epic 9, #9, #28). ``warnings`` is the advice's own ``warnings()``,
+    the list every transport returns, which ``goldilocks.json`` carries
+    unchanged (#152)."""
     artifacts: list[InputArtifact] = []
     for step in steps:
         for path, content in step.files.items():
@@ -85,4 +94,9 @@ def assemble_bundle_input(
             }
         )
     )
-    return BundleInput(artifacts=tuple(artifacts), records=records, citations=citations)
+    return BundleInput(
+        artifacts=tuple(artifacts),
+        records=records,
+        warnings=tuple(warnings),
+        citations=citations,
+    )

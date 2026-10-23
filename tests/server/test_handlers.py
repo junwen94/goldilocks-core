@@ -73,7 +73,7 @@ class TestExplain:
         assert result["records"]["functional"]["status"] == "resolved"
         assert isinstance(result["warnings"], list)
         assert all(
-            warning.keys() == {"code", "level", "category", "message"}
+            warning.keys() == {"code", "level", "category", "message", "record"}
             for warning in result["warnings"]
         )
 

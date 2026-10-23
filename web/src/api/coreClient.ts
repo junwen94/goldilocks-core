@@ -35,6 +35,13 @@ export interface AdvisorWarning {
   readonly message: string;
 }
 
+/** One entry of a response's top-level `warnings` (`resolution
+ * .collect_warnings`): a record's warning, naming the record it came from
+ * (`nscf_parallelisation` for a dos task's nscf step). */
+export interface RecordWarning extends AdvisorWarning {
+  readonly record: string;
+}
+
 // ---------------------------------------------------------------------
 // GET /capabilities -- mirrors capabilities.py's `Capabilities` TypedDict
 // and the Setting/Fact projections `_settings()`/`_facts()` build.
@@ -186,7 +193,7 @@ export interface StructureInspection {
 
 export interface ExplainResult {
   readonly records: Readonly<Record<string, ResolvedField>>;
-  readonly warnings: readonly AdvisorWarning[];
+  readonly warnings: readonly RecordWarning[];
   /** The distinct reasons `/run` would refuse to generate input files
    * for (the task's `check()` verdict, in first-seen order); empty when
    * those checks pass. */
@@ -196,7 +203,7 @@ export interface ExplainResult {
 export interface RunResult {
   readonly files: readonly string[];
   readonly records: Readonly<Record<string, ResolvedField>>;
-  readonly warnings: readonly AdvisorWarning[];
+  readonly warnings: readonly RecordWarning[];
 }
 
 // ---------------------------------------------------------------------

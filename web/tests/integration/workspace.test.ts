@@ -222,6 +222,7 @@ describe("Workspace", () => {
           level: "info",
           category: "job",
           message: "retried",
+          record: "job",
         },
       ],
     };

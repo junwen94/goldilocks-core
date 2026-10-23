@@ -51,8 +51,8 @@ from goldilocks_core.bundle import BundleInput
 from goldilocks_core.checks import CheckReport, collect_blocked
 from goldilocks_core.generation.quantum_espresso.dos import write_qe_dos
 from goldilocks_core.inputs.hpc import HpcProfile
-from goldilocks_core.resolution import FieldState
-from goldilocks_core.service._advice import Advice, RunOverrides, warnings_from_records
+from goldilocks_core.resolution import FieldState, collect_warnings
+from goldilocks_core.service._advice import Advice, RunOverrides
 from goldilocks_core.service._bundle import assemble_bundle_input
 from goldilocks_core.service._generate import AdviceIncomplete, generate
 from goldilocks_core.service._pipeline import advise_steps, check
@@ -95,7 +95,7 @@ class DosAdvice:
         return merged
 
     def warnings(self) -> list[dict[str, object]]:
-        return warnings_from_records(self.records())
+        return collect_warnings(self.records())
 
 
 def _nscf_overrides(overrides: RunOverrides) -> RunOverrides:
@@ -224,4 +224,5 @@ def to_bundle_input_dos(
         submission_script,
         ctx,
         advice.records(),
+        advice.warnings(),
     )

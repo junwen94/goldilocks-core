@@ -30,7 +30,7 @@ from support import (
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.inputs.hpc import load_hpc_profile
-from goldilocks_core.resolution import ResolvedField
+from goldilocks_core.resolution import records_document
 from goldilocks_core.service import (
     advise,
     advise_relax,
@@ -122,13 +122,7 @@ def test_an_isolated_molecule_is_sampled_at_gamma_only(store: AssetStore) -> Non
     assert k_sampling.k_index == 1
     assert k_sampling.k_distance_interval == (0.0, None)
     assert advice.step.kpoints.n_irr_k.value == 1
-    json.dumps(
-        {
-            name: ResolvedField.from_state(state).model_dump()
-            for name, state in advice.records().items()
-        },
-        allow_nan=False,
-    )
+    json.dumps(records_document(advice.records()), allow_nan=False)
 
 
 def test_a_slab_is_sampled_once_along_its_vacuum(store: AssetStore) -> None:
@@ -246,7 +240,7 @@ def test_a_tilted_slab_is_written_in_the_xy_frame_and_relaxed_under_2dxy(
     assert advice.relax.value.cell_dofree == "2Dxy"
     assert "cell_dofree      = '2Dxy'" in content
     assert a[1] == a[2] == b[2] == 0.0
-    assert advice.records()["magnetic"].value["frame"]["rotated"] is True
+    assert advice.records()["magnetic"].value.frame.rotated is True
 
 
 def test_vc_relax_of_a_slab_with_its_vacuum_along_a_is_refused(

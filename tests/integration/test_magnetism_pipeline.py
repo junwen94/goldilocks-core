@@ -444,8 +444,8 @@ def test_spin_orbit_moments_start_along_c_and_count_k_points_as_pw_x_does(
 
     advice = steps[0]
     assert advice.step.kpoints.n_irr_k.value == 126
-    record = advice.records()["magnetic"].value
-    assert record["moment_direction"] == {"uvw": [0.0, 0.0, 1.0], "source": "heuristic"}
+    direction = advice.records()["magnetic"].value.moment_direction
+    assert (direction.uvw, direction.source) == ((0.0, 0.0, 1.0), "heuristic")
     codes = {warning["code"] for warning in advice.warnings()}
     assert "magnetic.soc_moment_direction_defaulted" in codes
     for species in (1, 2):
@@ -467,8 +467,8 @@ def test_a_moment_direction_setting_is_written_as_qe_s_angles(
     )
 
     advice = steps[0]
-    record = advice.records()["magnetic"].value
-    assert record["moment_direction"] == {"uvw": [1.0, 1.0, 0.0], "source": "human"}
+    direction = advice.records()["magnetic"].value.moment_direction
+    assert (direction.uvw, direction.source) == ((1.0, 1.0, 0.0), "human")
     codes = {warning["code"] for warning in advice.warnings()}
     assert "magnetic.soc_moment_direction_defaulted" not in codes
     for species in (1, 2):
@@ -714,14 +714,14 @@ def test_a_requested_label_writes_that_ordering_and_records_its_alternatives(
     advice = steps[0]
     assert advice.system.symmetry_eff.value.space_group_symbol == "R-3"
     assert _keyword(content, "nat") == "10"
-    record = advice.records()["magnetic"].value["ordering"]
-    assert record == {
-        "requested": label,
-        "applied": label,
-        "compensated": True,
-        "criterion": "requested",
-        "alternatives": list(others),
-    }
+    record = advice.records()["magnetic"].value.ordering
+    assert record == OrderingRecord(
+        requested=label,
+        applied=label,
+        compensated=True,
+        criterion="requested",
+        alternatives=tuple(others),
+    )
     assert len(others) == 2
 
 
@@ -814,7 +814,7 @@ def test_a_smearing_magnet_s_bands_hold_its_seeded_moment(
         5.0 / 18.0
     )
     assert _keyword(content, "nbnd") == "28"
-    assert steps[0].records()["magnetic"].value["seeded_moment"] == pytest.approx(10.0)
+    assert steps[0].records()["magnetic"].value.seeded_moment == pytest.approx(10.0)
 
 
 def _janus_vsse(c: float = 20.0) -> Structure:
