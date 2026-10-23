@@ -24,9 +24,10 @@ export { WorkbenchContent } from "./App";
 export { colorSchemeManager, workbenchTheme } from "./theme";
 export type { Theme } from "./theme";
 export { WorkspaceProvider } from "./workspace/WorkspaceProvider";
-export { createWorkspace } from "./workspace/workspace";
+export { createWorkspace, currentOrderings } from "./workspace/workspace";
 export type {
   CalculationDraft,
+  MagneticOrderingsListing,
   Workspace,
   WorkspaceAction,
   WorkspaceOperation,

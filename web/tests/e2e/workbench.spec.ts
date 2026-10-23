@@ -31,6 +31,23 @@ Si
 Direct
 0 0 0
 `;
+const IRON_BCC_CIF = fileURLToPath(
+  new URL(
+    "../../../src/goldilocks_core/examples/structures/Fe_bcc.cif",
+    import.meta.url,
+  ),
+);
+/** One-atom fcc Ni, the cell of MC3D mc3d-4988. */
+const NICKEL_FCC_POSCAR = `Nickel fcc primitive
+3.524
+0 0.5 0.5
+0.5 0 0.5
+0.5 0.5 0
+Ni
+1
+Direct
+0 0 0
+`;
 
 test("serves concurrent explains through one real Core runtime", async ({
   request,
@@ -882,21 +899,12 @@ test("centres and fits the unit cell in the viewer, also after the card narrows"
     await explainHeld;
     await route.continue();
   });
-  // One-atom fcc Ni (the cell of MC3D mc3d-4988): its only atom sits on a cell
-  // corner, so centring on the atoms pushes the cell box off-centre.
+  // fcc Ni's only atom sits on a cell corner, so centring on the atoms pushes
+  // the cell box off-centre.
   await page.locator('input[type="file"]').setInputFiles({
     name: "POSCAR",
     mimeType: "text/plain",
-    buffer: Buffer.from(`Nickel fcc primitive
-3.524
-0 0.5 0.5
-0.5 0 0.5
-0.5 0.5 0
-Ni
-1
-Direct
-0 0 0
-`),
+    buffer: Buffer.from(NICKEL_FCC_POSCAR),
   });
   const canvas = page
     .getByRole("region", { name: "Crystal structure viewer" })
@@ -914,6 +922,86 @@ Direct
     .poll(async () => (await canvas.boundingBox())?.width)
     .toBeLessThan(fourColumnWidth);
   await expect.poll(async () => describeCellFraming(page)).toEqual(framed);
+});
+
+test("lists and bundles the open structure's own magnetic orderings", async ({
+  page,
+}) => {
+  // #149: a listing still in flight when another structure opened was shown
+  // for that structure, which was then never listed itself, and Download
+  // selected filed the old structure's candidates under the new name. Opening
+  // a structure now aborts the listing of the one it replaces.
+  const listed: string[] = [];
+  const failed: string[] = [];
+  const listedName = (request: Request): string =>
+    (request.postDataJSON() as { structure_name: string }).structure_name;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/magnetic-orderings") {
+      listed.push(listedName(request));
+    }
+  });
+  page.on("requestfailed", (request) => {
+    if (new URL(request.url()).pathname === "/magnetic-orderings") {
+      failed.push(
+        `${listedName(request)} ${request.failure()?.errorText ?? "no error"}`,
+      );
+    }
+  });
+  let releaseListing = (): void => undefined;
+  const listingHeld = new Promise<void>((resolve) => {
+    releaseListing = resolve;
+  });
+  await page.route(
+    "**/magnetic-orderings",
+    async (route) => {
+      await listingHeld;
+      await route.continue();
+    },
+    { times: 1 },
+  );
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.locator('input[type="file"]').setInputFiles(IRON_BCC_CIF);
+  const orderings = page.getByRole("region", { name: "Magnetic orderings" });
+  await expect(orderings.getByText("Listing candidates…")).toBeVisible({
+    timeout: 20_000,
+  });
+
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "POSCAR",
+    mimeType: "text/plain",
+    buffer: Buffer.from(NICKEL_FCC_POSCAR),
+  });
+  const fm = orderings.getByRole("checkbox", {
+    name: "Select fm for download",
+  });
+  await expect(fm).toBeVisible({ timeout: 20_000 });
+  await expect.poll(() => failed).toEqual(["Fe_bcc.cif net::ERR_ABORTED"]);
+  releaseListing();
+  // Atoms: the one-atom Ni cell, not Fe_bcc.cif's two.
+  const fmRow = orderings.getByRole("row").filter({
+    has: page.getByRole("checkbox", { name: "Select fm for download" }),
+  });
+  await expect(fmRow.getByRole("cell").nth(2)).toHaveText("1");
+
+  await fm.check();
+  const downloadStarted = page.waitForEvent("download");
+  await orderings
+    .getByRole("button", { name: "Download selected (1)" })
+    .click();
+  const download = await downloadStarted;
+  expect(download.suggestedFilename()).toBe("POSCAR-fm-scf_single_point.zip");
+  const path = await download.path();
+  assert(path, "Download must have a local path");
+  const entries = unzipSync(new Uint8Array(await readFile(path)));
+  const manifest = JSON.parse(
+    textEntry(entries, "goldilocks.json"),
+  ) as InputManifest;
+  expect(manifest.request.structure).toMatchObject({
+    name: "POSCAR-fm",
+    sha256: sha256(new Uint8Array(Buffer.from(NICKEL_FCC_POSCAR))),
+  });
+  expect(listed).toEqual(["Fe_bcc.cif", "POSCAR"]);
 });
 
 /** Every settings-group Accordion.Panel is a `role="region"` whose

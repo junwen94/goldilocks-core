@@ -13,6 +13,10 @@ import { Download } from "lucide-react";
 
 import { WarningsPanel } from "../review/WarningsPanel";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
+import { currentOrderings } from "../workspace/workspace";
+
+/** What the card shows for a structure that has no listing yet. */
+const UNLISTED = { result: null, operation: null, error: null } as const;
 
 /** #87 layer 4: lists candidate magnetic orderings (FM plus any AFM
  * candidates enumerate_magnetic_orderings finds) for the currently
@@ -24,11 +28,13 @@ import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
 export function MagneticOrderingsPanel() {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
-  const { inspection, magneticOrderings, magneticOrderingsOperation } =
-    snapshot;
+  const { inspection } = snapshot;
+  const listing = currentOrderings(snapshot);
+  const { result: magneticOrderings, operation, error } = listing ?? UNLISTED;
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
-  // Reset the selection whenever the listing itself changes (a fresh
-  // structure, a re-rank, ...) -- adjusted during render, React's own
+  // Reset the selection whenever the listed candidates change (another
+  // structure, a ranking, ...), not when Download selected marks the
+  // listing busy and idle again -- adjusted during render, React's own
   // recommended pattern for "reset state when an input changes", rather
   // than a second effect that would call setState after the fact.
   const [previousOrderings, setPreviousOrderings] = useState(magneticOrderings);
@@ -37,20 +43,18 @@ export function MagneticOrderingsPanel() {
     setSelected(new Set());
   }
 
+  // Lists the open structure while it has no listing of its own. A failed
+  // listing is its listing too, so its error stays and is not re-sent.
   useEffect(() => {
-    if (
-      inspection !== null &&
-      magneticOrderings === null &&
-      magneticOrderingsOperation === null
-    ) {
+    if (inspection !== null && listing === null) {
       void workspace.dispatch({ type: "magneticOrderings.list" });
     }
-  }, [inspection, magneticOrderings, magneticOrderingsOperation, workspace]);
+  }, [inspection, listing, workspace]);
 
   if (inspection === null) return null;
 
   const candidates = magneticOrderings?.candidates ?? [];
-  const busy = magneticOrderingsOperation !== null;
+  const busy = operation !== null;
 
   function toggleSelected(label: string, checked: boolean): void {
     setSelected((current) => {
@@ -72,7 +76,7 @@ export function MagneticOrderingsPanel() {
             size="xs"
             variant="light"
             miw={160}
-            loading={magneticOrderingsOperation === "rank"}
+            loading={operation === "rank"}
             disabled={busy || candidates.length === 0}
             onClick={() =>
               void workspace.dispatch({ type: "magneticOrderings.rank" })
@@ -86,17 +90,15 @@ export function MagneticOrderingsPanel() {
           ranks them by energy per atom.
         </Text>
       </Stack>
-      {snapshot.magneticOrderingsError === null ? null : (
+      {error === null ? null : (
         <Text c="red" size="sm" role="alert">
-          {snapshot.magneticOrderingsError}
+          {error}
         </Text>
       )}
       <WarningsPanel warnings={magneticOrderings?.warnings ?? []} />
       {candidates.length === 0 ? (
         <Text c="dimmed" size="sm">
-          {magneticOrderingsOperation === "list"
-            ? "Listing candidates…"
-            : "No candidates yet."}
+          {operation === "list" ? "Listing candidates…" : "No candidates yet."}
         </Text>
       ) : (
         <>
@@ -165,7 +167,7 @@ export function MagneticOrderingsPanel() {
             <Button
               size="xs"
               rightSection={<Download aria-hidden="true" size={14} />}
-              loading={magneticOrderingsOperation === "download"}
+              loading={operation === "download"}
               disabled={busy || selected.size === 0}
               onClick={() =>
                 void workspace.dispatch({

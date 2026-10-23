@@ -28,6 +28,24 @@ export type WorkspaceOperation =
  * `WorkspaceOperation` itself, covering its own three concerns. */
 export type MagneticOrderingsOperation = "list" | "rank" | "download";
 
+/** A magnetic-ordering listing and the structure it was requested for.
+ * `result`, `error` and the request in flight (`operation`) belong to
+ * `input` alone: read them through `currentOrderings`, which returns the
+ * listing only while `input` is the open structure, and candidate bundles
+ * take their structure and name from `input` (#149). */
+export interface MagneticOrderingsListing {
+  readonly input: StructureInput;
+  readonly operation: MagneticOrderingsOperation | null;
+  /** The last listing or ranking that arrived; kept while a new request
+   * for the same structure runs. */
+  readonly result: MagneticOrderingsResult | null;
+  /** Shown inline in the Magnetic Orderings card, not the global
+   * `FailureBanner` -- this is a side-quest failure, not a reason to
+   * block the main pipeline the banner exists for. Not re-sent on its
+   * own: the card lists a structure only when it has no listing. */
+  readonly error: string | null;
+}
+
 /** The v2 request shape has no `intent`/`hints` vocabulary: every tunable
  * knob is a flat `overrides` entry reflected from `capabilities().settings`/
  * `.facts` (see `capabilities.py`'s own "add an advisor, its settings
@@ -62,12 +80,8 @@ export interface WorkspaceSnapshot {
   readonly operation: WorkspaceOperation | null;
   readonly failure: CoreFailure | null;
   readonly failureOperation: WorkspaceOperation | null;
-  readonly magneticOrderings: MagneticOrderingsResult | null;
-  readonly magneticOrderingsOperation: MagneticOrderingsOperation | null;
-  /** Shown inline in the Advisors card, not the global `FailureBanner` --
-   * this is a side-quest failure, not a reason to block the main
-   * pipeline the banner exists for. */
-  readonly magneticOrderingsError: string | null;
+  /** Read through `currentOrderings`. */
+  readonly magneticOrderings: MagneticOrderingsListing | null;
 }
 
 export type WorkspaceAction =
@@ -126,8 +140,6 @@ const EMPTY_SNAPSHOT: WorkspaceSnapshot = {
   failure: null,
   failureOperation: null,
   magneticOrderings: null,
-  magneticOrderingsOperation: null,
-  magneticOrderingsError: null,
 };
 
 function defaultDraft(capabilities: Capabilities): CalculationDraft {
@@ -186,12 +198,6 @@ function toMagneticOrderingsRequest(
   };
 }
 
-function magneticOrderingsErrorMessage(error: unknown): string {
-  return error instanceof CoreFailure
-    ? error.message
-    : "Cannot reach Goldilocks Core.";
-}
-
 function mergeOverrides(
   current: Readonly<Record<string, unknown>>,
   patch: Readonly<Record<string, unknown>>,
@@ -211,6 +217,16 @@ export function currentArchive(
   return snapshot.outOfDate ? null : snapshot.lastDownload;
 }
 
+/** The magnetic-ordering listing of the open structure, or null when it
+ * has none (nothing requested yet, or the listing belongs to another
+ * structure). The card lists the open structure whenever this is null. */
+export function currentOrderings(
+  snapshot: WorkspaceSnapshot,
+): MagneticOrderingsListing | null {
+  const listing = snapshot.magneticOrderings;
+  return listing?.input === snapshot.structureInput ? listing : null;
+}
+
 export function createWorkspace(
   core: CoreClient,
   saveArchive: ArchiveSink = saveArchiveToBrowser,
@@ -222,6 +238,9 @@ export function createWorkspace(
     readonly promise: Promise<void>;
   } | null = null;
   let draftRevision = 0;
+  // Aborts the listing request in flight; only the open structure's
+  // listing can be in flight, since opening another structure aborts it.
+  let orderingsRequest: AbortController | null = null;
 
   function beginOperation(operation: WorkspaceOperation): OperationOwner {
     const owner = { operation };
@@ -285,6 +304,9 @@ export function createWorkspace(
       const inspection = await core.inspectStructure(input);
       if (activeOperation !== owner) return;
       draftRevision = 0;
+      // Only now is the open structure replaced: an inspection that fails
+      // leaves it, and the listing request in flight for it, in place.
+      abortOrderingsRequest();
       completeOperation(owner, {
         structureInput: input,
         attemptedStructureInput: null,
@@ -294,8 +316,6 @@ export function createWorkspace(
         outOfDate: false,
         lastDownload: null,
         magneticOrderings: null,
-        magneticOrderingsOperation: null,
-        magneticOrderingsError: null,
       });
     } catch (error) {
       failOperation(owner, error);
@@ -397,95 +417,128 @@ export function createWorkspace(
     if (archive !== null) saveArchive(archive);
   }
 
+  function abortOrderingsRequest(): void {
+    orderingsRequest?.abort();
+    orderingsRequest = null;
+  }
+
+  /** Clears the busy state of the listing `pending` and applies `update`,
+   * while `pending` is still the stored listing: the same owner rule as
+   * `completeOperation`, so the outcome of a request for a structure that
+   * is no longer open (or was reset away) is dropped. */
+  function completeOrderings(
+    pending: MagneticOrderingsListing,
+    update: Partial<Pick<MagneticOrderingsListing, "result" | "error">> = {},
+  ): void {
+    if (store.getState().magneticOrderings !== pending) return;
+    store.setState({
+      magneticOrderings: { ...pending, ...update, operation: null },
+    });
+  }
+
+  /** As `failOperation`: a `CoreFailure` becomes the listing's error, any
+   * other error propagates once the listing is no longer busy. */
+  function failOrderings(
+    pending: MagneticOrderingsListing,
+    error: unknown,
+  ): void {
+    if (store.getState().magneticOrderings !== pending) return;
+    if (!(error instanceof CoreFailure)) {
+      completeOrderings(pending);
+      throw error;
+    }
+    completeOrderings(pending, { error: error.message });
+  }
+
+  /** Lists (or mMACE-ranks) the open structure's candidate orderings.
+   * Refused while that structure's listing is busy; a result it already
+   * has stays on screen until the new one arrives. */
   async function listMagneticOrderings(rankWithMmace: boolean): Promise<void> {
     const snapshot = store.getState();
-    if (
-      snapshot.structureInput === null ||
-      snapshot.magneticOrderingsOperation !== null
-    ) {
+    const input = snapshot.structureInput;
+    const current = currentOrderings(snapshot);
+    if (input === null || (current !== null && current.operation !== null)) {
       return;
     }
-    const request = toMagneticOrderingsRequest(
-      snapshot.structureInput,
-      rankWithMmace,
-    );
-    store.setState({
-      magneticOrderingsOperation: rankWithMmace ? "rank" : "list",
-      magneticOrderingsError: null,
-    });
-    // A listing belongs to the structure it was requested for: one that
-    // returns after another structure was opened is dropped, so its
-    // labels never reach a structure they were not listed for (#170).
-    const listed = snapshot.structureInput;
+    const pending: MagneticOrderingsListing = {
+      input,
+      operation: rankWithMmace ? "rank" : "list",
+      result: current?.result ?? null,
+      error: null,
+    };
+    const request = new AbortController();
+    orderingsRequest = request;
+    store.setState({ magneticOrderings: pending });
     try {
-      const magneticOrderings = await core.magneticOrderings(request);
-      if (store.getState().structureInput !== listed) return;
-      store.setState({ magneticOrderings, magneticOrderingsOperation: null });
+      const result = await core.magneticOrderings(
+        toMagneticOrderingsRequest(input, rankWithMmace),
+        request.signal,
+      );
+      completeOrderings(pending, { result });
     } catch (error) {
-      if (store.getState().structureInput !== listed) return;
-      store.setState({
-        magneticOrderingsOperation: null,
-        magneticOrderingsError: magneticOrderingsErrorMessage(error),
-      });
+      failOrderings(pending, error);
     }
   }
 
   /** Generates and downloads each selected candidate's DFT input bundle
    * -- one `runArchive` call per candidate, one browser download per
-   * archive. A candidate is the listed structure (the current one: a
-   * listing for another is dropped on arrival) with the draft's
-   * overrides plus its own `magnetic_ordering` label (#170), which asks
-   * for a spin-polarized run, `fm` included. The draft's
-   * `starting_magnetization` is left out of every candidate: it is keyed
-   * by the uploaded cell's site labels, which an ordered cell does not
-   * have, so each candidate starts from its own ordering's seeds. */
+   * archive. A candidate is the listing's own structure (`input`, which
+   * also names the bundle) with the draft's overrides plus its own
+   * `magnetic_ordering` label (#170), which asks for a spin-polarized
+   * run, `fm` included. The draft's `starting_magnetization` is left out
+   * of every candidate: it is keyed by the uploaded cell's site labels,
+   * which an ordered cell does not have, so each candidate starts from
+   * its own ordering's seeds. Archives that arrive after another
+   * structure opened are still saved; only the listing's busy state is
+   * dropped with it. */
   async function downloadSelectedOrderings(
     labels: readonly string[],
   ): Promise<void> {
     const snapshot = store.getState();
-    const { capabilities, structureInput, draft, magneticOrderings } = snapshot;
+    const { capabilities, draft } = snapshot;
+    const listing = currentOrderings(snapshot);
     if (
       capabilities === null ||
-      structureInput === null ||
       draft === null ||
-      magneticOrderings === null ||
-      snapshot.magneticOrderingsOperation !== null ||
+      listing?.result == null ||
+      listing.operation !== null ||
       labels.length === 0
     ) {
       return;
     }
-    store.setState({
-      magneticOrderingsOperation: "download",
-      magneticOrderingsError: null,
-    });
+    const { input, result } = listing;
+    const pending: MagneticOrderingsListing = {
+      ...listing,
+      operation: "download",
+      error: null,
+    };
+    store.setState({ magneticOrderings: pending });
+    const overrides = Object.fromEntries(
+      Object.entries(draft.overrides).filter(
+        ([key]) => key !== "starting_magnetization",
+      ),
+    );
+    let archives: readonly ArchiveDownload[];
     try {
-      const selected = magneticOrderings.candidates.filter((candidate) =>
-        labels.includes(candidate.label),
-      );
-      const overrides = Object.fromEntries(
-        Object.entries(draft.overrides).filter(
-          ([key]) => key !== "starting_magnetization",
-        ),
-      );
-      const archives = await Promise.all(
-        selected.map((candidate) =>
-          core.runArchive({
-            ...toComputeRequest(capabilities, structureInput, {
-              ...draft,
-              overrides: { ...overrides, ...candidate.overrides },
+      archives = await Promise.all(
+        result.candidates
+          .filter((candidate) => labels.includes(candidate.label))
+          .map((candidate) =>
+            core.runArchive({
+              ...toComputeRequest(capabilities, input, {
+                ...draft,
+                overrides: { ...overrides, ...candidate.overrides },
+              }),
+              structure_name: `${input.structure_name}-${candidate.label}`,
             }),
-            structure_name: `${structureInput.structure_name}-${candidate.label}`,
-          }),
-        ),
+          ),
       );
-      for (const archive of archives) saveArchive(archive);
-      store.setState({ magneticOrderingsOperation: null });
     } catch (error) {
-      store.setState({
-        magneticOrderingsOperation: null,
-        magneticOrderingsError: magneticOrderingsErrorMessage(error),
-      });
+      failOrderings(pending, error);
+      return;
     }
+    completeOrderings(pending);
+    for (const archive of archives) saveArchive(archive);
   }
 
   async function retryFailure(): Promise<void> {
@@ -512,6 +565,7 @@ export function createWorkspace(
     const pendingStartup =
       startup !== null && activeOperation === startup.owner ? startup : null;
     draftRevision = 0;
+    abortOrderingsRequest();
     if (pendingStartup === null) {
       activeOperation = null;
       startup = null;

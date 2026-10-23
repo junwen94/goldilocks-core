@@ -4,6 +4,7 @@ import {
   CoreFailure,
   HttpCoreClient,
   type ComputeRequest,
+  type MagneticOrderingsRequest,
 } from "../../src/api/coreClient";
 import {
   capabilities,
@@ -200,6 +201,55 @@ describe("HttpCoreClient", () => {
         kind: "advice_incomplete",
       });
       expect(fetcher).toHaveBeenCalledWith("/explain", expect.anything());
+    });
+  });
+
+  describe("magneticOrderings", () => {
+    const orderingsRequest: MagneticOrderingsRequest = {
+      structure_content: structureInput.structure_content,
+      structure_name: structureInput.structure_name,
+      structure_format: "cif",
+      rank_with_mmace: false,
+    };
+
+    it("posts to /magnetic-orderings with the caller's abort signal", async () => {
+      const listing = { ranked: false, candidates: [], warnings: [] };
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json(listing));
+      const client = new HttpCoreClient("", fetcher);
+      const controller = new AbortController();
+
+      await expect(
+        client.magneticOrderings(orderingsRequest, controller.signal),
+      ).resolves.toEqual(listing);
+      expect(fetcher).toHaveBeenCalledWith("/magnetic-orderings", {
+        body: JSON.stringify(orderingsRequest),
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+        signal: controller.signal,
+      });
+    });
+
+    it("rejects an aborted request with the abort, not a network failure", async () => {
+      // #149: the Workbench aborts a listing whose structure was replaced;
+      // that is not a failure to report, nor one to retry.
+      const controller = new AbortController();
+      controller.abort();
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockRejectedValue(controller.signal.reason);
+      const client = new HttpCoreClient("", fetcher);
+
+      const failure = await client
+        .magneticOrderings(orderingsRequest, controller.signal)
+        .catch((error: unknown) => error);
+
+      expect(failure).toBe(controller.signal.reason);
+      expect(failure).toMatchObject({ name: "AbortError" });
     });
   });
 

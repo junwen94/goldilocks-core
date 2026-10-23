@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -50,6 +51,7 @@ class CoreStub implements CoreClient {
   archiveCalls: ComputeRequest[] = [];
   magneticOrderingsResults: Promise<MagneticOrderingsResult>[] = [];
   magneticOrderingsCalls: MagneticOrderingsRequest[] = [];
+  magneticOrderingsSignals: (AbortSignal | undefined)[] = [];
 
   constructor(readonly capabilitiesResult: Promise<Capabilities>) {}
 
@@ -90,8 +92,10 @@ class CoreStub implements CoreClient {
 
   magneticOrderings(
     request: MagneticOrderingsRequest,
+    signal?: AbortSignal,
   ): Promise<MagneticOrderingsResult> {
     this.magneticOrderingsCalls.push(request);
+    this.magneticOrderingsSignals.push(signal);
     // Like explain()/runArchive() above: MagneticOrderingsPanel fetches
     // this automatically as soon as a structure loads, so most tests
     // never opted into this and shouldn't have to.
@@ -234,6 +238,157 @@ describe("Goldilocks Workbench", () => {
     expect(
       screen.queryByRole("region", { name: "Magnetic orderings" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("lists and bundles a replacement structure's own orderings when the old listing lands late", async () => {
+    // #149: the listing of a structure replaced while it was in flight was
+    // shown on the new structure's card, kept the new structure from being
+    // listed, and Download selected filed its candidates under the new name.
+    const user = userEvent.setup();
+    let finishObsoleteListing: (value: MagneticOrderingsResult) => void = () =>
+      undefined;
+    const obsoleteListing = new Promise<MagneticOrderingsResult>((resolve) => {
+      finishObsoleteListing = resolve;
+    });
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [
+      Promise.resolve(inspection),
+      Promise.resolve(inspection),
+    ];
+    core.explainResults = [spinPolarizedReview(), spinPolarizedReview()];
+    core.magneticOrderingsResults = [
+      obsoleteListing,
+      Promise.resolve(orderingsListing(1, "fm", "afm-1")),
+    ];
+    const { container } = renderApp(core, saveArchive);
+    await screen.findByRole("button", {
+      name: "Choose a CIF or POSCAR structure",
+    });
+
+    await user.upload(
+      structureInputElement(container),
+      structureFile("NiO.cif", "data_NiO"),
+    );
+    expect(
+      await within(await orderingsCard()).findByText("Listing candidates…"),
+    ).toBeInTheDocument();
+    await user.upload(
+      structureInputElement(container),
+      structureFile("Fe.cif", "data_Fe"),
+    );
+    const afm = await within(await orderingsCard()).findByRole("checkbox", {
+      name: "Select afm-1 for download",
+    });
+
+    expect(
+      core.magneticOrderingsCalls.map((request) => request.structure_content),
+    ).toEqual(["data_NiO", "data_Fe"]);
+    expect(core.magneticOrderingsSignals[0]?.aborted).toBe(true);
+    // A client that ignores the abort still delivers the old listing.
+    await act(async () => {
+      finishObsoleteListing(orderingsListing(2, "fm", "afm-1", "afm-2"));
+      await obsoleteListing;
+    });
+    const card = await orderingsCard();
+    expect(
+      within(card).queryByRole("checkbox", {
+        name: "Select afm-2 for download",
+      }),
+    ).not.toBeInTheDocument();
+    expect(within(card).getAllByRole("row")).toHaveLength(3);
+
+    await user.click(afm);
+    await user.click(
+      within(card).getByRole("button", { name: "Download selected (1)" }),
+    );
+
+    await waitFor(() => {
+      expect(saveArchive).toHaveBeenCalledOnce();
+    });
+    const candidateRequests = core.archiveCalls.filter(
+      (request) => request.overrides?.magnetic_ordering !== undefined,
+    );
+    expect(
+      candidateRequests.map((request) => [
+        request.structure_name,
+        request.structure_content,
+        request.overrides?.magnetic_ordering,
+      ]),
+    ).toEqual([["Fe.cif-afm-1", "data_Fe", "afm-1"]]);
+  });
+
+  it("keeps the ticked orderings after Download selected saves them", async () => {
+    // Download selected marks the listing busy and then idle again; only a
+    // new listing (another structure, a ranking) clears the selection.
+    const user = userEvent.setup();
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [spinPolarizedReview()];
+    core.magneticOrderingsResults = [
+      Promise.resolve(orderingsListing(2, "fm", "afm-1")),
+    ];
+    const { container } = renderApp(core, saveArchive);
+    await openStructure(user, container);
+    const card = await orderingsCard();
+    const afm = await within(card).findByRole("checkbox", {
+      name: "Select afm-1 for download",
+    });
+
+    await user.click(afm);
+    await user.click(
+      within(card).getByRole("button", { name: "Download selected (1)" }),
+    );
+
+    await waitFor(() => {
+      expect(saveArchive).toHaveBeenCalledOnce();
+    });
+    expect(afm).toBeChecked();
+    expect(
+      within(card).getByRole("button", { name: "Download selected (1)" }),
+    ).toBeEnabled();
+  });
+
+  it("keeps a failed listing's error on its card without re-sending it", async () => {
+    // A failed listing is the open structure's listing: the card shows its
+    // error and does not list the structure again on its own.
+    let failListing: (reason: unknown) => void = () => undefined;
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [spinPolarizedReview()];
+    core.magneticOrderingsResults = [
+      new Promise((_, reject) => {
+        failListing = reject;
+      }),
+    ];
+    const { container } = renderApp(core);
+    await openStructure(userEvent.setup(), container);
+    await waitFor(
+      () => {
+        expect(core.magneticOrderingsCalls).toHaveLength(1);
+      },
+      { timeout: 5000 },
+    );
+
+    failListing(
+      new CoreFailure(
+        "orderings_unavailable",
+        "Orderings could not be listed.",
+        false,
+      ),
+    );
+
+    expect(
+      await within(await orderingsCard()).findByRole("alert"),
+    ).toHaveTextContent("Orderings could not be listed.");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(within(await orderingsCard()).getByRole("alert")).toHaveTextContent(
+      "Orderings could not be listed.",
+    );
+    expect(core.magneticOrderingsCalls).toHaveLength(1);
   });
 
   it("uses light mode by default and persists an explicit dark mode", async () => {
@@ -1014,12 +1169,10 @@ function emulateNativeSelectSectionPointerEvents(): void {
   });
 }
 
-function structureFile(): File {
-  const file = new File(["data_Si"], "Si.cif", {
-    type: "chemical/x-cif",
-  });
+function structureFile(name = "Si.cif", content = "data_Si"): File {
+  const file = new File([content], name, { type: "chemical/x-cif" });
   Object.defineProperty(file, "text", {
-    value: () => Promise.resolve("data_Si"),
+    value: () => Promise.resolve(content),
   });
   return file;
 }
@@ -1060,6 +1213,37 @@ function magneticReview({
     warnings: [],
     blocking: [],
   };
+}
+
+/** A spin-polarized review, which shows the Magnetic Orderings card. */
+function spinPolarizedReview(): Promise<ExplainResult> {
+  return Promise.resolve(
+    magneticReview({ isMagnetic: "magnetic", spinPolarized: true }),
+  );
+}
+
+/** A listing of `labels`, each a cell of `natoms` atoms. */
+function orderingsListing(
+  natoms: number,
+  ...labels: readonly string[]
+): MagneticOrderingsResult {
+  return {
+    ranked: false,
+    candidates: labels.map((label) => ({
+      label,
+      formula: "Fe",
+      natoms,
+      energy_per_atom_ev: null,
+      status: null,
+      is_recommended: false,
+      overrides: { magnetic_ordering: label },
+    })),
+    warnings: [],
+  };
+}
+
+function orderingsCard(): Promise<HTMLElement> {
+  return screen.findByRole("region", { name: "Magnetic orderings" });
 }
 
 /** A settings group's humanized name (e.g. "Magnetic") can collide with

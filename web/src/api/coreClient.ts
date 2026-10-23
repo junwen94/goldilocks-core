@@ -292,9 +292,13 @@ export interface CoreClient {
    * the reasons `run` would give. */
   explain(request: ComputeRequest): Promise<ExplainResult>;
   /** Lists candidate magnetic orderings (FM plus any AFM candidates),
-   * optionally mMACE-ranked by relaxed energy per atom. */
+   * optionally mMACE-ranked by relaxed energy per atom. Aborting `signal`
+   * abandons the request: the promise then rejects with the abort reason
+   * (fetch's `AbortError`), not a `CoreFailure`. The server still finishes
+   * the enumeration or ranking it started. */
   magneticOrderings(
     request: MagneticOrderingsRequest,
+    signal?: AbortSignal,
   ): Promise<MagneticOrderingsResult>;
   /** Executes the pipeline and returns the JSON summary (file list +
    * records + warnings), not the files themselves. */
@@ -364,6 +368,7 @@ export class HttpCoreClient implements CoreClient {
 
   async magneticOrderings(
     request: MagneticOrderingsRequest,
+    signal?: AbortSignal,
   ): Promise<MagneticOrderingsResult> {
     const response = await this.request("/magnetic-orderings", {
       body: JSON.stringify(request),
@@ -372,6 +377,7 @@ export class HttpCoreClient implements CoreClient {
         "Content-Type": "application/json",
       },
       method: "POST",
+      signal: signal ?? null,
     });
     return parseJson<MagneticOrderingsResult>(response);
   }
@@ -405,6 +411,9 @@ export class HttpCoreClient implements CoreClient {
     try {
       response = await this.fetcher(`${this.baseUrl}${path}`, init);
     } catch (error) {
+      // The caller aborted it: neither a failure to reach Core nor one to
+      // retry, so the abort reason propagates as fetch raised it.
+      if (init.signal?.aborted) throw error;
       throw new CoreFailure(
         "network_error",
         error instanceof Error
