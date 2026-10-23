@@ -11,6 +11,8 @@ import spglib
 from pymatgen.core import Lattice, Species as SpinSpecies, Structure
 from support import (
     SSSP_FIXTURE_UPF as _UPF,
+    fcc_lead,
+    hcp_gadolinium,
     mc3d_42058_silicon,
     sssp_fixture_table_spec as _sssp_table_spec,
 )
@@ -570,6 +572,43 @@ class TestAdviseDegradation:
         assert advice.step.kpoints.k_sampling.ok
         assert advice.step.kpoints.occupations.ok
         assert advice.system.boundary.ok
+
+    @pytest.mark.parametrize(
+        ("structure", "functional", "notice"),
+        [
+            (hcp_gadolinium(), "PBEsol", "magnetic.soc_unavailable"),
+            (fcc_lead(), "PBEsol", "magnetic.soc_suggested"),
+            (fcc_lead(), "LDA", "magnetic.soc_unavailable"),
+        ],
+        ids=["Gd-PBEsol", "Pb-PBEsol", "Pb-LDA"],
+    )
+    def test_the_soc_notice_follows_the_selection_soc_would_make(
+        self, hpc, structure, functional, notice
+    ) -> None:
+        """#181: the spin-orbit notice of a run without SOC comes from the
+        table selection the same request makes with spin_orbit_coupling:
+        soc_suggested names the table it selects, soc_unavailable carries
+        the reason it refuses. hcp Gd used to be told to enable SOC, which
+        then left pseudo_table unavailable."""
+        settings = {"functional": functional}
+        without = advise(structure, hpc=hpc, overrides=build_overrides(settings))
+        with_soc = advise(
+            structure,
+            hpc=hpc,
+            overrides=build_overrides({**settings, "spin_orbit_coupling": True}),
+        )
+
+        notices = {
+            warning.code: warning.message
+            for warning in without.system.magnetic.value.warnings
+            if warning.code in {"magnetic.soc_suggested", "magnetic.soc_unavailable"}
+        }
+        assert notices.keys() == {notice}
+        table = with_soc.system.pseudo.table
+        if notice == "magnetic.soc_suggested":
+            assert notices[notice].endswith(f" table {table.value.id}.")
+        else:
+            assert notices[notice].endswith(f"pseudopotential tables: {table.reason}")
 
     @pytest.mark.parametrize(
         "settings", [{}, {"spin_polarized": True}], ids=["default", "spin_polarized"]

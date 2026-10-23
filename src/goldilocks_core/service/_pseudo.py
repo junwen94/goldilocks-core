@@ -20,7 +20,9 @@ manifest-loading + per-element narrowing behind ``resolve_pseudopotentials``
 keeps every asset-store-shaped type (``AssetStore``, ``AssetNotInstalled``,
 ``InstalledAsset``, the registry/importers modules) out of ``_system.py``'s
 own import surface entirely. ``upf_projectors`` reads the selected files'
-own headers for the job's memory estimate (#148), so it lives here too.
+own headers for the job's memory estimate (#148), so it lives here too, and
+``soc_pseudo_table`` runs the same selection with spin-orbit coupling on,
+for the spin-orbit notice (#181).
 """
 
 from __future__ import annotations
@@ -145,6 +147,22 @@ def resolve_pseudopotentials(
         table=table_state,
         metadata=select_metadata_for_elements(full_metadata, elements),
         relativistic=relativistic_state,
+    )
+
+
+def soc_pseudo_table(elements: set[str], functional: str) -> FieldState[PseudoTable]:
+    """The table automatic selection picks for ``elements`` under
+    ``functional`` with spin-orbit coupling on (relativistic ``full``), or
+    ``Unavailable`` with the selector's refusal. Reads only the registry,
+    with the same selection ``resolve_pseudopotentials`` makes, so the
+    spin-orbit notice (``magnetic_config``) suggests SOC only where that
+    selection would serve it (#181). A pinned ``pseudo_table_id`` is not
+    consulted: the question is whether any registered table can serve SOC."""
+    return select_pseudopotential_table(
+        load_tables(),
+        table_id=None,
+        elements=elements,
+        requirements=pseudo_requirements(functional, spin_orbit_enabled=True),
     )
 
 

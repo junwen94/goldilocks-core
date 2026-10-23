@@ -11,7 +11,9 @@ These decisions depend on one another in a fixed order:
    the most of its point group: idealized, and turned or shifted when that
    is what it takes (``pw_symmetry.pw_frame``, #140);
 2. pseudopotential table selection, which reads the functional and the
-   cell's spin-orbit switch (the relativistic requirement);
+   cell's spin-orbit switch (the relativistic requirement), and the same
+   selection with spin-orbit coupling on (``soc_pseudo_table``), whose
+   verdict decides whether the spin-orbit notice suggests SOC (#181);
 3. ``magnetic_config``, the starting moments on the cell, scaled by the
    selected pseudopotentials' z_valence.
 
@@ -43,10 +45,15 @@ from goldilocks_core.advisors.magnetic_config import (
 )
 from goldilocks_core.analysis.geometry import GeometryFacts, with_vacuum_of
 from goldilocks_core.analysis.symmetry import SymmetryFacts, symmetry
+from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.resolution import Blocked, FieldState, Resolved, blocked_by
 from goldilocks_core.service._analysis import AnalysisFacts
-from goldilocks_core.service._pseudo import PseudoAdvice, resolve_pseudopotentials
+from goldilocks_core.service._pseudo import (
+    PseudoAdvice,
+    resolve_pseudopotentials,
+    soc_pseudo_table,
+)
 from goldilocks_core.service._system_overrides import SystemOverrides
 
 
@@ -81,27 +88,29 @@ def magnetic_advice(
     )
     if cell.ok:
         cell = Resolved(framed_cell(cell.value), cell.provenance)
+        elements = set(analysis.composition.value.elements)
         pseudo = resolve_pseudopotentials(
-            elements=set(analysis.composition.value.elements),
+            elements=elements,
             functional=functional_state.value,
             spin_orbit_enabled=cell.value.spin_orbit_enabled,
             table_id=overrides.pseudo_table_id,
             store=store,
             fetch_missing=fetch_missing,
         )
+        soc_table = soc_pseudo_table(elements, functional_state.value)
         symmetry_eff = symmetry(cell.value.structure)
         geometry_eff = cell_geometry(analysis.geometry, cell)
     else:
         cause = Blocked(by=blocked_by(cell))
         pseudo = PseudoAdvice(table=cause, metadata=cause, relativistic=cause)
-        symmetry_eff = geometry_eff = cause
+        symmetry_eff = geometry_eff = soc_table = cause
     return MagneticAdvice(
         functional=functional_state,
         cell=cell,
         symmetry_eff=symmetry_eff,
         geometry_eff=geometry_eff,
         pseudo=pseudo,
-        magnetic=_seeded(cell, pseudo, analysis, overrides),
+        magnetic=_seeded(cell, pseudo, soc_table, analysis, overrides),
     )
 
 
@@ -123,6 +132,7 @@ def cell_geometry(
 def _seeded(
     cell: FieldState[MagneticCell],
     pseudo: PseudoAdvice,
+    soc_table: FieldState[PseudoTable],
     analysis: AnalysisFacts,
     overrides: SystemOverrides,
 ) -> FieldState[MagneticConfigFacts]:
@@ -131,7 +141,8 @@ def _seeded(
     flat default fractions; a selection that failed outright (``Blocked``:
     no compatible table exists, e.g. spin-orbit coupling on a lanthanide
     that only SSSP covers) blocks the decision instead of serving
-    uncalibrated seeds as if they were good."""
+    uncalibrated seeds as if they were good. ``soc_table``, the selection
+    spin-orbit coupling would make, decides the spin-orbit notice (#181)."""
     if isinstance(pseudo.metadata, Blocked):
         return Blocked(by=pseudo.metadata)
     z_valences = (
@@ -143,4 +154,6 @@ def _seeded(
         if pseudo.metadata.ok
         else None
     )
-    return magnetic_config(cell, analysis.needs_soc, z_valences, overrides.magnetic)
+    return magnetic_config(
+        cell, analysis.needs_soc, soc_table, z_valences, overrides.magnetic
+    )

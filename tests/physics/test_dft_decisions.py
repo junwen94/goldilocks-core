@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import pytest
 from pymatgen.core import Lattice, Structure
-from support import magnetic_decision
+from support import fcc_lead, hcp_gadolinium, magnetic_decision
 
 from goldilocks_core.advisors.convergence import ConvergenceHumanInput, convergence
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
@@ -45,6 +45,7 @@ from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 from goldilocks_core.assets.records import AssetFile, AssetSpec
 from goldilocks_core.checks import check_all
 from goldilocks_core.resolution import FieldState, Provenance, Resolved
+from goldilocks_core.service._pseudo import soc_pseudo_table
 
 
 def _table(
@@ -91,11 +92,38 @@ def test_elemental_metal_uses_modest_cold_smearing_in_qe_rydberg_units() -> None
     assert decision.value.degauss == 0.01
 
 
+_SOC_NOTICES = frozenset({"magnetic.soc_suggested", "magnetic.soc_unavailable"})
+
+
+def _soc_notices(structure: Structure, functional: str) -> dict[str, str]:
+    """The spin-orbit notices of ``structure``'s magnetic decision with
+    spin-orbit coupling off, given the real registry's verdict on serving
+    it under ``functional`` -- code to message."""
+    facts = composition(structure)
+    magnetism = magnetic_decision(
+        structure,
+        is_magnetic(structure),
+        needs_soc(facts),
+        soc_table=soc_pseudo_table(set(facts.value.elements), functional),
+    )
+    assert magnetism.value.spin_orbit_enabled is False
+    return {
+        warning.code: warning.message
+        for warning in magnetism.value.warnings
+        if warning.code in _SOC_NOTICES
+    }
+
+
 def test_heavy_element_prompts_for_soc_without_silently_enabling_it() -> None:
     iodine = Structure(Lattice.cubic(7.0), ["I"], [[0.0, 0.0, 0.0]])
 
     soc_needed = needs_soc(composition(iodine))
-    magnetism = magnetic_decision(iodine, is_magnetic(iodine), soc_needed)
+    magnetism = magnetic_decision(
+        iodine,
+        is_magnetic(iodine),
+        soc_needed,
+        soc_table=soc_pseudo_table({"I"}, "PBEsol"),
+    )
     requirements = pseudo_requirements(
         "PBEsol", spin_orbit_enabled=magnetism.value.spin_orbit_enabled
     )
@@ -105,6 +133,56 @@ def test_heavy_element_prompts_for_soc_without_silently_enabling_it() -> None:
     assert requirements.relativistic == "scalar"
     assert any(
         warning.code == "magnetic.soc_suggested" for warning in magnetism.value.warnings
+    )
+
+
+def test_soc_is_suggested_with_the_fully_relativistic_table_that_serves_it() -> None:
+    """#181: fcc Pb under PBEsol has a fully relativistic PseudoDojo
+    table, so the suggestion can be followed and names that table."""
+    notices = _soc_notices(fcc_lead(), "PBEsol")
+
+    assert notices.keys() == {"magnetic.soc_suggested"}
+    assert notices["magnetic.soc_suggested"].endswith(
+        "with it, automatic selection uses the fully relativistic table "
+        "pseudodojo-pbesol-efficiency-fr."
+    )
+
+
+def test_soc_is_not_suggested_for_a_lanthanide_no_registered_table_serves() -> None:
+    """#181: every lanthanide must use an SSSP table and no SSSP table is
+    fully relativistic, so enabling spin_orbit_coupling on hcp Gd makes
+    table selection refuse. The notice keeps the caveat and says why
+    instead of suggesting a setting the selector refuses."""
+    notices = _soc_notices(hcp_gadolinium(), "PBEsol")
+
+    assert notices.keys() == {"magnetic.soc_unavailable"}
+    message = notices["magnetic.soc_unavailable"]
+    assert message.startswith(
+        "heavy, non-s-block elements are present, where spin-orbit coupling "
+        "can matter, but spin_orbit_coupling cannot be enabled for them with "
+        "this functional and the registered pseudopotential tables: no "
+        "pseudopotential table satisfies PBEsol efficiency full for Gd: "
+    )
+    assert (
+        "pseudodojo-pbesol-efficiency-fr: lanthanide and actinide elements "
+        "require an SSSP table and missing elements Gd; "
+    ) in message
+    assert message.endswith(
+        "sssp-pbesol-efficiency-sr: relativistic treatment is scalar, requested full"
+    )
+
+
+def test_soc_is_not_suggested_under_a_functional_with_no_relativistic_table() -> None:
+    """#181: no fully relativistic LDA table is registered, so Pb under
+    LDA gets the unavailable notice, while under PBEsol it gets the
+    suggestion."""
+    notices = _soc_notices(fcc_lead(), "LDA")
+
+    assert notices.keys() == {"magnetic.soc_unavailable"}
+    assert notices["magnetic.soc_unavailable"].endswith(
+        "no pseudopotential table satisfies LDA efficiency full for Pb: "
+        "pseudodojo-lda-efficiency-sr: relativistic treatment is scalar, "
+        "requested full"
     )
 
 

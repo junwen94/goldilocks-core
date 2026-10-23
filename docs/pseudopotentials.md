@@ -68,7 +68,10 @@ coverage must still match the request. In particular:
   freezes 4f electrons in the core assuming trivalent ions, which is not
   suitable for all oxidation states; its tables do not cover actinides. No
   registered SSSP table is fully relativistic, so automatic or explicit
-  registered-table selection cannot supply SOC for these elements.
+  registered-table selection cannot supply SOC for these elements. Their runs
+  carry the notice `magnetic.soc_unavailable`, with the selector's reason, in
+  place of a suggestion to enable SOC (see
+  [spin-orbit coupling](science.md#check-magnetism-and-spin-orbit-coupling)).
 - SSSP 1.3.0 PBEsol tables reuse PBE input parameters and cutoffs and were not
   tested with the SSSP convergence protocol. Do not treat these as
   PBEsol-validated cutoffs.

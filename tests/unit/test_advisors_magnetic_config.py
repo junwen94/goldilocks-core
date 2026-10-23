@@ -26,6 +26,7 @@ from goldilocks_core.analysis.geometry import slab_geometry, slab_layers, vacuum
 from goldilocks_core.analysis.is_magnetic import is_magnetic
 from goldilocks_core.analysis.local_moments import local_moments
 from goldilocks_core.analysis.symmetry import symmetry
+from goldilocks_core.assets.pseudopotentials.registry import load_tables
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
@@ -504,15 +505,102 @@ def test_soc_enabled_on_a_non_magnetic_structure_has_no_angles() -> None:
     assert state.value.angle2 is None
 
 
-def test_soc_is_never_auto_enabled_even_when_needs_soc_says_yes() -> None:
-    always_true = Resolved(True, is_magnetic(_IRON).provenance)
+_NEEDS_SOC = Resolved(True, Provenance(source="heuristic"))
+_FR_TABLE = Resolved(
+    load_tables()["pseudodojo-pbesol-efficiency-fr"], Provenance(source="heuristic")
+)
+_NO_FR_TABLE = Unavailable(reason="no pseudopotential table satisfies the request")
 
-    state = magnetic_decision(_IRON, is_magnetic(_IRON), needs_soc=always_true)
+
+def _soc_codes(state) -> set[str]:
+    return {
+        warning.code
+        for warning in state.value.warnings
+        if warning.code in {"magnetic.soc_suggested", "magnetic.soc_unavailable"}
+    }
+
+
+def test_soc_is_never_auto_enabled_even_when_needs_soc_says_yes() -> None:
+    state = magnetic_decision(
+        _BCC_IRON, is_magnetic(_BCC_IRON), needs_soc=_NEEDS_SOC, soc_table=_FR_TABLE
+    )
 
     assert state.value.spin_orbit_enabled is False
-    assert any(
-        "consider enabling" in warning.message for warning in state.value.warnings
+    (notice,) = (
+        warning
+        for warning in state.value.warnings
+        if warning.code == "magnetic.soc_suggested"
     )
+    assert (notice.level, notice.category) == ("info", "magnetic")
+    assert notice.message == (
+        "heavy, non-s-block elements are present; consider enabling "
+        "spin_orbit_coupling (not enabled automatically -- it changes cost and "
+        "setup); with it, automatic selection uses the fully relativistic table "
+        "pseudodojo-pbesol-efficiency-fr."
+    )
+
+
+def test_soc_no_table_can_serve_is_reported_unavailable_with_the_reason() -> None:
+    """#181: a suggestion the table selector would refuse is replaced by
+    ``magnetic.soc_unavailable``, which keeps the caveat and carries the
+    selector's refusal."""
+    state = magnetic_decision(
+        _BCC_IRON,
+        is_magnetic(_BCC_IRON),
+        needs_soc=_NEEDS_SOC,
+        soc_table=_NO_FR_TABLE,
+    )
+
+    (notice,) = (
+        warning
+        for warning in state.value.warnings
+        if warning.code in {"magnetic.soc_suggested", "magnetic.soc_unavailable"}
+    )
+    assert (notice.code, notice.level, notice.category) == (
+        "magnetic.soc_unavailable",
+        "info",
+        "magnetic",
+    )
+    assert notice.message == (
+        "heavy, non-s-block elements are present, where spin-orbit coupling can "
+        "matter, but spin_orbit_coupling cannot be enabled for them with this "
+        "functional and the registered pseudopotential tables: no "
+        "pseudopotential table satisfies the request"
+    )
+
+
+@pytest.mark.parametrize("soc_table", [_FR_TABLE, _NO_FR_TABLE, None])
+def test_no_soc_notice_once_spin_orbit_coupling_is_on(soc_table) -> None:
+    state = magnetic_decision(
+        _BCC_IRON,
+        is_magnetic(_BCC_IRON),
+        needs_soc=_NEEDS_SOC,
+        soc_table=soc_table,
+        human=MagneticConfigHumanInput(spin_orbit_coupling=True),
+    )
+
+    assert state.value.spin_orbit_enabled is True
+    assert _soc_codes(state) == set()
+
+
+@pytest.mark.parametrize("soc_table", [_FR_TABLE, _NO_FR_TABLE])
+def test_no_soc_notice_when_needs_soc_is_false(soc_table) -> None:
+    state = magnetic_decision(
+        _BCC_IRON,
+        is_magnetic(_BCC_IRON),
+        needs_soc=Resolved(False, Provenance(source="heuristic")),
+        soc_table=soc_table,
+    )
+
+    assert _soc_codes(state) == set()
+
+
+def test_no_soc_notice_without_a_table_verdict() -> None:
+    """No verdict on serving spin-orbit coupling, no SOC notice: the notice
+    never recommends a setting the table selector was not asked about."""
+    state = magnetic_decision(_BCC_IRON, is_magnetic(_BCC_IRON), needs_soc=_NEEDS_SOC)
+
+    assert _soc_codes(state) == set()
 
 
 _HCP_COBALT = Structure.from_spacegroup(

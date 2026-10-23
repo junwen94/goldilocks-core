@@ -167,8 +167,16 @@ records the frame; the notice `magnetic.cell_framed` names it when the
 cell was turned or shifted or an atom moved by 1e-4 A or more.
 
 SOC stays opt-in, matching v1's own policy: `needs_soc` only ever produces a
-warning recommending it be considered, never enables it automatically --
-enabling SOC changes cost and setup, which is a human's call.
+notice, never enables it automatically -- enabling SOC changes cost and
+setup, which is a human's call. The notice follows the table selection
+spin-orbit coupling would make (`soc_table`, from
+`service._pseudo.soc_pseudo_table`), so it never recommends a setting the
+selector refuses (#181): `magnetic.soc_suggested` names the fully
+relativistic table that selection picks, and `magnetic.soc_unavailable`
+keeps the caveat and carries the selector's refusal -- for every
+lanthanide and actinide (SSSP only, and no SSSP table is fully
+relativistic) and under a functional with no fully relativistic table
+(LDA). Without a verdict there is no notice.
 
 **`starting_magnetization` follows aiida-quantumespresso's own convention**
 (`aiida_quantumespresso.workflows.protocols.utils.get_magnetization`, used by
@@ -231,6 +239,7 @@ from goldilocks_core.analysis.geometry import LATTICE_AXES, vacuum_axes
 from goldilocks_core.analysis.is_magnetic import Magnetism
 from goldilocks_core.analysis.local_moments import LocalMomentFacts, local_moments
 from goldilocks_core.analysis.symmetry import SYMPREC
+from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.pw_symmetry import PwFrame, pw_frame
 from goldilocks_core.resolution import (
@@ -367,15 +376,15 @@ _ORDERING_IGNORED_WARNING = Warning(
     ),
 )
 
-_SOC_SUGGESTED_WARNING = Warning(
-    code="magnetic.soc_suggested",
-    level="info",
-    category="magnetic",
-    message=(
-        "heavy, non-s-block elements are present; consider enabling "
-        "spin_orbit_coupling (not enabled automatically -- it changes "
-        "cost and setup)."
-    ),
+_SOC_SUGGESTED = (
+    "heavy, non-s-block elements are present; consider enabling "
+    "spin_orbit_coupling (not enabled automatically -- it changes cost and setup)"
+)
+
+_SOC_UNAVAILABLE = (
+    "heavy, non-s-block elements are present, where spin-orbit coupling can "
+    "matter, but spin_orbit_coupling cannot be enabled for them with this "
+    "functional and the registered pseudopotential tables"
 )
 
 _MOMENT_DIRECTION_DEFAULTED_WARNING = Warning(
@@ -432,7 +441,24 @@ run."""
 _CELL_FRAMED = "magnetic.cell_framed"
 
 WARNING_CATALOGUE = (
-    _SOC_SUGGESTED_WARNING,
+    Warning(
+        code="magnetic.soc_suggested",
+        level="info",
+        category="magnetic",
+        message=(
+            f"{_SOC_SUGGESTED}; with it, automatic selection uses the named "
+            "fully relativistic table."
+        ),
+    ),
+    Warning(
+        code="magnetic.soc_unavailable",
+        level="info",
+        category="magnetic",
+        message=(
+            f"{_SOC_UNAVAILABLE}: the table selector's refusal names what "
+            "rejected each table."
+        ),
+    ),
     Warning(
         code="magnetic.magnetism_unknown_defaulted_spin_polarized",
         level="warning",
@@ -483,10 +509,10 @@ WARNING_CATALOGUE = (
 ``warnings[]`` catalogue aggregates one of these tuples per advisor. The
 real, per-occurrence messages for
 ``magnetic.magnetism_unknown_defaulted_spin_polarized``,
-``magnetic.afm_ordering_unavailable`` and ``magnetic.cell_framed`` name
-the actual reason (built at their call sites in
-``_resolve_spin_polarized``, ``_afm_unavailable`` and ``_frame_notice``
-below); these are the generic descriptions,
+``magnetic.afm_ordering_unavailable``, ``magnetic.cell_framed`` and the
+two spin-orbit notices name the actual reason (built at their call sites
+in ``_resolve_spin_polarized``, ``_afm_unavailable``, ``_frame_notice``
+and ``_soc_notice`` below); these are the generic descriptions,
 for a caller that has not seen them fire."""
 
 
@@ -766,6 +792,7 @@ def magnetic_cell(
 def magnetic_config(
     cell: FieldState[MagneticCell],
     needs_soc: FieldState[bool] | None = None,
+    soc_table: FieldState[PseudoTable] | None = None,
     z_valences: dict[str, float] | None = None,
     human: MagneticConfigHumanInput | None = None,
 ) -> FieldState[MagneticConfigFacts]:
@@ -773,10 +800,11 @@ def magnetic_config(
     human ``starting_magnetization`` (already split onto the cell's
     species by ``magnetic_cell``), or the heuristic fractions, scaled by
     the selected pseudopotentials' ``z_valences`` when known -- with the
-    net moment they seed (``_seeded_moment``), the spin-orbit suggestion
-    and the angles of the cell's moment direction (``_angles``). Copies
-    the cell's facts, with the cell's provenance; ``Blocked`` when the
-    cell is not resolved."""
+    net moment they seed (``_seeded_moment``), the spin-orbit notice
+    (``_soc_notice``, from ``needs_soc`` and ``soc_table``, the table
+    selection spin-orbit coupling would make) and the angles of the cell's
+    moment direction (``_angles``). Copies the cell's facts, with the
+    cell's provenance; ``Blocked`` when the cell is not resolved."""
     human = human or MagneticConfigHumanInput()
     if not cell.ok:
         return Blocked(by=blocked_by(cell))
@@ -792,10 +820,10 @@ def magnetic_config(
         else None
     )
 
-    warnings = facts.warnings
-    needs_soc_resolved_true = needs_soc is not None and needs_soc.ok and needs_soc.value
-    if not facts.spin_orbit_enabled and needs_soc_resolved_true:
-        warnings = (*warnings, _SOC_SUGGESTED_WARNING)
+    warnings = (
+        *facts.warnings,
+        *_soc_notice(facts.spin_orbit_enabled, needs_soc, soc_table),
+    )
 
     angle1 = angle2 = None
     axis = facts.moment_axis
@@ -822,6 +850,34 @@ def magnetic_config(
         warnings=warnings,
     )
     return Resolved(config, cell.provenance)
+
+
+def _soc_notice(
+    spin_orbit_enabled: bool,
+    needs_soc: FieldState[bool] | None,
+    soc_table: FieldState[PseudoTable] | None,
+) -> tuple[Warning, ...]:
+    """The spin-orbit notice of a run without spin-orbit coupling whose
+    ``needs_soc`` resolved true: ``magnetic.soc_suggested`` naming the
+    table when ``soc_table`` resolved, else ``magnetic.soc_unavailable``
+    carrying the selector's refusal (#181). None when spin-orbit coupling
+    is on, ``needs_soc`` did not resolve true, or no ``soc_table`` was
+    given. Automatic selection only resolves or refuses, so an unresolved
+    ``soc_table`` is ``Unavailable``."""
+    if spin_orbit_enabled or soc_table is None:
+        return ()
+    if needs_soc is None or not (needs_soc.ok and needs_soc.value):
+        return ()
+    if isinstance(soc_table, Resolved):
+        code = "magnetic.soc_suggested"
+        message = (
+            f"{_SOC_SUGGESTED}; with it, automatic selection uses the fully "
+            f"relativistic table {soc_table.value.id}."
+        )
+    else:
+        code = "magnetic.soc_unavailable"
+        message = f"{_SOC_UNAVAILABLE}: {soc_table.reason}"
+    return (Warning(code=code, level="info", category="magnetic", message=message),)
 
 
 def framed_cell(cell: MagneticCell) -> MagneticCell:

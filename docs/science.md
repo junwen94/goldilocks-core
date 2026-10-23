@@ -284,7 +284,15 @@ elements (Rb, Sr, Cs, Ba) are excluded because s orbitals carry no
 first-order spin-orbit splitting. Whether SOC matters depends on the property,
 not only the elements. Enabling it changes the required pseudopotentials and
 the QE spin settings. See [relativistic modes](conventions.md#relativistic-modes)
-and the [table restrictions](pseudopotentials.md#choose-a-table).
+and the [table restrictions](pseudopotentials.md#choose-a-table). The info
+notice follows the table selection SOC would make. `magnetic.soc_suggested`
+names the fully relativistic table automatic selection would use, for
+example `pseudodojo-pbesol-efficiency-fr` for fcc Pb under PBEsol. Where no
+registered table can serve SOC, the notice is `magnetic.soc_unavailable`
+instead and carries the selector's reason. That covers every lanthanide and
+actinide, which must use SSSP, and any element under LDA, which has no fully
+relativistic table: enabling `spin_orbit_coupling` there would leave
+`pseudo_table` unavailable.
 
 A spin-polarized run with SOC is noncollinear: every moment starts along one
 direction, and that direction is a physical choice, since magnetic

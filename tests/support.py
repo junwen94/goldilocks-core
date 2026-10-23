@@ -91,13 +91,15 @@ def magnetic_decision(
     needs_soc: FieldState[bool] | None = None,
     z_valences: dict[str, float] | None = None,
     human: MagneticConfigHumanInput | None = None,
+    *,
+    soc_table: FieldState[PseudoTable] | None = None,
 ) -> FieldState[MagneticConfigFacts]:
     """``magnetic_cell`` then ``magnetic_config``, the two steps
     ``service/_magnetic.py`` runs around pseudopotential selection -- for
     advisor-level tests that need one structure's whole magnetic
     decision (#128)."""
     cell = magnetic_cell(structure, is_magnetic, human)
-    return magnetic_config(cell, needs_soc, z_valences, human)
+    return magnetic_config(cell, needs_soc, soc_table, z_valences, human)
 
 
 def strict_json(document: str | bytes) -> Any:
@@ -638,6 +640,22 @@ def uranium_nitride() -> Structure:
     symmetry, differ in the seventh significant figure from CIF noise
     (up to 4.5e-7 A^-1)."""
     return Structure.from_str(_MP_1865_URANIUM_NITRIDE_CIF, fmt="cif")
+
+
+def hcp_gadolinium() -> Structure:
+    """hcp Gd (P6_3/mmc), Materials Project mp-155: 2 atoms, a = 3.642 A,
+    c = 5.902 A."""
+    return Structure.from_spacegroup(
+        "P6_3/mmc", Lattice.hexagonal(3.642, 5.902), ["Gd"], [[1 / 3, 2 / 3, 0.25]]
+    )
+
+
+def fcc_lead() -> Structure:
+    """fcc Pb (Fm-3m), MC3D mc3d-48868, in its 4-atom conventional cell
+    (a = 4.919 A)."""
+    return Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(4.919), ["Pb"], [[0.0, 0.0, 0.0]]
+    )
 
 
 def geometry_facts(

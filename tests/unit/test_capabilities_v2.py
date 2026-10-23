@@ -163,6 +163,18 @@ class TestTopLevelShape:
                 "hubbard",
             )
 
+    def test_warnings_catalogue_lists_both_spin_orbit_notices(self) -> None:
+        """#181: the notice that spin-orbit coupling cannot be served is
+        published next to the suggestion, so a frontend can filter on it
+        before any run has emitted it."""
+        by_code = {entry["code"]: entry for entry in capabilities()["warnings"]}
+
+        for code in ("magnetic.soc_suggested", "magnetic.soc_unavailable"):
+            assert (by_code[code]["level"], by_code[code]["category"]) == (
+                "info",
+                "magnetic",
+            )
+
     def test_warnings_catalogue_codes_are_unique(self) -> None:
         codes = [entry["code"] for entry in capabilities()["warnings"]]
 
