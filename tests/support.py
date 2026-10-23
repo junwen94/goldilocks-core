@@ -224,6 +224,62 @@ def sssp_fixture_table_spec(
     return spec, registry_table
 
 
+def dojo_fixture_table_spec(
+    tmp_path: Path,
+    *,
+    upf: bytes = SSSP_FIXTURE_UPF,
+    report_functional: object = "PBEsol",
+    table_functional: str = "PBEsol",
+    frozen_4f_core: bool = False,
+) -> tuple[AssetSpec, PseudoTable]:
+    """Build one fully-offline PseudoDojo-shaped table covering Si (file://
+    sources, no network): ``upf`` and a dojo report whose ``low``/``normal``/
+    ``high`` hints are 10/15/20 Ha (20/30/40 Ry), under a table with
+    ``charge_density_dual`` 4. Its registry id ``pseudodojo-fixture``
+    differs from its asset id."""
+    from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    upfs = tmp_path / "upfs.tgz"
+    reports = tmp_path / "reports.tgz"
+    sssp_fixture_archive(upfs, {"nested/Si.upf": upf})
+    report = {
+        "xc": report_functional,
+        "md5_upf": hashlib.md5(upf).hexdigest(),
+        "hints": {
+            "low": {"ecut": 10.0},
+            "normal": {"ecut": 15.0},
+            "high": {"ecut": 20.0},
+        },
+    }
+    sssp_fixture_archive(reports, {"nested/Si.djrepo": json.dumps(report).encode()})
+    spec = AssetSpec(
+        "pseudopotentials/pseudodojo-fixture",
+        "1",
+        (
+            AssetFile("pseudopotentials", "source/upfs.tgz", upfs.as_uri()),
+            AssetFile("metadata", "source/reports.tgz", reports.as_uri()),
+        ),
+    )
+    registry_table = PseudoTable(
+        id="pseudodojo-fixture",
+        provider="pseudodojo",
+        upstream_table="fixture",
+        version="1",
+        functional=table_functional,
+        relativistic="scalar",
+        accuracy="efficiency",
+        licence="fixture licence",
+        citation="fixture citation",
+        elements=("Si",),
+        asset=spec,
+        charge_density_dual=4.0,
+        default=True,
+        frozen_4f_core=frozen_4f_core,
+    )
+    return spec, registry_table
+
+
 _MC2D_60196AFB_PHOSPHORENE_CIF = """\
 data_P
 _symmetry_space_group_name_H-M   'P 1'

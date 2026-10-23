@@ -27,8 +27,10 @@ defaults to `0.15` for metals or when metallicity is unknown and `0.30` for a
 confirmed non-metal; `degauss` defaults to
 `0.01` Ry for metals; `ecutwfc_ry`/`ecutrho_ry` are decided together by the
 `cutoffs` advisor from the selected pseudopotentials' own published
-recommendations, deriving `ecutrho_ry` from `ecutwfc_ry` when a table (e.g.
-PseudoDojo) does not publish it directly.
+recommendations. When the table publishes no charge-density cutoff
+(PseudoDojo), `ecutrho_ry` is its `charge_density_dual` times the resolved
+`ecutwfc_ry` (a human one included), reported as the info notice
+`cutoffs.ecutrho_derived_from_dual`.
 
 ## K-point spacing and shifts
 

@@ -16,8 +16,8 @@ Use this only after Goldilocks has already selected the scientific values. The g
   ibrav = 0
   nat = <site_count>
   ntyp = <species_count>
-  ecutwfc = <max_selected_ecutwfc_ry>
-  ecutrho = <max_selected_ecutrho_ry>
+  ecutwfc = <cutoffs_ecutwfc_ry>
+  ecutrho = <cutoffs_ecutrho_ry>
   occupations = '<fixed_or_smearing>'
   smearing = '<smearing_type>'        ! omit if fixed occupations
   degauss = <smearing_width_ry>       ! omit if fixed occupations
@@ -83,7 +83,8 @@ species_count       -> len({site.label for site in advice.system.cell.value.stru
 k-grid              -> advice.step.kpoints.k_sampling.value.mesh
 k-shift             -> advice.step.kpoints.k_sampling.value.shift
 pseudos             -> advice.system.pseudo.metadata.value  (one entry per element)
-ecutwfc / ecutrho   -> advice.system.cutoffs.value (max across elements)
+ecutwfc / ecutrho   -> advice.system.cutoffs.value (max across elements; ecutrho is
+                       charge_density_dual x ecutwfc where the table publishes none)
 occupations         -> advice.step.kpoints.occupations.value
 tot_magnetization   -> advice.step.kpoints.occupations.value.tot_magnetization  (None writes none)
 spin / SOC          -> advice.system.magnetic.value, advice.system.pseudo.relativistic
@@ -134,5 +135,8 @@ for element in elements:
 if pseudopotential selection failed for any element -- check `.ok` (or use
 `check(advice)`/`report.blocking`, see [workflows.md](workflows.md)) before
 assuming a runnable input can be generated. Do not proceed to a runnable
-input if any selected pseudopotential's `filename`, `ecutwfc_ry`, or
-`ecutrho_ry` is `None`.
+input if any selected pseudopotential's `filename` is `None` or
+`advice.system.cutoffs` is not `Resolved`. Take both cutoffs from that record:
+a PseudoDojo file's own `cutoffs["ecutrho_ry"]` is `None`, because PseudoDojo
+publishes no density cutoff, and the record carries the derived value with a
+`cutoffs.ecutrho_derived_from_dual` notice.

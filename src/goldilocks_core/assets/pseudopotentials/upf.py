@@ -33,8 +33,23 @@ from goldilocks_core.validation import (
 
 
 class PseudoCutoffs(TypedDict):
+    """The cutoffs the provider publishes for one file, in Ry: ``None``
+    where it publishes none (PseudoDojo has no density cutoff, #180)."""
+
     ecutwfc_ry: float | None
     ecutrho_ry: float | None
+
+
+class PseudoCutoffHints(TypedDict):
+    """PseudoDojo's published wavefunction cutoff hints, in Ry; ``high``
+    is the file's ``ecutwfc_ry``."""
+
+    low: float
+    normal: float
+    high: float
+
+
+_HINT_LEVELS = ("low", "normal", "high")
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +74,7 @@ class PseudoMetadata:
     table_id: str | None = None
     asset_path: str | None = None
     cutoffs: PseudoCutoffs | None = None
+    cutoff_hints: PseudoCutoffHints | None = None
     source_identifier: str | None = None
     content_sha256: str | None = None
     content_size_bytes: int | None = None
@@ -176,6 +192,21 @@ class PseudoMetadata:
                     value = float(value)
                 normalized[field_name] = value
             object.__setattr__(self, "cutoffs", normalized)
+        if self.cutoff_hints is not None:
+            self._normalize_cutoff_hints()
+
+    def _normalize_cutoff_hints(self) -> None:
+        hints = self.cutoff_hints
+        if not isinstance(hints, Mapping) or set(hints) != set(_HINT_LEVELS):
+            raise ValueError(
+                "PseudoMetadata.cutoff_hints must map exactly low, normal and high"
+            )
+        for level in _HINT_LEVELS:
+            validate_finite_positive(
+                hints[level], f"PseudoMetadata.cutoff_hints.{level}"
+            )
+        normalized = {level: float(hints[level]) for level in _HINT_LEVELS}
+        object.__setattr__(self, "cutoff_hints", normalized)
 
 
 def _clean_string(value: object) -> str | None:

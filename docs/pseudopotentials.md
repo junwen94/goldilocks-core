@@ -153,10 +153,16 @@ for pseudo in metadata:
     print(pseudo.element, pseudo.filename, pseudo.cutoffs)
 ```
 
-Managed PseudoDojo tables convert the provider's high cutoff hint from Hartree
-to Ry and derive the charge-density cutoff using the registered multiplier
-(currently 4). SSSP tables supply separate wavefunction and charge-density
-cutoffs. Neither path optimizes cutoffs for your structure.
+PseudoDojo publishes only wavefunction cutoff hints (low, normal and high, in
+Hartree). A managed PseudoDojo table converts them to Ry and keeps all three as
+`cutoff_hints`; `cutoffs` holds the high hint as `ecutwfc_ry` and `None` as
+`ecutrho_ry`, because PseudoDojo publishes no charge-density cutoff. SSSP tables
+publish both cutoffs, so `cutoff_hints` is `None`. The `cutoffs` advisor is the
+one place a charge-density cutoff is derived: for a table that publishes none it
+writes the table's `charge_density_dual` (4 for every PseudoDojo table) times
+the resolved `ecutwfc_ry`, a `--set ecutwfc_ry` value included, and the
+`cutoffs` record says so with the info notice `cutoffs.ecutrho_derived_from_dual`.
+Neither path optimizes cutoffs for your structure.
 
 ## Use your own UPF files
 

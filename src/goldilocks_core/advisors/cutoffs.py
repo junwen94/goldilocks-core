@@ -14,25 +14,24 @@ independently. The two maxima are not required to come from the same
 element or preserve any particular ratio to each other -- that is
 `aiida-pseudo`'s own behaviour too, not a shortcut taken here.
 
-**Where `ecutrho_ry` comes from when a pseudopotential does not publish
-one directly.** SSSP tables give both `ecutwfc_ry`/`ecutrho_ry`
-explicitly per element (no derivation needed). This codebase's actual
+**Where `ecutrho_ry` comes from when a provider publishes none.** SSSP
+tables publish both `ecutwfc_ry`/`ecutrho_ry` per element. This codebase's
 default provider, PseudoDojo (`advisors/pseudo_selection.py`'s
 `requires_sssp`: SSSP is the exception, only for lanthanides/actinides),
-distributes only a wavefunction cutoff -- the density cutoff has to be
-derived as `ecutwfc * charge_density_dual`. That dual is not invented
-here: `PseudoTable.charge_density_dual`
-(`assets/pseudopotentials/registry.py:91`) is already a required,
-populated field for every PseudoDojo table in the live registry
-(`registry.toml`: `4.0` throughout, matching both QE's own general
-guidance for norm-conserving pseudopotentials and aiida-pseudo's own
-`dual_mapping` for norm-conserving pseudo types) -- this module only
-reads it, it does not maintain its own copy.
+publishes only wavefunction cutoff hints, so its files carry
+`cutoffs["ecutrho_ry"] = None` (`importers._published_cutoffs`) and this
+module is the one place the density cutoff is derived (#180): the table's
+`PseudoTable.charge_density_dual` (`registry.toml`: `4.0` for every
+PseudoDojo table, QE's own default for norm-conserving pseudopotentials and
+aiida-pseudo's `dual_mapping` for them) times the *resolved* ecutwfc, so a
+human `ecutwfc_ry` moves it too, as QE's own `ecutrho` default does. It is
+taken as the max with any element's published density cutoff and reported
+once per decision as `cutoffs.ecutrho_derived_from_dual`.
 
-If a pseudopotential's metadata carries neither an explicit `ecutrho_ry`
-nor a table with a `charge_density_dual` to derive one from, that is a
-genuine gap this module cannot safely paper over with an invented
-number -- it returns `Blocked` naming the element, not a guess.
+If a pseudopotential publishes no `ecutrho_ry` and the table has no
+`charge_density_dual` to derive one from, that is a genuine gap this module
+cannot safely paper over with an invented number -- it returns `Blocked`
+naming the element, not a guess.
 """
 
 from __future__ import annotations
@@ -59,16 +58,18 @@ WARNING_CATALOGUE = (
         level="info",
         category="cutoffs",
         message=(
-            "ecutrho derived as charge_density_dual x ecutwfc for one or more "
-            "elements (no explicit value published for that pseudopotential)."
+            "ecutrho derived as the table's charge_density_dual x the resolved "
+            "ecutwfc: the selected pseudopotentials publish no density cutoff "
+            "(PseudoDojo)."
         ),
     ),
 )
 """Every warning code this module can emit -- ``capabilities.py``'s
 ``warnings[]`` catalogue aggregates one of these tuples per advisor. The
-real, per-occurrence message (naming the actual element and dual) is
-built at the call site in ``_aggregate`` below; this entry is the
-generic description of the code, for a caller that has not seen it fire."""
+real, per-occurrence message (naming the dual, the cutoffs, the table and
+the elements) is built at the call site in ``_density_cutoff`` below; this
+entry is the generic description of the code, for a caller that has not
+seen it fire."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +89,10 @@ def cutoffs(
     table: FieldState[PseudoTable] | None = None,
     human: CutoffsHumanInput | None = None,
 ) -> FieldState[CutoffsDecision]:
+    """``ecutwfc``: the human value, else the largest the selected
+    pseudopotentials publish. ``ecutrho``: the human value, else
+    ``_density_cutoff`` at that ``ecutwfc``. ``source`` is ``human`` once
+    either value is."""
     human = human or CutoffsHumanInput()
 
     if human.ecutwfc_ry is not None and human.ecutrho_ry is not None:
@@ -99,56 +104,70 @@ def cutoffs(
     if not pseudos.ok:
         return Blocked(by=blocked_by(pseudos))
 
-    aggregated = _aggregate(pseudos.value, table)
-    if isinstance(aggregated, Blocked):
-        return aggregated
-    ecutwfc_ry, ecutrho_ry, warnings = aggregated
-
-    if human.ecutwfc_ry is None and human.ecutrho_ry is None:
-        decision = CutoffsDecision(ecutwfc_ry, ecutrho_ry, warnings)
-        return Resolved(decision, Provenance(source="heuristic"))
-
-    decision = CutoffsDecision(
-        ecutwfc_ry=human.ecutwfc_ry if human.ecutwfc_ry is not None else ecutwfc_ry,
-        ecutrho_ry=human.ecutrho_ry if human.ecutrho_ry is not None else ecutrho_ry,
-        warnings=warnings,
+    published_ecutwfc = _largest_ecutwfc(pseudos.value)
+    if isinstance(published_ecutwfc, Blocked):
+        return published_ecutwfc
+    ecutwfc_ry = published_ecutwfc if human.ecutwfc_ry is None else human.ecutwfc_ry
+    decision = (
+        _density_cutoff(pseudos.value, ecutwfc_ry, table)
+        if human.ecutrho_ry is None
+        else CutoffsDecision(ecutwfc_ry, human.ecutrho_ry)
     )
+    if isinstance(decision, Blocked):
+        return decision
+    if human.ecutwfc_ry is None and human.ecutrho_ry is None:
+        return Resolved(decision, Provenance(source="heuristic"))
     return Resolved(decision, Provenance(source="human"))
 
 
-def _aggregate(
-    pseudos: tuple[PseudoMetadata, ...], table: FieldState[PseudoTable] | None
-) -> tuple[float, float, tuple[Warning, ...]] | Blocked:
-    dual = table.value.charge_density_dual if table is not None and table.ok else None
-    wfc_values: list[float] = []
-    rho_values: list[float] = []
-    warnings: list[Warning] = []
+def _largest_ecutwfc(pseudos: tuple[PseudoMetadata, ...]) -> float | Blocked:
+    values: list[float] = []
     for metadata in pseudos:
         wfc = metadata.cutoffs.get("ecutwfc_ry") if metadata.cutoffs else None
         if wfc is None:
             return Blocked(
                 by=f"no recommended ecutwfc for pseudopotential {metadata.element!r}"
             )
-        wfc_values.append(wfc)
+        values.append(wfc)
+    return max(values)
 
+
+def _density_cutoff(
+    pseudos: tuple[PseudoMetadata, ...],
+    ecutwfc_ry: float,
+    table: FieldState[PseudoTable] | None,
+) -> CutoffsDecision | Blocked:
+    """The decision at ``ecutwfc_ry`` with the largest published ``ecutrho``.
+    Pseudopotentials that publish none take the table's
+    ``charge_density_dual`` x ``ecutwfc_ry``, reported in one
+    ``cutoffs.ecutrho_derived_from_dual`` notice naming them."""
+    published: list[float] = []
+    unpublished: list[str] = []
+    for metadata in pseudos:
         rho = metadata.cutoffs.get("ecutrho_ry") if metadata.cutoffs else None
         if rho is None:
-            if dual is None:
-                return Blocked(
-                    by=f"no recommended ecutrho for {metadata.element!r} and no "
-                    "charge_density_dual to derive one from"
-                )
-            rho = wfc * dual
-            warnings.append(
-                Warning(
-                    code="cutoffs.ecutrho_derived_from_dual",
-                    level="info",
-                    category="cutoffs",
-                    message=(
-                        f"{metadata.element}: ecutrho derived as {dual}x ecutwfc "
-                        "(no explicit value published)"
-                    ),
-                )
-            )
-        rho_values.append(rho)
-    return max(wfc_values), max(rho_values), tuple(warnings)
+            unpublished.append(str(metadata.element))
+        else:
+            published.append(rho)
+    if not unpublished:
+        return CutoffsDecision(ecutwfc_ry, max(published))
+
+    selected = table.value if table is not None and table.ok else None
+    if selected is None or selected.charge_density_dual is None:
+        return Blocked(
+            by=f"no recommended ecutrho for {unpublished[0]!r} and no "
+            "charge_density_dual to derive one from"
+        )
+    dual = selected.charge_density_dual
+    derived = dual * ecutwfc_ry
+    notice = Warning(
+        code="cutoffs.ecutrho_derived_from_dual",
+        level="info",
+        category="cutoffs",
+        message=(
+            "ecutrho derived as charge_density_dual x ecutwfc = "
+            f"{dual:g} x {ecutwfc_ry:g} = {derived:g} Ry: table {selected.id} "
+            f"publishes no density cutoff for {', '.join(sorted(unpublished))}"
+        ),
+    )
+    return CutoffsDecision(ecutwfc_ry, max([*published, derived]), (notice,))

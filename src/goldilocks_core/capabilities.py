@@ -233,7 +233,12 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "ecutrho_ry": {
         "unit": "Ry",
-        "description": "Charge-density cutoff; auto-derived from ecutwfc_ry if unset.",
+        "description": (
+            "Charge-density cutoff. Unset: the largest the selected "
+            "pseudopotentials publish (SSSP), or the table's "
+            "charge_density_dual times the resolved ecutwfc_ry where it "
+            "publishes none (PseudoDojo)."
+        ),
     },
     "nelec": {
         "description": (

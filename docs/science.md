@@ -200,10 +200,14 @@ configuration, and relativistic treatment suit your system.
 
 Goldilocks selects files and cutoff metadata, not system-specific convergence
 limits. Quantum ESPRESSO receives the largest wavefunction cutoff and largest
-charge-density cutoff among the selected elements. An `efficiency` or
-`precision` table is a library choice, not proof that your target property is
-converged. Test both cutoffs. See [Pseudopotential tables](pseudopotentials.md)
-for selection rules, installation, and custom files.
+charge-density cutoff among the selected elements. PseudoDojo publishes no
+charge-density cutoff, so for its tables `ecutrho` is 4 times `ecutwfc` (the
+table's `charge_density_dual`: Quantum ESPRESSO's default, which its
+documentation advises keeping for norm-conserving files), flagged by the
+`cutoffs.ecutrho_derived_from_dual` notice. An `efficiency` or `precision`
+table is a library choice, not proof that your target property is converged.
+Test both cutoffs. See [Pseudopotential tables](pseudopotentials.md) for
+selection rules, installation, and custom files.
 
 ## Check magnetism and spin-orbit coupling
 

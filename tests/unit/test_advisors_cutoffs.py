@@ -62,7 +62,8 @@ def test_sssp_style_pseudopotentials_give_explicit_cutoffs_directly() -> None:
 
 def test_pseudodojo_style_pseudopotentials_derive_ecutrho_via_table_dual() -> None:
     """PseudoDojo (this codebase's default provider) only publishes ecutwfc;
-    ecutrho must be derived from the table's own charge_density_dual."""
+    ecutrho is derived from the table's own charge_density_dual, and one
+    notice per decision says so, naming the elements and the table (#180)."""
     pseudos = Resolved(
         (_metadata("Fe", ecutwfc_ry=40.0), _metadata("O", ecutwfc_ry=45.0)),
         Provenance(source="heuristic"),
@@ -71,11 +72,53 @@ def test_pseudodojo_style_pseudopotentials_derive_ecutrho_via_table_dual() -> No
     state = cutoffs(pseudos, table=_table(charge_density_dual=4.0))
 
     assert state.ok
+    assert state.source == "heuristic"
     assert state.value.ecutwfc_ry == 45.0
-    assert state.value.ecutrho_ry == 180.0  # max(40*4, 45*4)
-    assert len(state.value.warnings) == 2
-    assert "derived" in state.value.warnings[0].message
-    assert state.value.warnings[0].code == "cutoffs.ecutrho_derived_from_dual"
+    assert state.value.ecutrho_ry == 180.0  # 4 x max(40, 45)
+    (warning,) = state.value.warnings
+    assert warning.code == "cutoffs.ecutrho_derived_from_dual"
+    assert warning.level == "info"
+    assert warning.message == (
+        "ecutrho derived as charge_density_dual x ecutwfc = 4 x 45 = 180 Ry: "
+        "table pseudodojo-pbe-efficiency-sr publishes no density cutoff for Fe, O"
+    )
+
+
+def test_a_human_ecutwfc_scales_a_derived_ecutrho() -> None:
+    """#180: ecutrho is charge_density_dual x the resolved ecutwfc, so a
+    human ecutwfc_ry of 150 Ry on a dual-4 table gives 600 Ry (QE's own
+    norm-conserving default), not 4 x the published 45 Ry."""
+    pseudos = Resolved(
+        (_metadata("Fe", ecutwfc_ry=40.0), _metadata("O", ecutwfc_ry=45.0)),
+        Provenance(source="heuristic"),
+    )
+
+    state = cutoffs(
+        pseudos,
+        table=_table(charge_density_dual=4.0),
+        human=CutoffsHumanInput(ecutwfc_ry=150.0),
+    )
+
+    assert (state.value.ecutwfc_ry, state.value.ecutrho_ry) == (150.0, 600.0)
+    assert state.source == "human"
+    (warning,) = state.value.warnings
+    assert "= 4 x 150 = 600 Ry" in warning.message
+
+
+def test_a_human_ecutrho_is_not_reported_as_derived() -> None:
+    pseudos = Resolved(
+        (_metadata("Fe", ecutwfc_ry=40.0), _metadata("O", ecutwfc_ry=45.0)),
+        Provenance(source="heuristic"),
+    )
+
+    state = cutoffs(
+        pseudos,
+        table=_table(charge_density_dual=4.0),
+        human=CutoffsHumanInput(ecutrho_ry=500.0),
+    )
+
+    assert (state.value.ecutwfc_ry, state.value.ecutrho_ry) == (45.0, 500.0)
+    assert state.value.warnings == ()
 
 
 def test_missing_ecutrho_and_no_dual_blocks() -> None:
