@@ -5,7 +5,13 @@ import { posix } from "node:path";
 import AxeBuilder from "@axe-core/playwright";
 import { strFromU8, unzipSync } from "fflate";
 
-import { expect, test, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type Locator,
+  type Page,
+  type Request,
+} from "@playwright/test";
 import { fileURLToPath } from "node:url";
 import type { InputManifest } from "../../src/review/artifacts";
 
@@ -211,6 +217,92 @@ test("corrects the metallicity classification from the Analysis card", async ({
   await expect(page.getByLabel("Generated input scf.in")).toContainText(
     "occupations = 'fixed'",
   );
+});
+
+test("resets every kind of pinned select to automatic with a mouse click", async ({
+  page,
+}) => {
+  // #158: NativeSelect's right section passes pointer events through to the
+  // <select> so that its chevron opens it, and the reset button in that
+  // section inherited this, so a mouse click only focused the select.
+  // locator.click() without force fails while the <select> intercepts it.
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
+  await waitForBundleReady(page);
+  for (const group of ["Convergence", "Pseudopotential table", "Functional"]) {
+    await expandAdvisorGroup(page, group);
+  }
+  const analysis = page.getByRole("region", { name: "Goldilocks analysis" });
+  const advisors = page.getByRole("region", { name: "Goldilocks advisors" });
+  const table = advisors.getByRole("combobox", {
+    name: "Pseudopotential table",
+    exact: true,
+  });
+  const automaticTable = await table.inputValue();
+
+  // A boolean fact, an enum setting and the pseudopotential table.
+  for (const { scope, field, option, key, value } of [
+    {
+      scope: analysis,
+      field: "needs correlation",
+      option: "true",
+      key: "needs_correlation",
+      value: true,
+    },
+    {
+      scope: advisors,
+      field: "mixing mode",
+      option: "local-TF",
+      key: "mixing_mode",
+      value: "local-TF",
+    },
+    {
+      scope: advisors,
+      field: "Pseudopotential table",
+      option: "sssp-pbesol-efficiency-sr",
+      key: "pseudo_table_id",
+      value: "sssp-pbesol-efficiency-sr",
+    },
+  ]) {
+    const select = scope.getByRole("combobox", { name: field, exact: true });
+    const automatic = await select.inputValue();
+    await pinOverride(page, select, option, { [key]: value });
+    await expect(select).toHaveAccessibleDescription(/Your override/);
+
+    const reset = scope.getByRole("button", {
+      name: `Reset ${field} to automatic`,
+    });
+    expect(await clickForNextExplain(page, reset)).not.toHaveProperty(key);
+    await expect(reset).toHaveCount(0);
+    await expect(select).toHaveValue(automatic);
+    await expect(select).not.toHaveAccessibleDescription(/Your override/);
+    expect(await rightSectionClickTarget(select)).toBe("SELECT");
+  }
+
+  // The functional: its reset also drops the table pinned under it.
+  const functional = advisors.getByRole("combobox", {
+    name: "Functional",
+    exact: true,
+  });
+  const automaticFunctional = await functional.inputValue();
+  await pinOverride(page, functional, "PBE", { functional: "PBE" });
+  await pinOverride(page, table, "sssp-pbe-efficiency-sr", {
+    functional: "PBE",
+    pseudo_table_id: "sssp-pbe-efficiency-sr",
+  });
+  const overrides = await clickForNextExplain(
+    page,
+    advisors.getByRole("button", { name: "Reset Functional to automatic" }),
+  );
+  expect(overrides).not.toHaveProperty("functional");
+  expect(overrides).not.toHaveProperty("pseudo_table_id");
+  await expect(functional).toHaveValue(automaticFunctional);
+  await expect(table).toHaveValue(automaticTable);
+  await expect(
+    advisors.getByRole("button", { name: /^Reset .* to automatic$/ }),
+  ).toHaveCount(0);
+  expect(await rightSectionClickTarget(functional)).toBe("SELECT");
 });
 
 test("keeps an old Result visible until the recommendation auto-recomputes", async ({
@@ -784,6 +876,64 @@ async function expandAdvisorGroup(page: Page, name: string): Promise<void> {
   const control = page.getByRole("button", { name, exact: true });
   if ((await control.getAttribute("aria-expanded")) === "true") return;
   await control.click();
+}
+
+/** The `overrides` a /explain or /run request body carries. */
+function requestOverrides(request: Request): Readonly<Record<string, unknown>> {
+  const body = request.postDataJSON() as {
+    overrides?: Record<string, unknown>;
+  } | null;
+  return body?.overrides ?? {};
+}
+
+/** Picks `option` on `select`, then waits for the /explain whose overrides
+ * hold every entry of `pinned` and for the bundle that follows it. */
+async function pinOverride(
+  page: Page,
+  select: Locator,
+  option: string,
+  pinned: Readonly<Record<string, unknown>>,
+): Promise<void> {
+  const reviewed = page.waitForResponse((response) => {
+    if (new URL(response.url()).pathname !== "/explain") return false;
+    const overrides = requestOverrides(response.request());
+    return Object.entries(pinned).every(
+      ([key, value]) => overrides[key] === value,
+    );
+  });
+  await select.selectOption(option);
+  expect((await reviewed).status()).toBe(200);
+  await waitForBundleReady(page);
+}
+
+/** Clicks `target` with the mouse (no `force`, so Playwright first checks
+ * that nothing else would receive the click) and returns the overrides of
+ * the /explain that follows. */
+async function clickForNextExplain(
+  page: Page,
+  target: Locator,
+): Promise<Readonly<Record<string, unknown>>> {
+  const next = page.waitForRequest(
+    (request) => new URL(request.url()).pathname === "/explain",
+  );
+  await target.click();
+  return requestOverrides(await next);
+}
+
+/** The tag of the element a click at the centre of a select's right section
+ * lands on. That section holds the chevron while nothing is pinned, and must
+ * then pass the click through to the <select>. */
+async function rightSectionClickTarget(select: Locator): Promise<string> {
+  await select.scrollIntoViewIfNeeded();
+  const section = await select
+    .locator("xpath=../*[@data-position='right']")
+    .boundingBox();
+  assert(section, "The select's right section must have a layout box");
+  const x = String(section.x + section.width / 2);
+  const y = String(section.y + section.height / 2);
+  return select
+    .page()
+    .evaluate<string>(`document.elementFromPoint(${x}, ${y})?.tagName`);
 }
 
 /** Waits for useAutoCompute's debounced recommendation to finish and the

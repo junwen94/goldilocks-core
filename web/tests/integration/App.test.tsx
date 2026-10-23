@@ -6,7 +6,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { App } from "../../src/App";
 import type {
@@ -440,6 +440,95 @@ describe("Goldilocks Workbench", () => {
     );
   });
 
+  it.each([
+    {
+      site: "a boolean setting",
+      groups: ["Magnetic"],
+      pins: [{ field: "spin polarized", option: "true" }],
+      reset: "spin polarized",
+      pinned: { spin_polarized: true },
+    },
+    {
+      site: "an enum setting",
+      groups: ["Occupations"],
+      pins: [{ field: "smearing type", option: "cold" }],
+      reset: "smearing type",
+      pinned: { smearing_type: "cold" },
+    },
+    {
+      site: "the pseudopotential table",
+      groups: ["Pseudopotential table"],
+      pins: [
+        { field: "Pseudopotential table", option: "sssp-pbe-precision-sr" },
+      ],
+      reset: "Pseudopotential table",
+      pinned: { pseudo_table_id: "sssp-pbe-precision-sr" },
+    },
+    {
+      site: "the functional, with the table pinned under it",
+      groups: ["Functional", "Pseudopotential table"],
+      pins: [
+        { field: "Functional", option: "PBE" },
+        { field: "Pseudopotential table", option: "sssp-pbe-precision-sr" },
+      ],
+      reset: "Functional",
+      pinned: { functional: "PBE", pseudo_table_id: "sssp-pbe-precision-sr" },
+    },
+  ])(
+    "clears $site back to automatic with a pointer click on its reset button",
+    async ({ groups, pins, reset, pinned }) => {
+      // #158: the reset button sits in NativeSelect's right section.
+      emulateNativeSelectSectionPointerEvents();
+      const user = userEvent.setup();
+      const core = new CoreStub(Promise.resolve(capabilities));
+      core.inspectionResults = [Promise.resolve(inspection)];
+      const { container } = renderApp(core);
+
+      await openStructure(user, container);
+      const calculation = advisorsPanel();
+      for (const group of groups) {
+        await user.click(
+          within(calculation).getByRole("button", { name: group }),
+        );
+      }
+      for (const { field, option } of pins) {
+        await user.selectOptions(
+          within(calculation).getByRole("combobox", { name: field }),
+          option,
+        );
+      }
+      await waitFor(
+        () => {
+          expect(core.explainCalls.at(-1)?.overrides).toMatchObject(pinned);
+        },
+        { timeout: 2000 },
+      );
+      const pinnedCalls = core.explainCalls.length;
+
+      await user.click(
+        within(calculation).getByRole("button", {
+          name: `Reset ${reset} to automatic`,
+        }),
+      );
+
+      await waitFor(
+        () => {
+          expect(core.explainCalls.length).toBeGreaterThan(pinnedCalls);
+        },
+        { timeout: 2000 },
+      );
+      const overrides = core.explainCalls[pinnedCalls]?.overrides ?? {};
+      for (const key of Object.keys(pinned)) {
+        expect(overrides).not.toHaveProperty(key);
+      }
+      expect(
+        within(calculation).queryByRole("button", {
+          name: /^Reset .* to automatic$/,
+        }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
   it("keeps the old review visible and disables input generation after an edit", async () => {
     const user = userEvent.setup();
     const core = new CoreStub(Promise.resolve(capabilities));
@@ -840,6 +929,22 @@ function expectHubbardOverrideControls(calculation: HTMLElement): void {
   expect(
     within(calculation).getByLabelText("hubbard needs correlation"),
   ).toBeVisible();
+}
+
+/** jsdom applies no Mantine stylesheet (and cannot resolve its var() chain),
+ * so this restores what a browser computes for every NativeSelect's right
+ * section: `pointer-events: none`, Mantine's default, which passes a click on
+ * the chevron through to the <select> and which the section's content
+ * inherits. user-event then refuses a click that a browser would not deliver
+ * to that content. */
+function emulateNativeSelectSectionPointerEvents(): void {
+  const style = document.createElement("style");
+  style.textContent =
+    '.mantine-NativeSelect-section[data-position="right"] { pointer-events: none; }';
+  document.head.append(style);
+  onTestFinished(() => {
+    style.remove();
+  });
 }
 
 function structureFile(): File {

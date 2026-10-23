@@ -2,7 +2,6 @@ import { type ReactNode, useId } from "react";
 import {
   Accordion,
   Badge,
-  CloseButton,
   Fieldset,
   Group,
   NativeSelect,
@@ -28,6 +27,7 @@ import { isAdvisorWarning } from "../review/warnings";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
 import { OverrideControl } from "./OverrideControl";
 import { describeSource } from "./overrideFieldMeta";
+import { OverrideSelect } from "./OverrideSelect";
 
 const STATUS_COLORS: Readonly<Record<ResolvedField["status"], string>> = {
   resolved: "green",
@@ -251,9 +251,10 @@ function uniqueFunctionals(tables: readonly PseudopotentialTable[]): string[] {
  * value pre-selected (with a source-naming description above the box)
  * rather than a separate read-only "here's what resolved" card next to
  * an always-"Automatic" select -- the same `resolvedValue`/`source`
- * pattern `OverrideControl` already uses for scalar/enum fields, just
- * hand-written here since a pseudopotential-table pick needs its own
- * elements/functional filtering `OverrideControl` doesn't know about. */
+ * pattern `OverrideControl` already uses for scalar/enum fields, on the
+ * same `OverrideSelect`, just hand-written here since a
+ * pseudopotential-table pick needs its own elements/functional filtering
+ * `OverrideControl` doesn't know about. */
 function PseudoTableControl({
   tables,
   elements,
@@ -297,27 +298,13 @@ function PseudoTableControl({
     effectiveId === undefined ||
     !matching.some((table) => table.id === effectiveId);
   return (
-    <NativeSelect
+    <OverrideSelect
       label="Pseudopotential table"
       description={
         noMatch ?? describeSource(description, pinnedId !== undefined, source)
       }
       disabled={disabled}
-      rightSection={
-        pinnedId === undefined ? undefined : (
-          <CloseButton
-            aria-label="Reset Pseudopotential table to automatic"
-            size="sm"
-            disabled={disabled}
-            onMouseDown={(event) => {
-              event.preventDefault();
-            }}
-            onClick={() => {
-              onChange({ pseudo_table_id: undefined });
-            }}
-          />
-        )
-      }
+      pinned={pinnedId !== undefined}
       value={effectiveId ?? ""}
       data={[
         ...(needsPlaceholder
@@ -328,8 +315,10 @@ function PseudoTableControl({
           label: `${table.provider} · ${table.functional} · ${table.accuracy} · ${table.relativistic}`,
         })),
       ]}
-      onChange={(event) => {
-        const raw = event.currentTarget.value;
+      onReset={() => {
+        onChange({ pseudo_table_id: undefined });
+      }}
+      onChange={(raw) => {
         onChange({ pseudo_table_id: raw === "" ? undefined : raw });
       }}
     />
@@ -359,25 +348,11 @@ function FunctionalControl({
   const needsPlaceholder =
     effective === undefined || !options.includes(effective);
   return (
-    <NativeSelect
+    <OverrideSelect
       label="Functional"
       description={describeSource(description, pinned, source)}
       disabled={disabled}
-      rightSection={
-        pinned ? (
-          <CloseButton
-            aria-label="Reset Functional to automatic"
-            size="sm"
-            disabled={disabled}
-            onMouseDown={(event) => {
-              event.preventDefault();
-            }}
-            onClick={() => {
-              onChange({ functional: undefined, pseudo_table_id: undefined });
-            }}
-          />
-        ) : undefined
-      }
+      pinned={pinned}
       value={effective ?? ""}
       data={[
         ...(needsPlaceholder
@@ -388,14 +363,16 @@ function FunctionalControl({
           label: functional,
         })),
       ]}
-      onChange={(event) => {
-        const raw = event.currentTarget.value;
-        // A pinned table pinned under the old functional may no
-        // longer be a valid choice (and won't even appear in the
-        // now-refiltered dropdown) -- clear it rather than silently
-        // keep submitting a now-invisible override, matching how a
-        // pseudopotential-table pin has always been invalidated by
-        // changing the functional it was chosen under.
+      // A table pinned under the old functional may no longer be a valid
+      // choice (and won't even appear in the now-refiltered dropdown) --
+      // a reset or a change clears it rather than silently keep
+      // submitting a now-invisible override, matching how a
+      // pseudopotential-table pin has always been invalidated by changing
+      // the functional it was chosen under.
+      onReset={() => {
+        onChange({ functional: undefined, pseudo_table_id: undefined });
+      }}
+      onChange={(raw) => {
         onChange({
           functional: raw === "" ? undefined : raw,
           pseudo_table_id: undefined,
