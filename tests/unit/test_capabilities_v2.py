@@ -22,6 +22,8 @@ from goldilocks_core.capabilities import (
 from goldilocks_core.ml import predict as predict_module
 from goldilocks_core.service import (
     AnalysisFacts,
+    DosOverrides,
+    JobOverrides,
     KpointsOverrides,
     RelaxOverrides,
     ResourceOverrides,
@@ -29,6 +31,8 @@ from goldilocks_core.service import (
     SystemOverrides,
 )
 from goldilocks_core.set_overrides import build_overrides
+
+_ALL_TASKS = ["scf_single_point", "dos", "relax", "vc-relax"]
 
 
 def _install_every_model(monkeypatch, root) -> None:
@@ -55,17 +59,22 @@ def _advertised_values(entry: dict[str, object]) -> list[object]:
     return list(entry.get("enum") or entry.get("values") or [])
 
 
-def _landed(overrides: RunOverrides, binding: SettingBinding) -> object:
-    """The value ``build_overrides`` stored for ``binding``'s key."""
-    branch = {
-        "analysis": overrides.analysis,
-        "system": overrides.system,
-        "kpoints": overrides.step.kpoints,
-        "resources": overrides.step.resources,
-        "relax": overrides.step.relax,
-    }[binding.branch]
+def _accepted(binding: SettingBinding, value: object) -> object:
+    """``value`` for ``binding``'s key through ``build_overrides``, for the
+    first task the key applies to, read back from where it landed: the
+    task-level overrides, or the first step of that task it applies to."""
+    task = binding.tasks[0]
+    overrides = build_overrides({binding.key: value}, task=task)
+    branch = _branch(overrides, binding)
     outer = getattr(branch, binding.outer_field)
     return outer if binding.inner_field is None else getattr(outer, binding.inner_field)
+
+
+def _branch(overrides: RunOverrides, binding: SettingBinding) -> object:
+    if binding.steps is None:
+        return getattr(overrides, binding.branch)
+    step = next(purpose for purpose in overrides.steps if purpose in binding.steps)
+    return getattr(overrides.steps[step], binding.branch)
 
 
 def _expected_setting_field_count() -> int:
@@ -75,7 +84,14 @@ def _expected_setting_field_count() -> int:
     silently drops a field, without hardcoding a magic number that
     would need editing by hand every time an advisor gains a field."""
     total = 0
-    for cls in (SystemOverrides, KpointsOverrides, ResourceOverrides, RelaxOverrides):
+    for cls in (
+        SystemOverrides,
+        JobOverrides,
+        KpointsOverrides,
+        ResourceOverrides,
+        RelaxOverrides,
+        DosOverrides,
+    ):
         hints = typing.get_type_hints(cls)
         for name, annotation in hints.items():
             if name.endswith("_llm"):
@@ -261,7 +277,7 @@ class TestSettingsCompleteness:
     def test_per_step_settings_are_scoped_to_pw_x(self) -> None:
         settings = {s["key"]: s for s in capabilities()["settings"]}
 
-        for key in ("occupations", "k_grid", "nbnd", "npool"):
+        for key in ("occupations", "k_grid", "nbnd", "npool", "nstep", "press"):
             assert settings[key]["scope"] == "per_step"
             assert settings[key]["programs"] == ["pw.x"]
 
@@ -337,6 +353,100 @@ class TestSettingsCompleteness:
         assert settings["walltime_h"]["unit"] == "hours"
         assert settings["u_by_element"]["unit"] == "eV"
         assert settings["npool"]["unit"] is None
+
+
+class TestSettingApplicability:
+    """#154: every setting published codes: null, tasks: null, so nothing
+    could reject or hide a key no step of a task reads. Each setting now
+    names the code, the tasks and the steps it applies to and the program
+    that reads it; system and job settings are task-level (steps null)."""
+
+    def _settings(self) -> dict[str, dict[str, object]]:
+        return {s["key"]: s for s in capabilities()["settings"]}
+
+    def test_every_setting_declares_its_codes_tasks_steps_and_programs(
+        self,
+    ) -> None:
+        for setting in capabilities()["settings"]:
+            assert setting["codes"] == ["quantum_espresso"], setting["key"]
+            assert setting["tasks"], setting["key"]
+            if setting["scope"] == "per_step":
+                assert setting["steps"], setting["key"]
+                assert setting["programs"], setting["key"]
+            else:
+                assert setting["scope"] in ("system", "task"), setting["key"]
+                assert setting["steps"] is None, setting["key"]
+                assert setting["tasks"] == _ALL_TASKS, setting["key"]
+
+    def test_pw_x_step_settings_apply_to_every_pw_x_step(self) -> None:
+        settings = self._settings()
+
+        for key in ("k_grid", "occupations", "nbnd", "conv_thr", "npool", "ndiag"):
+            assert settings[key]["steps"] == ["scf", "nscf", "relax", "vc-relax"]
+            assert settings[key]["tasks"] == _ALL_TASKS
+            assert settings[key]["programs"] == ["pw.x"]
+
+    def test_scf_loop_settings_skip_the_nscf_step(self) -> None:
+        """An nscf step runs no SCF loop (QE 7.3 calls non_scf and sets
+        niter = 1), yet these were published, accepted and recorded human
+        for a dos task's nscf step, which ignores them."""
+        settings = self._settings()
+
+        scf_loop = ("mixing_beta", "mixing_mode", "mixing_fixed_ns", "electron_maxstep")
+        for key in scf_loop:
+            assert settings[key]["steps"] == ["scf", "relax", "vc-relax"], key
+            assert settings[key]["tasks"] == _ALL_TASKS, key
+            assert settings[key]["programs"] == ["pw.x"], key
+
+    def test_relaxation_settings_apply_to_the_relax_tasks_only(self) -> None:
+        settings = self._settings()
+
+        for key in ("nstep", "ion_dynamics", "fix_bottom_layers", "etot_conv_thr"):
+            assert settings[key]["steps"] == ["relax", "vc-relax"], key
+            assert settings[key]["tasks"] == ["relax", "vc-relax"], key
+
+    def test_cell_settings_apply_to_vc_relax_only(self) -> None:
+        settings = self._settings()
+
+        for key in ("press", "cell_dofree", "press_conv_thr", "cell_factor"):
+            assert settings[key]["steps"] == ["vc-relax"], key
+            assert settings[key]["tasks"] == ["vc-relax"], key
+            assert settings[key]["programs"] == ["pw.x"], key
+
+    def test_dos_x_settings_are_published_on_the_dos_step(self) -> None:
+        settings = self._settings()
+
+        delta_e = settings["delta_e"]
+        assert (delta_e["group"], delta_e["scope"]) == ("dos", "per_step")
+        assert (delta_e["steps"], delta_e["tasks"]) == (["dos"], ["dos"])
+        assert delta_e["programs"] == ["dos.x"]
+        assert delta_e["unit"] == "eV"
+        assert (settings["emin"]["unit"], settings["emax"]["unit"]) == ("eV", "eV")
+        assert settings["broadening"]["unit"] == "Ry"
+        assert settings["ngauss"]["type"] == "integer"
+        for key in ("delta_e", "emin", "emax", "broadening", "ngauss"):
+            assert settings[key]["description"], key
+
+    def test_job_settings_are_task_level(self) -> None:
+        settings = self._settings()
+
+        for key in ("partition", "nodes", "ntasks", "walltime_h", "account"):
+            assert settings[key]["scope"] == "task", key
+            assert settings[key]["steps"] is None, key
+
+    def test_the_routing_notice_is_in_the_warnings_catalogue(self) -> None:
+        by_code = {entry["code"]: entry for entry in capabilities()["warnings"]}
+
+        entry = by_code["overrides.applies_to_multiple_steps"]
+        assert (entry["level"], entry["category"]) == ("info", "overrides")
+
+    def test_bindings_route_with_the_published_steps(self) -> None:
+        catalogue = bindings()
+
+        for setting in capabilities()["settings"]:
+            binding = catalogue[setting["key"]]
+            steps = None if binding.steps is None else list(binding.steps)
+            assert steps == setting["steps"], setting["key"]
 
 
 class TestFacts:
@@ -476,17 +586,16 @@ class TestOverrideContract:
         assert overridable
         for fact in overridable:
             for value in _advertised_values(fact):
-                overrides = build_overrides({fact["key"]: value})
-                assert _landed(overrides, catalogue[fact["key"]]) == value
+                assert _accepted(catalogue[fact["key"]], value) == value
 
     def test_every_advertised_setting_value_is_accepted(self) -> None:
+        """For a task the setting applies to (#154: no other accepts it)."""
         catalogue = bindings()
         checked = 0
 
         for setting in capabilities()["settings"]:
             for value in _advertised_values(setting):
-                overrides = build_overrides({setting["key"]: value})
-                assert _landed(overrides, catalogue[setting["key"]]) == value
+                assert _accepted(catalogue[setting["key"]], value) == value
                 checked += 1
         assert checked > 0
 

@@ -26,6 +26,7 @@ from goldilocks_core.service import RunOverrides
 from goldilocks_core.set_overrides import (
     build_overrides,
     coerce_cli_assignments,
+    config_assignments,
     parse_set_flags,
 )
 from goldilocks_core.types import CalcTask
@@ -54,10 +55,18 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="Override one setting (repeatable). See 'goldilocks settings'.",
+        help=(
+            "Override one setting (repeatable); steps.<step>.KEY=VALUE sets "
+            "one step of the task only. See 'goldilocks settings'."
+        ),
     )
     parser.add_argument(
-        "--config", type=Path, help="TOML file of KEY=VALUE overrides, same as --set."
+        "--config",
+        type=Path,
+        help=(
+            "TOML file of KEY=VALUE overrides, same as --set; a [steps.<step>] "
+            "table sets one step of the task."
+        ),
     )
     parser.add_argument("--json", action="store_true", help="Print JSON output.")
 
@@ -80,12 +89,13 @@ def resolve_hpc(name: str | None) -> HpcProfile:
 
 
 def resolve_overrides(args: argparse.Namespace) -> RunOverrides:
+    """``--config`` then ``--set`` (which wins), routed for ``--task``."""
     assignments: dict[str, object] = {}
     if args.config is not None:
         with args.config.open("rb") as source:
-            assignments.update(tomllib.load(source))
+            assignments.update(config_assignments(tomllib.load(source)))
     assignments.update(coerce_cli_assignments(parse_set_flags(args.set)))
-    return build_overrides(assignments)
+    return build_overrides(assignments, task=args.task)
 
 
 def format_field_state(state: FieldState[object]) -> str:
@@ -99,6 +109,18 @@ def format_field_state(state: FieldState[object]) -> str:
     if isinstance(state, Blocked):
         return f"blocked by: {state.root_cause()}"
     return f"unavailable: {state.reason}"
+
+
+def notice_lines(warnings: list[dict[str, object]]) -> list[str]:
+    """The ``notice:`` lines of ``explain``'s text report: the warnings no
+    record carries, which the records it prints cannot show. Those are the
+    request's routing notices (``record`` ``overrides``, #154): a setting
+    given without a step that reached several steps."""
+    return [
+        f"notice: {warning['message']}"
+        for warning in warnings
+        if warning["record"] == "overrides"
+    ]
 
 
 def records_to_json(records: dict[str, FieldState[object]]) -> dict[str, object]:

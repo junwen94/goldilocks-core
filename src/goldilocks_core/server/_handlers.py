@@ -85,7 +85,7 @@ def explain(document: ComputeRequestDocument) -> dict[str, Any]:
     would go on to generate."""
     structure = normalize_structure(_structure_source(document)).structure
     hpc = resolve_hpc_profile(document.hpc, field=_HPC_FIELD_NAME)
-    overrides = build_overrides(document.overrides)
+    overrides = build_overrides(document.overrides, task=document.task)
     if document.task == "dos":
         advice = advise_dos(
             structure,
@@ -128,7 +128,7 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
     the former."""
     structure = normalize_structure(_structure_source(document)).structure
     hpc = resolve_hpc_profile(document.hpc, field=_HPC_FIELD_NAME)
-    overrides = build_overrides(document.overrides)
+    overrides = build_overrides(document.overrides, task=document.task)
     ctx = default_shared_context()
     if document.task == "dos":
         dos_advice = advise_dos(

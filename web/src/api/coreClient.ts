@@ -72,6 +72,10 @@ export interface RecordWarning extends AdvisorWarning {
 // and the Setting/Fact projections `_settings()`/`_facts()` build.
 // ---------------------------------------------------------------------
 
+/** `tasks` are the tasks a setting applies to; a request for any other
+ * task is refused. `steps`/`programs` are the steps (the names
+ * `steps.<step>.<key>` takes) and programs a `per_step` setting applies to,
+ * `null` for a `system` or `task` setting, which is set once per task. */
 export interface Setting {
   readonly key: string;
   readonly group: string;
@@ -80,10 +84,11 @@ export interface Setting {
   readonly unit: string | null;
   readonly default?: unknown;
   readonly enum_from?: string;
-  readonly codes: readonly string[] | null;
-  readonly tasks: readonly string[] | null;
+  readonly codes: readonly string[];
+  readonly tasks: readonly string[];
+  readonly steps: readonly string[] | null;
   readonly programs: readonly string[] | null;
-  readonly scope: "system" | "per_step";
+  readonly scope: "system" | "task" | "per_step";
   readonly ml_target: string | null;
   readonly approaches: readonly Source[];
   readonly description: string;

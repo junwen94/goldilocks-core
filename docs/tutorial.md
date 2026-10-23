@@ -65,12 +65,14 @@ everything at once instead of field by field.
 
 Pass overrides built by `build_overrides` for the settings you want to
 control — the same validation path `--set`/HTTP/MCP use, so an unknown key
-or a badly-shaped value fails the same way here as anywhere else:
+or a badly-shaped value fails the same way here as anywhere else. Name the
+task: each setting reaches the steps of that task it applies to, and a
+setting no step of the task reads (`press` on an scf) is refused:
 
 ```python
 from goldilocks_core.set_overrides import build_overrides
 
-overrides = build_overrides({"k_grid": (4, 4, 4)})
+overrides = build_overrides({"k_grid": (4, 4, 4)}, task="scf_single_point")
 advice = advise(silicon, hpc=hpc, overrides=overrides)
 
 k_sampling = advice.step.kpoints.k_sampling
@@ -157,7 +159,10 @@ from goldilocks_core.service import (
     to_bundle_input_dos,
 )
 
-dos_advice = advise_dos(silicon, hpc=hpc)
+dos_overrides = build_overrides(
+    {"steps.nscf.k_grid": (12, 12, 12), "delta_e": 0.05}, task="dos"
+)
+dos_advice = advise_dos(silicon, hpc=hpc, overrides=dos_overrides)
 dos_report = check_dos(dos_advice)
 if dos_report.ok:
     dos_steps = generate_dos(dos_advice, dos_report, ctx=ctx)
@@ -165,6 +170,12 @@ if dos_report.ok:
     dos_bundle = to_bundle_input_dos(dos_advice, dos_steps, dos_script, ctx)
     print([step.name for step in dos_steps])
 ```
+
+The task's steps are `scf`, `nscf` and `dos`. `steps.nscf.k_grid` sets the
+nscf mesh only, and `delta_e`, a `dos.x` setting, reaches the `dos` step. A
+setting given without a step reaches every step it applies to: a flat
+`k_grid` sets both `pw.x` steps, and `dos_advice.warnings()` then carries an
+`overrides.applies_to_multiple_steps` notice naming them.
 
 `dos_advice.records()` keys the shared system-level fields and the task's
 one `job` unprefixed, the nscf step's own fields under an `nscf_`-prefixed

@@ -133,10 +133,23 @@ function defaultDraft(capabilities: Capabilities): CalculationDraft {
   };
 }
 
+/** The request for `draft`. An override of a setting that does not apply
+ * to the draft's task is left out, since the core refuses it (#154); the
+ * draft keeps it, so switching back to a task it applies to sends it again.
+ * A key that is not a setting (a fact such as `is_metal`) is always sent. */
 function toComputeRequest(
+  capabilities: Capabilities,
   structureInput: StructureInput,
   draft: CalculationDraft,
 ): ComputeRequest {
+  const settings = new Map(
+    capabilities.settings.map((setting) => [setting.key, setting]),
+  );
+  const overrides = Object.fromEntries(
+    Object.entries(draft.overrides).filter(
+      ([key]) => settings.get(key)?.tasks.includes(draft.task) ?? true,
+    ),
+  );
   return {
     structure_content: structureInput.structure_content,
     structure_name: structureInput.structure_name,
@@ -146,7 +159,7 @@ function toComputeRequest(
     code: draft.code,
     task: draft.task,
     hpc: draft.hpc,
-    overrides: draft.overrides,
+    overrides,
     fetch_missing: draft.fetchMissing,
   };
 }
@@ -300,6 +313,7 @@ export function createWorkspace(
   async function computeReview(): Promise<void> {
     const snapshot = store.getState();
     if (
+      snapshot.capabilities === null ||
       snapshot.structureInput === null ||
       snapshot.draft === null ||
       snapshot.operation !== null
@@ -307,7 +321,11 @@ export function createWorkspace(
       return;
     }
     const revision = draftRevision;
-    const request = toComputeRequest(snapshot.structureInput, snapshot.draft);
+    const request = toComputeRequest(
+      snapshot.capabilities,
+      snapshot.structureInput,
+      snapshot.draft,
+    );
     const owner = beginOperation("explain");
     try {
       const reviewed = await core.explain(request);
@@ -329,6 +347,7 @@ export function createWorkspace(
   async function refreshArchive(): Promise<ArchiveDownload | null> {
     const snapshot = store.getState();
     if (
+      snapshot.capabilities === null ||
       snapshot.structureInput === null ||
       snapshot.draft === null ||
       snapshot.reviewed === null ||
@@ -338,7 +357,11 @@ export function createWorkspace(
       return null;
     }
     const revision = draftRevision;
-    const request = toComputeRequest(snapshot.structureInput, snapshot.draft);
+    const request = toComputeRequest(
+      snapshot.capabilities,
+      snapshot.structureInput,
+      snapshot.draft,
+    );
     const owner = beginOperation("download");
     try {
       const archive = await core.runArchive(request);
@@ -407,8 +430,9 @@ export function createWorkspace(
     labels: readonly string[],
   ): Promise<void> {
     const snapshot = store.getState();
-    const { structureInput, draft, magneticOrderings } = snapshot;
+    const { capabilities, structureInput, draft, magneticOrderings } = snapshot;
     if (
+      capabilities === null ||
       structureInput === null ||
       draft === null ||
       magneticOrderings === null ||
@@ -433,7 +457,7 @@ export function createWorkspace(
       const archives = await Promise.all(
         selected.map((candidate) =>
           core.runArchive({
-            ...toComputeRequest(structureInput, {
+            ...toComputeRequest(capabilities, structureInput, {
               ...draft,
               overrides: { ...overrides, ...candidate.overrides },
             }),

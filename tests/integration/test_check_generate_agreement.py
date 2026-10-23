@@ -251,7 +251,9 @@ def store(tmp_path, monkeypatch) -> AssetStore:
 
 def _generate(task: str, scenario: _Scenario, store: AssetStore):
     structure = scenario.structure()
-    overrides = build_overrides(scenario.overrides)
+    overrides = build_overrides(
+        scenario.overrides, task="scf_single_point" if task == "scf" else task
+    )
     if task == "scf":
         advice = advise(structure, hpc=_hpc(), overrides=overrides, store=store)
         report, render = check(advice), generate
@@ -319,7 +321,7 @@ def test_check_refuses_a_request_no_input_can_express(
     advice = advise(
         refusal.structure(),
         hpc=_hpc(),
-        overrides=build_overrides(refusal.overrides),
+        overrides=build_overrides(refusal.overrides, task="scf_single_point"),
         store=store,
     )
 

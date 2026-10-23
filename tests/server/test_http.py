@@ -525,6 +525,175 @@ class TestExplain:
         assert "finite number" in error["message"]
 
 
+class TestPerStepOverrides:
+    """#154 over HTTP: `steps.nscf.k_grid` was a 422 "unknown setting",
+    dos.x keys were unknown, and a key no step of the task reads (press on
+    an scf) answered 200 and was dropped. No real assets needed: /explain
+    reports every record either way."""
+
+    def _explain(
+        self, client: TestClient, silicon_cif: str, task: str, overrides: dict
+    ) -> object:
+        return client.post(
+            "/explain",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "task": task,
+                "overrides": overrides,
+            },
+        )
+
+    def test_steps_nscf_k_grid_changes_only_the_nscf_mesh(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        default = self._explain(client, silicon_cif, "dos", {}).json()["records"]
+        response = self._explain(
+            client, silicon_cif, "dos", {"steps.nscf.k_grid": [30, 30, 30]}
+        )
+
+        assert response.status_code == 200
+        records = response.json()["records"]
+        assert records["nscf_k_sampling"]["value"]["mesh"] == [30, 30, 30]
+        assert records["k_sampling"] == default["k_sampling"]
+
+    def test_a_shift_keeps_the_protocol_nscf_mesh(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        default = self._explain(client, silicon_cif, "dos", {}).json()["records"]
+        response = self._explain(client, silicon_cif, "dos", {"shift": [1, 1, 1]})
+
+        assert response.status_code == 200
+        nscf = response.json()["records"]["nscf_k_sampling"]["value"]
+        assert nscf["mesh"] == default["nscf_k_sampling"]["value"]["mesh"]
+        assert (nscf["k_distance"], nscf["shift"]) == (0.1, [1, 1, 1])
+
+    def test_a_dos_x_setting_reaches_the_dos_record(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        response = self._explain(client, silicon_cif, "dos", {"delta_e": 0.05})
+
+        assert response.status_code == 200
+        dos = response.json()["records"]["dos"]
+        assert dos["value"]["delta_e"] == 0.05
+        assert dos["source"] == "human"
+
+    def test_a_flat_k_grid_on_dos_answers_with_the_routing_notice(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        response = self._explain(client, silicon_cif, "dos", {"k_grid": [4, 4, 4]})
+
+        assert response.status_code == 200
+        notices = [
+            warning
+            for warning in response.json()["warnings"]
+            if warning["code"] == "overrides.applies_to_multiple_steps"
+        ]
+        assert [(n["record"], n["level"]) for n in notices] == [("overrides", "info")]
+
+    def test_a_mixing_beta_on_dos_sets_the_scf_step_only(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        """The nscf step runs no SCF loop, yet nscf_convergence read human for
+        a mixing_beta pw.x ignores there, with a notice naming both steps."""
+        response = self._explain(client, silicon_cif, "dos", {"mixing_beta": 0.3})
+
+        assert response.status_code == 200
+        body = response.json()
+        scf = body["records"]["convergence"]
+        nscf = body["records"]["nscf_convergence"]
+        assert (scf["value"]["mixing_beta"], scf["field_sources"]["mixing_beta"]) == (
+            0.3,
+            "human",
+        )
+        assert (nscf["value"]["mixing_beta"], nscf["source"]) == (0.4, "heuristic")
+        assert "overrides.applies_to_multiple_steps" not in {
+            warning["code"] for warning in body["warnings"]
+        }
+
+    @pytest.mark.parametrize(
+        ("task", "overrides", "message"),
+        [
+            (
+                "scf_single_point",
+                {"press": 10},
+                "'press' does not apply to task 'scf_single_point'; "
+                "it applies to task vc-relax",
+            ),
+            (
+                "relax",
+                {"cell_dofree": "2Dxy", "press": 5},
+                "'cell_dofree' does not apply to task 'relax'; "
+                "it applies to task vc-relax",
+            ),
+            (
+                "scf_single_point",
+                {"delta_e": 0.05},
+                "'delta_e' does not apply to task 'scf_single_point'; "
+                "it applies to task dos",
+            ),
+            (
+                "dos",
+                {"steps.nscf.mixing_beta": 0.3},
+                "'mixing_beta' does not apply to step 'nscf' "
+                "(in 'steps.nscf.mixing_beta'); it applies to steps scf, relax, "
+                "vc-relax",
+            ),
+        ],
+    )
+    def test_a_setting_no_step_of_the_task_reads_is_a_422(
+        self,
+        client: TestClient,
+        silicon_cif: str,
+        task: str,
+        overrides: dict,
+        message: str,
+    ) -> None:
+        for route in ("/explain", "/run"):
+            response = client.post(
+                route,
+                json={
+                    "structure_content": silicon_cif,
+                    "hpc": "scarf",
+                    "task": task,
+                    "overrides": overrides,
+                },
+            )
+
+            assert response.status_code == 422, route
+            error = response.json()["error"]
+            assert (error["kind"], error["message"]) == ("invalid_setting", message)
+
+    def test_delta_e_reaches_dos_in_and_steps_nscf_only_nscf_in(
+        self, client: TestClient, silicon_fixture_table, silicon_cif: str
+    ) -> None:
+        response = client.post(
+            "/run",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "task": "dos",
+                "respond_with": "archive",
+                "overrides": {"delta_e": 0.05, "steps.nscf.k_grid": [12, 12, 12]},
+            },
+        )
+
+        assert response.status_code == 200
+        archive = zipfile.ZipFile(io.BytesIO(response.content))
+        dos_in = archive.read(_archive_member(archive, "dos.in")).decode()
+        assert "deltae           = 0.05" in dos_in
+        nscf_in = archive.read(_archive_member(archive, "nscf.in")).decode()
+        scf_in = archive.read(_archive_member(archive, "scf.in")).decode()
+        assert "K_POINTS automatic\n  12  12  12  0  0  0" in nscf_in
+        assert "K_POINTS automatic\n  12  12  12" not in scf_in
+
+
+def _archive_member(archive: zipfile.ZipFile, name: str) -> str:
+    return next(
+        member for member in archive.namelist() if member.rpartition("/")[2] == name
+    )
+
+
 class TestRun:
     def test_json_mode_lists_the_published_files(
         self, client: TestClient, real_assets, silicon_cif: str

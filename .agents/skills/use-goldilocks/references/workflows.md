@@ -24,7 +24,7 @@ from goldilocks_core.set_overrides import build_overrides
 
 structure = normalize_structure(PathStructureSource("structure.cif")).structure
 hpc = load_hpc_profile("scarf")
-overrides = build_overrides({"k_grid": (4, 4, 4)})
+overrides = build_overrides({"k_grid": (4, 4, 4)}, task="scf_single_point")
 
 advice = advise(structure, hpc=hpc, overrides=overrides)
 
@@ -35,6 +35,9 @@ if isinstance(k_sampling, Resolved):
     print(k_sampling.value.mesh)
 print(advice.warnings())
 ```
+
+`build_overrides` routes each setting to the steps of `task` it applies to and
+raises `InvalidSetting` for one no step of the task reads (`press` on an scf).
 
 `advise()` always returns -- diagnosis degrades field-by-field
 (`Resolved`/`Unavailable`/`Blocked`) rather than raising. `advice.records()`
@@ -116,7 +119,8 @@ for how local tables are registered.
 ```python
 from goldilocks_core.service import advise_dos, check_dos, generate_dos
 
-dos_advice = advise_dos(structure, hpc=hpc)
+dos_overrides = build_overrides({"steps.nscf.k_grid": (12, 12, 12)}, task="dos")
+dos_advice = advise_dos(structure, hpc=hpc, overrides=dos_overrides)
 dos_report = check_dos(dos_advice)
 if dos_report.ok:
     dos_steps = generate_dos(dos_advice, dos_report, ctx=ctx)
@@ -130,6 +134,12 @@ scf and nscf inputs as `max_seconds` (`job.max_seconds_by_step`). Unless the
 request sets them, the nscf step's k-point spacing and occupations come from
 the dos protocol (aiida-quantumespresso `pdos.yaml`); those records read
 `heuristic` with the protocol in `source_note`, never `human`.
+`steps.<step>.<key>` sets one step (`scf`, `nscf`, or `dos` for the `dos.x`
+settings `delta_e`, `emin`, `emax`, `broadening`, `ngauss`; `dos.x` reads
+`ngauss` only with a broadening width, so it needs `broadening` unless the
+nscf step uses smearing); a key without a step reaches every step it applies
+to, with an `overrides.applies_to_multiple_steps` notice when that is both
+`pw.x` steps.
 CLI/HTTP/MCP equivalent: pass `task="dos"` (CLI: `--task dos`).
 
 ## Optional transports

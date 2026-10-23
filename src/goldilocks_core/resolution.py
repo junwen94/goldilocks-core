@@ -151,10 +151,11 @@ class Provenance(BaseModel):
     ``mixing_beta``/...; ``magnetic``'s ``spin_orbit_coupling``): ``human``
     or ``llm`` for a value that tier set, otherwise the tier that decided
     it. A setting the decision did not apply (a smearing width under fixed
-    occupations, ``press`` on a relax) has no entry. ``source`` is then the
-    highest tier among them (``from_field_sources``). ``None`` for a
-    decision that applies no setting of its own (an analysis fact, the
-    selected pseudopotentials)."""
+    occupations, a smearing function under tetrahedra) has no entry.
+    ``source`` is then the highest tier among them (``from_field_sources``).
+    ``None`` for a decision that applies no setting of its own (an analysis
+    fact, the selected pseudopotentials), and for those still labelled as a
+    whole (``cutoffs``, ``job``, ``nbnd``, ``parallelisation``, ``vdw``)."""
     derived_from: tuple[str, ...] = ()
     """The records whose answers this record's own rule followed, by
     record name: ``("is_metal",)`` for occupations chosen from the

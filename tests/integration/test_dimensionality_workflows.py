@@ -273,7 +273,7 @@ def test_a_2d_cell_constraint_on_a_tilted_bulk_cell_is_refused(
         primitive_diamond_silicon(),
         calculation="vc-relax",
         hpc=load_hpc_profile("scarf"),
-        overrides=build_overrides({"cell_dofree": "2Dxy"}),
+        overrides=build_overrides({"cell_dofree": "2Dxy"}, task="vc-relax"),
         store=store,
     )
 
@@ -293,7 +293,7 @@ def test_a_slab_override_writes_the_2d_coulomb_truncation(store: AssetStore) -> 
     advice = advise(
         silicon_001_slab(min_vacuum_size=18),
         hpc=load_hpc_profile("scarf"),
-        overrides=build_overrides({"isolation": "slab"}),
+        overrides=build_overrides({"isolation": "slab"}, task="scf_single_point"),
         store=store,
     )
     report = check(advice)
@@ -315,7 +315,7 @@ def test_vc_relax_of_a_slab_under_the_2d_truncation_holds_c_fixed(
         silicon_001_slab(min_vacuum_size=18),
         calculation="vc-relax",
         hpc=load_hpc_profile("scarf"),
-        overrides=build_overrides({"isolation": "slab"}),
+        overrides=build_overrides({"isolation": "slab"}, task="vc-relax"),
         store=store,
     )
     report = check_relax(advice)
@@ -335,7 +335,9 @@ def test_vc_relax_of_a_slab_under_the_2d_truncation_refuses_cell_dofree_all(
         silicon_001_slab(min_vacuum_size=18),
         calculation="vc-relax",
         hpc=load_hpc_profile("scarf"),
-        overrides=build_overrides({"isolation": "slab", "cell_dofree": "all"}),
+        overrides=build_overrides(
+            {"isolation": "slab", "cell_dofree": "all"}, task="vc-relax"
+        ),
         store=store,
     )
 
@@ -357,7 +359,7 @@ def test_a_slab_override_on_a_thick_slab_in_a_short_cell_is_refused(
     advice = advise(
         silicon_001_slab(),
         hpc=load_hpc_profile("scarf"),
-        overrides=build_overrides({"isolation": "slab"}),
+        overrides=build_overrides({"isolation": "slab"}, task="scf_single_point"),
         store=store,
     )
 
@@ -374,7 +376,7 @@ def test_a_slab_override_on_a_monolayer_passes_the_isolation_gate() -> None:
     advice = advise(
         molybdenum_disulfide_monolayer(),
         hpc=load_hpc_profile("scarf"),
-        overrides=build_overrides({"isolation": "slab"}),
+        overrides=build_overrides({"isolation": "slab"}, task="scf_single_point"),
     )
 
     report = check(advice)
@@ -391,7 +393,7 @@ def test_a_slab_override_on_bulk_graphite_is_refused() -> None:
     advice = advise(
         graphite(),
         hpc=load_hpc_profile("scarf"),
-        overrides=build_overrides({"isolation": "slab"}),
+        overrides=build_overrides({"isolation": "slab"}, task="scf_single_point"),
     )
 
     report = check(advice)
@@ -445,7 +447,7 @@ def test_fix_bottom_layers_on_bulk_graphite_is_refused() -> None:
         graphite(),
         calculation="relax",
         hpc=load_hpc_profile("scarf"),
-        overrides=build_overrides({"fix_bottom_layers": 1}),
+        overrides=build_overrides({"fix_bottom_layers": 1}, task="relax"),
     )
 
     report = check_relax(advice)
@@ -464,7 +466,7 @@ def test_a_relax_of_a_slab_fixes_its_bottom_layers(store: AssetStore) -> None:
         slab,
         calculation="relax",
         hpc=load_hpc_profile("scarf"),
-        overrides=build_overrides({"fix_bottom_layers": 2}),
+        overrides=build_overrides({"fix_bottom_layers": 2}, task="relax"),
         store=store,
     )
     report = check_relax(advice)
@@ -482,7 +484,7 @@ def test_a_relax_of_a_slab_fixes_its_bottom_layers(store: AssetStore) -> None:
 
 def test_the_quantum_espresso_assume_isolated_key_is_not_a_setting() -> None:
     with pytest.raises(InvalidSetting, match="unknown setting 'assume_isolated'"):
-        build_overrides({"assume_isolated": "none"})
+        build_overrides({"assume_isolated": "none"}, task="scf_single_point")
 
 
 def test_lda_graphite_gets_no_d3_dispersion_and_a_warning() -> None:
@@ -490,7 +492,11 @@ def test_lda_graphite_gets_no_d3_dispersion_and_a_warning() -> None:
     its default D3 only under a functional that has them."""
     hpc = load_hpc_profile("scarf")
     default = advise(graphite(), hpc=hpc)
-    lda = advise(graphite(), hpc=hpc, overrides=build_overrides({"functional": "LDA"}))
+    lda = advise(
+        graphite(),
+        hpc=hpc,
+        overrides=build_overrides({"functional": "LDA"}, task="scf_single_point"),
+    )
 
     assert default.system.vdw.value.use_vdw is True
     assert lda.analysis.geometry.value.dimensionality == "2d"
@@ -505,7 +511,9 @@ def test_d3_dispersion_with_lda_is_refused_before_generation() -> None:
     advice = advise(
         graphite(),
         hpc=load_hpc_profile("scarf"),
-        overrides=build_overrides({"functional": "LDA", "use_vdw": True}),
+        overrides=build_overrides(
+            {"functional": "LDA", "use_vdw": True}, task="scf_single_point"
+        ),
     )
 
     report = check(advice)

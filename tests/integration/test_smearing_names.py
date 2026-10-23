@@ -70,7 +70,7 @@ def _rendered_smearing(store: AssetStore, overrides: RunOverrides) -> str:
 
 def test_a_fermi_dirac_request_renders_quantum_espresso_s_short_name(store) -> None:
     """`--set smearing_type=fd` was refused; Fermi-Dirac had no spelling."""
-    overrides = build_overrides_from_cli(["smearing_type=fd"])
+    overrides = build_overrides_from_cli(["smearing_type=fd"], task="scf_single_point")
 
     assert _rendered_smearing(store, overrides) == "fd"
 
@@ -81,6 +81,8 @@ def test_every_advertised_smearing_type_renders_a_name_pw_x_accepts(store) -> No
 
     assert setting["enum"]
     for kind in setting["enum"]:
-        name = _rendered_smearing(store, build_overrides({"smearing_type": kind}))
+        name = _rendered_smearing(
+            store, build_overrides({"smearing_type": kind}, task="scf_single_point")
+        )
         assert name == kind
         assert name in _PW_X_SMEARING_NAMES, kind

@@ -110,8 +110,10 @@ so no default is refused before generation; see
 Each per-step advisor module under `src/goldilocks_core/advisors/` documents
 and owns its own heuristic default (e.g. `occupations.py` for smearing,
 `convergence.py` for SCF thresholds, `functional.py` for the default
-functional); there is no single parameters/policy module. `code`/`task`
-defaults live on `inputs/task.py`'s `Task` class.
+functional); there is no single parameters/policy module. The default code
+and task, `quantum_espresso` and `scf_single_point`, are the CLI's
+`--code`/`--task` defaults and those of the HTTP/MCP request document
+(`server/documents.py`).
 
 Spin, dispersion, and electronic-character heuristics are described in
 [Check your recommendations](science.md). Pseudopotential compatibility
@@ -121,7 +123,11 @@ exceptions belong to the [table guide](pseudopotentials.md#choose-a-table).
 
 Fields below are `--set`-able keys (see `goldilocks settings` for the full,
 live list) that `set_overrides.build_overrides` turns into a `RunOverrides`
-object consumed by `service.advise()`/`generate()`. Leaving a key unset
+object for one task, consumed by `service.advise()`/`generate()` and their
+task variants. Each key reaches the steps of that task it applies to; a key
+no step of the task reads is refused, and `steps.<step>.<key>` sets one step
+only, ahead of the plain key for that step (see the
+[CLI reference](cli.md#scientific-controls)). Leaving a key unset
 leaves the choice to Goldilocks's heuristics, or -- for `is_metal`,
 `is_magnetic`, and `k_distance`, where an ML tier is wired and resolves
 ahead of the heuristic -- to a real model prediction (`human > ml > llm >
@@ -145,7 +151,12 @@ heuristic`; see `goldilocks settings` for each key's actual sources).
 - `conv_thr`, `etot_conv_thr`, `mixing_beta`, and `electron_maxstep`
   override independently; an unspecified `conv_thr`/`etot_conv_thr` falls
   back to the per-atom-scaled formula (see Defaults above), not a fixed
-  constant.
+  constant. `etot_conv_thr` applies to relax and vc-relax only, the runs
+  that compare energies between ionic steps. `mixing_beta`, `mixing_mode`,
+  `mixing_fixed_ns` and `electron_maxstep` tune the SCF loop, so they apply
+  to the scf, relax and vc-relax steps and not to a `dos` task's nscf step,
+  which pw.x diagonalizes once in the scf step's density; `conv_thr` also
+  sets that step's diagonalization threshold.
 - The functional comes from the `functional` setting (default `PBEsol`).
   There is currently no setting to choose the pseudopotential accuracy
   tier -- it is hardcoded to `efficiency`; pinning a `precision`-tier

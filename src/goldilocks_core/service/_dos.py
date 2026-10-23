@@ -15,8 +15,14 @@ covers the larger ``pw.x`` step, and the scf and nscf each get their own
 ``max_seconds`` share of the walltime (pw.x counts it from its own
 start). ``dos.x`` has no ``max_seconds`` and runs in the remainder.
 
-**The nscf protocol is its own tier** (#174). Both steps get the
-request's overrides unchanged; the nscf step also gets
+**Each step gets its own overrides** (#154). ``set_overrides`` routes a
+request for the dos task to its scf, nscf and dos steps: a setting given
+without a step lands on every step it applies to (``k_grid`` on both pw.x
+steps, with a notice ``DosAdvice.warnings()`` publishes), and
+``steps.nscf.k_grid`` on the nscf step only. The dos step's overrides are
+``dos.x``'s own settings (``advisors/dos.py``).
+
+**The nscf protocol is its own tier** (#174). The nscf step also gets
 ``DOS_NSCF_PROTOCOL`` (``_step_protocol.py``: aiida-quantumespresso's
 ``pdos.yaml``, a denser k-mesh and ``tetrahedra_opt``), which ranks below
 the request and above the ML tier for that step only. A request value
@@ -30,18 +36,13 @@ from dataclasses import dataclass
 
 from pymatgen.core import Structure
 
-from goldilocks_core.advisors.dos import (
-    DosDecision,
-    DosHumanInput,
-    DosLlmInput,
-    dos_settings,
-)
+from goldilocks_core.advisors.dos import DosDecision, dos_settings
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.bundle import BundleInput
 from goldilocks_core.checks import CheckReport, collect_blocked
 from goldilocks_core.generation.quantum_espresso.dos import write_qe_dos
 from goldilocks_core.inputs.hpc import HpcProfile
-from goldilocks_core.resolution import FieldState, collect_warnings
+from goldilocks_core.resolution import FieldState, Warning, collect_warnings
 from goldilocks_core.service._advice import Advice, RunOverrides
 from goldilocks_core.service._bundle import assemble_bundle_input
 from goldilocks_core.service._generate import AdviceIncomplete, generate
@@ -54,9 +55,13 @@ from goldilocks_core.submission.slurm import render_slurm_script
 
 @dataclass(frozen=True, slots=True)
 class DosAdvice:
+    """``routing`` is the request's routing notices
+    (``RunOverrides.warnings``)."""
+
     scf: Advice
     nscf: Advice
     dos: FieldState[DosDecision]
+    routing: tuple[Warning, ...]
 
     def field_states(self) -> tuple[FieldState[object], ...]:
         return self.scf.field_states() + self.nscf.field_states() + (self.dos,)
@@ -82,7 +87,11 @@ class DosAdvice:
         return merged
 
     def warnings(self) -> list[dict[str, object]]:
-        return collect_warnings(self.records())
+        """Every record's warnings, then the routing notices, tagged with
+        the record ``overrides``."""
+        return collect_warnings(self.records()) + [
+            {**notice.model_dump(), "record": "overrides"} for notice in self.routing
+        ]
 
 
 def advise_dos(
@@ -91,29 +100,31 @@ def advise_dos(
     code: str = "quantum_espresso",
     hpc: HpcProfile,
     overrides: RunOverrides | None = None,
-    dos_human: DosHumanInput | None = None,
-    dos_llm: DosLlmInput | None = None,
     store: AssetStore | None = None,
     fetch_missing: bool = False,
 ) -> DosAdvice:
     """Diagnosis for all three of dos's steps, under the same contract as
-    ``advise()``: an undecided field degrades, a fault raises. Both pw.x
-    steps get ``overrides``; the nscf step also gets the dos protocol
+    ``advise()``: an undecided field degrades, a fault raises. Each step
+    gets its own overrides; the nscf step also gets the dos protocol
     (module docstring)."""
     overrides = overrides or RunOverrides()
+    steps = overrides.for_steps(("scf", "nscf", "dos"))
     advice = advise_steps(
         structure,
         code=code,
         hpc=hpc,
         overrides=overrides,
-        steps={"scf": overrides.step, "nscf": overrides.step},
+        steps={"scf": steps["scf"], "nscf": steps["nscf"]},
         protocols={"nscf": DOS_NSCF_PROTOCOL},
         store=store,
         fetch_missing=fetch_missing,
     )
     nscf = advice["nscf"]
-    dos = dos_settings(nscf.step.kpoints.occupations, dos_human, dos_llm)
-    return DosAdvice(scf=advice["scf"], nscf=nscf, dos=dos)
+    dos_overrides = steps["dos"].dos
+    dos = dos_settings(
+        nscf.step.kpoints.occupations, dos_overrides.dos, dos_overrides.dos_llm
+    )
+    return DosAdvice(scf=advice["scf"], nscf=nscf, dos=dos, routing=overrides.warnings)
 
 
 def check_dos(advice: DosAdvice) -> CheckReport:

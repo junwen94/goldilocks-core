@@ -68,7 +68,7 @@ def _diamond_silicon() -> Structure:
 @pytest.mark.parametrize("k_grid", [[1, 1, 1], [3, 3, 3]])
 def test_default_scf_leaves_ndiag_to_pw_x(k_grid, tmp_path, monkeypatch) -> None:
     store = _installed_store(tmp_path, monkeypatch)
-    overrides = build_overrides({"k_grid": k_grid})
+    overrides = build_overrides({"k_grid": k_grid}, task="scf_single_point")
 
     advice = advise(
         _silicon(), hpc=load_hpc_profile("scarf"), overrides=overrides, store=store
@@ -84,7 +84,9 @@ def test_default_scf_leaves_ndiag_to_pw_x(k_grid, tmp_path, monkeypatch) -> None
 
 def _gamma_only_advice(ndiag: int, tmp_path, monkeypatch):
     store = _installed_store(tmp_path, monkeypatch)
-    overrides = build_overrides({"k_grid": [1, 1, 1], "ndiag": ndiag})
+    overrides = build_overrides(
+        {"k_grid": [1, 1, 1], "ndiag": ndiag}, task="scf_single_point"
+    )
     return advise(
         _silicon(), hpc=load_hpc_profile("scarf"), overrides=overrides, store=store
     )
@@ -198,7 +200,7 @@ def test_dos_task_splits_one_walltime_across_its_pw_x_steps(
     is assumed to be the larger one."""
     store = _installed_store(tmp_path, monkeypatch)
     hpc = load_hpc_profile("scarf")
-    overrides = build_overrides({"walltime_h": 4})
+    overrides = build_overrides({"walltime_h": 4}, task="dos")
     advice = advise_dos(_diamond_silicon(), hpc=hpc, overrides=overrides, store=store)
     report = check_dos(advice)
     assert report.ok, report.blocking
@@ -308,7 +310,8 @@ def test_the_memory_estimate_counts_the_species_the_writer_renders(
             "spin_polarized": True,
             "starting_magnetization": {"Si0": 0.5, "Si1": -0.5},
             "occupations": "smearing",
-        }
+        },
+        task="scf_single_point",
     )
     advice = advise(structure, hpc=hpc, overrides=overrides, store=store)
     report = check(advice)

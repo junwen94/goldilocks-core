@@ -169,10 +169,17 @@ Paths below are relative to `src/goldilocks_core/` unless stated otherwise.
 ### Add a task
 
 There is no generic task-registration API or graph to define. To add a new
-task, add a `service/_<task>.py` module that calls `_pipeline.advise_steps`
-with one entry per `pw.x` step (purpose -> that step's `StepOverrides`, in
-run order) — one entry for a single-step task, like `service/_relax.py`,
-or several, like `service/_dos.py`'s `scf` and `nscf` — and then
+task, add it to `types.CalcTask`, the one task list (the CLI's `--task`
+choices, the request documents, `capabilities.py` and
+`set_overrides.build_overrides` read it), and its steps to `plan.py`'s
+`expand_task` (their purposes are also the step names
+`set_overrides.build_overrides` routes settings to, and `capabilities.py`
+derives each setting's `tasks` from them), and add a
+`service/_<task>.py` module that calls `_pipeline.advise_steps` with one
+entry per `pw.x` step (purpose -> that step's `StepOverrides`, from
+`RunOverrides.for_steps`, in run order) — one entry for a single-step task,
+like `service/_relax.py`, or several, like `service/_dos.py`'s `scf` and
+`nscf` — and then
 `_generate.generate` once per step with that step's purpose. `advise_steps`
 returns one `Advice` per step, all sharing the same analysis, system advice
 and job, so the submission script is rendered from that one job, which
@@ -181,9 +188,10 @@ holds every step's `max_seconds` share. Multi-step ordering is described by
 
 Export the new `advise_<task>`/`check_<task>`/`generate_<task>`/
 `render_submission_<task>`/`to_bundle_input_<task>` functions from
-`service/__init__.py`'s `__all__`, and wire the CLI's `--task` choices
-(`cli/_run.py`) and `capabilities()`'s `tasks` list (`capabilities.py`) to
-match.
+`service/__init__.py`'s `__all__`, dispatch to them where `run` and
+`explain` pick a task's functions (`cli/_run.py`, `cli/_explain.py`,
+`server/_handlers.py`), and describe the task in `capabilities.py`'s
+`_tasks()`.
 
 ### Add an input writer
 
@@ -293,17 +301,17 @@ requirements.
   references the records do not. ML model licence material is not shipped:
   bundles do not contain the models.
 - **Label each record from what its advisor consumed.** The `magnetic`,
-  `occupations`, `k_sampling`, `hubbard`, `convergence` and `relax`
+  `occupations`, `k_sampling`, `hubbard`, `convergence`, `relax` and `dos`
   decisions build their `Provenance` with `resolution.field_sources_from` and
   `Provenance.from_field_sources`, from the settings they applied and the
   inputs they read, so a setting reads `human` exactly when the request set
   it and the decision kept it, and `source` is the highest tier among them.
-  The other decisions that apply several settings (`cutoffs`, `dos`, `job`,
-  `nbnd`, `parallelisation`, `vdw`) still stamp one record-level `source`
-  and publish no `field_sources`, so their `human` means only that the
-  request set at least one of their settings. A rule that follows another
-  record keeps `heuristic` and names that record in `derived_from` rather
-  than copying its tier.
+  The other decisions that apply several settings (`cutoffs`, `job`, `nbnd`,
+  `parallelisation`, `vdw`) still stamp one record-level `source` and
+  publish no `field_sources`, so their `human` means only that the request
+  set at least one of their settings. A rule that follows another record
+  keeps `heuristic` and names that record in `derived_from` rather than
+  copying its tier.
 - **Keep remote callers away from local paths.** HTTP and MCP accept inline
   structures and registered table IDs, not filesystem sources, model
   locations, or publication paths. Published records name no local path

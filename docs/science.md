@@ -665,19 +665,22 @@ be resolved. There is no separate "provenance block" distinct from structure
 analysis -- both use this same shape.
 
 A decision that applies several settings (the magnetic decision,
-occupations, k-point sampling, Hubbard +U, convergence, relaxation) also
-carries `field_sources`, one source per setting it applied, keyed by the
-setting's override name: `human` (or `llm`) for a value that tier set,
-otherwise the tier that chose it. The record's `source` is the highest of
-them, so `mixing_beta=0.3` alone makes `convergence` `human` while
+occupations, k-point sampling, Hubbard +U, convergence, relaxation, the
+`dos.x` settings) also carries `field_sources`, one source per setting it
+applied, keyed by the setting's override name: `human` (or `llm`) for a value
+that tier set, otherwise the tier that chose it. The record's `source` is the
+highest of them, so `mixing_beta=0.3` alone makes `convergence` `human` while
 `field_sources` keeps `conv_thr` `heuristic`, and `spin_orbit_coupling=true`
 makes `magnetic` `human` while spin polarization still reads `heuristic`. A
 setting the decision did not apply has no entry and cannot make the record
-`human`: a `degauss` under fixed occupations, `press` on a `relax`, or a
-`magnetic_ordering` that an explicit `spin_polarized=false` ignores. Hubbard's
-switch is keyed `needs_correlation`, its override field, though `--set` calls
-it `hubbard_needs_correlation`. A pinned `pseudo_table_id` makes
-`pseudo_table` `human`.
+`human`: a `degauss` under fixed occupations, a `smearing_type` on a `dos`
+task's `tetrahedra_opt` nscf step, or a `magnetic_ordering` that an explicit
+`spin_polarized=false` ignores. Hubbard's switch is keyed `needs_correlation`,
+its override field, though `--set` calls it `hubbard_needs_correlation`. A
+pinned `pseudo_table_id` makes `pseudo_table` `human`. The other records that
+apply several settings (`cutoffs`, `job`, `nbnd`, `parallelisation`, `vdw`)
+carry one `source` and no `field_sources`: their `human` means the request set
+at least one of their settings.
 
 A record whose own rule followed another record's answer keeps the tier that
 applied the rule, `heuristic`, and names that record in `derived_from`:
@@ -701,9 +704,11 @@ request: a `dos` task's nscf protocol values (`nscf_k_sampling`'s k_distance,
 Per-decision warnings live inside that decision's own value (e.g.
 `job.warnings`, `cutoffs.warnings`), and every run, whatever its task, also
 carries one aggregated top-level `warnings` list: every record's warnings, in
-record-name order, each naming the record it came from in `record`. A `dos`
-task's nscf step keeps its own, under `nscf_`-prefixed records: a notice on
-`nscf_parallelisation` is about the nscf step's npool, not the scf step's.
+record-name order, each naming the record it came from in `record`, then the
+request's routing notices (a setting given without a step that reached several
+steps), under the `record` `overrides`. A `dos` task's nscf step keeps its
+own, under `nscf_`-prefixed records: a notice on `nscf_parallelisation` is
+about the nscf step's npool, not the scf step's.
 
 A resolved record also carries the rest of its provenance: `source_note`,
 the advisor's rationale where it gives one (such as why a molecule gets a

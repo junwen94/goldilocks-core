@@ -6,34 +6,56 @@ Composed of the three phases' own dataclasses, not a flat 20-odd-field
 dataclass: a flat shape would need to import every analysis/advisor
 decision type directly for its own field annotations, which is exactly
 the "god module" shape ``scripts/check_complexity.py``'s import-surface
-ceiling exists to catch. Composing three already-typed sub-objects costs
-this module only three local origins.
+ceiling exists to catch. Composing three already-typed sub-objects, plus
+the task's ``JobOverrides`` (``_step_resources.py``) in ``RunOverrides``,
+costs this module only four local origins.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from goldilocks_core.resolution import FieldState, collect_warnings
+from goldilocks_core.resolution import FieldState, Warning, collect_warnings
 from goldilocks_core.service._analysis import AnalysisFacts, AnalysisOverrides
 from goldilocks_core.service._step import StepAdvice, StepOverrides
+from goldilocks_core.service._step_resources import JobOverrides
 from goldilocks_core.service._system import SystemAdvice, SystemOverrides
 
 
 @dataclass(frozen=True, slots=True)
 class RunOverrides:
-    """One optional human/llm override object per advisor this epic
-    wires up, grouped by the same three phases as ``Advice`` below.
-    Deliberately typed, not a generic key/value bag -- ``resolution.py``'s
-    own note applies here too: "there is no generic override-forwarding
-    mechanism; each advisor's override class is separate and typed."
-    Mapping flat ``--set``/HTTP keys onto these fields is the shared
-    request-validation layer's job (this epic's next module), not this
-    one's."""
+    """One task's request overrides, routed for that task
+    (``set_overrides.build_overrides``, #154): the analysis and system
+    overrides and the task's one ``job`` allocation, then ``steps``, one
+    ``StepOverrides`` per step of the task that the request set anything
+    for, keyed by the step's purpose (``plan.expand_task``). Typed, not a
+    generic key/value bag -- each advisor's override class is separate.
+
+    ``warnings`` holds the routing notices (a setting given without a step
+    that landed on several); only a task with two pw.x steps, ``dos``, can
+    raise one, so ``DosAdvice`` alone publishes them."""
 
     analysis: AnalysisOverrides = field(default_factory=AnalysisOverrides)
     system: SystemOverrides = field(default_factory=SystemOverrides)
-    step: StepOverrides = field(default_factory=StepOverrides)
+    job: JobOverrides = field(default_factory=JobOverrides)
+    steps: Mapping[str, StepOverrides] = field(default_factory=dict)
+    warnings: tuple[Warning, ...] = ()
+
+    def for_steps(self, purposes: Sequence[str]) -> dict[str, StepOverrides]:
+        """Each of ``purposes``' (every step of the task, in run order)
+        overrides, empty where the request set none. Raises ``ValueError``
+        when ``steps`` holds a step outside ``purposes``: these overrides
+        were routed for another task."""
+        foreign = [purpose for purpose in self.steps if purpose not in purposes]
+        if foreign:
+            raise ValueError(
+                f"overrides for step(s) {', '.join(foreign)} were routed for "
+                f"another task; this task's steps are {', '.join(purposes)}"
+            )
+        return {
+            purpose: self.steps.get(purpose, StepOverrides()) for purpose in purposes
+        }
 
 
 @dataclass(frozen=True, slots=True)

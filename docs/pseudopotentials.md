@@ -48,7 +48,7 @@ apart from missing coverage.
 
 To choose a table explicitly, pin `pseudo_table_id`: `--set
 pseudo_table_id=<table-id>` on the CLI, `build_overrides({"pseudo_table_id":
-"<table-id>"})` in Python (see the [Python tutorial](tutorial.md)), or
+"<table-id>"}, task=...)` in Python (see the [Python tutorial](tutorial.md)), or
 `{"overrides": {"pseudo_table_id": "<table-id>"}}` over HTTP/MCP. The pinned
 table's functional, accuracy tier, relativistic treatment, and element
 coverage must still match the request. In particular:

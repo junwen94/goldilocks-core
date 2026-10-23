@@ -15,9 +15,11 @@ uv run goldilocks run structure.cif --out silicon-run
 
 `inspect` reports structure metadata. `explain` runs analysis and every
 advisor, printing each decision and its source (`human`, `ml`, `llm`, or
-`heuristic`), then the checks `run` applies, printing one `blocked: <reason>`
-line for each reason `run` would refuse to generate an input. It never writes
-anything, even without `--json`, and exits 0 whether or not it is blocked.
+`heuristic`), then a `notice: <message>` line for each setting given without a
+step that reached several steps, then the checks `run` applies, printing one
+`blocked: <reason>` line for each reason `run` would refuse to generate an
+input. It never writes anything, even without `--json`, and exits 0 whether or
+not it is blocked.
 `run` generates a complete runnable input (Quantum ESPRESSO by default) and
 publishes it to `silicon-run` because `-o/--out` was given; omit `-o/--out`
 for a memory-only preview instead. Use `uv run goldilocks --help` or a
@@ -79,7 +81,8 @@ lists the distinct reasons `run` would refuse to generate an input and is empty
 when its checks pass. `warnings` holds every record's warnings, for every task,
 each as `{"code", "level", "category", "message", "record"}`, where `record`
 names the record it came from (`nscf_parallelisation` for a `dos` task's nscf
-step); `goldilocks.json` carries the same list.
+step), then the request's routing notices under the `record` `overrides`
+(below); `goldilocks.json` carries the same list.
 
 `--json` output and the published `goldilocks.json` are strict JSON: a value
 with no finite number is `null`, never `Infinity` or `NaN`. For example, the
@@ -121,6 +124,36 @@ its type, default, and description; a selection of commonly used keys:
 | `conv_thr`, `mixing_beta`, `electron_maxstep` | SCF energy-convergence threshold, density-mixing factor, max SCF iterations |
 | `u_by_element`                      | Hubbard U_eff per element in eV, replacing the built-in table, e.g. `--set 'u_by_element={"Ti": 4.0}'` |
 | `hubbard_needs_correlation`         | `false` runs without Hubbard +U; `true` applies the built-in U table  |
+| `delta_e`, `emin`, `emax`, `broadening`, `ngauss` | `dos.x` settings of the `dos` task: energy step and window in eV, broadening in Ry, broadening function (`-99`, `-1`, `0`..`10`; `dos.x` reads it only with a broadening width, so it needs `broadening` unless the nscf step uses smearing) |
+
+Each setting applies to the steps that read it, and `goldilocks settings
+--json` lists them (`tasks`, `steps`, `scope`). A task's steps are named by
+purpose: `scf` (`scf_single_point`), `relax`, `vc-relax`, and `scf`, `nscf`,
+`dos` for `--task dos`.
+
+- A step setting given as `KEY=VALUE` reaches every step of the task it
+  applies to. On a `dos` task, `k_grid` sets both the scf and the nscf step,
+  with an `overrides.applies_to_multiple_steps` notice naming them: a
+  `notice:` line in `explain`'s text output, and a `warnings` entry with
+  `record` `overrides` in `--json` output and `goldilocks.json`. The SCF-loop
+  settings (`mixing_beta`, `mixing_mode`, `mixing_fixed_ns`,
+  `electron_maxstep`) set the scf step only: the nscf step runs no SCF loop,
+  so pw.x does not use them there.
+- `steps.<step>.KEY=VALUE` sets one step only and wins over the plain key for
+  that step: `--task dos --set 'k_grid=[10,10,10]' --set
+  'steps.nscf.k_grid=[30,30,30]'` gives the scf 10×10×10 and the nscf
+  30×30×30. In `--config`, a `[steps.nscf]` table does the same. A plain key
+  that every step it applies to also sets this way would reach no step, and
+  is refused.
+- System settings (functional, cutoffs, magnetism, ...) describe the system
+  every step runs on, and the job settings (`partition`, `nodes`, `ntasks`,
+  `walltime_h`, `account`) the one allocation all of a task's steps run in:
+  both are set once per task, and `steps.<step>.` is refused for them.
+- A setting no step of the task reads is refused (exit 2, HTTP 422): `press`
+  and `cell_dofree` apply to `vc-relax` only, `nstep` and `etot_conv_thr` to
+  `relax` and `vc-relax`, and the `dos.x` settings to `dos`. So is
+  `steps.<step>.KEY` for a step that does not read it, such as
+  `steps.nscf.mixing_beta`.
 
 Quote `--set` values that contain brackets or braces (e.g. `--set
 'k_grid=[8,8,8]'`) so the shell does not glob-expand them; array and object

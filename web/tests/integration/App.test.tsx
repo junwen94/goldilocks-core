@@ -767,6 +767,26 @@ describe("Goldilocks Workbench", () => {
     expect(screen.getByText("Relax")).toBeInTheDocument();
   });
 
+  it("offers a setting for exactly the tasks it declares", async () => {
+    // #154: visibility follows each setting's `tasks`, not its group name.
+    const user = userEvent.setup();
+    const relaxForEveryTask: Capabilities = {
+      ...capabilities,
+      settings: capabilities.settings.map((setting) =>
+        setting.key === "ion_dynamics"
+          ? { ...setting, tasks: ["scf_single_point", "relax"] }
+          : setting,
+      ),
+    };
+    const core = new CoreStub(Promise.resolve(relaxForEveryTask));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    const { container } = renderApp(core);
+
+    await openStructure(user, container);
+
+    expect(screen.getByText("Relax")).toBeInTheDocument();
+  });
+
   it("keeps retry available and dismiss hidden for a Capabilities failure", async () => {
     const failure = new CoreFailure(
       "assets_unavailable",

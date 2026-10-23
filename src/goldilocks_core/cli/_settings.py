@@ -4,7 +4,8 @@ own illustrative table ("k_index integer human . ml(cgcnn-v2) . heuristic").
 
 The keys are capabilities' ``settings[]`` plus its overridable ``facts[]``
 (``is_metal``, ``is_magnetic``, ...), listed under ``[analysis]`` with the
-values they accept (#139).
+values they accept (#139). A step setting names the steps it applies to,
+the names ``steps.<step>.KEY`` takes (#154).
 """
 
 from __future__ import annotations
@@ -38,5 +39,7 @@ def run(args: argparse.Namespace, out: TextIO) -> None:
         if values:
             print(f"  values: {', '.join(values)}", file=out)
         print(f"  sources: {' . '.join(entry['approaches'])}", file=out)
+        if entry.get("steps"):
+            print(f"  steps: {', '.join(entry['steps'])}", file=out)
         if entry["description"]:
             print(f"  {entry['description']}", file=out)

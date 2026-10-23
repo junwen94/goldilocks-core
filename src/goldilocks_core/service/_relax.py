@@ -12,12 +12,11 @@ mirroring how ``service/_dos.py``'s own ``DosAdvice`` adds ``dos`` on
 top of two ``Advice``s, just with one ``Advice`` instead of two.
 
 **``RelaxOverrides`` is real request-validation plumbing, not a
-task-specific side channel.** ``relax``/``relax_llm`` are read off
-``overrides.step.relax`` (``capabilities.py``'s own ``relax`` branch,
-v2 epic 10, #10) -- unlike ``DosHumanInput``/``DosLlmInput`` (v2 epic 9,
-#9), which the epic 9 delivery-layer audit found are never reachable
-from any transport at all. ``--set nstep=100`` (etc.) actually reaches
-here.
+task-specific side channel.** ``relax``/``relax_llm`` are read off the
+step's own overrides (``capabilities.py``'s ``relax`` branch, v2 epic 10,
+#10), which ``set_overrides.build_overrides`` routes to the step named by
+``calculation``: ``--set nstep=100`` (etc.) reaches here, and a vc-relax
+key on a relax (``press``) is refused before it (#154).
 """
 
 from __future__ import annotations
@@ -83,16 +82,17 @@ def advise_relax(
     every slab with its vacuum along c in the xy frame, so such a slab
     gets '2Dxy' however it was uploaded (#140)."""
     overrides = overrides or RunOverrides()
+    steps = overrides.for_steps((calculation,))
     advice = advise_steps(
         structure,
         code=code,
         hpc=hpc,
         overrides=overrides,
-        steps={calculation: overrides.step},
+        steps=steps,
         store=store,
         fetch_missing=fetch_missing,
     )[calculation]
-    relax_overrides = overrides.step.relax
+    relax_overrides = steps[calculation].relax
     relax = relax_settings(
         calculation,
         advice.step.kpoints.convergence,

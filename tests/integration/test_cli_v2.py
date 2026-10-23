@@ -159,6 +159,21 @@ def test_settings_human_output_lists_sources() -> None:
     assert "sources: human . heuristic" in completed.stdout
 
 
+def test_settings_human_output_names_the_steps_a_setting_applies_to() -> None:
+    """#154: a step setting lists the steps ``steps.<step>.KEY`` can name;
+    a task-level setting (the job's walltime) lists none."""
+    completed = _run_cli("settings")
+
+    assert completed.returncode == 0, completed.stderr
+    lines = completed.stdout.splitlines()
+    press = lines.index("press [relax] number (default 0.0)")
+    assert lines[press + 2] == "  steps: vc-relax"
+    delta_e = lines.index("delta_e [dos] number")
+    assert lines[delta_e + 2] == "  steps: dos"
+    walltime = lines.index("walltime_h [job] number")
+    assert not lines[walltime + 2].startswith("  steps:")
+
+
 def test_settings_human_output_lists_the_facts_and_their_values() -> None:
     """#139: is_metal/is_magnetic are --set-able, but `goldilocks settings`,
     which an unknown key points to, never listed them or their values."""
@@ -815,3 +830,156 @@ class TestRunAndExplainAgainstRealAssets:
         assert json.dumps(
             document, indent=2, sort_keys=True
         ) == completed.stdout.rstrip("\n")
+
+
+class TestPerStepOverrides:
+    """#154 on the CLI: `--set steps.nscf.k_grid=...` was stripped to a flat
+    `k_grid`, so it also moved the scf mesh (752 irreducible k-points instead
+    of 47 on diamond Si); a flat plus a per-step value of one key exited 2;
+    dos.x keys were unknown; and a key no step of the task reads was dropped.
+    No real assets needed: explain reports every record either way."""
+
+    def _explain_dos(self, *settings: str) -> dict[str, object]:
+        silicon = structure("Si.cif")
+        flags = [part for setting in settings for part in ("--set", setting)]
+        completed = _run_cli(
+            "explain", str(silicon), "--hpc", "scarf", "--task", "dos", *flags, "--json"
+        )
+        assert completed.returncode == 0, completed.stderr
+        return strict_json(completed.stdout)
+
+    def test_steps_nscf_k_grid_changes_only_the_nscf_mesh(self) -> None:
+        default = self._explain_dos()["records"]
+        records = self._explain_dos("steps.nscf.k_grid=[30,30,30]")["records"]
+
+        assert records["nscf_k_sampling"]["value"]["mesh"] == [30, 30, 30]
+        assert records["nscf_k_sampling"]["source"] == "human"
+        assert records["k_sampling"] == default["k_sampling"]
+        assert records["n_irr_k"] == default["n_irr_k"]
+
+    def test_a_flat_and_a_per_step_value_of_one_key_both_apply(self) -> None:
+        records = self._explain_dos("k_grid=[4,4,4]", "steps.nscf.k_grid=[30,30,30]")[
+            "records"
+        ]
+
+        assert records["k_sampling"]["value"]["mesh"] == [4, 4, 4]
+        assert records["nscf_k_sampling"]["value"]["mesh"] == [30, 30, 30]
+
+    def test_a_flat_k_grid_names_both_steps_it_lands_on(self) -> None:
+        document = self._explain_dos("k_grid=[4,4,4]")
+
+        notices = [
+            warning
+            for warning in document["warnings"]
+            if warning["code"] == "overrides.applies_to_multiple_steps"
+        ]
+        assert notices == [
+            {
+                "code": "overrides.applies_to_multiple_steps",
+                "level": "info",
+                "category": "overrides",
+                "message": (
+                    "k_grid was given without a step, so it applies to the "
+                    "scf and nscf steps; set steps.<step>.k_grid to set one "
+                    "step only."
+                ),
+                "record": "overrides",
+            }
+        ]
+
+    _K_GRID_NOTICE = (
+        "notice: k_grid was given without a step, so it applies to the scf and "
+        "nscf steps; set steps.<step>.k_grid to set one step only."
+    )
+
+    def test_the_text_report_prints_the_notice_before_the_blocked_lines(
+        self,
+    ) -> None:
+        """The notice belongs to no record, and the text report printed only
+        records and blocked lines, so it never showed."""
+        silicon = structure("Si.cif")
+
+        completed = _run_cli(
+            "explain",
+            str(silicon),
+            "--hpc",
+            "scarf",
+            "--task",
+            "dos",
+            "--set",
+            "k_grid=[4,4,4]",
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        lines = completed.stdout.splitlines()
+        notice = lines.index(self._K_GRID_NOTICE)
+        after = lines[notice + 1 :]
+        assert all(not line.startswith("blocked:") for line in lines[:notice])
+        assert all(line.startswith("blocked:") for line in after), after
+
+    def test_a_shift_keeps_the_protocol_nscf_mesh(self) -> None:
+        default = self._explain_dos()["records"]["nscf_k_sampling"]["value"]
+        nscf = self._explain_dos("shift=[1,1,1]")["records"]["nscf_k_sampling"]["value"]
+
+        assert (nscf["k_distance"], nscf["mesh"]) == (0.1, default["mesh"])
+        assert nscf["shift"] == [1, 1, 1]
+
+    def test_a_dos_x_setting_reaches_the_dos_record(self) -> None:
+        dos = self._explain_dos(
+            "delta_e=0.05", "steps.dos.ngauss=1", "steps.dos.broadening=0.01"
+        )["records"]["dos"]
+
+        assert (dos["value"]["delta_e"], dos["value"]["ngauss"]) == (0.05, 1)
+        assert dos["field_sources"]["delta_e"] == "human"
+        assert dos["field_sources"]["ngauss"] == "human"
+
+    def test_steps_in_a_config_file_are_per_step_settings(self, tmp_path: Path) -> None:
+        config = tmp_path / "dos.toml"
+        config.write_text("[steps.nscf]\nk_grid = [30, 30, 30]\n")
+        silicon = structure("Si.cif")
+
+        completed = _run_cli(
+            "explain",
+            str(silicon),
+            "--hpc",
+            "scarf",
+            "--task",
+            "dos",
+            "--config",
+            str(config),
+            "--json",
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        records = strict_json(completed.stdout)["records"]
+        assert records["nscf_k_sampling"]["value"]["mesh"] == [30, 30, 30]
+        assert records["k_sampling"]["value"]["mesh"] != [30, 30, 30]
+
+    @pytest.mark.parametrize(
+        ("task", "setting", "message"),
+        [
+            (
+                "scf_single_point",
+                "press=10",
+                "'press' does not apply to task 'scf_single_point'; "
+                "it applies to task vc-relax",
+            ),
+            (
+                "dos",
+                "steps.nscf.walltime_h=4",
+                "'walltime_h' is set once per task, not per step",
+            ),
+        ],
+    )
+    def test_a_setting_no_step_of_the_task_reads_is_an_operator_error(
+        self, task: str, setting: str, message: str
+    ) -> None:
+        silicon = structure("Si.cif")
+
+        completed = _run_cli(
+            "explain", str(silicon), "--hpc", "scarf", "--task", task, "--set", setting
+        )
+
+        assert completed.returncode == 2
+        assert "Traceback" not in completed.stderr
+        assert message in completed.stderr

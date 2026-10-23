@@ -131,7 +131,9 @@ def _run(
 ) -> tuple[tuple[Advice, ...], tuple[str, ...]]:
     """Every pw.x step's ``Advice`` and every pw.x input for ``task``,
     after asserting the gate passes."""
-    overrides = build_overrides(settings)
+    overrides = build_overrides(
+        settings, task="scf_single_point" if task == "scf" else task
+    )
     if task == "scf":
         advice = advise(structure, hpc=_hpc(), overrides=overrides, store=store)
         report, steps = check(advice), (advice,)
@@ -232,7 +234,9 @@ def test_nelec_for_the_uploaded_cell_is_refused_once_the_ordering_resizes_it(
     advice = advise(
         _primitive_nio(),
         hpc=_hpc(),
-        overrides=build_overrides({"magnetic_ordering": "afm", "nelec": 24.0}),
+        overrides=build_overrides(
+            {"magnetic_ordering": "afm", "nelec": 24.0}, task="scf_single_point"
+        ),
         store=store,
     )
 
@@ -374,7 +378,9 @@ def test_spin_orbit_refuses_tot_magnetization_before_generation(
     advice = advise(
         _cri3_monolayer(),
         hpc=_hpc(),
-        overrides=build_overrides({**_SPIN_ORBIT_FIXED, "tot_magnetization": 6.0}),
+        overrides=build_overrides(
+            {**_SPIN_ORBIT_FIXED, "tot_magnetization": 6.0}, task="scf_single_point"
+        ),
         store=spin_orbit_store,
     )
 
@@ -518,7 +524,9 @@ def test_afm_orders_the_four_fe_of_olivine_lifepo4(olivine_store: AssetStore) ->
     advice = advise(
         olivine,
         hpc=_hpc(),
-        overrides=build_overrides({"magnetic_ordering": "afm"}),
+        overrides=build_overrides(
+            {"magnetic_ordering": "afm"}, task="scf_single_point"
+        ),
         store=olivine_store,
     )
 
@@ -872,7 +880,11 @@ def test_the_dipole_notice_of_a_polar_afm_slab_describes_the_written_cell() -> N
     janus = _janus_vsse()
 
     advice = advise(
-        janus, hpc=_hpc(), overrides=build_overrides({"magnetic_ordering": "afm"})
+        janus,
+        hpc=_hpc(),
+        overrides=build_overrides(
+            {"magnetic_ordering": "afm"}, task="scf_single_point"
+        ),
     )
 
     cell = advice.system.magnetic.value.cell
@@ -911,7 +923,11 @@ def test_the_dipole_notice_reads_the_vacuum_of_the_cell_written(monkeypatch) -> 
     )
 
     advice = advise(
-        janus, hpc=_hpc(), overrides=build_overrides({"magnetic_ordering": "afm"})
+        janus,
+        hpc=_hpc(),
+        overrides=build_overrides(
+            {"magnetic_ordering": "afm"}, task="scf_single_point"
+        ),
     )
 
     cell = advice.system.magnetic.value.cell

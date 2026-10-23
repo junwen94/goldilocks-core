@@ -274,3 +274,63 @@ class TestToolCalls:
                     {"document": {"structure_content": "/etc/passwd"}},
                 )
             )
+
+
+class TestPerStepOverrides:
+    """#154 over MCP: `steps.nscf.k_grid` raised "unknown setting", dos.x
+    keys were unknown, and press on an scf was dropped silently."""
+
+    def _call(
+        self, tool: str, silicon_cif: str, task: str, overrides: dict[str, Any]
+    ) -> Any:
+        document = {
+            "structure_content": silicon_cif,
+            "hpc": "scarf",
+            "task": task,
+            "overrides": overrides,
+        }
+        return asyncio.run(create_server().call_tool(tool, {"document": document}))
+
+    def test_steps_nscf_k_grid_changes_only_the_nscf_mesh(
+        self, silicon_cif: str
+    ) -> None:
+        default = self._call("explain", silicon_cif, "dos", {})
+        result = self._call(
+            "explain", silicon_cif, "dos", {"steps.nscf.k_grid": [30, 30, 30]}
+        )
+
+        assert result.is_error is False
+        records = result.structured_content["records"]
+        assert records["nscf_k_sampling"]["value"]["mesh"] == [30, 30, 30]
+        assert (
+            records["k_sampling"] == default.structured_content["records"]["k_sampling"]
+        )
+
+    def test_a_shift_keeps_the_protocol_nscf_mesh(self, silicon_cif: str) -> None:
+        default = self._call("explain", silicon_cif, "dos", {})
+        result = self._call("explain", silicon_cif, "dos", {"shift": [1, 1, 1]})
+
+        nscf = result.structured_content["records"]["nscf_k_sampling"]["value"]
+        protocol = default.structured_content["records"]["nscf_k_sampling"]["value"]
+        assert (nscf["k_distance"], nscf["mesh"]) == (0.1, protocol["mesh"])
+
+    def test_a_dos_x_setting_reaches_the_dos_record(
+        self, silicon_fixture_table, silicon_cif: str
+    ) -> None:
+        result = self._call("run", silicon_cif, "dos", {"delta_e": 0.05})
+
+        assert result.is_error is False
+        dos = result.structured_content["records"]["dos"]
+        assert (dos["value"]["delta_e"], dos["source"]) == (0.05, "human")
+
+    @pytest.mark.parametrize("tool", ["explain", "run"])
+    def test_press_on_an_scf_raises_tool_error(
+        self, silicon_cif: str, tool: str
+    ) -> None:
+        with pytest.raises(ToolError) as excinfo:
+            self._call(tool, silicon_cif, "scf_single_point", {"press": 10})
+
+        assert str(excinfo.value).endswith(
+            "'press' does not apply to task 'scf_single_point'; "
+            "it applies to task vc-relax"
+        )

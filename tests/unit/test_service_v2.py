@@ -22,7 +22,6 @@ from goldilocks_core.advisors import magnetic_config as magnetic_config_module
 from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
 from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
 from goldilocks_core.advisors.parallelisation import (
-    ParallelisationHumanInput,
     diag_grid_side,
 )
 from goldilocks_core.advisors.size import Species, memory_estimate, resource_estimate
@@ -34,9 +33,7 @@ from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
 from goldilocks_core.resolution import Blocked, Unavailable, records_document
 from goldilocks_core.service import (
     AdviceIncomplete,
-    ResourceOverrides,
     RunOverrides,
-    StepOverrides,
     SystemOverrides,
     advise,
     advise_dos,
@@ -217,13 +214,7 @@ class TestAdviseEndToEnd:
         check() pipeline (test_checks.py already covers checks.check_all
         directly) -- npool=7 never divides scarf's 64 ntasks."""
         store, _table = installed_table
-        overrides = RunOverrides(
-            step=StepOverrides(
-                resources=ResourceOverrides(
-                    parallelisation=ParallelisationHumanInput(npool=7)
-                )
-            )
-        )
+        overrides = build_overrides({"npool": 7}, task="scf_single_point")
 
         advice = advise(silicon, hpc=hpc, overrides=overrides, store=store)
         assert advice.step.resources.job.value.ntasks == 64
@@ -243,7 +234,7 @@ class TestAdviseEndToEnd:
         with 'too few bands'; check() refuses it before generation
         instead."""
         store, _ = installed_table
-        overrides = build_overrides(setting)
+        overrides = build_overrides(setting, task="scf_single_point")
 
         advice = advise(silicon, hpc=hpc, overrides=overrides, store=store)
         assert advice.step.kpoints.nbnd.value.nbnd == 2
@@ -395,7 +386,9 @@ class TestJobMemory:
             'number_of_proj="4" l_max="1"'
         )
         store = _store_with(upf, tmp_path, monkeypatch)
-        overrides = build_overrides({"u_by_element": {"Si": 4.0}})
+        overrides = build_overrides(
+            {"u_by_element": {"Si": 4.0}}, task="scf_single_point"
+        )
 
         advice = advise(diamond_silicon, hpc=hpc, overrides=overrides, store=store)
 
@@ -415,7 +408,9 @@ class TestJobMemory:
             'number_of_proj="4" l_max="1"'
         )
         store = _store_with(upf, tmp_path, monkeypatch, relativistic="full")
-        overrides = build_overrides({"spin_orbit_coupling": True, "ntasks": 1})
+        overrides = build_overrides(
+            {"spin_orbit_coupling": True, "ntasks": 1}, task="scf_single_point"
+        )
 
         advice = advise(diamond_silicon, hpc=hpc, overrides=overrides, store=store)
 
@@ -468,7 +463,7 @@ class TestJobMemory:
         vacancy = Structure(
             Lattice.cubic(5.43), [{"Si": 0.5}, "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]]
         )
-        overrides = build_overrides({"spin_polarized": False})
+        overrides = build_overrides({"spin_polarized": False}, task="scf_single_point")
 
         advice = advise(vacancy, hpc=hpc, overrides=overrides, store=store)
 
@@ -485,7 +480,9 @@ class TestPoolsShareKpointSpinPairs:
 
     @staticmethod
     def _parallelisation(silicon, hpc, store, **settings):
-        overrides = build_overrides({"k_grid": [3, 3, 3], **settings})
+        overrides = build_overrides(
+            {"k_grid": [3, 3, 3], **settings}, task="scf_single_point"
+        )
         advice = advise(silicon, hpc=hpc, overrides=overrides, store=store)
         assert advice.step.kpoints.n_irr_k.value == 6
         assert advice.step.resources.job.value.ntasks == 64
@@ -548,7 +545,7 @@ class TestUnresolvedStepInputBlocksTheJob:
         self, diamond_silicon, hpc, installed_table, settings, cause
     ) -> None:
         store, _table = installed_table
-        overrides = build_overrides(settings)
+        overrides = build_overrides(settings, task="scf_single_point")
 
         advice = advise(diamond_silicon, hpc=hpc, overrides=overrides, store=store)
 
@@ -648,11 +645,17 @@ class TestAdviseDegradation:
         the reason it refuses. hcp Gd used to be told to enable SOC, which
         then left pseudo_table unavailable."""
         settings = {"functional": functional}
-        without = advise(structure, hpc=hpc, overrides=build_overrides(settings))
+        without = advise(
+            structure,
+            hpc=hpc,
+            overrides=build_overrides(settings, task="scf_single_point"),
+        )
         with_soc = advise(
             structure,
             hpc=hpc,
-            overrides=build_overrides({**settings, "spin_orbit_coupling": True}),
+            overrides=build_overrides(
+                {**settings, "spin_orbit_coupling": True}, task="scf_single_point"
+            ),
         )
 
         notices = {
@@ -685,7 +688,11 @@ class TestAdviseDegradation:
             [[0, 0, 0], [0.5, 0.5, 0.5]],
         )
 
-        advice = advise(disordered, hpc=hpc, overrides=build_overrides(settings))
+        advice = advise(
+            disordered,
+            hpc=hpc,
+            overrides=build_overrides(settings, task="scf_single_point"),
+        )
 
         magnetic = advice.records()["magnetic"]
         assert isinstance(magnetic, Blocked)
@@ -935,7 +942,7 @@ def test_hubbard_record_lists_each_applied_u_with_its_source(
 
 
 def test_user_u_by_element_reaches_the_generated_card(hpc, correlated_store) -> None:
-    overrides = build_overrides({"u_by_element": {"Ni": 5.0}})
+    overrides = build_overrides({"u_by_element": {"Ni": 5.0}}, task="scf_single_point")
 
     advice = advise(
         _rock_salt_nio(), hpc=hpc, overrides=overrides, store=correlated_store
@@ -977,7 +984,7 @@ def test_hubbard_warnings_reach_the_top_level_list_for_table_and_user_u(
     advice = advise(
         _rock_salt_nio(),
         hpc=hpc,
-        overrides=build_overrides(overrides),
+        overrides=build_overrides(overrides, task="scf_single_point"),
         store=correlated_store,
     )
 
@@ -1013,7 +1020,9 @@ def test_frozen_ns_warning_follows_the_hubbard_decision_not_needs_correlation(
     advice = advise(
         structure(),
         hpc=hpc,
-        overrides=build_overrides({**overrides, "mixing_fixed_ns": 50}),
+        overrides=build_overrides(
+            {**overrides, "mixing_fixed_ns": 50}, task="scf_single_point"
+        ),
         store=correlated_store,
     )
 
@@ -1037,7 +1046,9 @@ def test_a_blocked_cell_blocks_every_count_made_on_it(
     advice = advise(
         silicon,
         hpc=hpc,
-        overrides=build_overrides({"starting_magnetization": {"Si9": 0.5}}),
+        overrides=build_overrides(
+            {"starting_magnetization": {"Si9": 0.5}}, task="scf_single_point"
+        ),
         store=store,
     )
 
@@ -1072,7 +1083,9 @@ def test_table_selection_reads_the_simulated_cell_s_spin_orbit_switch(
     spin_orbit = advise(
         silicon,
         hpc=hpc,
-        overrides=build_overrides({"spin_orbit_coupling": True}),
+        overrides=build_overrides(
+            {"spin_orbit_coupling": True}, task="scf_single_point"
+        ),
         store=store,
     )
 
@@ -1120,15 +1133,17 @@ def counted_enumerations(monkeypatch) -> list[Structure]:
 
 
 @pytest.mark.parametrize(
-    "advise_task",
+    ("advise_task", "task"),
     [
-        pytest.param(advise, id="advise"),
-        pytest.param(advise_dos, id="advise_dos"),
-        pytest.param(functools.partial(advise_relax, calculation="relax"), id="relax"),
+        pytest.param(advise, "scf_single_point", id="advise"),
+        pytest.param(advise_dos, "dos", id="advise_dos"),
+        pytest.param(
+            functools.partial(advise_relax, calculation="relax"), "relax", id="relax"
+        ),
     ],
 )
 def test_an_afm_task_enumerates_its_orderings_once(
-    hpc, correlated_store, counted_enumerations, advise_task
+    hpc, correlated_store, counted_enumerations, advise_task, task
 ) -> None:
     """#184 (part A), #128: the simulated cell is resolved once per task.
     The two-pass magnetic decision used to enumerate before pseudopotential
@@ -1136,7 +1151,7 @@ def test_an_afm_task_enumerates_its_orderings_once(
     advise_task(
         _rock_salt_nio(),
         hpc=hpc,
-        overrides=build_overrides({"magnetic_ordering": "afm"}),
+        overrides=build_overrides({"magnetic_ordering": "afm"}, task=task),
         store=correlated_store,
     )
 
@@ -1151,7 +1166,7 @@ def test_the_written_cell_is_seeded_once_from_the_selected_table(
     z_valence of 18, opposite on the two Ni sublattices, with O off the
     sublattice at 0 (#170). A table that is not installed yet leaves
     aiida's flat 0.1."""
-    overrides = build_overrides({"magnetic_ordering": "afm"})
+    overrides = build_overrides({"magnetic_ordering": "afm"}, task="scf_single_point")
 
     installed = advise(
         _rock_salt_nio(), hpc=hpc, overrides=overrides, store=correlated_store
@@ -1226,7 +1241,7 @@ def test_the_magnetic_record_shows_the_written_cell_and_its_ordering(
     advice = advise(
         _rock_salt_nio(),
         hpc=hpc,
-        overrides=build_overrides(settings),
+        overrides=build_overrides(settings, task="scf_single_point"),
         store=correlated_store,
     )
 

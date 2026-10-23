@@ -257,10 +257,10 @@ def relax_settings(
     ``geometry`` gives the cell no default ``cell_dofree`` and no human or
     llm value is set (a wire, or a slab outside the xy frame).
 
-    ``field_sources`` has one entry per field of the decision, so a
-    vc-relax key on a relax (``press``) is not the request's and leaves the
-    record ``heuristic`` (#173, #154); ``etot_conv_thr`` reads its source on
-    ``convergence``."""
+    ``field_sources`` has one entry per field of the decision, so only a
+    setting the decision applied can make the record ``human`` (#173; a
+    request cannot carry the vc-relax keys to a relax at all, #154);
+    ``etot_conv_thr`` reads its source on ``convergence``."""
     human = human or RelaxHumanInput()
     llm = llm or RelaxLlmInput()
 

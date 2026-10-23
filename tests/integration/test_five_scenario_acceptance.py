@@ -154,7 +154,9 @@ class TestWrittenFrame:
         advice = advise(
             mc3d_42058_silicon(),
             hpc=_hpc(),
-            overrides=build_overrides({"k_grid": [10, 10, 10]}),
+            overrides=build_overrides(
+                {"k_grid": [10, 10, 10]}, task="scf_single_point"
+            ),
             store=store,
         )
         report = check(advice)
