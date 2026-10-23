@@ -90,7 +90,9 @@ backbone configured and the mace packages installed (#130).
 ``ml_target`` names a real, published goldilocks-ml *ladder-rung* model
 that is a distinct thing from QRF95 and is not registered/wired yet
 (#90) -- it stays ``["human", "heuristic"]`` honestly rather than
-claiming support that would raise on every real call.
+claiming support that would raise on every real call. That model predicts
+rungs on goldilocks-data's ladder (``ladder_1based.v2``), which core's
+ladder no longer matches rung for rung (#163, ``kmesh``).
 """
 
 from __future__ import annotations
@@ -372,17 +374,19 @@ _SETTING_META: dict[str, _SettingExtra] = {
     "k_index": {
         "ml_target": "k_index",
         "description": (
-            "A specific 1-based rung on this structure's own k-mesh ladder "
-            "(rung 1 is Gamma-only); wins over k_distance if both are set."
+            "A specific 1-based rung on this structure's own k-mesh ladder, "
+            "the distinct meshes its point group maps onto itself (rung 1 is "
+            "Gamma-only); wins over k_distance if both are set."
         ),
     },
     "k_distance": {
         "unit": "1/Angstrom",
         "ml_target": "k_distance",
         "description": (
-            "Target k-point spacing along each periodic axis; a vacuum axis "
-            "always gets one k-point. Heuristic default is 0.15 for metals, "
-            "0.30 otherwise."
+            "Target k-point spacing along each periodic axis; axes the point "
+            "group mixes share the larger count, and a vacuum axis always gets "
+            "one k-point. Heuristic default is 0.15 for metals or when "
+            "metallicity is unknown, 0.30 for a confirmed non-metal."
         ),
     },
     "shift": {
@@ -396,13 +400,20 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "nbnd": {
         "description": (
-            "Total number of Kohn-Sham bands, overriding the formula-based "
-            "value entirely."
+            "Total number of Kohn-Sham bands (per spin channel with nspin=2), "
+            "overriding the default written otherwise: pw.x's setup.f90 rule, "
+            "with a collinear smearing run's majority channel raised for its "
+            "seeded moment. Refused when below the electrons a "
+            "spin channel holds (pw.x's 'too few bands'); a count that holds "
+            "the moment below its seed gets a warning."
         ),
     },
     "extra_bands": {
         "description": (
-            "Extra bands added on top of the formula-computed base band count."
+            "Extra bands added on top of the default band count (pw.x's "
+            "setup.f90 rule, with a collinear smearing run's majority channel "
+            "raised for its seeded moment); a total below the electrons a spin "
+            "channel holds is refused."
         ),
     },
     "conv_thr": {
@@ -543,10 +554,12 @@ _SETTING_META: dict[str, _SettingExtra] = {
         "default": "all",
         "description": (
             "Which cell degrees of freedom vc-relax may move. Default 'all'; "
-            "'2Dxy' for a slab with its vacuum along c and a, b in the xy "
-            "plane. A wire or a slab in another orientation has no default. "
-            "'2Dxy' and '2Dshape' are refused unless a and b lie in the xy "
-            "plane and any vacuum lies along c."
+            "'2Dxy' for a slab with its vacuum along c, which is written with a "
+            "along x and a, b in the xy plane. A wire or a slab with its vacuum "
+            "along a or b has no default. '2Dxy' and '2Dshape' are refused unless "
+            "a and b lie in the xy plane and any vacuum lies along c; the masks "
+            "of Cartesian components ('a', 'b', 'c', 'x', 'y', 'z', 'xy', 'xz', "
+            "'yz', 'xyz') are refused when the cell is written rotated."
         ),
     },
     "press": {

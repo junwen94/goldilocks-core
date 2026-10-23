@@ -26,7 +26,9 @@ and this tier falls through to the heuristic, the same way
 ``is_metal``/``is_magnetic`` do; any other model failure fails the
 request (#130) -- see that module's docstring. A *ladder-rung* k_index
 model also exists in goldilocks-ml but is not yet published/wired (#90);
-that is a distinct model from QRF95, not another name for it, despite
+it predicts rungs on goldilocks-data's ladder, which core's no longer
+matches rung for rung (#163, ``kmesh``), and it is a distinct model from
+QRF95, not another name for it, despite
 ``capabilities.py`` having (incorrectly) pointed ``k_distance``'s
 ``ml_target`` at ``"k_index"`` until this same change fixed it.
 
@@ -49,18 +51,14 @@ underneath it is entirely new (``kmesh.py``, this epic's other
 deliverable).
 
 **Heuristic default k_distance** (operator-specified 2026-09-13, not
-from a published benchmark): metals get ``0.15`` A^-1; everything else
--- a *confirmed* non-metal, or ``is_metal`` itself ``Unavailable`` --
-gets ``0.30`` A^-1. Unlike ``advisors/occupations.py``, uncertain
-metallicity here leans toward the *metal* value, not the cheaper one:
-using too coarse a mesh on an actual, undetected metal risks a silently
-under-converged answer, while using too fine a mesh on an actual
-insulator only costs more compute -- a wrong-but-plausible-looking
-number is worse than an expensive-but-correct one. ``fixed`` occupations
-misjudging a metal fails differently (typically loud non-convergence),
-which is why that module could afford to lean the other way; the two
-are not required to agree with each other's tie-break, they just each
-need their own honest justification.
+from a published benchmark): metals, and ``is_metal`` itself
+``Unavailable``, get ``0.15`` A^-1; a *confirmed* non-metal gets ``0.30``
+A^-1. Uncertain metallicity leans toward the *metal* value, not the
+cheaper one, as it does in ``advisors/occupations.py``: using too coarse
+a mesh on an actual, undetected metal risks a silently under-converged
+answer, while using too fine a mesh on an actual insulator only costs
+more compute -- a wrong-but-plausible-looking number is worse than an
+expensive-but-correct one.
 
 **One k-point along each vacuum axis** (#159). Every k_distance -- human,
 ml, llm or heuristic -- and every k_index becomes a mesh in ``kmesh``,
@@ -74,6 +72,15 @@ caller passes the cell the mesh is for (the simulated cell,
 from that cell,
 never from the dimensionality label, which calls bulk graphite '2d'. An
 explicit human ``k_grid`` is kept as given, vacuum axes included.
+
+**Coupled axes alike** (#163). ``kmesh`` also gives the lattice vectors
+the structure's point group mixes the same count, the larger one, so every
+k_distance and k_index mesh is one the point group maps onto itself, and
+the ladder's rungs are the distinct meshes of that kind. The structure is
+the simulated cell with its species, spin classes included, so the point
+group is the one pw.x keeps for a collinear run and contains the one it
+keeps for a noncollinear one. An explicit human ``k_grid`` is kept as
+given here too, invariant or not.
 
 Not attempted here (and not claimed to be): the ``is_metal``-based
 k_distance *ceiling* and the rung-cannot-exceed-the-ladder clamp
@@ -151,10 +158,9 @@ class KSamplingDecision:
     k_index: int | None = None
     """Best-effort reverse lookup of the resolved ``mesh`` onto this
     structure's own k-mesh ladder (``kmesh.build_gamma_kmesh_entries``) --
-    see ``_with_k_index`` below. ``None`` when the resolved mesh doesn't
-    land exactly on a rung (expected whenever the mesh came from
-    ``k_distance``/ml/heuristic rather than an explicit ``k_index``
-    override), not a failure."""
+    see ``_with_k_index`` below. ``None`` when no rung has the resolved
+    mesh -- typically an explicit ``k_grid`` off the ladder -- not a
+    failure."""
     k_distance_interval: tuple[float, float | None] | None = None
     """The matched rung's own ``KMeshEntry.k_distance_interval``, carried
     alongside ``k_index`` whenever a rung is known. Exists so a caller
@@ -177,7 +183,11 @@ class KSamplingHumanInput(HumanInput):
     (``kmesh.build_gamma_kmesh_entries`` -- rung 1 is the Gamma-only
     mesh), for a human who thinks in ladder position rather than a raw
     target spacing. A third, equally explicit convention alongside
-    ``k_grid``/``k_distance``, not a variant of either."""
+    ``k_grid``/``k_distance``, not a variant of either. The rungs are the
+    distinct meshes the structure's point group maps onto itself, so they
+    are numbered differently from goldilocks-data's ``ladder_1based.v2``
+    wherever the point group mixes lattice vectors of different length
+    (#163)."""
     k_distance: float | None = Field(default=None, gt=0)
     shift: tuple[_ZeroOrOne, _ZeroOrOne, _ZeroOrOne] | None = None
     """QE's own K_POINTS automatic card requires each shift component to
@@ -333,12 +343,13 @@ def _with_k_index(
     decision: KSamplingDecision, structure: Structure
 ) -> KSamplingDecision:
     """Best-effort reverse lookup: does the resolved ``mesh`` land exactly
-    on a rung of this structure's own ladder? ``build_gamma_kmesh_entries``
-    guarantees the ladder is complete and non-repeating (its own
-    docstring), so at most one entry can match and the first hit is
-    authoritative. Leaves ``decision`` untouched (``k_index`` stays
-    ``None``) when the mesh came from a ``k_distance``/ml/heuristic value
-    that falls between rungs -- not every resolved mesh has one."""
+    on a rung of this structure's own ladder? Every rung of
+    ``build_gamma_kmesh_entries`` is a distinct mesh (its own docstring),
+    so at most one entry can match and the first hit is authoritative. A
+    mesh from a k_distance is built the way the rungs are, coupled axes
+    alike (#163). Leaves ``decision`` untouched (``k_index`` stays
+    ``None``) when no rung has the mesh: an explicit ``k_grid`` off the
+    ladder, such as one that gives coupled axes different counts."""
     for entry in build_gamma_kmesh_entries(structure):
         if entry.mesh == decision.mesh:
             return replace(

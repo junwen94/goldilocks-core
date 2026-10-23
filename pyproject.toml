@@ -48,7 +48,9 @@ dependencies = [
     # extras to a core dependency (goldilocks-core-design.md S12, already decided).
     "pydantic>=2.12",
     # Imported directly for magnetic symmetry (get_magnetic_symmetry), which
-    # pymatgen does not wrap; the floor is pymatgen-core's own.
+    # pymatgen does not wrap, and for pw.x's own symmetry count and the frame
+    # the cell is written in (pw_symmetry.py: get_symmetry_dataset,
+    # get_stabilized_reciprocal_mesh); the floor is pymatgen-core's own.
     "spglib>=2.5",
 ]
 

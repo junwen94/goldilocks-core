@@ -23,7 +23,8 @@ Every setting above is listed by `goldilocks settings` (with its group, type,
 and default) and, once resolved for a structure, shown in the matching record
 from `goldilocks explain`/the published `goldilocks.json` (`k_sampling`,
 `occupations`, `cutoffs`, and `convergence` respectively). `k_distance`
-defaults to `0.15` for metals and `0.30` otherwise; `degauss` defaults to
+defaults to `0.15` for metals or when metallicity is unknown and `0.30` for a
+confirmed non-metal; `degauss` defaults to
 `0.01` Ry for metals; `ecutwfc_ry`/`ecutrho_ry` are decided together by the
 `cutoffs` advisor from the selected pseudopotentials' own published
 recommendations, deriving `ecutrho_ry` from `ecutwfc_ry` when a table (e.g.
@@ -36,18 +37,24 @@ factor (matching AiiDA-QuantumESPRESSO's k-distance convention). For each
 reciprocal vector `b_i`, the grid size is:
 
 ```text
-N_i = max(1, ceil(round(|b_i| / k_distance, 5)))   along a periodic lattice vector
-N_i = 1                                            along a vacuum axis
+N_i = max(1, ceil(round(L_i / k_distance, 5)))   along a periodic lattice vector
+N_i = 1                                          along a vacuum axis
 ```
 
-Rounding to five decimal places avoids numerical noise at integer boundaries. A
-smaller `k_distance` gives a denser mesh. The human-override, `k_distance`,
-and `k_grid` paths all default to shift `[0, 0, 0]` (Gamma-centered) when no
-explicit `shift` is given; the ML-based k-point model (`qrf-kpoints`) is
-wired into `k_distance`'s own heuristic-vs-ml resolution, not into shift
-selection. In Quantum ESPRESSO's `K_POINTS automatic` convention
-this includes Γ (the reciprocal-space origin), even for even-sized meshes; a
-shift flag of `1` means a half-grid shift on that axis.
+`L_i` is the longest `|b_j|` among the periodic lattice vectors that a
+rotation of the cell's point group mixes with vector `i`, directly or through
+the third, `|b_i|` itself included. Vectors the point group mixes therefore
+get the same count, the larger one, and the mesh is one the point group maps
+onto itself. The point group is searched on the cell's species, spin classes
+included, at a 0.01 Å tolerance. Rounding to five decimal places avoids
+numerical noise at integer boundaries. A smaller `k_distance` gives a denser
+mesh. The human-override, `k_distance`, and `k_grid` paths all default to
+shift `[0, 0, 0]` (Gamma-centered) when no explicit `shift` is given; the
+ML-based k-point model (`qrf-kpoints`) is wired into `k_distance`'s own
+heuristic-vs-ml resolution, not into shift selection. In Quantum ESPRESSO's
+`K_POINTS automatic` convention this includes Γ (the reciprocal-space
+origin), even for even-sized meshes; a shift flag of `1` means a half-grid
+shift on that axis.
 
 A vacuum axis is a lattice vector along which the cell has an atom-free slab
 wider than 5 Å (the `geometry` record's `vacuum_axes`), so a slab gets one

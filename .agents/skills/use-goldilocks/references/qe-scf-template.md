@@ -62,6 +62,19 @@ hold a different number of atoms. Its site labels are already those species
 handles this distinction -- this template documents what it produces, it is
 not something to reimplement by hand.
 
+`CELL_PARAMETERS` holds the simulated cell's lattice vectors in the frame
+where pw.x, which tests fixed Cartesian rotations only, keeps the most of the
+cell's point group (a supercell, a slab with its vacuum along a or b, or a
+sheet whose in-plane symmetry axes lie off x can keep less than all of it):
+idealized to its space group, and turned rigidly (a cell without vacuum into
+its standard orientation, a slab with its vacuum along c so that a lies along
+x and a, b in the xy plane) or its origin moved when that is what it takes.
+The lattice basis is kept, so `ATOMIC_POSITIONS` and the k-grid keep their
+meaning; `advice.system.magnetic.value.frame` records the rotation and
+shift. Copying the uploaded structure's own Cartesian lattice into the card
+instead can hide symmetry from pw.x, which then runs more k-points than
+`n_irr_k` counts.
+
 ## Mapping from Goldilocks records
 
 ```text

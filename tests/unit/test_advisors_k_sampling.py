@@ -6,7 +6,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 from pymatgen.core import Element, Lattice, Structure
-from support import carbon_pair_in_a_box, graphene_monolayer
+from support import (
+    alpha_uranium,
+    carbon_pair_in_a_box,
+    graphene_monolayer,
+    uranium_nitride,
+)
 
 from goldilocks_core.advisors.k_sampling import (
     KSamplingHumanInput,
@@ -305,6 +310,43 @@ def test_gamma_only_mesh_has_an_open_k_distance_interval(
     assert state.value.mesh == (1, 1, 1)
     assert state.value.k_index == 1
     assert state.value.k_distance_interval == (round(2 * math.pi / 2.87, 8), None)
+
+
+def test_a_k_index_on_a_noisy_cubic_cell_names_its_cubic_mesh() -> None:
+    """#163: on UN as Materials Project serves it (mp-1865), whose three
+    reciprocal lengths differ in the seventh significant figure, k_index=33
+    gave 32x33x32 (8721 irreducible k-points, its neighbours 897 and 969)
+    with an interval 1e-8 A^-1 wide. Rung n is now n x n x n, and its
+    interval runs between rungs 34 and 32."""
+    structure = uranium_nitride()
+
+    state = k_sampling(_NON_METAL, structure, human=KSamplingHumanInput(k_index=33))
+
+    entries = build_gamma_kmesh_entries(structure)
+    assert state.value.mesh == (33, 33, 33)
+    assert state.value.k_index == 33
+    assert state.value.k_distance_interval == (0.06761454, 0.0697275)
+    assert state.value.k_distance_interval == (
+        entries[33].k_distance_interval[1],
+        entries[31].k_distance_interval[0],
+    )
+
+
+def test_the_heuristic_mesh_of_alpha_uranium_is_invariant_and_on_a_rung() -> None:
+    """#163: the metal default 0.15 A^-1 meshed alpha-U (Materials Project
+    mp-44, whose point group mixes a and b) as 17x15x9, a mesh the point
+    group does not keep. a and b now share the denser count, and the
+    reverse lookup finds the mesh on the ladder: rung 25, which holds from
+    0.1476 to 0.1568 A^-1."""
+    structure = alpha_uranium()
+
+    state = k_sampling(is_metal(structure), structure)
+
+    assert state.source == "heuristic"
+    assert state.value.k_distance == 0.15
+    assert state.value.mesh == (17, 17, 9)
+    assert state.value.k_index == 25
+    assert state.value.k_distance_interval == (0.1476022, 0.15682734)
 
 
 def test_human_k_index_with_a_shift() -> None:

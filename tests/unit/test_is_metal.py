@@ -16,39 +16,114 @@ def _structure(*species: str) -> Structure:
     return Structure(lattice, species, coords)
 
 
-@pytest.mark.parametrize(
-    "species",
-    [
-        ("Ru", "O", "O"),  # RuO2
-        ("Re", "O", "O", "O"),  # ReO3
-        ("Ti", "N"),  # TiN
-        ("La", "Ni", "O", "O", "O"),  # LaNiO3
-        ("Cr", "O", "O"),  # CrO2
-    ],
-)
-def test_oxides_and_nitrides_of_real_metals_resolve_as_metal(
-    species: tuple[str, ...],
+_ORIGIN_AND_BODY_CENTRE = [[0, 0, 0], [0.5, 0.5, 0.5]]
+
+_COMPOUNDS_WITH_NON_METALS = {
+    # Ionic insulators and semiconductors the anion-stripping rule called metal.
+    "NaCl": ("Fm-3m", Lattice.cubic(5.64), ["Na", "Cl"], _ORIGIN_AND_BODY_CENTRE),
+    "MgO": ("Fm-3m", Lattice.cubic(4.21), ["Mg", "O"], _ORIGIN_AND_BODY_CENTRE),
+    "LiF": ("Fm-3m", Lattice.cubic(4.03), ["Li", "F"], _ORIGIN_AND_BODY_CENTRE),
+    "LiH": ("Fm-3m", Lattice.cubic(4.08), ["Li", "H"], _ORIGIN_AND_BODY_CENTRE),
+    "CsCl": ("Pm-3m", Lattice.cubic(4.12), ["Cs", "Cl"], _ORIGIN_AND_BODY_CENTRE),
+    "CaF2": (
+        "Fm-3m",
+        Lattice.cubic(5.46),
+        ["Ca", "F"],
+        [[0, 0, 0], [0.25, 0.25, 0.25]],
+    ),
+    "CdTe": (
+        "F-43m",
+        Lattice.cubic(6.48),
+        ["Cd", "Te"],
+        [[0, 0, 0], [0.25, 0.25, 0.25]],
+    ),
+    "ZnO": (
+        "P6_3mc",
+        Lattice.hexagonal(3.25, 5.21),
+        ["Zn", "O"],
+        [[1 / 3, 2 / 3, 0], [1 / 3, 2 / 3, 0.382]],
+    ),
+    "GaN": (
+        "P6_3mc",
+        Lattice.hexagonal(3.19, 5.19),
+        ["Ga", "N"],
+        [[1 / 3, 2 / 3, 0], [1 / 3, 2 / 3, 0.377]],
+    ),
+    # Metallic oxides and nitrides (stfc/goldilocks-core#175): the same kind
+    # of composition, so composition cannot tell them from the insulators.
+    "RuO2": (
+        "P4_2/mnm",
+        Lattice.tetragonal(4.49, 3.11),
+        ["Ru", "O"],
+        [[0, 0, 0], [0.306, 0.306, 0]],
+    ),
+    "CrO2": (
+        "P4_2/mnm",
+        Lattice.tetragonal(4.42, 2.92),
+        ["Cr", "O"],
+        [[0, 0, 0], [0.303, 0.303, 0]],
+    ),
+    "ReO3": ("Pm-3m", Lattice.cubic(3.75), ["Re", "O"], [[0, 0, 0], [0.5, 0, 0]]),
+    "TiN": ("Fm-3m", Lattice.cubic(4.24), ["Ti", "N"], _ORIGIN_AND_BODY_CENTRE),
+    "LaNiO3": (
+        "Pm-3m",
+        Lattice.cubic(3.84),
+        ["La", "Ni", "O"],
+        [[0.5, 0.5, 0.5], [0, 0, 0], [0.5, 0, 0]],
+    ),
+}
+
+_ALL_METAL_COMPOSITIONS = {
+    "Al": ("Fm-3m", Lattice.cubic(4.05), ["Al"], [[0, 0, 0]]),
+    "Fe": ("Im-3m", Lattice.cubic(2.87), ["Fe"], [[0, 0, 0]]),
+    "NiAl": ("Pm-3m", Lattice.cubic(2.88), ["Ni", "Al"], _ORIGIN_AND_BODY_CENTRE),
+    "TiNi": ("Pm-3m", Lattice.cubic(3.01), ["Ti", "Ni"], _ORIGIN_AND_BODY_CENTRE),
+    "Cu3Au": ("Pm-3m", Lattice.cubic(3.75), ["Au", "Cu"], [[0, 0, 0], [0, 0.5, 0.5]]),
+}
+
+
+def _crystal(prototype: tuple) -> Structure:
+    spacegroup, lattice, species, coords = prototype
+    return Structure.from_spacegroup(spacegroup, lattice, species, coords)
+
+
+@pytest.mark.parametrize("formula", sorted(_COMPOUNDS_WITH_NON_METALS))
+def test_a_compound_with_non_metal_elements_is_unavailable_never_metal(
+    formula: str,
 ) -> None:
-    """stfc/goldilocks-core#175: v1's all-elements-must-be-metallic rule
-    misclassified every one of these as "unknown" because O/N are not
-    metallic themselves -- fixed by excluding common anions first."""
-    state = is_metal(_structure(*species))
+    """#164: stripping common anions and asking whether the cations are
+    metals called nearly every ionic insulator a metal. A non-metal element
+    leaves the heuristic undecided, including for the real metals RuO2,
+    CrO2, ReO3, TiN and LaNiO3; ``Unavailable`` still means smearing."""
+    state = is_metal(_crystal(_COMPOUNDS_WITH_NON_METALS[formula]))
+
+    assert state.status == "unavailable"
+    assert state.reason.startswith("composition contains non-metal elements (")
+
+
+def test_the_unavailable_reason_names_the_non_metal_elements() -> None:
+    state = is_metal(_crystal(_COMPOUNDS_WITH_NON_METALS["LaNiO3"]))
+
+    assert state.reason == (
+        "composition contains non-metal elements (O); whether such a compound "
+        "conducts depends on its band filling, which composition alone "
+        "cannot settle"
+    )
+
+
+@pytest.mark.parametrize("formula", sorted(_ALL_METAL_COMPOSITIONS))
+def test_an_all_metal_composition_resolves_as_metal(formula: str) -> None:
+    state = is_metal(_crystal(_ALL_METAL_COMPOSITIONS[formula]))
 
     assert state.ok
     assert state.value == "metal"
     assert state.source == "heuristic"
 
 
-def test_all_metallic_elements_resolve_as_metal() -> None:
-    state = is_metal(_structure("Al"))
-
-    assert state.value == "metal"
-
-
 def test_metalloid_oxide_is_unavailable_not_a_guessed_non_metal() -> None:
     """Heuristic tier never confidently asserts non_metal from composition
-    alone -- SiO2's cation (Si) is not metallic, so this can't confirm
-    metallic character, but that is not evidence it is an insulator either."""
+    alone: SiO2 contains non-metal elements, so composition cannot settle
+    whether it conducts, but that is not evidence it is an insulator either."""
     silica = _structure("Si", "O", "O")
 
     state = is_metal(silica)

@@ -1,17 +1,19 @@
 """The k-mesh ladder, checked on real materials -- ported from
-goldilocks-data's own test_kmesh.py (v2 epic 6, #6) so the rungs this
-module builds for a cell without vacuum (kindex, mesh and intervals, which
-depend on the lattice alone) match goldilocks-data's on the same lattices,
-per the epic's acceptance criteria. Core's rungs carry
-no symmetry-reduced count (#155); test_advisors_n_irr_k.py checks the
-reduction. Every bulk structure here is a real crystal: three built from
-their space group and published lattice constants, and two MC3D cells --
-hexagonal Si exactly as goldilocks-data's own SCF campaign ran it
-(embedded inline rather than as a separate fixture file, since it is used
-by exactly one test) and triclinic TiNi. Synthetic lattices were tried
-first upstream and hid what a real cell exposes: the repeated-mesh skip
-never fired. The vacuum-axis tests (#159) use a graphene sheet, a carbon
-chain and the isolated C pair of MC3D mc3d-6516 from ``tests/support.py``.
+goldilocks-data's own test_kmesh.py (v2 epic 6, #6). For a cell without
+vacuum whose symmetry-coupled axes have equal reciprocal lengths, the rungs
+(kindex, mesh and intervals) still match goldilocks-data's on the same
+lattice; where the point group couples axes of different length, or of
+lengths CIF noise has made unequal, core meshes them alike and its rungs
+are numbered differently (#163). Core's rungs carry no symmetry-reduced
+count (#155); test_advisors_n_irr_k.py checks the reduction. Every bulk
+structure here is a real crystal: three built from their space group and
+published lattice constants, two MC3D cells -- hexagonal Si exactly as
+goldilocks-data's own SCF campaign ran it and triclinic TiNi -- and three
+Materials Project cells as MP serves them: alpha-U, UN and a CeCoIn5
+supercell. Synthetic lattices were tried first upstream and hid what a
+real cell exposes: CIF noise and the slivers it leaves between change
+points. The vacuum-axis tests (#159) use a graphene sheet, a carbon chain
+and the isolated C pair of MC3D mc3d-6516 from ``tests/support.py``.
 """
 
 from __future__ import annotations
@@ -23,10 +25,13 @@ from itertools import pairwise
 import pytest
 from pymatgen.core import Lattice, Structure
 from support import (
+    alpha_uranium,
     carbon_chain,
     carbon_pair_in_a_box,
     graphene_monolayer,
     graphene_with_vacuum_along_a,
+    mc3d_67775_silicon,
+    uranium_nitride,
 )
 
 from goldilocks_core.kmesh import (
@@ -35,32 +40,6 @@ from goldilocks_core.kmesh import (
     build_gamma_kmesh_entries,
     k_distance_to_mesh,
 )
-
-_MC3D_67775_SILICON_CIF = """\
-data_0
-
-loop_
-  _atom_site_label
-  _atom_site_fract_x
-  _atom_site_fract_y
-  _atom_site_fract_z
-  _atom_site_type_symbol
-         Si1  0.6666666666716649  0.3333333333433297  0.06292314380102376  Si
-         Si2  0.33333333332833526  0.6666666666566704  0.5629231437931663  Si
-         Si3  0.6666666666716649  0.3333333333433297  0.4370768562068337  Si
-         Si4  0.33333333332833526  0.6666666666566704  0.9370768561989763  Si
-_cell_angle_alpha                       90.0
-_cell_angle_beta                        90.0
-_cell_angle_gamma                       120.00000000021976
-_cell_length_a                          3.8504103266
-_cell_length_b                          3.85041032657442
-_cell_length_c                          6.3634082249
-loop_
-  _symmetry_equiv_pos_as_xyz
-         'x, y, z'
-_symmetry_int_tables_number             1
-_symmetry_space_group_name_H-M          'P 1'
-"""
 
 
 def diamond_silicon() -> Structure:
@@ -94,16 +73,6 @@ def rutile() -> Structure:
     )
 
 
-def mc3d_67775_silicon() -> Structure:
-    """Hexagonal Si, MC3D 67775, as goldilocks-data's SCF campaign ran it.
-
-    Its a and b differ in the last few bits of the cell file
-    (3.8504103266 against 3.85041032657442), which is what makes it
-    interesting: see the repeated-mesh test.
-    """
-    return Structure.from_str(_MC3D_67775_SILICON_CIF, fmt="cif")
-
-
 def mc3d_31340_tini() -> Structure:
     """Triclinic TiNi, MC3D 31340 (P-1). Its three reciprocal axes all
     differ, and its Laue group, -1, maps every mesh onto itself."""
@@ -126,6 +95,27 @@ def mc3d_31340_tini() -> Structure:
             [0.4999999999814244, 0.9999999999993829, 0.5000000000107764],
         ],
     )
+
+
+def doubled_cecoin5() -> Structure:
+    """CeCoIn5 (P4/mmm), Materials Project mp-19961, doubled along a. MP's
+    a and b differ in the seventh significant figure (4.61176646 against
+    4.61176336 A); doubling a leaves no operation that mixes a and b, and
+    makes |b_2| twice |b_1| up to that noise."""
+    cecoin5 = Structure(
+        Lattice.from_parameters(4.61176646, 4.61176336, 7.53603488, 90, 90, 90),
+        ["Ce", "In", "In", "In", "In", "In", "Co"],
+        [
+            [0.0, 0.0, 0.0],
+            [0.5, 0.5, 0.0],
+            [0.5, 0.0, 0.68994532],
+            [0.0, 0.5, 0.31005468],
+            [0.5, 0.0, 0.31005468],
+            [0.0, 0.5, 0.68994532],
+            [0.0, 0.0, 0.5],
+        ],
+    )
+    return cecoin5.make_supercell([2, 1, 1], in_place=False)
 
 
 def test_gamma_kmesh_entries_start_with_gamma_mesh() -> None:
@@ -183,27 +173,122 @@ def test_ladder_is_gap_free_down_to_the_floor() -> None:
         assert min(steps) >= 0, f"{before} -> {after} is not monotonic"
 
 
-def test_ladder_drops_a_mesh_a_second_interval_would_repeat() -> None:
-    # MC3D 67775, hexagonal Si. Its a and b are equal only to about 11
-    # decimal places, so |b_1| and |b_2| give two change points a hair
-    # apart, and the sliver of k-distance between them yields a mesh the
-    # next interval yields again. Without the skip two kindex values would
-    # name one mesh.
-    #
-    # Exactly equal axes do not cause this -- their change points coincide
-    # and collapse in the candidate set. It takes a near miss, which is
-    # why this needs a real cell: 36 of the 20,826 MC3D structures in
-    # goldilocks-data's campaign hit it, and no idealised lattice does.
+def _assert_distinct_and_contiguous(entries: list[KMeshEntry]) -> None:
+    """Every rung names its own mesh, and each rung's interval starts where
+    the next denser rung's ends, so the intervals tile the k-distance axis
+    from the floor up with no gap."""
+    assert len({entry.mesh for entry in entries}) == len(entries)
+    for coarser, finer in pairwise(entries):
+        assert finer.k_distance_interval[1] == coarser.k_distance_interval[0], (
+            coarser,
+            finer,
+        )
+
+
+def test_near_equal_coupled_axes_step_together() -> None:
+    """MC3D 67775, hexagonal Si. Its a and b are equal only to about 11
+    decimal places, so |b_1| and |b_2| gave two change points a hair apart,
+    and the sliver of k-distance between them gave the mesh of the next
+    interval again; the ladder dropped that interval and left a gap in the
+    k-distance axis (#163). The six-fold axis mixes a and b, so both are
+    meshed from the longer |b_i| and step at one change point: a and b
+    always have the same count, and the intervals tile.
+
+    Exactly equal axes never did this -- their change points coincide and
+    collapse in the candidate set. It took a near miss, which is why this
+    needs a real cell: 36 of the 20,826 MC3D structures in goldilocks-data's
+    campaign hit it, and no idealised lattice does."""
     entries = build_gamma_kmesh_entries(mc3d_67775_silicon())
 
-    # Consecutive change points bound consecutive intervals, so each rung's
-    # interval ends where the next one's starts unless an interval between
-    # them was dropped: a break in that chain means the skip ran.
-    assert any(
-        finer.k_distance_interval[1] != coarser.k_distance_interval[0]
-        for coarser, finer in pairwise(entries)
+    _assert_distinct_and_contiguous(entries)
+    assert all(entry.mesh[0] == entry.mesh[1] for entry in entries)
+
+
+def test_a_sliver_between_uncoupled_axes_joins_the_rung_above() -> None:
+    """Doubled CeCoIn5: no operation mixes a and b, but |b_2| is twice
+    |b_1| up to CIF noise, so |b_1| / n and |b_2| / 2n are change points
+    closer than the mesh's 5-decimal rounding resolves. The interval between
+    them gives the mesh of the interval above it, and joins that rung,
+    which now ends at the lower change point: rung 3, (1, 2, 2), runs from
+    |b_1| = 0.68121243 A^-1 (|b_2| / 2 = 0.68121289) to |b_3| = 0.83375215.
+    The ladder used to drop such an interval, leaving a gap in the
+    k-distance axis that no rung covered (#163)."""
+    entries = build_gamma_kmesh_entries(doubled_cecoin5())
+
+    _assert_distinct_and_contiguous(entries)
+    assert len(entries) == 87
+    assert entries[2].mesh == (1, 2, 2)
+    assert entries[2].k_distance_interval == (0.68121243, 0.83375215)
+
+
+def test_alpha_uranium_meshes_its_coupled_axes_alike() -> None:
+    """#163: alpha-U as Materials Project serves it (mp-44), the reduced
+    primitive cell, whose point group mixes a and b although |b_1| = 2.509
+    and |b_2| = 2.148 A^-1. Meshing each axis from its own length gave
+    11x10x6 at QRF95's 0.2378 A^-1, which the point group does not map
+    onto itself: pw.x ran it with 224 irreducible k-points against 144 for
+    the denser 11x11x6. a and b are now both meshed from |b_1|, so every
+    rung has n1 = n2, and the ladder has 126 rungs, not 197."""
+    structure = alpha_uranium()
+
+    entries = build_gamma_kmesh_entries(structure)
+
+    assert k_distance_to_mesh(structure, 0.237770676612854) == (11, 11, 6)
+    assert len(entries) == 126
+    assert all(entry.mesh[0] == entry.mesh[1] for entry in entries)
+    assert [(entry.mesh, entry.k_distance_interval) for entry in entries[:8]] == [
+        ((1, 1, 1), (2.50923743, None)),
+        ((2, 2, 1), (1.29547372, 2.50923743)),
+        ((2, 2, 2), (1.25461872, 1.29547372)),
+        ((3, 3, 2), (0.83641248, 1.25461872)),
+        ((4, 4, 2), (0.64773686, 0.83641248)),
+        ((4, 4, 3), (0.62730936, 0.64773686)),
+        ((5, 5, 3), (0.50184749, 0.62730936)),
+        ((6, 6, 3), (0.43182457, 0.50184749)),
+    ]
+
+
+def test_coupled_axes_read_the_k_line_density_at_their_longest_length() -> None:
+    """#163: alpha-U's coupled a and b both read the k-line density at a's
+    crystallographic reciprocal length |a*|, the longer, so the 11x11x6
+    rung's interval is a's [10.5, 11.5] / |a*| cut by c's [5.5, 6.5] / |c*|.
+    Read at its own shorter |b*|, b's interval [10.5, 11.5] / |b*| would
+    miss a's, and the rung would have no k-line density."""
+    structure = alpha_uranium()
+    a_star, b_star, c_star = structure.lattice.reciprocal_lattice_crystallographic.abc
+
+    rung = next(
+        entry
+        for entry in build_gamma_kmesh_entries(structure)
+        if entry.mesh == (11, 11, 6)
     )
-    assert len({entry.mesh for entry in entries}) == len(entries)
+
+    assert 10.5 / b_star > 11.5 / a_star
+    assert rung.k_line_density_interval == pytest.approx((5.5 / c_star, 11.5 / a_star))
+
+
+def test_cif_noise_between_equivalent_axes_leaves_no_sliver_rung() -> None:
+    """#163: UN as Materials Project serves it (mp-1865), the fcc primitive
+    cell, whose three reciprocal lengths differ in the seventh significant
+    figure. Each axis used to step at its own change point, which put 19
+    slivers such as 32x33x32 (an interval 1e-8 A^-1 wide, 8721 irreducible
+    k-points against 897 and 969 for its neighbours) on a 93-rung ladder and
+    renumbered every rung above 32. The cubic point group mixes all three
+    axes, so all are meshed from the longest |b_i|: rung n is n x n x n
+    between that length's change points n and n - 1."""
+    longest = max(uranium_nitride().lattice.reciprocal_lattice.abc)
+
+    entries = build_gamma_kmesh_entries(uranium_nitride())
+
+    assert [astuple(entry)[:3] for entry in entries] == [
+        (
+            n,
+            (n, n, n),
+            (round(longest / n, 8), round(longest / (n - 1), 8) if n > 1 else None),
+        )
+        for n in range(1, 75)
+    ]
+    assert entries[32].k_distance_interval == (0.06761454, 0.0697275)
 
 
 def test_lowering_the_floor_only_extends_the_ladder() -> None:
@@ -309,9 +394,11 @@ def test_ladder_matches_its_stored_reference(
 ) -> None:
     """Every field of every rung down to a 0.2 A^-1 floor, as the ladder
     stood at d254510 apart from rung 1's open upper bound, now None
-    instead of inf (#137). ``kindex`` is recorded in published records, so
-    any change here renumbers them. The k-line-density bounds are stored
-    to 8 decimals; every other value is exact."""
+    instead of inf (#137). The axes each point group mixes have equal
+    reciprocal lengths here, so meshing them alike (#163) changes nothing.
+    ``kindex`` is recorded in published records, so any change here
+    renumbers them. The k-line-density bounds are stored to 8 decimals;
+    every other value is exact."""
     entries = build_gamma_kmesh_entries(structure, min_k_distance=0.2)
 
     assert [astuple(entry) for entry in entries] == [

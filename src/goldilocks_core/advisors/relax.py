@@ -33,13 +33,15 @@ its stacking axis stayed frozen while BFGS reported convergence on the
 masked stress. '2Dxy' moves only the x and y components of a and b and
 holds c fixed, in Cartesian axes (QE 7.3 Modules/cell_base.f90:803-808),
 so it is the default only for a slab in that frame: one vacuum axis, c,
-with a and b in the xy plane (``analysis.geometry.SlabGeometry``). A cell
-without vacuum, or with vacuum along all three axes, gets 'all' (the
-boundary gate in ``checks.py`` refuses a vc-relax of an isolated system).
-A wire, or a slab in any other orientation, has no default, so the
-vc-relax is ``Blocked`` until a human or llm value sets ``cell_dofree``;
-``checks.py`` refuses '2Dxy' and '2Dshape' from any source on a written
-cell outside that frame. The plain '2Dxy' is written because the writer's
+with a and b in the xy plane (``analysis.geometry.SlabGeometry``), read on
+the cell to be written, which the magnetic step turns every slab with its
+vacuum along c into (``pw_symmetry.pw_frame``, #140). A cell without
+vacuum, or with vacuum along all three axes, gets 'all' (the boundary gate
+in ``checks.py`` refuses a vc-relax of an isolated system). A wire, or a
+slab with its vacuum along a or b, has no default, so the vc-relax is
+``Blocked`` until a human or llm value sets ``cell_dofree``; ``checks.py``
+refuses '2Dxy' and '2Dshape' from any source on a written cell outside
+that frame. The plain '2Dxy' is written because the writer's
 ``ibrav = 0`` makes the 'ibrav+' forms act the same way (QE 7.3
 Modules/latgen.f90:749-752).
 

@@ -6,16 +6,20 @@ These decisions depend on one another in a fixed order:
 1. the functional and ``magnetic_cell`` -- spin polarization, spin-orbit
    coupling, and the requested magnetic ordering applied to the structure,
    which is the calculation's only enumlib call, split into one species per
-   element and starting-magnetization class (#170);
+   element and starting-magnetization class (#170) -- ending with
+   ``framed_cell``, which writes that cell in the frame where pw.x keeps
+   the most of its point group: idealized, and turned or shifted when that
+   is what it takes (``pw_symmetry.pw_frame``, #140);
 2. pseudopotential table selection, which reads the functional and the
    cell's spin-orbit switch (the relativistic requirement);
 3. ``magnetic_config``, the starting moments on the cell, scaled by the
    selected pseudopotentials' z_valence.
 
-``symmetry_eff`` is the cell's own symmetry, counted on those species as
-pw.x counts it, and ``geometry_eff`` the uploaded structure's geometry with
-the cell's own vacuum, which the boundary advisor's dipole notice and
-'slab' offer describe (#144). Every later decision -- the
+``symmetry_eff`` is the cell's own symmetry, counted on those species,
+and ``geometry_eff`` the uploaded structure's geometry with the written
+cell's own vacuum and frame (``cell_geometry``), which the boundary
+advisor's dipole notice and 'slab' offer describe (#144) and vc-relax's
+``cell_dofree`` is decided from (#140). Every later decision -- the
 electron count, bands, k-points, convergence, resources, the gate and the
 writer -- reads the same cell object (``MagneticCell.structure``), and the
 input structure stops here: no count can describe a cell other than the
@@ -33,6 +37,7 @@ from goldilocks_core.advisors.functional import functional
 from goldilocks_core.advisors.magnetic_config import (
     MagneticCell,
     MagneticConfigFacts,
+    framed_cell,
     magnetic_cell,
     magnetic_config,
 )
@@ -49,8 +54,8 @@ from goldilocks_core.service._system_overrides import SystemOverrides
 class MagneticAdvice:
     """The decisions above, in order; ``system_advice`` copies them onto
     ``SystemAdvice``. ``geometry_eff`` is the uploaded structure's geometry
-    with the cell's vacuum facts (``analysis.geometry.with_vacuum_of``),
-    which the boundary advisor reads (#144)."""
+    with the written cell's vacuum facts (``cell_geometry``), which the
+    boundary advisor reads (#144)."""
 
     functional: FieldState[str]
     cell: FieldState[MagneticCell]
@@ -75,6 +80,7 @@ def magnetic_advice(
         structure, analysis.is_magnetic, overrides.magnetic, overrides.magnetic_llm
     )
     if cell.ok:
+        cell = Resolved(framed_cell(cell.value), cell.provenance)
         pseudo = resolve_pseudopotentials(
             elements=set(analysis.composition.value.elements),
             functional=functional_state.value,
@@ -84,7 +90,7 @@ def magnetic_advice(
             fetch_missing=fetch_missing,
         )
         symmetry_eff = symmetry(cell.value.structure)
-        geometry_eff = _cell_geometry(analysis.geometry, cell.value.structure)
+        geometry_eff = cell_geometry(analysis.geometry, cell)
     else:
         cause = Blocked(by=blocked_by(cell))
         pseudo = PseudoAdvice(table=cause, metadata=cause, relativistic=cause)
@@ -99,14 +105,19 @@ def magnetic_advice(
     )
 
 
-def _cell_geometry(
-    geometry: FieldState[GeometryFacts], cell: Structure
+def cell_geometry(
+    geometry: FieldState[GeometryFacts], cell: FieldState[MagneticCell]
 ) -> FieldState[GeometryFacts]:
-    """``geometry`` with the vacuum facts of ``cell``; an unresolved
-    ``geometry`` as it is."""
-    if not geometry.ok:
+    """``geometry`` with the vacuum facts of the written ``cell``
+    (``analysis.geometry.with_vacuum_of``): its vacuum axes and widths, and
+    whether a slab lies in the xy frame, which ``framed_cell`` puts every
+    slab with its vacuum along c in (#140). An unresolved ``geometry`` or
+    ``cell`` leaves ``geometry`` as it is."""
+    if not (geometry.ok and cell.ok):
         return geometry
-    return Resolved(with_vacuum_of(geometry.value, cell), geometry.provenance)
+    return Resolved(
+        with_vacuum_of(geometry.value, cell.value.structure), geometry.provenance
+    )
 
 
 def _seeded(

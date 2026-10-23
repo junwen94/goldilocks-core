@@ -1,18 +1,23 @@
-"""is_metal: metal | non_metal, from composition alone.
+"""is_metal: whether the structure is metallic (zero DFT band gap).
 
-Fixes the bug in stfc/goldilocks-core#175 (v2 epic 4, #1): v1's
-``heuristic_metallicity`` (``legacy_analysis.py:83-93``) requires *every*
-element -- including anion-forming nonmetals like O/N -- to be metallic
-(``all(element.is_metal for element in periodic_elements)``), so
-RuO2/ReO3/LaNiO3/CrO2/TiN (all real metals) fall through to "unknown".
-Common anion-forming nonmetals are excluded before checking metallicity of
-what is left: those elements never carry the sign of whether the compound
-conducts, the remaining (cation-side) elements do.
+Tiers, first resolved wins: a human override, the published CGCNN
+classifier (``_ml_is_metal``), an LLM override, then the composition
+heuristic (``_heuristic``).
 
-Still conservative like v1: this only ever confidently asserts "metal" from
-composition alone (composition can't rule out a metal that merely looks
-insulator-like, e.g. a narrow-gap semiconductor) -- anything else is
-``Unavailable``, not a guessed "non_metal".
+The heuristic asserts ``metal`` only for a composition made entirely of
+metallic elements by pymatgen's ``Element.is_metal`` (elements and
+intermetallics). Any non-metal element leaves it ``Unavailable``: whether a
+compound with non-metals conducts depends on its band filling, so
+insulating NaCl, MgO and ZnO and metallic RuO2, ReO3, TiN, LaNiO3 and CrO2
+look alike to composition (#164). This reverses stfc/goldilocks-core#175,
+which stripped common anions and asked whether the remaining elements were
+metals, and so called nearly every ionic insulator a metal. Generated
+inputs do not change: occupations and k_sampling treat ``Unavailable``
+like ``metal``.
+
+The heuristic never guesses ``non_metal``: composition cannot rule out a
+metal that looks insulator-like. An all-metal ``metal`` can still be wrong,
+for intermetallic semiconductors such as CsAu or Mg2Sn.
 """
 
 from __future__ import annotations
@@ -26,11 +31,6 @@ from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import FieldState, Provenance, Resolved, Unavailable
 
 Metallicity = Literal["metal", "non_metal"]
-
-_COMMON_ANIONS = frozenset({"O", "N", "S", "Se", "Te", "F", "Cl", "Br", "I", "H"})
-"""Elements that commonly form anions and therefore say nothing about
-whether the compound as a whole conducts -- the cation-side elements decide
-that."""
 
 
 class IsMetalHumanInput(HumanInput):
@@ -79,8 +79,15 @@ def _ml_is_metal(structure: Structure) -> bool | None:
 
 
 def _heuristic(structure: Structure) -> FieldState[Metallicity]:
-    elements = tuple(sorted(e.symbol for e in structure.composition.elements))
-    cations = tuple(symbol for symbol in elements if symbol not in _COMMON_ANIONS)
-    if cations and all(Element(symbol).is_metal for symbol in cations):
-        return Resolved("metal", Provenance(source="heuristic"))
-    return Unavailable(reason="composition alone does not confirm metallic character")
+    """``metal`` when every element is metallic, otherwise ``Unavailable``
+    naming the non-metal elements."""
+    elements = sorted({e.symbol for e in structure.composition.elements})
+    non_metals = [symbol for symbol in elements if not Element(symbol).is_metal]
+    if non_metals:
+        listed = ", ".join(non_metals)
+        return Unavailable(
+            reason=f"composition contains non-metal elements ({listed}); whether "
+            "such a compound conducts depends on its band filling, which "
+            "composition alone cannot settle"
+        )
+    return Resolved("metal", Provenance(source="heuristic"))

@@ -136,9 +136,11 @@ def check(
 
     ``job``/``parallel``/``nbnd``: always read straight off ``advice``
     (every ``Advice`` has all three) -- the ``npool``-must-divide-
-    ``ntasks`` rule and the ``ndiag`` grid rule (#133, ``checks.py``'s
+    ``ntasks`` rule, the ``ndiag`` grid rule (#133, ``checks.py``'s
     ``_npool_must_divide_ntasks``/``_ndiag_grid_must_distribute_bands``)
-    apply regardless of ``purpose``, each step with its own ``nbnd``.
+    and the rule that ``nbnd`` holds every electron of each spin channel
+    (#131, ``_nbnd_holds_every_electron``) apply regardless of
+    ``purpose``, each step with its own ``nbnd``.
     ``magnetic`` carries the cell the writer renders: ``relax.fix_bottom_layers``
     (#44, #160) is checked against that cell's slab layers, and a non-relax
     caller never sets it. ``boundary`` (#126, #161): read off ``advice`` too, so a

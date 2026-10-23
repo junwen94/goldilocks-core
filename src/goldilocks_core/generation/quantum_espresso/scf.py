@@ -43,7 +43,13 @@ the cell carries them, one ``ATOMIC_SPECIES`` entry per site label: the
 magnetic step splits the cell into species (``advisors/species_split.py``)
 before symmetry and k-points are counted, so this writer never regroups
 sites -- regrouping here once let the counted symmetry describe other
-species than the ones written (#170).
+species than the ones written (#170). Its orientation is chosen upstream
+too: pw.x finds symmetry by testing fixed Cartesian rotations against the
+cell as given, so the magnetic step writes the cell where that test finds
+the most of its point group (``pw_symmetry.pw_frame``, #140), and this writer
+renders its lattice vectors and fractional coordinates as they are. The
+cell copied verbatim in pymatgen's frame once showed pw.x 4 of diamond
+Si's 48 operations, so it ran six times the k-points ``n_irr_k`` counted.
 
 **v1 bugs this fixes (issue #7, section (c)):**
 
@@ -60,6 +66,8 @@ species than the ones written (#170).
   a fixed consequence of this writer always emitting an explicit
   ``CELL_PARAMETERS`` card (QE requires ``ibrav=0`` whenever the cell is
   given explicitly rather than derived from Bravais-lattice parameters).
+  With ``ibrav=0`` pw.x finds only the symmetry the card's orientation
+  shows it, which is why the cell is framed upstream (above).
 - ``if`` branches that pick a value (``_smearing_lines``/``_spin_lines``/
   ``_vdw_lines``, ``generation/qe/scf.py:166-211``) -- every decision
   those made now happens upstream, in ``advisors/occupations.py``/

@@ -18,7 +18,7 @@ analysis fact:
 
 | `is_metal` result                                     | Default occupations                              |
 | ------------------------------------------------------ | ------------------------------------------------- |
-| `metal`, or unavailable (composition couldn't confirm) | Smearing (`smearing_type='cold'`, `degauss=0.01` Ry) |
+| `metal`, or unavailable (composition couldn't decide)  | Smearing (`smearing_type='cold'`, `degauss=0.01` Ry) |
 | `non_metal`, where fixed occupations can run (below)  | Fixed occupations, without smearing               |
 | `non_metal`, otherwise                                 | Smearing, as for a metal                          |
 
@@ -27,15 +27,17 @@ Ahead of the heuristic, a published CGCNN classifier (installed by default as
 `is_metal` only falls back to the heuristic below when that model asset is
 not installed or fails verification. If the installed model fails to run,
 the request fails rather than silently using the heuristic. The heuristic
-itself excludes common anion-forming elements (O, N, S, Se, Te, F, Cl, Br, I,
-H) from the composition, then checks whether every remaining element is a
-metal according to pymatgen. It returns `metal` if so; otherwise it reports that
-composition alone can't confirm metallic character, which -- like an actual
-`metal` result -- still defaults to smearing, not fixed occupations, because
-assuming "fixed" on an undetected metal risks silent non-convergence. A
-confident `non_metal` result is reachable via a human override, the ML
-classifier, or an LLM override. Neither the heuristic nor the ML model
-determines a band structure.
+itself returns `metal` only when every element in the composition is a metal
+according to pymatgen (elemental metals and intermetallics). Any other
+element (O, N, the halogens, H, metalloids such as Si) leaves `is_metal`
+unavailable, naming those elements: whether such a compound conducts depends
+on its band filling, which composition cannot settle, so insulating NaCl and
+MgO look the same to it as metallic RuO2 and TiN. Unavailable -- like an
+actual `metal` result -- still defaults to smearing, not fixed occupations,
+because assuming "fixed" on an undetected metal risks silent
+non-convergence. A confident `non_metal` result is reachable via a human
+override, the ML classifier, or an LLM override. Neither the heuristic nor
+the ML model determines a band structure.
 
 Fixed occupations fill whole bands in each spin channel: pw.x puts
 (nelec + `tot_magnetization`)/2 electrons in the spin-up channel and
@@ -60,11 +62,12 @@ refused before generation: set `tot_magnetization` too, or use smearing.
 Check the `is_metal` record's `status`, `source`, and `reason` (via
 `goldilocks explain --json` or the published `goldilocks.json`'s
 `records.is_metal`), and the `occupations` record's own `warnings` array. A
-composition-only "metal" result can still give the wrong occupation choice
-for your system. Override the scheme itself with `occupations` (`fixed`,
-`smearing`, or `tetrahedra_opt`); when using smearing, refine it with
-`smearing_type` (default `cold`) and `degauss` (Ry, default 0.01). Test the
-width together with the k-point mesh.
+composition-only `metal` result can still be wrong -- intermetallic
+semiconductors such as CsAu or Mg2Sn contain only metals -- and give the
+wrong occupation choice for your system. Override the scheme itself with
+`occupations` (`fixed`, `smearing`, or `tetrahedra_opt`); when using
+smearing, refine it with `smearing_type` (default `cold`) and `degauss` (Ry,
+default 0.01). Test the width together with the k-point mesh.
 
 ## Check k-point sampling
 
@@ -77,10 +80,10 @@ predict a raw `k_distance` for the structure (if the installed model fails to
 run, the request fails); only when that model asset is not installed or fails
 verification does it fall back to picking a target k-point spacing
 heuristically: 0.15 Å⁻¹ if `is_metal`
-resolves to `metal`, otherwise 0.30 Å⁻¹ (this also covers the unavailable
-case, since a mesh that is too coarse on an undetected metal risks silent
-under-convergence, while a mesh that is too fine on an actual insulator only
-costs more compute). There is no "confidence" or prediction-interval field
+resolves to `metal` or is unavailable, 0.30 Å⁻¹ for a `non_metal` (a mesh
+that is too coarse on an undetected metal risks silent under-convergence,
+while a mesh that is too fine on an actual insulator only costs more
+compute). There is no "confidence" or prediction-interval field
 in `explain`/`run` output today.
 
 Each lattice vector in the `geometry` record's `vacuum_axes` (see
@@ -94,10 +97,91 @@ that is written, not its dimensionality, so a bulk layered crystal such as
 graphite is still sampled along its stacking axis. `k_index` rungs step the
 periodic axes only.
 
+The mesh is one the crystal's point group maps onto itself: lattice vectors
+that a symmetry operation mixes get the same number of k-points, the larger
+one, so no direction is sampled more coarsely than `k_distance` asks and
+pw.x can reduce the mesh by every operation it keeps. Meshing each vector
+from its own length broke this on cells whose mixed vectors differ in length.
+Alpha-U as the Materials Project serves it (the reduced primitive cell of its
+base-centred lattice) got 11×10×6, which pw.x ran with 224 irreducible
+k-points where the denser 11×11×6 has 144. CIF noise in the seventh
+significant figure between the three equal vectors of UN's primitive cell made
+`k_index` 33 a 32×33×32 mesh. Equal counts can cost irreducible k-points at
+some spacings and save them at most others: on La2CuO4's body-centred
+primitive cell, 8×8×4 (48 irreducible k-points) becomes 8×8×8 (59) at
+0.24 Å⁻¹, and 18×18×10 (800) becomes 18×18×18 (480) at 0.10 Å⁻¹. `k_index`
+numbers the distinct meshes of this kind from the Γ-point down to 0.03 Å⁻¹,
+so its rungs are numbered differently from goldilocks-data's k-index ladder
+wherever mixed vectors differ in length.
+
 Compare results on denser meshes. Use `k_grid` or `k_distance` to override
-the default; an explicit `k_grid` is written as given, vacuum axes included.
+the default; an explicit `k_grid` is written as given, vacuum axes included,
+even where the point group does not map it onto itself.
 Setting either one only affects k-point selection; it does not change the
 separate `is_metal` heuristic used elsewhere (e.g. by occupations).
+
+## Check the written cell
+
+Quantum ESPRESSO does not search a cell for its symmetry. pw.x tests 32 fixed
+Cartesian rotations, the 24 of a cube with its axes along x, y and z and 8 for
+a hexagonal axis along z, and keeps those that map the cell as written onto
+itself within 1e-5 in crystal coordinates, with a fractional translation of 0
+or ±1/n (n = 2, 3, 4 or 6) only, and none at all in a cell that is a supercell
+of a smaller one. A cell in pymatgen's frame (c along z, a in the xz plane)
+shows it only part of its point group: diamond Si's primitive cell shows 4 of
+its 48 operations, so pw.x ran 282 k-points of a 10×10×10 mesh where the full
+group gives 47, and `npool` and the memory estimate were sized for 47.
+
+Goldilocks therefore writes the cell in the frame where pw.x keeps the most of
+its point group, which is all of it except possibly for the sheets, the cells
+that keep their orientation and the supercells described below, and counts
+`n_irr_k` with pw.x's rules on the cell it writes. The cell is the uploaded one
+(or the cell of an antiferromagnetic ordering), idealized to the space group
+spglib finds within 1e-3 Å, which moves atoms of a CIF by about 1e-5 Å, and:
+
+- a cell without vacuum is turned rigidly into its standard orientation (cubic
+  axes along x, y and z; a hexagonal a along x and c along z) when pw.x would
+  miss operations otherwise, as it does for fcc, bcc and rhombohedral
+  primitive cells;
+- a slab with its vacuum along c is turned rigidly so that a lies along +x,
+  a and b lie in the xy plane and c points to positive z, the frame Quantum
+  ESPRESSO's 2D cell constraint and 2D Coulomb truncation assume. There pw.x
+  keeps an in-plane 2-fold axis or mirror only where it lies at a multiple of
+  30° or 45° from x, so a sheet whose in-plane axes lie elsewhere relative to a
+  loses them: a centred-rectangular sheet given in its primitive basis (a = b,
+  γ not 60°, 90° or 120°) has them along a ± b and keeps half its operations,
+  and `n_irr_k` counts the extra k-points pw.x then runs. A slab with its
+  vacuum along a or b, a wire and a molecule in a box keep their orientation;
+- the origin moves to a symmetry centre when an off-centre mirror or screw
+  axis would give pw.x a fractional translation it rejects, as on the CeTe3
+  monolayer, preferring the shift that keeps a slab in one piece inside the
+  cell.
+
+The lattice vectors are the uploaded ones, turned, so fractional coordinates
+(up to the origin shift), the k-point grid, `k_index`, species labels,
+`starting_magnetization`, Hubbard labels, `fix_bottom_layers` and
+`moment_direction` keep their meaning, and the energy does not change. The
+input keeps `ibrav = 0` with an explicit `CELL_PARAMETERS` card.
+`records.magnetic.frame` records the rotation (`rotation`, R with written
+lattice vectors = uploaded ones × Rᵀ), the origin shift, the largest
+displacement and the number of operations pw.x keeps. A turn that moves no
+lattice vector by more than 1e-3 Å only undoes a tilt the idealization gave
+the cell; it is recorded as no rotation and counted in the displacement. The
+info notice `magnetic.cell_framed` names the rotation, shift and
+displacement when the cell was turned, its origin moved, or an atom moved by
+1e-4 Å or more.
+The `geometry` record describes the uploaded cell. The dipole notice and the
+`vc-relax` default for `cell_dofree` read the vacuum and frame of the written
+cell, so a slab uploaded tilted shows `xy_frame` false in that record and is
+still written, and relaxed with `'2Dxy'`, in the xy frame.
+A `cell_dofree` that holds or frees Cartesian components (`a`, `b`, `c`, `x`,
+`y`, `z`, `xy`, `xz`, `yz`, `xyz`) is refused on a turned cell, whose x, y and
+z are not the uploaded cell's; `all`, `shape` and `fixa`, `fixb` or `fixc`
+keep their meaning.
+
+A supercell, such as the 8-atom conventional cell of diamond, gets no
+fractional translations in pw.x, so it keeps only the operations that need
+none (24 of diamond's 48), and is counted that way.
 
 ## Check pseudopotentials and cutoffs
 
@@ -158,6 +242,21 @@ review it for your calculation. Neither tier predicts magnetic *order* (see
 `magnetic_ordering` below for that). Override either tier with
 `spin_polarized`.
 
+Bands are counted per spin channel, and the default follows pw.x's own rule
+(QE setup.f90), sized so the majority channel holds (nelec + |M|)/2 electrons.
+M is `tot_magnetization` when the moment is pinned, as in pw.x. On a collinear
+smearing run without one, where pw.x would split the electrons evenly, M is
+the net moment the starting magnetization seeds (each species' fraction times
+its pseudopotential's valence electrons, `records.magnetic.seeded_moment`),
+so the default can exceed pw.x's own count. pw.x holds a smearing run's
+moment at 2 × `nbnd` − nelec Bohr magnetons without an error: with pw.x's
+default 22 bands, hcp Gd converged to 8 instead of 15.5 Bohr magnetons per
+cell; Goldilocks gives it 28. An oversized seed only adds
+bands. An `nbnd` or `extra_bands` that leaves fewer bands than pw.x accepts
+-- the electrons of each spin channel, or one band per electron with
+spin-orbit coupling -- is refused before generation, and one that holds the
+moment below its seed gets the warning `nbnd.moment_capped`.
+
 A `starting_magnetization` you set is keyed by site label and replaces the
 heuristic seeds; labels you leave out start at 0. The input has one species
 per element and starting value, whatever labels your file gave its sites
@@ -183,10 +282,13 @@ anisotropy, orbital moments and band splittings depend on it. Set
 `moment_direction` to a lattice direction [u, v, w] of the uploaded cell
 (`--set 'moment_direction=[1,1,0]'`). Unset, the moments start along
 [0, 0, 1], the uploaded cell's third lattice vector, with the info notice
-`magnetic.soc_moment_direction_defaulted`; for a CIF that is the c axis,
-which pymatgen puts along Cartesian z, QE's own default. The direction is a
-crystal direction, so it keeps its meaning whatever cell is written, an
-antiferromagnetic one included. `records.magnetic.moment_direction` shows it
+`magnetic.soc_moment_direction_defaulted`; for a CIF that is the c axis. The
+direction is a crystal direction, so it keeps its meaning whatever cell is
+written, an antiferromagnetic one or one turned into pw.x's frame (see
+[the written cell](#check-the-written-cell)) included. It is QE's own
+default, Cartesian z, only where c is written along z, which a cell turned
+into pw.x's frame (an fcc, bcc or rhombohedral primitive cell) is not, so
+`angle1` is not 0 there. `records.magnetic.moment_direction` shows it
 and whether you set it, and the input carries it as `angle1`/`angle2`, the
 same for every species (the sign stays in `starting_magnetization`). Any
 other run ignores `moment_direction` with the warning
@@ -384,14 +486,16 @@ the vacuum, and Goldilocks adds the `boundary.dipole_correction_suggested`
 notice. It names Quantum ESPRESSO's dipole correction (`tefield` and
 `dipfield` with `eamp = 0`) along the vacuum axis (`edir`), with the
 sawtooth's drop (`emaxpos`, `eopreg`) in the middle of the vacuum, where QE
-requires it; the `geometry` record's `slab` field locates the vacuum
-(`vacuum_center`, `vacuum_fraction`). The notice offers `isolation='slab'`
-only when the slab meets every precondition of that setting (the `slab`
-field's `fits_2d_truncation`). It does not set the
+requires it. The notice offers `isolation='slab'` only when the slab meets
+every precondition of that setting. It does not set the
 correction itself, because pw.x then uses no symmetry and computes no stress.
 The notice describes the cell that is written, which an antiferromagnetic
 `magnetic_ordering` writes with the uploaded vacuum (see
-[magnetism](#check-magnetism-and-spin-orbit-coupling)).
+[magnetism](#check-magnetism-and-spin-orbit-coupling)), turned and with its
+origin moved as [the written cell](#check-the-written-cell) describes. The
+`geometry` record's `slab` field (`vacuum_center`, `vacuum_fraction`,
+`fits_2d_truncation`) describes the uploaded cell, so it can differ from the
+written one when the cell was turned or its origin moved.
 Symmetric monolayers and bulk crystals get no notice: a bulk layered crystal
 such as graphite classifies as `2d` but has no vacuum.
 
@@ -501,11 +605,14 @@ The `vc-relax` default for `cell_dofree` comes from the vacuum, not from
 dimensionality. A cell without vacuum gets `'all'`, so the stacking axis of a
 bulk layered crystal such as graphite relaxes too. `'2Dxy'` moves only the x
 and y components of a and b and holds c fixed, so a slab gets it only when its
-vacuum lies along c and a and b lie in the Cartesian xy plane. The `geometry`
-record's `slab` field shows the vacuum axis and whether the slab is in that
-frame (`xy_frame`). A wire, or a slab in any other orientation, has no
-default: Goldilocks refuses the `vc-relax` until you set `cell_dofree` or
-reorient the cell. Whatever its source, `'2Dxy'` or `'2Dshape'` is refused
+vacuum lies along c and a and b lie in the Cartesian xy plane, the frame every
+slab with its vacuum along c is written in (see
+[the written cell](#check-the-written-cell)). The `geometry` record's `slab`
+field shows the vacuum axis and whether the uploaded cell is in that frame
+(`xy_frame`); the default is decided on the written cell. A wire, or a slab
+with its vacuum along a or b, has no default:
+Goldilocks refuses the `vc-relax` until you set `cell_dofree` or reorient the
+cell. Whatever its source, `'2Dxy'` or `'2Dshape'` is refused
 unless a and b lie in the xy plane and any vacuum lies along c. Otherwise
 pw.x would distort the cell, or move a vacuum vector while holding a vector
 of the sheet fixed.

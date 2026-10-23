@@ -24,6 +24,7 @@ from support import (
     rotated_about_x,
     silicon_dimer_in_a_box,
     sssp_fixture_table_spec,
+    with_vacuum_along,
 )
 
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
@@ -132,8 +133,11 @@ def test_an_isolated_molecule_is_sampled_at_gamma_only(store: AssetStore) -> Non
 
 def test_a_slab_is_sampled_once_along_its_vacuum(store: AssetStore) -> None:
     """#159: the Si(001) slab's vacuum axis c got ceil(|b_3| / k_distance)
-    k-points, 2 at the default 0.15 A^-1. It now gets one, and a and b keep
-    that formula."""
+    k-points, 2 at the default 0.15 A^-1. It now gets one. SlabGenerator's
+    in-plane basis is skewed (gamma 135 deg), and the slab's point group
+    mixes a and b, so both get ceil(|b_i| / k_distance) of the longer |b_i|:
+    16x16x1, where meshing each on its own gave 16x11x1, a mesh the group
+    does not map onto itself (#163)."""
     slab = silicon_001_slab()
     advice = advise(slab, hpc=load_hpc_profile("scarf"), store=store)
     report = check(advice)
@@ -143,10 +147,11 @@ def test_a_slab_is_sampled_once_along_its_vacuum(store: AssetStore) -> None:
 
     k_sampling = advice.step.kpoints.k_sampling.value
     b_1, b_2, _ = slab.lattice.reciprocal_lattice.abc
-    n_1, n_2 = (math.ceil(length / k_sampling.k_distance) for length in (b_1, b_2))
-    assert k_sampling.mesh == (n_1, n_2, 1)
+    n = math.ceil(max(b_1, b_2) / k_sampling.k_distance)
+    assert n == 16
+    assert k_sampling.mesh == (n, n, 1)
     assert k_sampling.k_index is not None
-    assert f"K_POINTS automatic\n  {n_1}  {n_2}  1  0  0  0\n" in content
+    assert f"K_POINTS automatic\n  {n}  {n}  1  0  0  0\n" in content
 
 
 def test_vc_relax_of_an_isolated_molecule_is_refused(store: AssetStore) -> None:
@@ -214,14 +219,44 @@ def test_vc_relax_of_bulk_graphite_relaxes_the_stacking_axis() -> None:
     assert advice.relax.value.warnings == ()
 
 
-def test_vc_relax_of_a_slab_outside_the_xy_frame_is_refused(
+def test_a_tilted_slab_is_written_in_the_xy_frame_and_relaxed_under_2dxy(
     store: AssetStore,
 ) -> None:
     """The Si(001) slab turned about x keeps its vacuum along c, but b and
-    the slab leave the xy plane, so '2Dxy' would distort it (#132).
-    SlabGenerator writes its (111) and (110) slabs in such a frame."""
+    the slab leave the xy plane, where '2Dxy' would distort it (#132), and
+    SlabGenerator writes its (111) and (110) slabs in such a frame. The
+    written cell is turned back so that a lies along +x and a x b along +z
+    (#140, maintainer decision), so the vc-relax gets '2Dxy' and passes."""
     advice = advise_relax(
         rotated_about_x(silicon_001_slab(), 30.0),
+        calculation="vc-relax",
+        hpc=load_hpc_profile("scarf"),
+        store=store,
+    )
+    report = check_relax(advice)
+    assert report.ok, report.blocking
+
+    content = generate_relax(advice, report)[0].files["vc-relax.in"]
+
+    lines = content.splitlines()
+    start = lines.index("CELL_PARAMETERS angstrom") + 1
+    a, b, _ = (
+        [float(value) for value in row.split()] for row in lines[start : start + 3]
+    )
+    assert advice.relax.value.cell_dofree == "2Dxy"
+    assert "cell_dofree      = '2Dxy'" in content
+    assert a[1] == a[2] == b[2] == 0.0
+    assert advice.records()["magnetic"].value["frame"]["rotated"] is True
+
+
+def test_vc_relax_of_a_slab_with_its_vacuum_along_a_is_refused(
+    store: AssetStore,
+) -> None:
+    """A slab whose vacuum lies along a keeps its orientation (#140): '2Dxy'
+    would free the vacuum vector and hold one in the sheet (#132), so the
+    vc-relax has no default cell_dofree."""
+    advice = advise_relax(
+        with_vacuum_along(silicon_001_slab(), "a"),
         calculation="vc-relax",
         hpc=load_hpc_profile("scarf"),
         store=store,
@@ -231,7 +266,7 @@ def test_vc_relax_of_a_slab_outside_the_xy_frame_is_refused(
 
     assert len(report.blocking) == 1
     assert "cell_dofree" in report.blocking[0]
-    assert "xy plane" in report.blocking[0]
+    assert "its vacuum along a" in report.blocking[0]
 
 
 def test_a_2d_cell_constraint_on_a_tilted_bulk_cell_is_refused(
