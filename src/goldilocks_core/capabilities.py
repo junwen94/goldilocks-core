@@ -591,7 +591,9 @@ _SETTING_META: dict[str, _SettingExtra] = {
 @dataclass(frozen=True, slots=True)
 class _FactMeta:
     """What a fact's record type cannot say: its ML model target and its
-    description. ``_facts()`` derives the rest."""
+    description. The description says what the fact means, never how it
+    was resolved -- that is the record's ``source`` and provenance, and it
+    differs per tier. ``_facts()`` derives the rest."""
 
     key: str
     ml_target: str | None
@@ -602,7 +604,7 @@ _FACTS: tuple[_FactMeta, ...] = (
     _FactMeta(
         key="is_metal",
         ml_target="is_metal",
-        description="Whether the structure is metallic, from composition alone.",
+        description="Whether the structure is metallic (zero DFT band gap).",
     ),
     _FactMeta(
         key="is_magnetic",

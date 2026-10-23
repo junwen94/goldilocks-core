@@ -35,9 +35,10 @@
  * Analysis/Advisors used to be plain 1fr with no floor at all on the
  * theory that ellipsis/truncation would keep them presentable -- in
  * practice a fact's own explanatory sentence ("Whether the structure is
- * metallic, from composition alone...") isn't a single truncatable
- * line, it's body text, and it turned into an unreadable column of
- * wrapped words once Structure/Bundle's floors left it almost no room.
+ * metallic (zero DFT band gap)." plus its source label) isn't a single
+ * truncatable line, it's body text, and it turned into an unreadable
+ * column of wrapped words once Structure/Bundle's floors left it almost
+ * no room.
  * overflow-x lets the grid scroll horizontally once these floors don't
  * all fit, rather than shrinking any column below its floor to force
  * everything in. */

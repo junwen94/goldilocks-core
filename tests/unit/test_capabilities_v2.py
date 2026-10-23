@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import typing
 from importlib.machinery import ModuleSpec
 from importlib.metadata import version as package_version
@@ -386,6 +387,28 @@ class TestFacts:
             assert fact["overridable"] is (key in analysis_keys), key
         assert facts["is_metal"]["overridable"] is True
         assert facts["is_magnetic"]["overridable"] is True
+
+    def test_no_fact_description_names_a_resolution_method(self) -> None:
+        """#175: is_metal read "..., from composition alone." while the CGCNN
+        tier produced the value, so NaCl showed non_metal under a caption
+        naming the tier that says metal. A description says what the fact
+        means; the record's source and provenance say how it was resolved."""
+        method_word = re.compile(
+            r"\b(" + "|".join(("composition", "model", *SOURCES)) + r")\b",
+            re.IGNORECASE,
+        )
+
+        for fact in capabilities()["facts"]:
+            assert method_word.search(fact["description"]) is None, fact
+
+    def test_is_metal_description_is_the_model_target_contract(self) -> None:
+        """The is_metal model's target contract is
+        goldilocks.is_metal.dft_band_gap_zero.v1; every tier answers that."""
+        facts = {f["key"]: f for f in capabilities()["facts"]}
+
+        assert facts["is_metal"]["description"] == (
+            "Whether the structure is metallic (zero DFT band gap)."
+        )
 
 
 class TestOverrideContract:
