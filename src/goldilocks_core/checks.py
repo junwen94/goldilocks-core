@@ -95,8 +95,8 @@ is now where that decision belongs.
    every profile.
 
 6. A vc-relax ``cell_dofree`` that masks Cartesian components of the
-   lattice vectors ('a', 'b', 'c', 'x', 'y', 'z', 'xy', 'xz', 'yz', 'xyz'
-   and their 'ibrav+' forms: QE 7.3 ``Modules/cell_base.f90:710-830``'s
+   lattice vectors ('a', 'b', 'c', 'x', 'y', 'z', 'xy', 'xz', 'yz', 'xyz':
+   QE 7.3 ``Modules/cell_base.f90:710-830``'s
    ``iforceh(i, j)`` is Cartesian component i of lattice vector j) on a
    cell the magnetic step wrote rotated (``MagneticConfigFacts.frame``,
    ``pw_symmetry.pw_frame``, #140): its x, y and z are no longer the
@@ -156,14 +156,10 @@ _MISSING_TOT_MAGNETIZATION = (
     "integer tot_magnetization, but none was set; set tot_magnetization, or "
     "use occupations='smearing'."
 )
-_TWO_D_CELL_DOFREE = frozenset({"2Dxy", "2Dshape", "ibrav+2Dxy", "ibrav+2Dshape"})
-"""``cell_dofree`` values that move only the x and y components of a and b.
-The 'ibrav+' forms act as the plain ones under the writer's ``ibrav = 0``
-(QE 7.3 Modules/latgen.f90:749-752)."""
+_TWO_D_CELL_DOFREE = frozenset({"2Dxy", "2Dshape"})
+"""``cell_dofree`` values that move only the x and y components of a and b."""
 _CARTESIAN_CELL_DOFREE = frozenset(
-    prefix + mask
-    for prefix in ("", "ibrav+")
-    for mask in ("a", "b", "c", "x", "y", "z", "xy", "xz", "yz", "xyz")
+    {"a", "b", "c", "x", "y", "z", "xy", "xz", "yz", "xyz"}
 )
 """``cell_dofree`` values that hold or free single Cartesian components of
 the lattice vectors (rule 6 of the module docstring)."""

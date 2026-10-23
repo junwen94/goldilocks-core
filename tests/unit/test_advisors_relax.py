@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from typing import get_args
+
 import pytest
+from pydantic import ValidationError
 from support import geometry_facts
 
 from goldilocks_core.advisors.convergence import convergence
 from goldilocks_core.advisors.relax import (
+    CellDofree,
     RelaxHumanInput,
     RelaxLlmInput,
     RelaxOptions,
@@ -14,6 +18,30 @@ from goldilocks_core.advisors.relax import (
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 
 _CONVERGENCE = convergence(nat=4)
+_IBRAV_0_CELL_DOFREE = {
+    "all",
+    "shape",
+    "a",
+    "b",
+    "c",
+    "fixa",
+    "fixb",
+    "fixc",
+    "x",
+    "y",
+    "z",
+    "xy",
+    "xz",
+    "yz",
+    "xyz",
+    "2Dxy",
+    "2Dshape",
+    "epitaxial_ab",
+    "epitaxial_ac",
+    "epitaxial_bc",
+}
+"""QE 7.3 ``init_dofree``'s (Modules/cell_base.f90:710-830) values that do
+what they name under the ``ibrav = 0`` the writer always emits."""
 
 
 def _geometry(dimensionality: str, vacuum_axes=(), *, ab_in_xy: bool = True):
@@ -71,6 +99,21 @@ def test_vc_relax_returns_vc_relax_options_with_its_own_defaults() -> None:
     assert state.value.press == 0.0
     assert state.value.press_conv_thr == 0.5
     assert state.value.cell_factor == 2.0
+
+
+def test_cell_dofree_offers_only_values_pw_x_honours_under_ibrav_0() -> None:
+    """#153: under the writer's ibrav = 0, 'volume' stops pw.x ("Isotropic
+    expansion is only allowed for ibrav=1", Modules/cell_base.f90:751-756)
+    and every 'ibrav' form only prints that it has no effect
+    (Modules/latgen.f90:749-752)."""
+    assert set(get_args(CellDofree)) == _IBRAV_0_CELL_DOFREE
+
+
+@pytest.mark.parametrize("bag", [RelaxHumanInput, RelaxLlmInput])
+@pytest.mark.parametrize("value", ["volume", "ibrav", "ibrav+volume", "ibrav+2Dxy"])
+def test_a_cell_dofree_ibrav_0_cannot_honour_is_refused(bag, value: str) -> None:
+    with pytest.raises(ValidationError, match="cell_dofree"):
+        bag(cell_dofree=value)
 
 
 def test_vc_relax_options_cell_dynamics_mirrors_ion_dynamics() -> None:

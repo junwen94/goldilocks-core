@@ -209,7 +209,8 @@ def test_vc_relax_of_a_slab_boundary_writes_the_2d_truncation_and_tstress(
     pseudo_metadata_factory,
 ) -> None:
     """#161: under '2D' pw.x computes the in-plane stress a '2Dxy' vc-relax
-    needs."""
+    needs. The plain '2Dxy' is written beside ibrav = 0, the only ibrav
+    ``CellDofree`` is valid for (#153)."""
     system = _system(
         graphene_monolayer(),
         pseudo_metadata_factory,
@@ -221,6 +222,7 @@ def test_vc_relax_of_a_slab_boundary_writes_the_2d_truncation_and_tstress(
 
     assert "assume_isolated  = '2D'" in content
     assert "tstress          = .true." in content
+    assert "   ibrav            = 0" in content.splitlines()
     assert "cell_dofree      = '2Dxy'" in content
 
 

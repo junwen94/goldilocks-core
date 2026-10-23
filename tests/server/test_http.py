@@ -250,6 +250,18 @@ class TestCapabilities:
         assert response.status_code == 200
         assert response.json() == capabilities()
 
+    def test_cell_dofree_advertises_only_values_valid_under_ibrav_0(
+        self, client: TestClient
+    ) -> None:
+        """#153: 'volume' and the 21 'ibrav' forms were offered, though the
+        written input always has ibrav = 0."""
+        settings = client.get("/capabilities").json()["settings"]
+
+        (cell_dofree,) = (s for s in settings if s["key"] == "cell_dofree")
+        assert len(cell_dofree["enum"]) == 20
+        assert "volume" not in cell_dofree["enum"]
+        assert not [value for value in cell_dofree["enum"] if "ibrav" in value]
+
 
 class TestInspect:
     def test_returns_200_for_real_structure_text(
@@ -628,6 +640,27 @@ class TestRun:
         assert response.status_code == 200
         files = response.json()["files"]
         assert "vc-relax.in" in files
+
+    @pytest.mark.parametrize("cell_dofree", ["volume", "ibrav+volume", "ibrav+2Dxy"])
+    def test_a_cell_dofree_invalid_under_ibrav_0_is_a_422(
+        self, client: TestClient, silicon_cif: str, cell_dofree: str
+    ) -> None:
+        """#153: cell_dofree='volume' returned 200 and a vc-relax.in with
+        ibrav = 0, where pw.x stops while reading it."""
+        response = client.post(
+            "/run",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "task": "vc-relax",
+                "overrides": {"cell_dofree": cell_dofree},
+            },
+        )
+
+        assert response.status_code == 422
+        error = response.json()["error"]
+        assert error["kind"] == "invalid_setting"
+        assert "cell_dofree" in error["message"]
 
     def test_unknown_setting_is_a_422_with_did_you_mean(
         self, client: TestClient, real_assets, silicon_cif: str

@@ -625,6 +625,12 @@ unless a and b lie in the xy plane and any vacuum lies along c. Otherwise
 pw.x would distort the cell, or move a vacuum vector while holding a vector
 of the sheet fixed.
 
+`cell_dofree` accepts only the values pw.x honours under the `ibrav = 0` every
+written input has. `'volume'` is refused, because pw.x stops on it unless
+`ibrav = 1`. `'ibrav'` and the `'ibrav+...'` forms are refused too: under
+`ibrav = 0` pw.x ignores the `ibrav` part and only warns that it has no
+effect.
+
 ## Read the reasons and warnings
 
 Every analysis fact and every advisor decision -- occupations, k-point

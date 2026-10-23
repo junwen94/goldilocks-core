@@ -41,9 +41,8 @@ in ``checks.py`` refuses a vc-relax of an isolated system). A wire, or a
 slab with its vacuum along a or b, has no default, so the vc-relax is
 ``Blocked`` until a human or llm value sets ``cell_dofree``; ``checks.py``
 refuses '2Dxy' and '2Dshape' from any source on a written cell outside
-that frame. The plain '2Dxy' is written because the writer's
-``ibrav = 0`` makes the 'ibrav+' forms act the same way (QE 7.3
-Modules/latgen.f90:749-752).
+that frame. ``CellDofree`` holds only the values pw.x honours under the
+writer's ``ibrav = 0`` (#153).
 
 **``etot_conv_thr`` is not this module's own decision.** ``advisors/
 convergence.py`` already resolves it as ``nat * etot_conv_thr_per_atom``
@@ -103,7 +102,6 @@ every non-``'bfgs'`` value for vc-relax, ``fire`` included."""
 
 CellDofree = Literal[
     "all",
-    "ibrav",
     "a",
     "b",
     "c",
@@ -118,42 +116,24 @@ CellDofree = Literal[
     "yz",
     "xyz",
     "shape",
-    "volume",
     "2Dxy",
     "2Dshape",
     "epitaxial_ab",
     "epitaxial_ac",
     "epitaxial_bc",
-    "ibrav+a",
-    "ibrav+b",
-    "ibrav+c",
-    "ibrav+fixa",
-    "ibrav+fixb",
-    "ibrav+fixc",
-    "ibrav+x",
-    "ibrav+y",
-    "ibrav+z",
-    "ibrav+xy",
-    "ibrav+xz",
-    "ibrav+yz",
-    "ibrav+xyz",
-    "ibrav+shape",
-    "ibrav+volume",
-    "ibrav+2Dxy",
-    "ibrav+2Dshape",
-    "ibrav+epitaxial_ab",
-    "ibrav+epitaxial_ac",
-    "ibrav+epitaxial_bc",
 ]
-"""Every value QE's ``cell_dofree`` accepts (``INPUT_PW.txt``, checked
-2026-09-14): one of the 20 base options, or ``'ibrav'`` plus any base
-option other than ``'all'``/``'ibrav'`` themselves -- official text:
-"You can use this option [ibrav] in combination with any other one by
-specifying 'ibrav+option'". Encoded as an explicit ``Literal`` (matching
-this codebase's existing style, e.g. ``types.SmearingType``) rather than
-a runtime membership check, so an invalid value is rejected as a normal
-pydantic validation error at the transport boundary (#35's pattern), not
-a bespoke error path."""
+"""The ``cell_dofree`` values pw.x honours under the ``ibrav = 0`` the
+writer always emits (``generation/quantum_espresso/scf.py``
+``system_keywords``; QE 7.3 ``Modules/cell_base.f90:710-830``
+``init_dofree``). QE's other 22 are left out (#153): ``'volume'`` stops
+pw.x unless ``ibrav = 1`` ("Isotropic expansion is only allowed for
+ibrav=1", ``cell_base.f90:751-756``), and ``'ibrav'`` and every
+``'ibrav+option'`` only print "With ibrav=0, cell_dofree='ibrav' has no
+effect" (``Modules/latgen.f90:749-752``) and act as ``'all'`` or
+``option``. A ``Literal``, so pydantic refuses any other value at the
+transport boundary and ``/capabilities`` advertises exactly these. If the
+writer ever emits a real ibrav, validity becomes structure-dependent and
+belongs in a ``checks.py`` rule."""
 
 _FORC_CONV_THR_DEFAULT = 1.0e-3
 """a.u. (Ry/Bohr). QE's own official INPUT_PW default."""

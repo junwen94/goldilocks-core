@@ -559,7 +559,9 @@ _SETTING_META: dict[str, _SettingExtra] = {
     "cell_dofree": {
         "default": "all",
         "description": (
-            "Which cell degrees of freedom vc-relax may move. Default 'all'; "
+            "Which cell degrees of freedom vc-relax may move, among the values "
+            "pw.x honours under the written ibrav = 0 ('volume' and the 'ibrav' "
+            "forms are not). Default 'all'; "
             "'2Dxy' for a slab with its vacuum along c, which is written with a "
             "along x and a, b in the xy plane. A wire or a slab with its vacuum "
             "along a or b has no default. '2Dxy' and '2Dshape' are refused unless "
