@@ -50,8 +50,10 @@ if isinstance(k_sampling, Resolved):
 
 This prints the selected functional, the source tier that picked it
 (`human`/`ml`/`llm`/`heuristic`), and the k-point mesh. Model-dependent
-values can change with the installed model; review warnings and check
-convergence rather than treating the recommendation as a verified result.
+values can change with the installed model, which a model-decided field
+names in `provenance.model` (with what it returned); review warnings and
+check convergence rather than treating the recommendation as a verified
+result.
 `advice.records()` returns every decision as a plain `{name: FieldState}`
 dict of the advisors' typed values (`resolution.records_document` turns it
 into the JSON the CLI, HTTP and `goldilocks.json` publish), and

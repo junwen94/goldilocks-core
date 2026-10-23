@@ -95,18 +95,6 @@ def assemble_bundle_input(
             "content": submission_script.encode("utf-8"),
         }
     )
-    citations = tuple(
-        sorted(
-            {
-                citation
-                for metadata in (pseudopotentials.value if pseudopotentials.ok else ())
-                if (citation := metadata.pseudo_info.get("citation"))
-            }
-        )
-    )
     return BundleInput(
-        artifacts=tuple(artifacts),
-        records=records,
-        warnings=tuple(warnings),
-        citations=citations,
+        artifacts=tuple(artifacts), records=records, warnings=tuple(warnings)
     )

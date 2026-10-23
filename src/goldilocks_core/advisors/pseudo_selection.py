@@ -121,7 +121,7 @@ def _select_explicit_table(
             reason=f"unknown pseudopotential table {table_id!r}; available: {choices}"
         )
     if not _table_problems(table, elements, requirements):
-        return Resolved(table, Provenance(source="heuristic"))
+        return _selected(table)
     return _refusal(tables, elements, requirements, pinned=table)
 
 
@@ -141,7 +141,13 @@ def _select_automatic_table(
     table = min(
         matches, key=lambda candidate: (candidate.provider != provider, candidate.id)
     )
-    return Resolved(table, Provenance(source="heuristic"))
+    return _selected(table)
+
+
+def _selected(table: PseudoTable) -> Resolved[PseudoTable]:
+    """``table`` as the selection, citing it: a bundle cites what its records
+    cite (#156)."""
+    return Resolved(table, Provenance(source="heuristic", citations=(table.citation,)))
 
 
 def _refusal(

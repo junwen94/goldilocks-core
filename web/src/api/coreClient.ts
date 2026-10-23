@@ -17,12 +17,20 @@ export type MagneticOrderingsRequest =
 export type Source = "human" | "ml" | "llm" | "heuristic";
 export type FieldStatus = "resolved" | "unavailable" | "blocked";
 
-/** Mirrors `resolution.ResolvedField`'s wire projection (`from_state`). */
+/** Mirrors a published record, `resolution.ResolvedField` as
+ * `records_document` projects it: a resolved record carries every
+ * `resolution.Provenance` field. */
 export interface ResolvedField<T = unknown> {
   readonly status: FieldStatus;
   readonly value?: T | null;
   readonly source?: Source | null;
   readonly field_sources?: Readonly<Record<string, Source>> | null;
+  /** The advisor's rationale, where it gives one. */
+  readonly source_note?: string | null;
+  /** The model that decided the value, when `source` is `ml`. */
+  readonly model?: ModelEvidence | null;
+  /** What to cite for the value (a model's or the table's citation). */
+  readonly citations?: readonly string[];
   readonly reason?: string | null;
   readonly blocked_by?: string | null;
 }
@@ -33,6 +41,20 @@ export interface AdvisorWarning {
   readonly level: "info" | "warning" | "error";
   readonly category: string;
   readonly message: string;
+}
+
+/** Mirrors `resolution.ModelEvidence`: what a registered model returned,
+ * verbatim (#156). */
+export interface ModelEvidence {
+  /** goldilocks-ml's id, e.g. `metallicity.is_metal.cgcnn@crystal_graph.v1`. */
+  readonly model_id: string;
+  /** The installed release, `<id>@<version>`. */
+  readonly asset: string;
+  readonly target_contract: string;
+  readonly value: unknown;
+  /** As returned: a classifier's `score`/`threshold`, QRF95's `interval`. */
+  readonly details: Readonly<Record<string, unknown>>;
+  readonly warnings: readonly AdvisorWarning[];
 }
 
 /** One entry of a response's top-level `warnings` (`resolution

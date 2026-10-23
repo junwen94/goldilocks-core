@@ -131,7 +131,11 @@ checked for compatibility.
 
 `is_metal`, `is_magnetic`, and `k_distance` (v2 epic 11) each resolve through
 a `human > ml > llm > heuristic` priority: `explain --json`'s
-`records[...].source` says which tier actually produced a value.
+`records[...].source` says which tier actually produced a value. When it is
+`ml`, `records[...].model` names the model (`model_id`, and `asset`, the
+installed release as `<id>@<version>`) and keeps what it returned
+(`details`, such as a classifier's `score` and `threshold` or QRF95's
+`interval`, and `warnings`), and `records[...].citations` says what to cite.
 `is_metal`/`k_distance` become ML-backed once their PSDI-hosted asset is
 installed (`uv run goldilocks assets install <id>` — see [Install and check
 assets](#install-and-check-assets)); `is_magnetic` additionally needs `mace`,

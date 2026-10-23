@@ -175,6 +175,16 @@ class TestTopLevelShape:
                 "magnetic",
             )
 
+    def test_warnings_catalogue_lists_a_model_warning_per_ml_record(self) -> None:
+        """#156: the caveat a model returns with a prediction is published
+        under its record's code, so a frontend can filter on it before any
+        run has emitted it."""
+        by_code = {entry["code"]: entry for entry in capabilities()["warnings"]}
+
+        for record in ("is_metal", "is_magnetic", "k_sampling"):
+            entry = by_code[f"{record}.model_warning"]
+            assert (entry["level"], entry["category"]) == ("warning", record)
+
     def test_warnings_catalogue_codes_are_unique(self) -> None:
         codes = [entry["code"] for entry in capabilities()["warnings"]]
 

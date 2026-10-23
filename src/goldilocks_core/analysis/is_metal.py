@@ -26,13 +26,16 @@ refused (#139).
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pymatgen.core import Structure
 from pymatgen.core.periodic_table import Element
 
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import FieldState, Provenance, Resolved, Unavailable
+
+if TYPE_CHECKING:
+    from goldilocks_core.ml.predict import MlPrediction
 
 Metallicity = Literal["metal", "non_metal"]
 
@@ -54,28 +57,29 @@ def is_metal(
     llm = llm or IsMetalLlmInput()
     if human.is_metal is not None:
         return Resolved(human.is_metal, Provenance(source="human"))
-    ml_value = _ml_is_metal(structure)
-    if ml_value is not None:
-        return Resolved("metal" if ml_value else "non_metal", Provenance(source="ml"))
+    prediction = _ml_is_metal(structure)
+    if prediction is not None:
+        return Resolved(
+            "metal" if prediction.value else "non_metal", prediction.provenance
+        )
     if llm.is_metal is not None:
         return Resolved(llm.is_metal, Provenance(source="llm"))
     return _heuristic(structure)
 
 
-def _ml_is_metal(structure: Structure) -> bool | None:
-    """The published CGCNN classifier (v2 epic 11, #11), or ``None`` if it
-    is not set up (its model asset is not installed or fails verification),
-    in which case ``is_metal()`` falls back to its next tier. A model that is
-    set up but fails to load or predict raises, failing ``is_metal()``
-    itself: a silent heuristic answer would change the generated input
-    (#130)."""
+def _ml_is_metal(structure: Structure) -> MlPrediction | None:
+    """The published CGCNN classifier's prediction (v2 epic 11, #11), whose
+    ``provenance`` the record carries (#156), or ``None`` if it is not set up
+    (its model asset is not installed or fails verification), in which case
+    ``is_metal()`` falls back to its next tier. A model that is set up but
+    fails to load or predict raises, failing ``is_metal()`` itself: a silent
+    heuristic answer would change the generated input (#130)."""
     from goldilocks_core.ml.predict import MlModelUnavailable, predict
 
     try:
-        prediction = predict("is_metal", structure)
+        return predict("is_metal", structure)
     except MlModelUnavailable:
         return None
-    return bool(prediction.value)
 
 
 def _heuristic(structure: Structure) -> FieldState[Metallicity]:

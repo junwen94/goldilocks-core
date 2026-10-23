@@ -91,7 +91,7 @@ output, not this heuristic's.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from pydantic import Field
 from pymatgen.core import Structure
@@ -112,6 +112,9 @@ from goldilocks_core.resolution import (
     Resolved,
     Warning,
 )
+
+if TYPE_CHECKING:
+    from goldilocks_core.ml.predict import MlPrediction
 
 _PositiveInt = Annotated[int, Field(gt=0)]
 _ZeroOrOne = Annotated[int, Field(ge=0, le=1)]
@@ -248,13 +251,14 @@ def k_sampling(
             ),
             Provenance(source="human"),
         )
-    ml_value = _ml_k_distance(structure)
-    if ml_value is not None:
+    prediction = _ml_k_distance(structure)
+    if prediction is not None:
         return Resolved(
             _with_k_index(
-                _from_k_distance(structure, ml_value, human.shift), structure
+                _from_k_distance(structure, float(prediction.value), human.shift),
+                structure,
             ),
-            Provenance(source="ml"),
+            prediction.provenance,
         )
     if llm.k_distance is not None:
         return Resolved(
@@ -280,8 +284,10 @@ def k_sampling(
     )
 
 
-def _ml_k_distance(structure: Structure) -> float | None:
-    """QRF95's own raw k-distance (v2 epic 11, #11; #92), or ``None`` if it
+def _ml_k_distance(structure: Structure) -> MlPrediction | None:
+    """QRF95's prediction of a raw k-distance (v2 epic 11, #11; #92), whose
+    ``provenance`` the record carries with QRF95's own interval in its details
+    (#156), or ``None`` if it
     is not set up (its model asset is not installed or fails verification),
     in which case ``k_sampling()`` falls back to its next tier, as
     ``analysis/is_metal.py``'s ``_ml_is_metal`` does. A model that is set up
@@ -296,10 +302,9 @@ def _ml_k_distance(structure: Structure) -> float | None:
     from goldilocks_core.ml.predict import MlModelUnavailable, predict_k_distance
 
     try:
-        prediction = predict_k_distance(split_species(structure, None))
+        return predict_k_distance(split_species(structure, None))
     except MlModelUnavailable:
         return None
-    return float(prediction.value)
 
 
 def _from_k_distance(

@@ -8,9 +8,14 @@ up but fails while loading or predicting fails the caller instead: a model
 broken by another request's torch state used to look like a missing one,
 and the caller silently answered from its heuristic (#130).
 
+A prediction keeps what the model returned -- its id, target contract,
+details and warnings, verbatim -- with the registry's asset and citation, as
+the ``Provenance`` of the record it decides (#156).
+
 None of these tests needs real assets. A stub store resolves every asset to
 a temporary directory and goldilocks-ml's ``load_model`` (or the mace worker)
-is stubbed. ``tests/integration/test_mace_isolation.py`` runs the real models.
+is stubbed to return real ``ModelPrediction``s.
+``tests/integration/test_mace_isolation.py`` runs the real models.
 """
 
 from __future__ import annotations
@@ -22,7 +27,9 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
+import numpy as np
 import pytest
+from goldilocks_ml.inference import ModelPrediction
 from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.advisors import magnetic_ordering_ml
@@ -32,13 +39,14 @@ from goldilocks_core.analysis.is_metal import is_metal
 from goldilocks_core.assets.records import AssetReference
 from goldilocks_core.assets.store import AssetCorrupt, AssetNotInstalled
 from goldilocks_core.ml import mace_process, predict as predict_module
+from goldilocks_core.ml.models import load_default_qrf_config, load_ml_classifier
 from goldilocks_core.ml.predict import (
     MlModelUnavailable,
     model_ready,
     predict,
     predict_k_distance,
 )
-from goldilocks_core.resolution import Provenance, Resolved
+from goldilocks_core.resolution import ModelEvidence, Provenance, Resolved, Warning
 
 _SILICON = Structure.from_spacegroup(
     "Fd-3m", Lattice.cubic(5.43), ["Si"], [[0.0, 0.0, 0.0]]
@@ -47,6 +55,66 @@ _IRON = Structure.from_spacegroup(
     "Im-3m", Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]]
 )
 _MODEL_FAILURE = "mat1 and mat2 must have the same dtype, but got Float and Double"
+_IS_METAL_ID = "metallicity.is_metal.cgcnn@crystal_graph.v1"
+_IS_MAGNETIC_ID = "magnetism.is_magnetic.mace_mlp@mace_probe_embedding.v1"
+_QRF95_ID = "k_points.k_distance.qrf@comp_struct_soap_lattice_metal.v1"
+_UNCALIBRATED = (
+    f"{_QRF95_ID} records no conformal calibration, so its interval carries no "
+    "coverage guarantee. The median is unaffected."
+)
+_UNVALIDATED = (
+    f"{_IS_MAGNETIC_ID} has not been externally validated (MP-ALOE external "
+    "validation has not been run.)"
+)
+
+
+def _is_metal_prediction(**details: Any) -> ModelPrediction:
+    """What the published CGCNN returned for MC3D Si (mc3d-42058)."""
+    return ModelPrediction(
+        parameter="metallicity",
+        quantity="is_metal",
+        value=False,
+        target_contract="goldilocks.is_metal.dft_band_gap_zero.v1",
+        model_id=_IS_METAL_ID,
+        details={
+            "score": 0.008642838336527348,
+            "threshold": 0.04782969690859318,
+            "label": "insulator",
+            "min_recall": 0.97,
+            **details,
+        },
+    )
+
+
+_IS_METAL_PREDICTION = _is_metal_prediction()
+
+_QRF95_PREDICTION = ModelPrediction(
+    parameter="k_points",
+    quantity="k_distance",
+    value=0.21744443476200104,
+    target_contract="goldilocks.k_distance.mesh_lower_bound.2pi.v1",
+    model_id=_QRF95_ID,
+    details={
+        "interval": [0.11168761551380157, 0.503409206867218],
+        "coverage": None,
+        "calibrated": False,
+        "units": "1/angstrom",
+    },
+    warnings=(_UNCALIBRATED,),
+)
+"""What QRF95 returned for MC3D Si (mc3d-42058)."""
+
+_IS_MAGNETIC_PREDICTION = ModelPrediction(
+    parameter="magnetism",
+    quantity="is_magnetic",
+    value=True,
+    target_contract="goldilocks.is_magnetic.dft_max_site_magmom_0p5ub.v1",
+    model_id=_IS_MAGNETIC_ID,
+    details={"score": 0.3598, "threshold": 0.323869526386261, "label": "magnetic"},
+    warnings=(_UNVALIDATED,),
+)
+"""TiNi (MC3D mc3d-31340) as the issue quotes it (#156)."""
+
 _IN_PROCESS_PREDICTIONS = [
     pytest.param(
         lambda store: predict("is_metal", _SILICON, store=store), id="is_metal"
@@ -80,13 +148,18 @@ class _UnusableStore:
 
 
 class _Model:
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        error: Exception | None = None,
+        prediction: ModelPrediction = _IS_METAL_PREDICTION,
+    ) -> None:
         self.error = error
+        self.prediction = prediction
 
-    def predict(self, structure: Structure) -> SimpleNamespace:
+    def predict(self, structure: Structure) -> ModelPrediction:
         if self.error is not None:
             raise self.error
-        return SimpleNamespace(value=True)
+        return self.prediction
 
 
 @pytest.fixture(autouse=True)
@@ -225,13 +298,16 @@ def test_is_magnetic_runs_on_the_mace_worker_with_the_installed_model_and_backbo
 
     def fake_predict_is_magnetic(
         model_root: Path, checkpoint: Path, structure: Structure
-    ) -> str:
+    ) -> ModelPrediction:
         calls.append((model_root, checkpoint, structure))
-        return "a prediction"
+        return _IS_MAGNETIC_PREDICTION
 
     monkeypatch.setattr(mace_process, "predict_is_magnetic", fake_predict_is_magnetic)
 
-    assert predict("is_magnetic", _IRON, store=_StubStore(tmp_path)) == "a prediction"
+    prediction = predict("is_magnetic", _IRON, store=_StubStore(tmp_path))
+
+    assert prediction.value is True
+    assert prediction.provenance.model.model_id == _IS_MAGNETIC_ID
     assert calls == [(tmp_path, backbone, _IRON)]
 
 
@@ -250,9 +326,9 @@ def test_is_magnetic_hands_the_worker_an_absolute_backbone_path(
 
     def fake_predict_is_magnetic(
         model_root: Path, checkpoint: Path, structure: Structure
-    ) -> str:
+    ) -> ModelPrediction:
         checkpoints.append(checkpoint)
-        return "a prediction"
+        return _IS_MAGNETIC_PREDICTION
 
     monkeypatch.setattr(mace_process, "predict_is_magnetic", fake_predict_is_magnetic)
 
@@ -373,3 +449,189 @@ def test_a_failing_model_fails_its_caller_instead_of_a_heuristic_answer(
 
     with pytest.raises(RuntimeError, match=_MODEL_FAILURE):
         decide(_IRON)
+
+
+def _model_returning(
+    prediction: ModelPrediction, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "goldilocks_ml.inference.load_model",
+        lambda directory, **kwargs: _Model(prediction=prediction),
+    )
+    monkeypatch.setattr(
+        mace_process, "predict_is_magnetic", lambda root, checkpoint, cell: prediction
+    )
+
+
+@pytest.mark.parametrize(
+    ("target", "returned", "asset", "citation", "warning"),
+    [
+        pytest.param(
+            "is_metal",
+            _IS_METAL_PREDICTION,
+            "models/is-metal-classifier@1",
+            load_ml_classifier("is_metal").model.citation,
+            None,
+            id="is_metal",
+        ),
+        pytest.param(
+            "k_distance",
+            _QRF95_PREDICTION,
+            "models/qrf-kpoints@QRF95",
+            load_default_qrf_config().model.citation,
+            Warning(
+                code="k_sampling.model_warning",
+                level="warning",
+                category="k_sampling",
+                message=_UNCALIBRATED,
+            ),
+            id="k_distance",
+        ),
+        pytest.param(
+            "is_magnetic",
+            _IS_MAGNETIC_PREDICTION,
+            "models/is-magnetic-classifier@1",
+            load_ml_classifier("is_magnetic").model.citation,
+            Warning(
+                code="is_magnetic.model_warning",
+                level="warning",
+                category="is_magnetic",
+                message=_UNVALIDATED,
+            ),
+            id="is_magnetic",
+        ),
+    ],
+)
+def test_a_prediction_keeps_what_the_model_returned_with_its_registry_entry(
+    target: str,
+    returned: ModelPrediction,
+    asset: str,
+    citation: str,
+    warning: Warning | None,
+    tmp_path: Path,
+    backbone: Path,
+    mace_packages: set[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#156: the seam kept only ``prediction.value``. A record decided by a
+    model now names it (goldilocks-ml's id and the registry asset it was
+    loaded from), keeps its target contract, details and warnings as
+    returned, and cites the registry's citation for it."""
+    _model_returning(returned, monkeypatch)
+    store = _StubStore(tmp_path)
+
+    prediction = (
+        predict_k_distance(_SILICON, store=store)
+        if target == "k_distance"
+        else predict(target, _SILICON, store=store)
+    )
+
+    assert prediction.value == returned.value
+    assert prediction.provenance == Provenance(
+        source="ml",
+        model=ModelEvidence(
+            model_id=returned.model_id,
+            asset=asset,
+            target_contract=returned.target_contract,
+            value=returned.value,
+            details=dict(returned.details),
+            warnings=() if warning is None else (warning,),
+        ),
+        citations=(citation,),
+    )
+
+
+def test_is_magnetic_cites_its_own_classifier_not_the_k_point_paper() -> None:
+    """#156: registry.toml's is_magnetic entry cited the QRF95 k-point paper,
+    which nobody noticed because nothing read the field."""
+    k_point_paper = load_default_qrf_config().model.citation
+    is_magnetic_citation = load_ml_classifier("is_magnetic").model.citation
+
+    assert is_magnetic_citation != k_point_paper
+    assert "1g8rw-q8128" in is_magnetic_citation
+    assert load_ml_classifier("is_metal").model.citation == k_point_paper
+
+
+@pytest.mark.parametrize(
+    ("details", "problem"),
+    [
+        pytest.param({"score": float("nan")}, "nan", id="non-finite"),
+        pytest.param({"score": np.float32(0.0086)}, "float32", id="numpy-scalar"),
+    ],
+)
+def test_details_without_a_strict_json_form_fail_the_prediction(
+    details: dict[str, Any],
+    problem: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Details are published verbatim in strict JSON, so a model returning
+    a value JSON cannot hold verbatim fails the request, naming the model,
+    rather than writing an ``NaN`` or a changed number."""
+    _model_returning(_is_metal_prediction(**details), monkeypatch)
+
+    with pytest.raises(ValueError, match=f"{_IS_METAL_ID}.*{problem}"):
+        predict("is_metal", _SILICON, store=_StubStore(tmp_path))
+
+
+def _k_sampling_of(structure: Structure):
+    return k_sampling(Resolved("non_metal", Provenance(source="human")), structure)
+
+
+@pytest.mark.parametrize(
+    ("decide", "target", "record_value"),
+    [
+        pytest.param(is_metal, "is_metal", "non_metal", id="is_metal"),
+        pytest.param(is_magnetic, "is_magnetic", "magnetic", id="is_magnetic"),
+        pytest.param(_k_sampling_of, "k_distance", None, id="k_sampling"),
+    ],
+)
+def test_a_record_decided_by_a_model_carries_its_prediction_s_provenance(
+    decide,
+    target: str,
+    record_value: str | None,
+    tmp_path: Path,
+    backbone: Path,
+    mace_packages: set[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ML tiers of is_metal, is_magnetic and k_sampling resolve with the
+    prediction's own ``Provenance``, not a bare ``source="ml"``."""
+    monkeypatch.setattr(predict_module, "AssetStore", lambda: _PerAssetStore(tmp_path))
+    monkeypatch.setattr(
+        "goldilocks_ml.inference.load_model",
+        lambda directory, **kwargs: _Model(
+            prediction=_QRF95_PREDICTION
+            if directory.name == "qrf-kpoints"
+            else _IS_METAL_PREDICTION
+        ),
+    )
+    monkeypatch.setattr(
+        mace_process,
+        "predict_is_magnetic",
+        lambda root, checkpoint, cell: _IS_MAGNETIC_PREDICTION,
+    )
+    prediction = (
+        predict_k_distance(_SILICON)
+        if target == "k_distance"
+        else predict(target, _SILICON)
+    )
+
+    state = decide(_SILICON)
+
+    assert state.provenance == prediction.provenance
+    if record_value is not None:
+        assert state.value == record_value
+    else:
+        assert state.value.k_distance == _QRF95_PREDICTION.value
+
+
+class _PerAssetStore:
+    """Resolves each asset to its own directory, so each model loads from a
+    directory of its own."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def resolve_spec(self, spec: Any) -> SimpleNamespace:
+        return SimpleNamespace(root=self.root / spec.id)

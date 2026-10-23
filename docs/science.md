@@ -61,7 +61,10 @@ refused before generation: set `tot_magnetization` too, or use smearing.
 
 Check the `is_metal` record's `status`, `source`, and `reason` (via
 `goldilocks explain --json` or the published `goldilocks.json`'s
-`records.is_metal`), and the `occupations` record's own `warnings` array. A
+`records.is_metal`), and the `occupations` record's own `warnings` array.
+When the classifier decided (`source` `ml`), `model.details` holds its
+`score` and the `threshold` it was compared with; a score close to the
+threshold is a call the model nearly made the other way. A
 composition-only `metal` result can still be wrong -- intermetallic
 semiconductors such as CsAu or Mg2Sn contain only metals -- and give the
 wrong occupation choice for your system. Correct the classification with
@@ -87,8 +90,12 @@ heuristically: 0.15 Å⁻¹ if `is_metal`
 resolves to `metal` or is unavailable, 0.30 Å⁻¹ for a `non_metal` (a mesh
 that is too coarse on an undetected metal risks silent under-convergence,
 while a mesh that is too fine on an actual insulator only costs more
-compute). There is no "confidence" or prediction-interval field
-in `explain`/`run` output today.
+compute). When the model picked the distance, the `k_sampling` record's
+`model` keeps QRF95's own prediction interval in `details.interval`. The
+published model records no conformal calibration, so a
+`k_sampling.model_warning` says that interval carries no coverage guarantee.
+`k_distance_interval` is not that interval: it is the range of k-distances
+that give the chosen ladder rung.
 
 Each lattice vector in the `geometry` record's `vacuum_axes` (see
 [boundary conditions and vacuum](#check-boundary-conditions-and-vacuum)) gets
@@ -668,6 +675,19 @@ carries one aggregated top-level `warnings` list: every record's warnings, in
 record-name order, each naming the record it came from in `record`. A `dos`
 task's nscf step keeps its own, under `nscf_`-prefixed records: a notice on
 `nscf_parallelisation` is about the nscf step's npool, not the scf step's.
-There is no `confidence`, `details`, or "asset identity" field in this shape
-today. Read analysis and selection warnings as
-well as advice; do not treat a `resolved` status as scientific validation.
+
+A resolved record also carries the rest of its provenance: `source_note`,
+the advisor's rationale where it gives one (such as why a molecule gets a
+Coulomb cutoff), and `citations`, what to cite for it. A record that a
+machine-learning model decided (`source` `ml`: `is_metal`, `is_magnetic`,
+`k_sampling`) names the model in `model`: `model_id` (goldilocks-ml's id and
+feature contract, such as `metallicity.is_metal.cgcnn@crystal_graph.v1`),
+`asset` (the installed release, such as `models/is-metal-classifier@1`),
+`target_contract`, the model's own `value`, its `details` as returned (a
+classifier's `score` and `threshold`, QRF95's `interval`) and its `warnings`.
+Each model warning, such as the is_magnetic classifier's "has not been
+externally validated", is also in the top-level `warnings` list as
+`<record>.model_warning`. A bundle's `CITATIONS.md` and the manifest's
+`citations` list every record's citations: the selected pseudopotential table
+and every model that decided a record. Read analysis and selection warnings
+as well as advice; do not treat a `resolved` status as scientific validation.

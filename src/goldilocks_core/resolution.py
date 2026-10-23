@@ -54,7 +54,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 from goldilocks_core.serialization import to_portable
 
@@ -92,15 +92,41 @@ class Warning(BaseModel):
     message: str
 
 
+class ModelEvidence(BaseModel):
+    """What a registered ML model returned for the record it decided, as
+    ``ml.predict`` received it from goldilocks-ml (whose ``ModelPrediction``
+    says ``details`` and ``warnings`` are opaque provenance, to be recorded
+    verbatim, #156). ``details`` and ``value`` have passed a strict JSON round
+    trip, so they publish unchanged."""
+
+    model_id: str
+    """goldilocks-ml's id for the model and its feature contract, e.g.
+    ``metallicity.is_metal.cgcnn@crystal_graph.v1``."""
+    asset: str
+    """The registered asset the model was loaded from, ``<id>@<version>``
+    (``models/is-metal-classifier@1``), as ``ml/registry.toml`` pins it."""
+    target_contract: str
+    """The contract the model's value answers, e.g.
+    ``goldilocks.is_metal.dft_band_gap_zero.v1``."""
+    value: JsonValue
+    """The model's own value, before the record maps it (``False``, not
+    ``non_metal``; QRF95's median k-distance in 1/angstrom)."""
+    details: dict[str, JsonValue]
+    """The model's details as returned: a classifier's ``score`` and
+    ``threshold``, QRF95's own ``interval`` (not ``k_sampling``'s
+    ``k_distance_interval``, the rung's, #116)."""
+    warnings: tuple[Warning, ...] = ()
+    """Each of the model's warnings, its text the ``message`` of the
+    catalogued ``<record>.model_warning`` (``ml.predict.WARNING_CATALOGUE``).
+    ``collect_warnings`` lists them with the record's own."""
+
+
 class Provenance(BaseModel):
+    """Where a resolved value came from. ``ResolvedField`` publishes every
+    field: one added here needs a twin of the same name there, or every
+    projection fails instead of dropping it (#156)."""
+
     source: Source
-    data_source: str | None = None
-    """Which upstream record/dataset backed the value, when ``source``
-    is ``"ml"`` -- e.g. a contract version or artifact id. ``None`` for
-    tiers with nothing to cite."""
-    model_id: str | None = None
-    """Which model produced the value, when ``source`` is ``"ml"``.
-    ``None`` otherwise."""
     source_note: str | None = None
     """Free-text detail v1's split ``ProvenanceSource`` values used to
     carry structurally (e.g. "derived from structure analysis" vs
@@ -118,6 +144,13 @@ class Provenance(BaseModel):
     need; this is additive, only populated by advisors precise enough
     to know which of their own scalars came from which tier, and
     ``None`` (the default) for every other advisor's ``Provenance``."""
+    model: ModelEvidence | None = None
+    """The model that decided the value and what it returned, when
+    ``source`` is ``"ml"`` (``ml.predict.MlPrediction.provenance``)."""
+    citations: tuple[str, ...] = ()
+    """What to cite for the value: the registry citation of the model that
+    decided it, or of the pseudopotential table selected. A bundle's
+    ``CITATIONS.md`` lists every record's (``collect_citations``)."""
 
 
 class BlockedValueError(Exception):
@@ -226,17 +259,27 @@ class ResolvedField[T](BaseModel):
     object. Build one with ``ResolvedField.from_state``, not the
     constructor directly, so the fields below can't be filled in an
     inconsistent combination (e.g. a ``status`` of ``"blocked"`` next
-    to a non-``None`` ``value``). ``from_state`` stores the value as
+    to a non-``None`` ``value``). ``from_state`` keeps the value as
+    resolved, a ``T``; ``records_document`` publishes the field as
     ``serialization.to_portable`` projects it: plain JSON, without
-    host-local fields."""
+    host-local fields.
+
+    A resolved field carries every ``Provenance`` field under its own name
+    (``source``, ``source_note``, ``field_sources``, ``model``,
+    ``citations``). Extra keys are forbidden and ``from_state`` passes the
+    whole provenance, so a ``Provenance`` field without a twin here fails
+    projection rather than being dropped from every published record
+    (#156)."""
+
+    model_config = ConfigDict(extra="forbid")
 
     status: Status
     value: T | None = None
-    source: str | None = None
+    source: Source | None = None
+    source_note: str | None = None
     field_sources: dict[str, Source] | None = None
-    """Mirrors ``Provenance.field_sources`` -- ``None`` unless the
-    advisor that produced this field opted in to per-scalar sourcing
-    (see ``Provenance.field_sources``'s own docstring)."""
+    model: ModelEvidence | None = None
+    citations: tuple[str, ...] = ()
     reason: str | None = None
     blocked_by: str | None = None
 
@@ -245,9 +288,8 @@ class ResolvedField[T](BaseModel):
         if isinstance(state, Resolved):
             return cls(
                 status=state.status,
-                value=to_portable(state.value),
-                source=state.source,
-                field_sources=state.provenance.field_sources,
+                value=state.value,
+                **dict(state.provenance),
             )
         if isinstance(state, Unavailable):
             return cls(status=state.status, reason=state.reason)
@@ -258,17 +300,19 @@ def records_document(
     records: Mapping[str, FieldState[object]],
 ) -> dict[str, dict[str, Any]]:
     """The published form of a records mapping (``Advice.records()``), in
-    record-name order: each record's ``ResolvedField`` projection as a
-    plain dict. The one projection the HTTP/MCP responses, CLI ``--json``
-    and ``goldilocks.json`` share (#152).
+    record-name order: each record's ``ResolvedField`` as
+    ``serialization.to_portable`` projects it, a plain dict. The one
+    projection the HTTP/MCP responses, CLI ``--json`` and ``goldilocks.json``
+    share (#152).
 
     Plain dicts, because HTTP returns these documents as ``JSONResponse``,
     which encodes with ``json.dumps`` and knows nothing of pydantic
     models. Floats stay as they are: the document is strict JSON only
     because no record holds a non-finite float, and ``JSONResponse``, CLI
-    ``--json`` and ``goldilocks.json`` all raise on one (#137)."""
+    ``--json`` and ``goldilocks.json`` all raise on one (#137). Sequences
+    are lists, as JSON reads them back."""
     return {
-        name: ResolvedField.from_state(state).model_dump()
+        name: to_portable(ResolvedField.from_state(state))
         for name, state in sorted(records.items())
     }
 
@@ -283,12 +327,32 @@ def collect_warnings(
     ``nscf_parallelisation``).
 
     Reads the ``warnings`` tuple of each resolved value, before any
-    projection, so every record shape is collected alike (#152). Values
-    without one (composition, symmetry, the pseudopotentials tuple, plain
-    strings) and unresolved records contribute nothing."""
+    projection, so every record shape is collected alike (#152), then the
+    warnings of the model that decided it (``Provenance.model``, #156).
+    Values without one (composition, symmetry, the pseudopotentials tuple,
+    plain strings) and unresolved records contribute nothing."""
     return [
         {**warning.model_dump(), "record": name}
         for name, state in sorted(records.items())
         if isinstance(state, Resolved)
-        for warning in getattr(state.value, "warnings", ())
+        for warning in _record_warnings(state)
     ]
+
+
+def _record_warnings(state: Resolved[object]) -> tuple[Warning, ...]:
+    model = state.provenance.model
+    return (*getattr(state.value, "warnings", ()), *(model.warnings if model else ()))
+
+
+def collect_citations(records: Mapping[str, FieldState[object]]) -> list[str]:
+    """Every distinct citation the resolved records' provenance carries
+    (``Provenance.citations``), sorted: what a bundle's ``CITATIONS.md`` and
+    its manifest's ``citations`` list (#156)."""
+    return sorted(
+        {
+            citation
+            for state in records.values()
+            if isinstance(state, Resolved)
+            for citation in state.provenance.citations
+        }
+    )

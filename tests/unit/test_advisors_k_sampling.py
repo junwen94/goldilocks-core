@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -22,7 +21,14 @@ from goldilocks_core.advisors.species_split import split_species
 from goldilocks_core.analysis.is_metal import is_metal
 from goldilocks_core.kmesh import build_gamma_kmesh_entries, k_distance_to_mesh
 from goldilocks_core.ml import predict as predict_module
-from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
+from goldilocks_core.ml.predict import MlPrediction
+from goldilocks_core.resolution import (
+    Blocked,
+    ModelEvidence,
+    Provenance,
+    Resolved,
+    Unavailable,
+)
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
 _SILICON = Structure(Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]])
@@ -190,17 +196,30 @@ def test_the_ml_tier_reads_a_spin_split_cell_as_plain_elements(
     trained on. The model gets the same lattice and sites as plain
     elements."""
     read: list[Structure] = []
+    prediction = MlPrediction(
+        value=0.25,
+        provenance=Provenance(
+            source="ml",
+            model=ModelEvidence(
+                model_id="k_points.k_distance.qrf@comp_struct_soap_lattice_metal.v1",
+                asset="models/qrf-kpoints@QRF95",
+                target_contract="goldilocks.k_distance.mesh_lower_bound.2pi.v1",
+                value=0.25,
+                details={"interval": [0.18, 0.45]},
+            ),
+        ),
+    )
 
-    def predict(structure: Structure) -> SimpleNamespace:
+    def predict(structure: Structure) -> MlPrediction:
         read.append(structure)
-        return SimpleNamespace(value=0.25)
+        return prediction
 
     monkeypatch.setattr(predict_module, "predict_k_distance", predict)
     cell = _afm_nickel_oxide()
 
     state = k_sampling(_NON_METAL, cell)
 
-    assert state.source == "ml"
+    assert state.provenance == prediction.provenance
     [model_input] = read
     assert all(isinstance(site.specie, Element) for site in model_input)
     assert [site.specie.symbol for site in model_input] == [

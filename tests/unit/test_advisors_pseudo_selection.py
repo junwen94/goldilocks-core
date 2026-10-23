@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from goldilocks_core.advisors.pseudo_selection import (
     PseudoRequirements,
     is_table_eligible,
@@ -21,6 +23,7 @@ def _table(
     accuracy: str = "efficiency",
     relativistic: str = "scalar",
     elements: tuple[str, ...] = ("Si",),
+    citation: str = "fixture citation",
 ) -> PseudoTable:
     return PseudoTable(
         id=table_id,
@@ -31,7 +34,7 @@ def _table(
         relativistic=relativistic,
         accuracy=accuracy,
         licence="fixture licence",
-        citation="fixture citation",
+        citation=citation,
         elements=elements,
         asset=AssetSpec(
             f"pseudopotentials/{table_id}",
@@ -75,6 +78,25 @@ def test_explicit_table_id_resolves_when_compatible() -> None:
 
     assert state.ok
     assert state.value.id == "fixture"
+
+
+@pytest.mark.parametrize("table_id", [None, "sssp"], ids=["automatic", "pinned"])
+def test_the_selected_table_record_cites_that_table(table_id: str | None) -> None:
+    """#156: the bundle cites what its records cite, so the pseudo_table
+    record carries the selected table's citation, however it was chosen."""
+    tables = {
+        "dojo": _table("dojo", elements=("Si",), citation="van Setten et al."),
+        "sssp": _table(
+            "sssp", provider="sssp", elements=("La", "Si"), citation="Prandini et al."
+        ),
+    }
+
+    state = select_pseudopotential_table(
+        tables, table_id=table_id, elements={"La"}, requirements=_requirements()
+    )
+
+    assert state.value.id == "sssp"
+    assert state.provenance.citations == ("Prandini et al.",)
 
 
 def test_explicit_unknown_table_id_is_unavailable_not_a_raise() -> None:

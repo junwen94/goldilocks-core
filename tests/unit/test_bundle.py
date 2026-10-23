@@ -23,7 +23,13 @@ from goldilocks_core.bundle import (
     is_complete,
     publish,
 )
-from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
+from goldilocks_core.resolution import (
+    Blocked,
+    ModelEvidence,
+    Provenance,
+    Resolved,
+    Unavailable,
+)
 
 
 def _artifact(path: str, content: bytes, role: str = "input") -> dict:
@@ -38,9 +44,12 @@ def _bundle_input(**overrides) -> BundleInput:
         ),
         "records": {
             "functional": Resolved("PBEsol", Provenance(source="heuristic")),
+            "pseudo_table": Resolved(
+                "pseudopotentials/sssp-fixture",
+                Provenance(source="heuristic", citations=("A citation.",)),
+            ),
         },
         "warnings": (),
-        "citations": ("A citation.",),
     }
     defaults.update(overrides)
     return BundleInput(**defaults)
@@ -104,6 +113,9 @@ def test_manifest_records_are_tri_state_aware(tmp_path: Path) -> None:
         "value": "PBEsol",
         "source": "human",
         "field_sources": None,
+        "source_note": None,
+        "model": None,
+        "citations": [],
         "reason": None,
         "blocked_by": None,
     }
@@ -111,6 +123,79 @@ def test_manifest_records_are_tri_state_aware(tmp_path: Path) -> None:
     assert records["hubbard"]["reason"] == "no correlated elements"
     assert records["vdw"]["status"] == "blocked"
     assert records["vdw"]["blocked_by"] == "geometry blocked upstream"
+
+
+_K_POINT_PAPER = (
+    "Elena Patyukova et al., Automatic generation of input files with optimised "
+    "k-point meshes for Quantum ESPRESSO self-consistent field single-point "
+    "total energy calculations, Digital Discovery (2026), DOI 10.1039/D5DD00565E."
+)
+
+
+def _ml_record(value: object, model_id: str, asset: str) -> Resolved[object]:
+    return Resolved(
+        value,
+        Provenance(
+            source="ml",
+            model=ModelEvidence(
+                model_id=model_id,
+                asset=asset,
+                target_contract="goldilocks.fixture.v1",
+                value=value,
+                details={},
+            ),
+            citations=(_K_POINT_PAPER,),
+        ),
+    )
+
+
+def test_citations_are_those_the_records_carry_each_listed_once() -> None:
+    """#156: CITATIONS.md listed only the pseudopotential table's paper,
+    read off the UPF metadata, while ML models chose the k-mesh and the
+    occupations. Both CITATIONS.md and the manifest's ``citations`` now list
+    every resolved record's citations: the table's and each model's, a paper
+    two models share once."""
+    bundle_input = _bundle_input(
+        records={
+            "pseudo_table": Resolved(
+                "pseudopotentials/pseudodojo-pbesol-efficiency-sr",
+                Provenance(
+                    source="heuristic",
+                    citations=(
+                        "van Setten et al., Comput. Phys. Commun. 226, 39 (2018)",
+                    ),
+                ),
+            ),
+            "is_metal": _ml_record(
+                False,
+                "metallicity.is_metal.cgcnn@crystal_graph.v1",
+                "models/is-metal-classifier@1",
+            ),
+            "k_sampling": _ml_record(
+                0.2174,
+                "k_points.k_distance.qrf@comp_struct_soap_lattice_metal.v1",
+                "models/qrf-kpoints@QRF95",
+            ),
+            "hubbard": Unavailable(reason="no correlated elements"),
+        }
+    )
+
+    files = {item["path"]: item["content"] for item in bundle_files(bundle_input)}
+    manifest = strict_json(files["goldilocks.json"])
+
+    cited = [
+        _K_POINT_PAPER,
+        "van Setten et al., Comput. Phys. Commun. 226, 39 (2018)",
+    ]
+    assert manifest["citations"] == cited
+    assert (
+        files["CITATIONS.md"]
+        .decode("utf-8")
+        .endswith("".join(f"- {citation}\n" for citation in cited))
+    )
+    assert manifest["records"]["k_sampling"]["model"]["model_id"] == (
+        "k_points.k_distance.qrf@comp_struct_soap_lattice_metal.v1"
+    )
 
 
 def test_manifest_warnings_are_the_bundle_input_s_verbatim() -> None:

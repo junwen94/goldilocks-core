@@ -109,7 +109,6 @@ class TestAdviseEndToEnd:
         bundle_input = to_bundle_input(advice, steps, script, ctx)
         assert any(a["path"] == "submit.sh" for a in bundle_input.artifacts)
         assert any(a["path"] == "pseudo/Si.upf" for a in bundle_input.artifacts)
-        assert bundle_input.citations == ("Synthetic SSSP fixture, cite me.",)
 
         destination = tmp_path / "out"
         publish(bundle_input, DirectoryOutput(destination))
@@ -119,6 +118,12 @@ class TestAdviseEndToEnd:
         assert manifest["records"]["functional"]["status"] == "resolved"
         assert manifest["records"]["functional"]["value"] == "PBEsol"
         assert manifest["records"]["pseudopotentials"]["status"] == "resolved"
+        assert manifest["citations"] == ["Synthetic SSSP fixture, cite me."]
+        assert (
+            (destination / "CITATIONS.md")
+            .read_text()
+            .endswith("- Synthetic SSSP fixture, cite me.\n")
+        )
         assert (destination / "pseudo" / "Si.upf").read_bytes() == _UPF
         assert (destination / "scf.in").exists()
         assert (destination / "submit.sh").exists()

@@ -19,24 +19,75 @@ passed as ``artifacts={"mace_backbone": path}``: the published record
 (1g8rw-q8128) declares no download for it. The path is
 ``GOLDILOCKS_MACE_BACKBONE``, the checkpoint ordering ranking also uses
 (``advisors/magnetic_ordering_ml.checkpoint_path``).
+
+A prediction is an :class:`MlPrediction`: the model's value and the
+``Provenance`` of the record it decides, which names the model (its
+goldilocks-ml id and the registry asset it was loaded from), keeps its target
+contract, details and warnings as returned, and carries the registry's
+citation for it (#156). Callers used to keep only the value.
 """
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING, Any
 
 from goldilocks_core.assets.store import AssetCorrupt, AssetNotInstalled, AssetStore
 from goldilocks_core.ml.models import (
     ML_CLASSIFIER_ROLES,
+    ModelSpec,
     load_default_qrf_config,
     load_ml_classifier,
 )
+from goldilocks_core.resolution import ModelEvidence, Provenance, Warning
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from pymatgen.core import Structure
+
+    from goldilocks_core.assets.records import AssetSpec
+
+_RECORDS = {
+    "is_metal": "is_metal",
+    "is_magnetic": "is_magnetic",
+    "k_distance": "k_sampling",
+}
+"""The record each model target decides."""
+
+_MODEL_WARNINGS = {
+    record: Warning(
+        code=f"{record}.model_warning",
+        level="warning",
+        category=record,
+        message=(
+            f"The model that decided {record} returned a caveat with its "
+            "prediction (for example, that it has not been externally "
+            "validated); the model's own text is the message."
+        ),
+    )
+    for record in _RECORDS.values()
+}
+"""Catalogue entry per record; each warning a model returns becomes its
+record's entry with the model's text as the message."""
+
+WARNING_CATALOGUE = tuple(_MODEL_WARNINGS.values())
+"""Every warning code this module can emit -- ``capabilities.py``'s
+``warnings[]`` catalogue aggregates it with the advisors'."""
+
+
+@dataclass(frozen=True, slots=True)
+class MlPrediction:
+    """One registered model's answer for one structure."""
+
+    value: bool | float
+    """The model's value: a classifier's verdict, QRF95's k-distance in
+    1/angstrom."""
+    provenance: Provenance
+    """``source="ml"``, the model's :class:`ModelEvidence` and its registry
+    citation: what a record resolved from ``value`` carries."""
 
 
 class MlModelUnavailable(Exception):
@@ -48,27 +99,71 @@ class MlModelUnavailable(Exception):
     that is set up but fails to load or predict raises its own error."""
 
 
-def predict(role: str, structure: Structure, *, store: AssetStore | None = None) -> Any:
-    """Return the registered ``role`` model's ``ModelPrediction`` for
-    ``structure`` (``goldilocks_ml.inference.ModelPrediction``).
+def predict(
+    role: str, structure: Structure, *, store: AssetStore | None = None
+) -> MlPrediction:
+    """The registered ``role`` model's prediction for ``structure``
+    (``is_metal`` or ``is_magnetic``).
 
-    Raises :class:`MlModelUnavailable` if the model is not set up; whatever
+    Raises :class:`MlModelUnavailable` if the model is not set up, and
+    ``ValueError`` if what it returns has no strict JSON form; whatever
     loading or running it raises propagates."""
-    root = _installed_root(role, store or AssetStore())
-    if role != "is_magnetic":
-        return _model(root).predict(structure)
+    return _predict(role, structure, store or AssetStore())
+
+
+def predict_k_distance(
+    structure: Structure, *, store: AssetStore | None = None
+) -> MlPrediction:
+    """QRF95's prediction (a raw k-distance, 1/angstrom) for ``structure``,
+    with the same contract as :func:`predict`."""
+    return _predict("k_distance", structure, store or AssetStore())
+
+
+def _predict(target: str, structure: Structure, store: AssetStore) -> MlPrediction:
+    spec, asset = _registration(target)
+    root = _installed_root(target, asset, store)
+    if target != "is_magnetic":
+        return _ml_prediction(target, spec, asset, _model(root).predict(structure))
     checkpoint = _mmace_checkpoint()
     from goldilocks_core.ml.mace_process import predict_is_magnetic
 
-    return predict_is_magnetic(root, checkpoint, structure)
+    returned = predict_is_magnetic(root, checkpoint, structure)
+    return _ml_prediction(target, spec, asset, returned)
 
 
-def predict_k_distance(structure: Structure, *, store: AssetStore | None = None) -> Any:
-    """Return QRF95's ``ModelPrediction`` (a raw k-distance, 1/angstrom) for
-    ``structure``, with the same contract as :func:`predict`."""
-    return _model(_installed_root("k_distance", store or AssetStore())).predict(
-        structure
+def _ml_prediction(
+    target: str, spec: ModelSpec, asset: AssetSpec, returned: Any
+) -> MlPrediction:
+    """The :class:`MlPrediction` of goldilocks-ml's ``ModelPrediction``
+    ``returned``, from the ``target`` model registered as ``spec``/``asset``."""
+    template = _MODEL_WARNINGS[_RECORDS[target]]
+    evidence = ModelEvidence(
+        model_id=returned.model_id,
+        asset=f"{asset.id}@{asset.version}",
+        target_contract=returned.target_contract,
+        value=_verbatim(returned.model_id, "a value", returned.value),
+        details=_verbatim(returned.model_id, "details", dict(returned.details or {})),
+        warnings=tuple(
+            template.model_copy(update={"message": text}) for text in returned.warnings
+        ),
     )
+    citations = (spec.citation,) if spec.citation else ()
+    return MlPrediction(
+        value=returned.value,
+        provenance=Provenance(source="ml", model=evidence, citations=citations),
+    )
+
+
+def _verbatim(model_id: str, what: str, value: Any) -> Any:
+    """``value`` after a strict JSON round trip, the form records publish it
+    in; ``ValueError`` naming the model if it has none (a non-finite or
+    numpy number), rather than a published ``NaN`` or a changed number."""
+    try:
+        return json.loads(json.dumps(value, allow_nan=False))
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"model {model_id} returned {what} with no strict JSON form: {error}"
+        ) from error
 
 
 def model_ready(target: str) -> bool:
@@ -79,7 +174,7 @@ def model_ready(target: str) -> bool:
     if target not in (*ML_CLASSIFIER_ROLES, "k_distance"):
         return False
     try:
-        _installed_root(target, AssetStore())
+        _installed_root(target, _registration(target)[1], AssetStore())
         if target == "is_magnetic":
             _mmace_checkpoint()
     except MlModelUnavailable:
@@ -87,14 +182,18 @@ def model_ready(target: str) -> bool:
     return True
 
 
-def _installed_root(target: str, store: AssetStore) -> Path:
+def _registration(target: str) -> tuple[ModelSpec, AssetSpec | None]:
+    """``target``'s registered model and the asset it is installed as."""
+    if target == "k_distance":
+        config = load_default_qrf_config()
+        return config.model, config.model_asset
+    classifier = load_ml_classifier(target)
+    return classifier.model, classifier.asset
+
+
+def _installed_root(target: str, asset: AssetSpec | None, store: AssetStore) -> Path:
     """The verified installed directory of ``target``'s registered model
-    asset."""
-    asset = (
-        load_default_qrf_config().model_asset
-        if target == "k_distance"
-        else load_ml_classifier(target).asset
-    )
+    ``asset``."""
     if asset is None:
         raise MlModelUnavailable(f"no {target} model asset is registered")
     try:

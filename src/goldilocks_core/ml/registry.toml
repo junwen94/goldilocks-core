@@ -162,6 +162,10 @@ size = 6012
 # would not make this feature installable end-to-end on its own, and
 # registering the same 84 MB file twice under two different asset ids
 # would be pure duplication for anyone who does have it configured.
+#
+# No paper describes this classifier, so its citation is its PSDI record. It
+# used to repeat the QRF95 k-point paper, which nothing read until bundles
+# cited their models (#156).
 [defaults.is_magnetic]
 name = "is-magnetic-goldilocks-mace-mlp"
 version = "1"
@@ -169,7 +173,7 @@ model_type = "mlp"
 target = "is_magnetic"
 feature_set = "mace_probe.v1"
 licence = "CC-BY-4.0; see the pinned model card"
-citation = "Elena Patyukova et al., Automatic generation of input files with optimised k-point meshes for Quantum ESPRESSO self-consistent field single-point total energy calculations, Digital Discovery (2026), DOI 10.1039/D5DD00565E."
+citation = "Goldilocks mMACE + MLP magnetism classifier (an MLP on mMACE mace_matpes_pbe_baseline_run-3 embeddings, trained on MatPES PBE), PSDI Data Collections record 1g8rw-q8128, https://data-collections.psdi.ac.uk/records/1g8rw-q8128."
 
 [defaults.is_magnetic.asset]
 id = "models/is-magnetic-classifier"

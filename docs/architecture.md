@@ -61,10 +61,11 @@ A `run` (or `explain`) request follows this path:
    a `bundle.BundleInput`: the rendered input file(s), the pseudopotential
    bytes read straight off disk for each selected element, the submission
    script, every advisor decision as a tri-state record (`advice.records()`),
-   the advice's warnings (`advice.warnings()`), and citations pulled from the
-   pseudopotentials' own registry metadata. Records stay typed until they are
-   published: `resolution.records_document` projects them once, for the
-   HTTP/MCP responses, CLI `--json` and `goldilocks.json` alike.
+   and the advice's warnings (`advice.warnings()`). Records stay typed until
+   they are published: `resolution.records_document` projects them once, for
+   the HTTP/MCP responses, CLI `--json` and `goldilocks.json` alike, each with
+   its whole `Provenance`, and `resolution.collect_citations` reads what the
+   bundle cites off the same records.
 7. `bundle.publish(bundle_input, output)` / `bundle.bundle_files(bundle_input)`
    / `bundle.archive_bytes(bundle_input)` write a directory (`DirectoryOutput`)
    or ZIP (`ArchiveOutput`), or return an in-memory preview.
@@ -274,11 +275,14 @@ requirements.
   real-but-incomplete directory behind with no exception ever raised, an
   explicitly accepted trade-off versus v1's staging approach, which made that
   physically impossible.
-- **Citations come from pseudopotentials, not models.** A published bundle's
-  `citations` are pulled exclusively from the selected pseudopotential
-  table's registry metadata (`metadata.pseudo_info.get("citation")`); there
-  is currently no ML-model citation/licence path in the bundle, even though
-  the `default` profile installs and uses ML models by default.
+- **Cite what the records cite.** Every `Provenance` field is published
+  (`ResolvedField` forbids keys it does not declare, so a new one cannot be
+  dropped silently). A record an ML model decided carries the model's
+  evidence (`ml.predict.MlPrediction`: goldilocks-ml id, registry asset,
+  details and warnings as returned) and its `ml/registry.toml` citation; the
+  `pseudo_table` record carries the selected table's. A bundle's
+  `CITATIONS.md` and manifest `citations` are every record's citations. ML
+  model licence material is not shipped: bundles do not contain the models.
 - **Keep remote callers away from local paths.** HTTP and MCP accept inline
   structures and registered table IDs, not filesystem sources, model
   locations, or publication paths. Published records name no local path

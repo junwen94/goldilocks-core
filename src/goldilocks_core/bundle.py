@@ -78,7 +78,11 @@ from typing import Any, Literal, TypedDict
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from goldilocks_core.generation.files import InputArtifact
-from goldilocks_core.resolution import FieldState, records_document
+from goldilocks_core.resolution import (
+    FieldState,
+    collect_citations,
+    records_document,
+)
 
 _COMPLETE_MARKER = ".complete"
 _SCHEMA_VERSION = 1
@@ -94,19 +98,21 @@ class Publication(TypedDict):
 class BundleInput:
     """Everything one calculation's published output needs -- content
     (``artifacts``), the facts/decisions behind it (``records``, tri
-    -state), the warnings about them, and legal attribution
-    (``citations``). Deliberately not code/task-specific: a QE bundle and
-    a future VASP bundle both build one of these the same way.
+    -state) and the warnings about them. Deliberately not code/task
+    -specific: a QE bundle and a future VASP bundle both build one of these
+    the same way.
 
     ``warnings`` is the list the transports return for the same advice
     (``advice.warnings()``, each tagged with its ``record``); the
     manifest carries it unchanged rather than collecting its own (#152).
+    What to cite is read off the records themselves
+    (``resolution.collect_citations``): the selected pseudopotential table
+    and every model that decided a record (#156).
     """
 
     artifacts: tuple[InputArtifact, ...]
     records: dict[str, FieldState[Any]]
     warnings: tuple[dict[str, object], ...]
-    citations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,7 +157,7 @@ def bundle_files(bundle_input: BundleInput) -> tuple[InputArtifact, ...]:
         "schema_version": _SCHEMA_VERSION,
         "records": records_document(bundle_input.records),
         "warnings": list(bundle_input.warnings),
-        "citations": list(bundle_input.citations),
+        "citations": collect_citations(bundle_input.records),
         "files": {
             path: {
                 "role": role,
@@ -281,7 +287,9 @@ def _validate_publication_path(path: str) -> None:
 
 
 def _citations(bundle_input: BundleInput) -> str:
-    entries = "".join(f"- {citation}\n" for citation in bundle_input.citations)
+    entries = "".join(
+        f"- {citation}\n" for citation in collect_citations(bundle_input.records)
+    )
     return (
         "# Citations\n\n"
         "Goldilocks records complete provenance in `goldilocks.json`. Cite the "
