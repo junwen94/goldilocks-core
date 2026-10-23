@@ -79,15 +79,29 @@ coverage must still match the request. In particular:
   treatment. Goldilocks permits this exception for scalar requests and
   preserves the per-file treatment; no warning is currently emitted for it.
 
+`spin_orbit_coupling` decides the relativistic treatment the table must have:
+`full` when it is true, `scalar` otherwise (see
+[relativistic modes](conventions.md#relativistic-modes)). With no pinned
+table, enabling it makes automatic selection take the matching fully
+relativistic table, with the same functional and accuracy: fcc Pb under
+PBEsol goes from `pseudodojo-pbesol-efficiency-sr` to
+`pseudodojo-pbesol-efficiency-fr`. This is the same in Python, on the CLI and
+over HTTP/MCP; nothing besides `spin_orbit_coupling` needs to be set. Where no
+registered table is fully relativistic for the structure's elements and
+functional (every lanthanide and actinide, and LDA), the `pseudo_table` record
+is unavailable. A pinned table is never changed: if its relativistic treatment
+does not match, `pseudo_table` is unavailable, for example `relativistic
+treatment is scalar, requested full; matching tables:
+pseudodojo-pbesol-efficiency-fr`. Selecting an `fr` table does **not** enable
+SOC; pinned without SOC, it is unavailable the same way.
+
 In the Workbench, the table dropdown shows choices that support every element
 in your structure at the selected functional; there is no accuracy or
 relativistic-treatment filter or hint in the UI today (accuracy and
 relativistic treatment appear only as descriptive text in each option's
-label). Changing the functional clears any pinned table override. Selecting an
-`fr` table does **not** enable SOC, and enabling `spin_orbit_coupling` does not
-change the table selection — it is an independent setting, checked against
-whichever table ends up selected. Direct Python, CLI, and HTTP requests must
-still supply compatible requirements explicitly.
+label). Changing the functional clears any pinned table override. With no pin,
+the dropdown shows the table automatic selection chose, so it follows the
+`spin_orbit_coupling` switch.
 
 The [scientific guide](science.md#check-pseudopotentials-and-cutoffs) explains
 what to check before using selected cutoffs.
@@ -95,13 +109,17 @@ what to check before using selected cutoffs.
 ## Install and select it
 
 The commands below assume Goldilocks is installed. Replace `structure.cif` with
-your ordered structure file. This example installs and selects fully
-relativistic PBEsol files for an SOC recommendation:
+your ordered structure file. This example installs the fully relativistic
+PBEsol files and asks for an SOC recommendation, which selects them
+automatically:
 
 ```bash
 uv run goldilocks assets install pseudodojo-pbesol-efficiency-fr
-uv run goldilocks explain structure.cif --set spin_orbit_coupling=true --set pseudo_table_id=pseudodojo-pbesol-efficiency-fr
+uv run goldilocks explain structure.cif --set spin_orbit_coupling=true
 ```
+
+Pinning the table with `--set pseudo_table_id=pseudodojo-pbesol-efficiency-fr`
+is optional; it selects the same table.
 
 Use the [asset commands](cli.md#install-and-check-assets) if a required model or
 table is missing.
