@@ -135,7 +135,7 @@ export const capabilities: Capabilities = {
       key: "smearing_type",
       group: "occupations",
       type: "string",
-      enum: ["cold", "gaussian", "mp", "fixed"],
+      enum: ["cold", "fd", "gaussian", "mp"],
       unit: null,
       codes: null,
       tasks: null,

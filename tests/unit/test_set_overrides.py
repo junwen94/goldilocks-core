@@ -223,6 +223,20 @@ class TestBuildOverrides:
         with pytest.raises(InvalidSetting, match="occupations"):
             build_overrides({"occupations": "bogus"})
 
+    def test_smearing_type_refuses_fixed_an_occupations_value(self) -> None:
+        """#200: 'fixed' rendered smearing = 'fixed', which pw.x stops on
+        (QE 7.3 set_occupations.f90:61-62, "smearing fixed unknown")."""
+        with pytest.raises(InvalidSetting, match="smearing_type"):
+            build_overrides({"smearing_type": "fixed"})
+
+    @pytest.mark.parametrize("kind", ["gaussian", "mp", "cold", "fd"])
+    def test_smearing_type_takes_quantum_espresso_s_four_kinds(self, kind) -> None:
+        """#200: QE's short names for its four smearing functions
+        (set_occupations.f90:48-59), Fermi-Dirac ('fd') included."""
+        overrides = build_overrides({"smearing_type": kind})
+
+        assert overrides.step.kpoints.occupations.smearing_type == kind
+
     @pytest.mark.parametrize(
         ("key", "value"),
         [

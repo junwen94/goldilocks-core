@@ -109,7 +109,7 @@ its type, default, and description; a selection of commonly used keys:
 | `is_metal`, `is_magnetic`           | Correct a classification: `metal`/`non_metal`, `magnetic`/`non_magnetic` (the record's own values, not `true`/`false`) |
 | `k_grid`                            | Explicit Monkhorst-Pack mesh, e.g. `--set 'k_grid=[8,8,8]'`            |
 | `k_distance`                        | Target k-point spacing along each periodic axis; axes the point group mixes share the larger count, and a vacuum axis always gets one k-point (heuristic default 0.15 for metals or when metallicity is unknown, 0.30 for a confirmed non-metal) |
-| `smearing_type`                     | Smearing function when `occupations=smearing` (default `cold`)        |
+| `smearing_type`                     | Smearing function when `occupations=smearing`: `gaussian`, `mp` (Methfessel-Paxton), `cold` (Marzari-Vanderbilt) or `fd` (Fermi-Dirac); default `cold` |
 | `degauss`                           | Smearing width in Ry (default 0.01)                                   |
 | `spin_polarized`, `spin_orbit_coupling` | Force spin polarization / spin-orbit coupling                     |
 | `moment_direction`                  | Lattice direction of the uploaded cell the moments of a magnetic spin-orbit run start along, e.g. `--set 'moment_direction=[1,1,0]'` (default `[0,0,1]`) |

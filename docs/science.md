@@ -68,8 +68,10 @@ wrong occupation choice for your system. Correct the classification with
 `is_metal` (`metal` or `non_metal`, the record's own values; `true`/`false`
 are refused), or override the scheme itself with
 `occupations` (`fixed`, `smearing`, or `tetrahedra_opt`); when using
-smearing, refine it with `smearing_type` (default `cold`) and `degauss` (Ry,
-default 0.01). Test the width together with the k-point mesh.
+smearing, refine it with `smearing_type` (`gaussian`, `mp` for
+Methfessel-Paxton, `cold` for Marzari-Vanderbilt, or `fd` for Fermi-Dirac;
+default `cold`) and `degauss` (Ry, default 0.01). Test the width together
+with the k-point mesh.
 
 ## Check k-point sampling
 

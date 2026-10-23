@@ -131,7 +131,7 @@ class OccupationsDecision:
     the writer renders (module docstring); ``None`` pins none."""
 
     occupations: Occupations
-    smearing_type: str | None
+    smearing_type: SmearingType | None
     degauss: float | None
     tot_magnetization: float | None = None
     warnings: tuple[Warning, ...] = ()
@@ -223,10 +223,10 @@ class OccupationsHumanInput(HumanInput):
     here, at construction, not deep inside this module's own logic --
     the same ``set_overrides.build_overrides`` boundary that already
     turns a bad ``occupations`` enum member into a clean
-    ``InvalidSetting``. ``smearing_type`` reuses ``types.SmearingType``
-    (the same closed vocabulary QE's own writer expects), rather than
-    accepting any string; ``degauss`` must be a real, positive smearing
-    width."""
+    ``InvalidSetting``. ``smearing_type`` takes ``types.SmearingType``,
+    QE's four smearing names, so a name pw.x stops on (#200) is refused
+    here rather than rendered; ``degauss`` must be a real, positive
+    smearing width."""
 
     occupations: Occupations | None = None
     smearing_type: SmearingType | None = None
@@ -288,7 +288,7 @@ def occupations(
 
 def _decision_for(
     choice: Occupations,
-    smearing_type: str | None,
+    smearing_type: SmearingType | None,
     degauss: float | None,
     spin: _Spin,
 ) -> OccupationsDecision:
@@ -322,7 +322,7 @@ def _fixed_decision(spin: _Spin) -> OccupationsDecision:
 
 
 def _smearing_decision(
-    smearing_type: str | None, degauss: float | None, spin: _Spin
+    smearing_type: SmearingType | None, degauss: float | None, spin: _Spin
 ) -> OccupationsDecision:
     """``smearing_type``/``degauss`` (v2 epic 9, #9, #34): honored even
     when ``occupations`` itself lands on ``smearing`` through the

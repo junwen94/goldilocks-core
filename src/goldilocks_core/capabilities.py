@@ -361,7 +361,10 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "smearing_type": {
         "description": (
-            "Smearing function used when occupations=smearing; defaults to 'cold'."
+            "Smearing function used when occupations=smearing, by Quantum "
+            "ESPRESSO's name: gaussian, mp (Methfessel-Paxton), cold "
+            "(Marzari-Vanderbilt) or fd (Fermi-Dirac); defaults to 'cold'. "
+            "Fixed occupations are occupations=fixed."
         ),
     },
     "degauss": {
