@@ -23,6 +23,7 @@ import {
 } from "./structureViewer";
 
 const LATTICE_AXES = ["a", "b", "c"];
+const LATTICE_ANGLES = ["α", "β", "γ"];
 
 export function StructureViewport({
   inspection,
@@ -156,11 +157,17 @@ export function StructureViewport({
               <Title order={4} mb="xs">
                 Lattice parameters
               </Title>
-              <SimpleGrid component="dl" cols={4} spacing="md" m={0}>
+              <SimpleGrid component="dl" cols={3} spacing="md" m={0}>
                 {lattice.lengths_angstrom.map((length, index) => (
                   <div key={index}>
                     <dt>{LATTICE_AXES[index]}</dt>
                     <dd>{length.toFixed(3)} Å</dd>
+                  </div>
+                ))}
+                {lattice.angles_degrees.map((angle, index) => (
+                  <div key={index}>
+                    <dt>{LATTICE_ANGLES[index]}</dt>
+                    <dd>{angle.toFixed(3)}°</dd>
                   </div>
                 ))}
                 <div>

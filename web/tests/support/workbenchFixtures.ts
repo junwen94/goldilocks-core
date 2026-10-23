@@ -299,6 +299,68 @@ export const inspection: StructureInspection = {
   },
 };
 
+type Coordinates = readonly [number, number, number];
+
+const zirconiaSites: readonly (readonly [string, Coordinates, Coordinates])[] =
+  [
+    ["Zr1", [0.2771, 0.0432, 0.2095], [1.4006, 0.2251, 0.8722]],
+    ["Zr2", [0.7229, 0.5432, 0.2905], [3.6532, 2.8293, 0.9204]],
+    ["Zr3", [0.7229, 0.9568, 0.7905], [3.6532, 4.9832, 3.5674]],
+    ["Zr4", [0.2771, 0.4568, 0.7095], [1.4006, 2.379, 3.5192]],
+    ["O1", [0.0698, 0.3362, 0.3415], [0.353, 1.7509, 1.7485]],
+    ["O2", [0.9302, 0.8362, 0.1585], [4.7008, 4.3551, 0.044]],
+    ["O3", [0.9302, 0.6638, 0.6585], [4.7008, 3.4574, 2.6911]],
+    ["O4", [0.0698, 0.1638, 0.8415], [0.353, 0.8533, 4.3955]],
+    ["O5", [0.4486, 0.7577, 0.4795], [2.2673, 3.9463, 2.1553]],
+    ["O6", [0.5514, 0.2577, 0.0205], [2.7865, 1.3421, -0.3628]],
+    ["O7", [0.5514, 0.2423, 0.5205], [2.7865, 1.2621, 2.2843]],
+    ["O8", [0.4486, 0.7423, 0.9795], [2.2673, 3.8663, 4.8024]],
+  ];
+
+/** Monoclinic ZrO2 (MC3D mc3d-78910) as /inspect returns it, with the
+ * lattice at full precision and the sites rounded to 4 decimals: a
+ * non-orthogonal cell (beta = 99.597 degrees). */
+export const monoclinicInspection: StructureInspection = {
+  schema_version: 1,
+  canonical_cif: "data_ZrO2",
+  source: {
+    origin: "inline",
+    name: "ZrO2.cif",
+    format: "cif",
+    content: "data_ZrO2",
+    sha256: "b".repeat(64),
+    size_bytes: 9,
+  },
+  structure: {
+    schema_version: 1,
+    formula: "Zr4 O8",
+    reduced_formula: "ZrO2",
+    site_count: zirconiaSites.length,
+    periodicity: [true, true, true],
+    lattice: {
+      vectors_angstrom: [
+        [5.053802818385099, 0, -0.8544960672976821],
+        [0, 5.2083461389853, 0],
+        [0, 0, 5.294079653689377],
+      ],
+      lengths_angstrom: [5.125532797294773, 5.2083461389853, 5.294079653689377],
+      angles_degrees: [90, 99.59679594924226, 90],
+      volume_angstrom3: 139.35052321494535,
+    },
+    sites: zirconiaSites.map(([label, fractional, cartesian]) => {
+      const symbol = label.replace(/\d+$/u, "");
+      return {
+        fractional_coordinates: fractional,
+        cartesian_coordinates_angstrom: cartesian,
+        label,
+        species: [
+          { symbol, label: symbol, occupancy: 1, oxidation_state: null },
+        ],
+      };
+    }),
+  },
+};
+
 /** The workspace's own default draft, seeded from `capabilities` above
  * right after a successful `source.open` -- exported so tests can
  * assert against it without re-deriving `defaultDraft`'s logic. */

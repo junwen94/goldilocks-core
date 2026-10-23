@@ -676,6 +676,52 @@ test("keeps lattice details out of the crystal viewer until requested", async ({
   ).toBeVisible();
 });
 
+test("lists the cell angles of a non-orthogonal cell from /inspect", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  // The two-atom fcc primitive cell of silicon: alpha = beta = gamma = 60.
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "POSCAR",
+    mimeType: "text/plain",
+    buffer: Buffer.from(`Silicon primitive
+5.431
+0 0.5 0.5
+0.5 0 0.5
+0.5 0.5 0
+Si
+2
+Direct
+0 0 0
+0.25 0.25 0.25
+`),
+  });
+  await page
+    .getByRole("region", { name: "Crystal structure viewer" })
+    .getByRole("button", { name: "Inspect lattice, sites and occupancies" })
+    .click();
+  const lattice = page.getByRole("region", { name: "Lattice parameters" });
+  await expect(lattice.getByRole("term")).toHaveText([
+    "a",
+    "b",
+    "c",
+    "α",
+    "β",
+    "γ",
+    "V",
+  ]);
+  await expect(lattice.getByRole("definition")).toHaveText([
+    "3.840 Å",
+    "3.840 Å",
+    "3.840 Å",
+    "60.000°",
+    "60.000°",
+    "60.000°",
+    "40.05 Å³",
+  ]);
+});
+
 /** Every settings-group Accordion.Panel is a `role="region"` whose
  * accessible name is its own control's text (Mantine's Accordion gives
  * the panel `aria-labelledby` pointing at the control) -- scoping by
