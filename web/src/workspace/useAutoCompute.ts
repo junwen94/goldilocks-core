@@ -53,11 +53,12 @@ export function useAutoCompute(
    * action either -- the generated-input preview should always match
    * the current recommendation, so once `review.compute` lands a fresh
    * (non-stale) result, fetch the archive that backs the live preview
-   * automatically too. The "Download" button then just saves whatever
-   * is already sitting in `lastDownload`, instead of fetching on click. */
+   * automatically too. The "Download" button only saves that archive,
+   * and is disabled until it has arrived; it never fetches on click. A
+   * live, undismissed `preview` failure blocks further auto-attempts. */
   useEffect(() => {
     if (operation !== null) return;
-    if (failureOperation === "download") return;
+    if (failureOperation === "preview") return;
     if (reviewed === null || outOfDate) return;
     if (lastDownload !== null) return;
 

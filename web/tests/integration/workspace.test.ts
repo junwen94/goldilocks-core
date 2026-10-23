@@ -315,7 +315,7 @@ describe("Workspace", () => {
     });
   });
 
-  it("downloads the archive for the exact reviewed request", async () => {
+  it("downloads the archive previewed for the exact reviewed request", async () => {
     const archive = buildArchive();
     const core = new CoreStub();
     core.explainResults = [Promise.resolve(explainResult)];
@@ -325,13 +325,79 @@ describe("Workspace", () => {
     await workspace.dispatch({ type: "workspace.start" });
     await workspace.dispatch({ type: "source.open", input: structureInput });
     await workspace.dispatch({ type: "review.compute" });
+    await workspace.dispatch({ type: "review.refreshArchive" });
+    expect(saveArchive).not.toHaveBeenCalled();
 
     await workspace.dispatch({ type: "review.download" });
 
+    // Download saves the preview's own archive: one /run in total.
     expect(core.archiveCalls).toEqual([baseRequest()]);
-    expect(saveArchive).toHaveBeenCalledWith(archive);
+    expect(saveArchive).toHaveBeenCalledOnce();
+    expect(saveArchive.mock.calls[0]?.[0]).toBe(archive);
     expect(workspace.getSnapshot()).toMatchObject({
       lastDownload: archive,
+      operation: null,
+      failure: null,
+    });
+  });
+
+  it("retries a failed automatic preview without saving the archive", async () => {
+    // #189: Retry used to route a failed preview through review.download,
+    // which fetched the archive and saved it as a file nobody asked for.
+    const unavailable = new CoreFailure(
+      "http_error",
+      "The Goldilocks Core server rejected the request (503).",
+      true,
+      { status: 503 },
+      503,
+    );
+    const archive = buildArchive();
+    const core = new CoreStub();
+    core.explainResults = [Promise.resolve(explainResult)];
+    core.archiveResults = [
+      Promise.reject(unavailable),
+      Promise.resolve(archive),
+    ];
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const workspace = createWorkspace(core, saveArchive);
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({ type: "review.compute" });
+    await workspace.dispatch({ type: "review.refreshArchive" });
+    expect(workspace.getSnapshot()).toMatchObject({
+      lastDownload: null,
+      failure: unavailable,
+      failureOperation: "preview",
+    });
+
+    await workspace.dispatch({ type: "failure.retry" });
+
+    expect(saveArchive).not.toHaveBeenCalled();
+    expect(core.archiveCalls).toEqual([baseRequest(), baseRequest()]);
+    expect(workspace.getSnapshot()).toMatchObject({
+      lastDownload: archive,
+      operation: null,
+      failure: null,
+      failureOperation: null,
+    });
+  });
+
+  it("saves nothing and sends no /run when Download has no current archive", async () => {
+    const core = new CoreStub();
+    core.explainResults = [Promise.resolve(explainResult)];
+    core.archiveResults = [Promise.resolve(buildArchive())];
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const workspace = createWorkspace(core, saveArchive);
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({ type: "review.compute" });
+
+    await workspace.dispatch({ type: "review.download" });
+
+    expect(core.archiveCalls).toEqual([]);
+    expect(saveArchive).not.toHaveBeenCalled();
+    expect(workspace.getSnapshot()).toMatchObject({
+      lastDownload: null,
       operation: null,
       failure: null,
     });
@@ -431,12 +497,16 @@ describe("Workspace", () => {
   });
 
   it("refuses to download while the review is out of date", async () => {
+    const archive = buildArchive();
     const core = new CoreStub();
     core.explainResults = [Promise.resolve(explainResult)];
-    const workspace = createWorkspace(core);
+    core.archiveResults = [Promise.resolve(archive)];
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const workspace = createWorkspace(core, saveArchive);
     await workspace.dispatch({ type: "workspace.start" });
     await workspace.dispatch({ type: "source.open", input: structureInput });
     await workspace.dispatch({ type: "review.compute" });
+    await workspace.dispatch({ type: "review.refreshArchive" });
     await workspace.dispatch({
       type: "draft.patch",
       overrides: { k_grid: [5, 5, 5] },
@@ -444,7 +514,13 @@ describe("Workspace", () => {
 
     await workspace.dispatch({ type: "review.download" });
 
-    expect(core.archiveCalls).toHaveLength(0);
+    // The archive in hand belongs to the draft before the edit.
+    expect(workspace.getSnapshot()).toMatchObject({
+      lastDownload: archive,
+      outOfDate: true,
+    });
+    expect(saveArchive).not.toHaveBeenCalled();
+    expect(core.archiveCalls).toHaveLength(1);
   });
 
   it("does not pair an obsolete explain with a replacement structure", async () => {

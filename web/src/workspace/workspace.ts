@@ -14,8 +14,11 @@ import type {
 } from "../api/coreClient";
 import { CoreFailure } from "../api/coreClient";
 
+/** The Core request in flight. `preview` is the automatic `/run` that fetches
+ * the archive behind `lastDownload`; saving a file is not an operation, since
+ * `review.download` only saves an archive already fetched. */
 export type WorkspaceOperation =
-  "capabilities" | "inspect" | "explain" | "download";
+  "capabilities" | "inspect" | "explain" | "preview";
 
 /** Independent of `WorkspaceOperation`: listing/ranking/downloading
  * magnetic-ordering candidates is an opt-in side-quest a user runs from
@@ -49,10 +52,12 @@ export interface WorkspaceSnapshot {
    * verdict, no files. Never carries an archive: `/explain` never calls
    * `generate()`, so it succeeds even when a `/run` would refuse with
    * `advice_incomplete` (the tri-state "diagnosis is always available"
-   * promise), and `blocking` then lists the reasons. Downloading real
-   * files is a separate `review.download` step against `/run`. */
+   * promise), and `blocking` then lists the reasons. The files come from
+   * the separate `preview` operation against `/run` (`lastDownload`). */
   readonly reviewed: ExplainResult | null;
   readonly outOfDate: boolean;
+  /** The archive the last `preview` fetched; it belongs to the current
+   * draft only while `outOfDate` is false (see `currentArchive`). */
   readonly lastDownload: ArchiveDownload | null;
   readonly operation: WorkspaceOperation | null;
   readonly failure: CoreFailure | null;
@@ -82,6 +87,9 @@ export type WorkspaceAction =
   /** Fetches a fresh archive for live preview without saving it anywhere
    * -- the auto-preview effect calls this, not a user action. */
   | { readonly type: "review.refreshArchive" }
+  /** Saves the current draft's archive (`currentArchive`) through the
+   * archive sink. Sends no request: with no current archive it does
+   * nothing, so a file is only ever saved by this explicit action. */
   | { readonly type: "review.download" }
   | { readonly type: "magneticOrderings.list" }
   | { readonly type: "magneticOrderings.rank" }
@@ -192,6 +200,15 @@ function mergeOverrides(
   return Object.fromEntries(
     Object.entries(merged).filter(([, value]) => value !== undefined),
   );
+}
+
+/** The archive fetched for the current draft of the current structure, or
+ * null when none has arrived yet (or the draft changed since). The generated
+ * inputs preview shows it, and `review.download` saves it and nothing else. */
+export function currentArchive(
+  snapshot: WorkspaceSnapshot,
+): ArchiveDownload | null {
+  return snapshot.outOfDate ? null : snapshot.lastDownload;
 }
 
 export function createWorkspace(
@@ -339,12 +356,11 @@ export function createWorkspace(
     }
   }
 
-  /** Fetches and stores a fresh archive, but never saves it -- shared by
-   * the explicit download action (when nothing's cached yet) and the
-   * auto-preview effect that keeps `lastDownload` current so
-   * `GeneratedInputReview` always shows a live preview with no separate
-   * "generate" step. */
-  async function refreshArchive(): Promise<ArchiveDownload | null> {
+  /** The `preview` operation: fetches the current draft's archive into
+   * `lastDownload`, so `GeneratedInputReview` shows a live preview with no
+   * separate "generate" step. Never saves it. The auto-preview effect and
+   * Retry after a failed preview call this. */
+  async function refreshArchive(): Promise<void> {
     const snapshot = store.getState();
     if (
       snapshot.capabilities === null ||
@@ -354,7 +370,7 @@ export function createWorkspace(
       snapshot.outOfDate ||
       snapshot.operation !== null
     ) {
-      return null;
+      return;
     }
     const revision = draftRevision;
     const request = toComputeRequest(
@@ -362,25 +378,22 @@ export function createWorkspace(
       snapshot.structureInput,
       snapshot.draft,
     );
-    const owner = beginOperation("download");
+    const owner = beginOperation("preview");
     try {
       const archive = await core.runArchive(request);
-      const staleByNow = revision !== draftRevision;
       completeOperation(owner, {
         lastDownload: archive,
-        outOfDate: staleByNow,
+        outOfDate: revision !== draftRevision,
       });
-      return staleByNow ? null : archive;
     } catch (error) {
       failOperation(owner, error);
-      return null;
     }
   }
 
-  async function downloadReviewed(): Promise<void> {
-    const snapshot = store.getState();
-    if (snapshot.outOfDate) return;
-    const archive = snapshot.lastDownload ?? (await refreshArchive());
+  /** Saves the current archive, the one the preview shows. Fetches nothing:
+   * without a current archive there is nothing to save (#189). */
+  function downloadReviewed(): void {
+    const archive = currentArchive(store.getState());
     if (archive !== null) saveArchive(archive);
   }
 
@@ -487,8 +500,8 @@ export function createWorkspace(
         return;
       case "explain":
         return computeReview();
-      case "download":
-        return downloadReviewed();
+      case "preview":
+        return refreshArchive();
       case null:
         return;
     }
@@ -532,7 +545,7 @@ export function createWorkspace(
         await refreshArchive();
         return;
       case "review.download":
-        await downloadReviewed();
+        downloadReviewed();
         return;
       case "magneticOrderings.list":
         await listMagneticOrderings(false);

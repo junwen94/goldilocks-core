@@ -395,9 +395,12 @@ ranking runs in a fresh process, one ranking at a time
 an absolute path once, when the app is created.
 
 Workbench keeps the editable draft and reviewed response in its browser store.
-Editing a draft marks the existing result out of date and prevents downloading
-its archive. Download uses the bytes returned with that result rather than
-recomputing it.
+Once the recommendation for the current draft has arrived, Workbench fetches
+that draft's archive from `/run` automatically as the generated-inputs preview.
+Editing a draft marks the existing result and its archive out of date.
+Download saves the previewed archive of the current draft and sends no request
+of its own: it stays disabled until that archive has arrived, and retrying a
+failed preview refreshes the preview without saving a file.
 
 After changing the wire contract, run these from the repository root with the
 HTTP extra installed:

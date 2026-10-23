@@ -13,11 +13,13 @@ import { Download } from "lucide-react";
 import { GeneratedInputReview } from "../review/GeneratedInputReview";
 import { WarningsPanel } from "../review/WarningsPanel";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
+import { currentArchive } from "../workspace/workspace";
 
 export function BundleCard({ kicker }: { readonly kicker: string }) {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
   const reviewed = snapshot.reviewed;
+  const archive = currentArchive(snapshot);
 
   return (
     <Paper
@@ -69,28 +71,26 @@ export function BundleCard({ kicker }: { readonly kicker: string }) {
             <Group justify="space-between">
               <Button
                 rightSection={<Download aria-hidden="true" size={14} />}
-                loading={snapshot.operation === "download"}
-                disabled={snapshot.outOfDate || snapshot.operation !== null}
+                loading={snapshot.operation === "preview"}
+                disabled={archive === null || snapshot.operation !== null}
                 onClick={() =>
                   void workspace.dispatch({ type: "review.download" })
                 }
               >
                 Download (.zip)
               </Button>
-              {snapshot.lastDownload === null || snapshot.outOfDate ? null : (
+              {archive === null ? null : (
                 <Text
                   size="sm"
                   role="status"
                   aria-label="Archive status"
                   aria-live="polite"
                 >
-                  {snapshot.lastDownload.filename} is ready
+                  {archive.filename} is ready
                 </Text>
               )}
             </Group>
-            <GeneratedInputReview
-              archive={snapshot.outOfDate ? null : snapshot.lastDownload}
-            />
+            <GeneratedInputReview archive={archive} />
             <WarningsPanel warnings={reviewed.warnings} />
           </Stack>
         )}

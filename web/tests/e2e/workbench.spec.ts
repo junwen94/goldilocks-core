@@ -343,6 +343,56 @@ test("keeps an old Result visible until the recommendation auto-recomputes", asy
   );
 });
 
+test("retries a failed preview without downloading its archive", async ({
+  page,
+}) => {
+  // #189: Retry on a failed automatic preview used to save the refetched
+  // archive as a browser download, although Download was never pressed.
+  const downloads: string[] = [];
+  page.on("download", (download) => {
+    downloads.push(download.suggestedFilename());
+  });
+  let runs = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/run") runs += 1;
+  });
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.route(
+    "**/run",
+    async (route) => {
+      await route.fulfill({
+        status: 503,
+        contentType: "text/plain",
+        body: "Service Unavailable",
+      });
+    },
+    { times: 1 },
+  );
+  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText(
+    "The Goldilocks Core server rejected the request (503).",
+    { timeout: 20_000 },
+  );
+  const downloadButton = page.getByRole("button", { name: "Download (.zip)" });
+  await expect(downloadButton).toBeDisabled();
+
+  await alert.getByRole("button", { name: "Retry" }).click();
+  await expect(
+    page.getByRole("status", { name: "Archive status" }),
+  ).toContainText("is ready", { timeout: 20_000 });
+  await expect(alert).toHaveCount(0);
+  expect(downloads).toEqual([]);
+
+  const downloadStarted = page.waitForEvent("download");
+  await downloadButton.click();
+  await downloadStarted;
+  expect(downloads).toHaveLength(1);
+  // The failed preview and its retry; Download sent no /run of its own.
+  expect(runs).toBe(2);
+});
+
 test("has no Axe violations in empty, failure, and viewer fallback states", async ({
   page,
 }) => {

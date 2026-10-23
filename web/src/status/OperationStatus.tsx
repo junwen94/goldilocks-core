@@ -24,7 +24,7 @@ const OPERATION_MESSAGES: Readonly<Record<WorkspaceOperation, string>> = {
   capabilities: "Loading capabilities",
   inspect: "Inspecting structure",
   explain: "Computing recommendation",
-  download: "Generating input files",
+  preview: "Generating input files",
 };
 
 function operationMessage(

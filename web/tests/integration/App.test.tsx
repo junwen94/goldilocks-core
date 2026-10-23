@@ -356,7 +356,8 @@ describe("Goldilocks Workbench", () => {
     // recomputed automatically (see useAutoCompute), after its debounce.
     // Wait for the recompute that carries the edit, not only for the notice
     // to be absent: during the debounce the notice may not have appeared
-    // yet, and Download would then fetch the archive for the old draft.
+    // yet. The recompute drops the old draft's archive, and Download stays
+    // disabled until the preview of the edited draft has arrived.
     await waitFor(
       () => {
         expect(core.explainCalls.at(-1)?.overrides).toMatchObject({
@@ -368,23 +369,89 @@ describe("Goldilocks Workbench", () => {
       },
       { timeout: 5000 },
     );
+    expect(
+      await screen.findByRole("status", { name: "Archive status" }),
+    ).toHaveTextContent(`${archive.filename} is ready`);
+    const runs = core.archiveCalls.length;
     await user.click(screen.getByRole("button", { name: "Download (.zip)" }));
 
-    await waitFor(() => {
-      expect(saveArchive).toHaveBeenCalledWith(archive);
-    });
-    expect(
-      screen.getByRole("status", { name: "Archive status" }),
-    ).toHaveTextContent(`${archive.filename} is ready`);
+    expect(saveArchive).toHaveBeenCalledOnce();
+    expect(saveArchive).toHaveBeenCalledWith(archive);
+    // Download saved the archive of the last /run and sent none itself. An
+    // auto-preview of the pre-edit draft may have run first on a slow
+    // machine; that one is discarded when the edit's recompute lands.
+    expect(core.archiveCalls).toHaveLength(runs);
     expect(core.explainCalls.at(-1)?.overrides).toMatchObject({
       spin_polarized: true,
     });
-    // The archive that was saved comes from the last /run. An auto-preview of
-    // the pre-edit draft may have run first on a slow machine; that one is
-    // discarded when the edit's recompute lands, so it is not what matters.
     expect(core.archiveCalls.at(-1)?.overrides).toMatchObject({
       spin_polarized: true,
     });
+  });
+
+  it("keeps Download disabled until the preview archive arrives, and Retry saves nothing", async () => {
+    // #189: Retry on a failed automatic preview used to save the refetched
+    // archive as a file, although Download was never pressed.
+    const user = userEvent.setup();
+    const archive = buildArchive("Si-scf_single_point.zip");
+    let failPreview: (reason: unknown) => void = () => undefined;
+    let finishPreview: (value: ArchiveDownload) => void = () => undefined;
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.archiveResults = [
+      new Promise((_, reject) => {
+        failPreview = reject;
+      }),
+      new Promise((resolve) => {
+        finishPreview = resolve;
+      }),
+    ];
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const { container } = renderApp(core, saveArchive);
+    await openStructure(user, container);
+
+    await waitFor(
+      () => {
+        expect(core.archiveCalls).toHaveLength(1);
+      },
+      { timeout: 5000 },
+    );
+    const download = screen.getByRole("button", { name: "Download (.zip)" });
+    expect(download).toBeDisabled();
+    failPreview(
+      new CoreFailure(
+        "http_error",
+        "The Goldilocks Core server rejected the request (503).",
+        true,
+        { status: 503 },
+        503,
+      ),
+    );
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      "The Goldilocks Core server rejected the request (503).",
+    );
+    expect(download).toBeDisabled();
+
+    await user.click(within(alert).getByRole("button", { name: "Retry" }));
+    expect(
+      screen.getByRole("status", { name: "Workbench status" }),
+    ).toHaveTextContent("Generating input files");
+    expect(download).toBeDisabled();
+    finishPreview(archive);
+
+    expect(
+      await screen.findByRole("status", { name: "Archive status" }),
+    ).toHaveTextContent("Si-scf_single_point.zip is ready");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(saveArchive).not.toHaveBeenCalled();
+    expect(download).toBeEnabled();
+
+    await user.click(download);
+
+    expect(saveArchive).toHaveBeenCalledOnce();
+    expect(saveArchive.mock.calls[0]?.[0]).toBe(archive);
+    expect(core.archiveCalls).toHaveLength(2);
   });
 
   it("submits smearing treatment and width as overrides in the occupations group", async () => {
