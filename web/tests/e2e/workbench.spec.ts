@@ -722,6 +722,58 @@ Direct
   ]);
 });
 
+test("centres and fits the unit cell in the viewer, also after the card narrows", async ({
+  page,
+}) => {
+  // The issue's window and sequence: the viewer frames the cell while the grid
+  // has four columns, then the magnetic record from /explain adds the Magnetic
+  // orderings column, which narrows the Structure card. Holding /explain
+  // fixes that order.
+  await page.setViewportSize({ width: 2400, height: 1100 });
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  let releaseExplain = (): void => undefined;
+  const explainHeld = new Promise<void>((resolve) => {
+    releaseExplain = resolve;
+  });
+  await page.route("**/explain", async (route) => {
+    await explainHeld;
+    await route.continue();
+  });
+  // One-atom fcc Ni (the cell of MC3D mc3d-4988): its only atom sits on a cell
+  // corner, so centring on the atoms pushes the cell box off-centre.
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "POSCAR",
+    mimeType: "text/plain",
+    buffer: Buffer.from(`Nickel fcc primitive
+3.524
+0 0.5 0.5
+0.5 0 0.5
+0.5 0.5 0
+Ni
+1
+Direct
+0 0 0
+`),
+  });
+  const canvas = page
+    .getByRole("region", { name: "Crystal structure viewer" })
+    .locator("canvas");
+  await expect(canvas).toBeVisible();
+  const framed = { centroid: "at the canvas centre", cornersOffCanvas: 0 };
+  await expect.poll(async () => describeCellFraming(page)).toEqual(framed);
+  const fourColumnWidth = (await canvas.boundingBox())?.width ?? 0;
+
+  releaseExplain();
+  await expect(
+    page.getByRole("region", { name: "Magnetic orderings" }),
+  ).toBeVisible();
+  await expect
+    .poll(async () => (await canvas.boundingBox())?.width)
+    .toBeLessThan(fourColumnWidth);
+  await expect.poll(async () => describeCellFraming(page)).toEqual(framed);
+});
+
 /** Every settings-group Accordion.Panel is a `role="region"` whose
  * accessible name is its own control's text (Mantine's Accordion gives
  * the panel `aria-labelledby` pointing at the control) -- scoping by
@@ -745,6 +797,60 @@ async function waitForBundleReady(page: Page): Promise<void> {
   await expect(
     page.getByRole("button", { name: "Download (.zip)" }),
   ).toBeEnabled({ timeout: 20_000 });
+}
+
+/** Projects the shown unit cell's centroid and eight corners through the live
+ * 3Dmol camera and reports where they land on the viewer canvas. 3Dmol tags
+ * its canvas with the viewer (`_3dmol_viewer`); its model's crystal matrix
+ * holds the lattice vectors as columns, in the frame the box was drawn in. */
+async function describeCellFraming(page: Page): Promise<{
+  readonly centroid: string;
+  readonly cornersOffCanvas: number;
+}> {
+  const { width, height, centroid, corners } = await page.evaluate<{
+    readonly width: number;
+    readonly height: number;
+    readonly centroid: { readonly x: number; readonly y: number };
+    readonly corners: readonly { readonly x: number; readonly y: number }[];
+  }>(`(() => {
+    const canvas = document.querySelector(
+      '[aria-label="Crystal structure viewer"] canvas',
+    );
+    const viewer = canvas._3dmol_viewer;
+    const m = viewer.getModel().getCrystData().matrix.elements;
+    const point = (i, j, k) => ({
+      x: i * m[0] + j * m[3] + k * m[6],
+      y: i * m[1] + j * m[4] + k * m[7],
+      z: i * m[2] + j * m[5] + k * m[8],
+    });
+    const corners = [];
+    for (const i of [0, 1])
+      for (const j of [0, 1])
+        for (const k of [0, 1]) corners.push(point(i, j, k));
+    // modelToScreen returns page coordinates.
+    const rect = canvas.getBoundingClientRect();
+    const onCanvas = ({ x, y }) => ({
+      x: x - rect.left - window.scrollX,
+      y: y - rect.top - window.scrollY,
+    });
+    return {
+      width: rect.width,
+      height: rect.height,
+      centroid: onCanvas(viewer.modelToScreen(point(0.5, 0.5, 0.5))),
+      corners: viewer.modelToScreen(corners).map(onCanvas),
+    };
+  })()`);
+  const dx = centroid.x - width / 2;
+  const dy = centroid.y - height / 2;
+  return {
+    centroid:
+      Math.hypot(dx, dy) <= 1
+        ? "at the canvas centre"
+        : `off centre by (${dx.toFixed(0)}, ${dy.toFixed(0)}) px`,
+    cornersOffCanvas: corners.filter(
+      ({ x, y }) => x < 0 || x > width || y < 0 || y > height,
+    ).length,
+  };
 }
 
 function verifyArchive(
