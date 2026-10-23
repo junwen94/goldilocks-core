@@ -2,6 +2,23 @@ import { unzipSync } from "fflate";
 
 import type { ArchiveDownload } from "../api/coreClient";
 
+/** The request a bundle answers -- `bundle.py`'s `RequestIdentity`
+ * (#176). `sha256`/`size_bytes` are those of the submitted structure text,
+ * `null` for a structure built in memory. */
+export interface ManifestRequest {
+  readonly code: string;
+  readonly task: string;
+  readonly hpc: string;
+  readonly core_version: string;
+  readonly overrides: Readonly<Record<string, unknown>>;
+  readonly structure: {
+    readonly name: string;
+    readonly format: string;
+    readonly sha256: string | null;
+    readonly size_bytes: number | null;
+  };
+}
+
 /** Mirrors `goldilocks.json`'s shape, written by `bundle.py`'s
  * `bundle_files` -- the manifest v1's combined /compute response used
  * to hand back as JSON is now only ever found inside the downloaded
@@ -9,6 +26,7 @@ import type { ArchiveDownload } from "../api/coreClient";
  * the same response). */
 export interface InputManifest {
   readonly schema_version: number;
+  readonly request: ManifestRequest;
   readonly records: Readonly<Record<string, unknown>>;
   readonly warnings: readonly unknown[];
   readonly citations: readonly string[];

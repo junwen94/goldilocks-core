@@ -14,6 +14,7 @@ from support import (
     SSSP_FIXTURE_UPF as _UPF,
     fcc_lead,
     hcp_gadolinium,
+    in_memory_source,
     mc3d_42058_silicon,
     sssp_fixture_table_spec as _sssp_table_spec,
 )
@@ -103,7 +104,16 @@ class TestAdviseEndToEnd:
         assert "#SBATCH" in script
         assert "pw.x" in script
 
-        bundle_input = to_bundle_input(advice, steps, script, ctx)
+        bundle_input = to_bundle_input(
+            advice,
+            steps,
+            script,
+            ctx,
+            code="quantum_espresso",
+            hpc=hpc,
+            assignments={},
+            source=in_memory_source(silicon),
+        )
         roles = {a["path"]: a["role"] for a in bundle_input.artifacts}
         assert roles["submit.sh"] == "submission_script"
         assert roles["pseudo/Si.upf"] == "pseudopotential"
@@ -118,6 +128,17 @@ class TestAdviseEndToEnd:
         assert manifest["records"]["functional"]["value"] == "PBEsol"
         assert manifest["records"]["pseudopotentials"]["status"] == "resolved"
         assert manifest["citations"] == ["Synthetic SSSP fixture, cite me."]
+        # #176: a structure built in memory has no submitted text to hash.
+        assert manifest["request"]["structure"] == {
+            "name": "generated-structure",
+            "format": "pymatgen",
+            "sha256": None,
+            "size_bytes": None,
+        }
+        assert (manifest["request"]["task"], manifest["request"]["hpc"]) == (
+            "scf_single_point",
+            "test-cluster",
+        )
         assert (
             "results.\n\n- Synthetic SSSP fixture, cite me.\n\n## Licences\n"
             in (destination / "CITATIONS.md").read_text()
@@ -150,7 +171,16 @@ class TestAdviseEndToEnd:
             match=r"^pseudos/Si\.upf of pseudopotentials/sssp-fixture@1 "
             r"changed after its table was verified$",
         ):
-            to_bundle_input(advice, steps, script, default_shared_context())
+            to_bundle_input(
+                advice,
+                steps,
+                script,
+                default_shared_context(),
+                code="quantum_espresso",
+                hpc=hpc,
+                assignments={},
+                source=in_memory_source(silicon),
+            )
 
     def test_bundle_refuses_a_licence_changed_since_it_was_verified(
         self, silicon, hpc, installed_table
@@ -171,7 +201,16 @@ class TestAdviseEndToEnd:
             match=r"^LICENSE\.txt of pseudopotentials/sssp-fixture@1 "
             r"changed after its table was verified$",
         ):
-            to_bundle_input(advice, steps, script, default_shared_context())
+            to_bundle_input(
+                advice,
+                steps,
+                script,
+                default_shared_context(),
+                code="quantum_espresso",
+                hpc=hpc,
+                assignments={},
+                source=in_memory_source(silicon),
+            )
 
     def test_generate_renders_the_advised_steps_own_max_seconds_share(
         self, silicon, hpc, installed_table

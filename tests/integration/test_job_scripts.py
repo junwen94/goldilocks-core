@@ -21,7 +21,7 @@ import json
 
 import pytest
 from pymatgen.core import Lattice, Structure
-from support import sssp_fixture_table_spec
+from support import in_memory_source, sssp_fixture_table_spec
 
 from goldilocks_core.advisors.size import Species, memory_estimate, resource_estimate
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
@@ -252,14 +252,23 @@ def test_goldilocks_json_publishes_the_memory_the_job_was_sized_on(
     store = _installed_store(tmp_path, monkeypatch)
     hpc = load_hpc_profile("scarf")
     ctx = default_shared_context()
-    advice = advise(_silicon(), hpc=hpc, store=store)
+    silicon = _silicon()
+    advice = advise(silicon, hpc=hpc, store=store)
     report = check(advice)
     assert report.ok, report.blocking
     steps = generate(advice, report, ctx=ctx)
     script = render_submission(advice, hpc, "quantum_espresso", steps)
-    publish(
-        to_bundle_input(advice, steps, script, ctx), DirectoryOutput(tmp_path / "out")
+    bundle_input = to_bundle_input(
+        advice,
+        steps,
+        script,
+        ctx,
+        code="quantum_espresso",
+        hpc=hpc,
+        assignments={},
+        source=in_memory_source(silicon),
     )
+    publish(bundle_input, DirectoryOutput(tmp_path / "out"))
 
     records = json.loads((tmp_path / "out" / "goldilocks.json").read_text())["records"]
     job = records["job"]["value"]

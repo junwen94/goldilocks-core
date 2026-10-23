@@ -5,8 +5,13 @@ FastAPI or the mcp package installed at all.
 
 from __future__ import annotations
 
-import pytest
+import hashlib
+from importlib.metadata import version
 
+import pytest
+from support import strict_json
+
+from goldilocks_core.bundle import bundle_files
 from goldilocks_core.server import _handlers
 from goldilocks_core.server.documents import (
     ComputeRequestDocument,
@@ -206,6 +211,53 @@ class TestRun:
 
         assert summary["records"]["functional"]["value"] == "PBE"
         assert summary["records"]["functional"]["source"] == "human"
+
+    @pytest.mark.parametrize(
+        ("task", "overrides"),
+        [
+            ("scf_single_point", {"k_distance": 0.2}),
+            ("dos", {"k_distance": 0.2, "steps.dos.delta_e": 0.05}),
+            ("relax", {"nstep": 123}),
+            ("vc-relax", {"press": 10.0, "steps.vc-relax.nstep": 50}),
+        ],
+    )
+    def test_the_manifest_records_the_request_as_submitted(
+        self, silicon_fixture_table, silicon_cif, task, overrides
+    ) -> None:
+        """#176: goldilocks.json named no code, task, engine version,
+        overrides or input structure. Each task's bundle now records the
+        request it answers: the overrides exactly as the body sent them and
+        the sha256 of the submitted structure_content."""
+        document = ComputeRequestDocument(
+            structure_content=silicon_cif,
+            structure_name="Si.cif",
+            hpc="scarf",
+            task=task,
+            overrides=overrides,
+        )
+
+        _summary, bundle_input = _handlers.run(document)
+
+        (manifest,) = (
+            strict_json(file["content"])
+            for file in bundle_files(bundle_input)
+            if file["path"] == "goldilocks.json"
+        )
+        content = silicon_cif.encode("utf-8")
+        assert manifest["schema_version"] == 2
+        assert manifest["request"] == {
+            "code": "quantum_espresso",
+            "task": task,
+            "hpc": "scarf",
+            "core_version": version("goldilocks-core"),
+            "overrides": overrides,
+            "structure": {
+                "name": "Si.cif",
+                "format": "cif",
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size_bytes": len(content),
+            },
+        }
 
 
 class TestBuildReadiness:

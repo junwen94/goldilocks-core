@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import math
+import re
 import zipfile
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from goldilocks_core.bundle import (
     ArchiveOutput,
     BundleInput,
     DirectoryOutput,
+    RequestIdentity,
     archive_bytes,
     bundle_files,
     is_complete,
@@ -36,6 +38,21 @@ def _artifact(path: str, content: bytes, role: str = "input") -> dict:
     return {"path": path, "role": role, "content": content}
 
 
+_REQUEST = RequestIdentity(
+    code="quantum_espresso",
+    task="dos",
+    hpc="scarf",
+    core_version="0.1.1",
+    overrides={"k_distance": 0.2, "steps.nscf.k_grid": (12, 12, 12)},
+    structure={
+        "name": "Si.cif",
+        "format": "cif",
+        "sha256": "5" * 64,
+        "size_bytes": 812,
+    },
+)
+
+
 def _bundle_input(**overrides) -> BundleInput:
     defaults = {
         "artifacts": (
@@ -50,6 +67,7 @@ def _bundle_input(**overrides) -> BundleInput:
             ),
         },
         "warnings": (),
+        "request": _REQUEST,
     }
     defaults.update(overrides)
     return BundleInput(**defaults)
@@ -190,10 +208,8 @@ def test_citations_are_those_the_records_carry_each_listed_once() -> None:
     ]
     assert manifest["citations"] == cited
     assert (
-        files["CITATIONS.md"]
-        .decode("utf-8")
-        .endswith("".join(f"- {citation}\n" for citation in cited))
-    )
+        "results.\n\n" + "".join(f"- {citation}\n" for citation in cited) + "\n"
+    ) in files["CITATIONS.md"].decode("utf-8")
     assert manifest["records"]["k_sampling"]["model"]["model_id"] == (
         "k_points.k_distance.qrf@comp_struct_soap_lattice_metal.v1"
     )
@@ -201,9 +217,17 @@ def test_citations_are_those_the_records_carry_each_listed_once() -> None:
 
 _CITATIONS_INTRO = (
     "# Citations\n\n"
-    "Goldilocks records complete provenance in `goldilocks.json`. Cite the "
-    "selected pseudopotential and model sources when publishing results.\n\n"
+    "Cite the selected pseudopotential and model sources when publishing "
+    "results.\n\n"
     "- A citation.\n"
+)
+_CITATIONS_PROVENANCE = (
+    "\n## Provenance\n\n"
+    "`goldilocks.json` holds:\n\n"
+    "- `citations`: every citation the records carry, as `CITATIONS.md` lists "
+    "them.\n"
+    "- `records`: every decision behind the input files, with its source and "
+    "provenance.\n"
 )
 
 
@@ -228,7 +252,7 @@ def test_citations_point_at_every_shipped_licence() -> None:
         "Pseudopotentials keep their upstream licences. Each file below holds a "
         "table's licence material, with any per-family references to cite; read "
         "it before redistributing the pseudopotentials.\n\n"
-        "- `licences/sssp-fixture.txt`\n"
+        "- `licences/sssp-fixture.txt`\n" + _CITATIONS_PROVENANCE
     )
     assert strict_json(files["goldilocks.json"])["files"][
         "licences/sssp-fixture.txt"
@@ -242,7 +266,9 @@ def test_citations_point_at_every_shipped_licence() -> None:
 def test_citations_name_no_licence_when_the_bundle_ships_none() -> None:
     files = {item["path"]: item["content"] for item in bundle_files(_bundle_input())}
 
-    assert files["CITATIONS.md"].decode("utf-8") == _CITATIONS_INTRO
+    assert files["CITATIONS.md"].decode("utf-8") == (
+        _CITATIONS_INTRO + _CITATIONS_PROVENANCE
+    )
 
 
 def test_manifest_warnings_are_the_bundle_input_s_verbatim() -> None:
@@ -461,3 +487,73 @@ def test_readme_lists_every_artifact_path_without_naming_a_specific_code() -> No
     assert "source/original.cif" in readme
     assert "pw.x" not in readme
     assert "quantum" not in readme.lower()
+
+
+def test_manifest_records_the_request_the_bundle_answers() -> None:
+    """#176: goldilocks.json held records, warnings, citations and file
+    hashes, but not the code, task, HPC profile, engine version, overrides or
+    input structure, so no bundle could be traced back to its request. Its
+    ``request`` block now holds them as given, the overrides verbatim with
+    their step prefixes; the manifest layout is schema_version 2."""
+    files = {item["path"]: item["content"] for item in bundle_files(_bundle_input())}
+    manifest = strict_json(files["goldilocks.json"])
+
+    assert manifest["schema_version"] == 2
+    assert manifest["request"] == {
+        "code": "quantum_espresso",
+        "task": "dos",
+        "hpc": "scarf",
+        "core_version": "0.1.1",
+        "overrides": {"k_distance": 0.2, "steps.nscf.k_grid": [12, 12, 12]},
+        "structure": {
+            "name": "Si.cif",
+            "format": "cif",
+            "sha256": "5" * 64,
+            "size_bytes": 812,
+        },
+    }
+
+
+def test_a_bundle_cannot_be_built_without_its_request() -> None:
+    with pytest.raises(TypeError, match="'request'"):
+        BundleInput(artifacts=(), records={}, warnings=())
+
+
+def _manifest_keys_named(text: str) -> list[str]:
+    return re.findall(r"^- `(\w+)`: ", text, flags=re.MULTILINE)
+
+
+def test_readme_and_citations_describe_only_keys_the_manifest_holds() -> None:
+    """#176: README.md said goldilocks.json records "which code/task it
+    targets" and CITATIONS.md that it records "complete provenance": fixed
+    strings that nothing checked against a manifest holding neither. Both now
+    describe the manifest key by key, from the keys it is written with:
+    README.md every key, CITATIONS.md the two that hold citations."""
+    files = {item["path"]: item["content"] for item in bundle_files(_bundle_input())}
+    manifest = strict_json(files["goldilocks.json"])
+    readme = files["README.md"].decode("utf-8")
+
+    assert (
+        _manifest_keys_named(readme)
+        == sorted(manifest)
+        == [
+            "citations",
+            "files",
+            "records",
+            "request",
+            "schema_version",
+            "warnings",
+        ]
+    )
+    assert readme.startswith(
+        "# Goldilocks DFT Input Data\n\n`goldilocks.json` holds:\n\n"
+    )
+    assert (
+        "- `request`: the request the bundle answers: code, task, HPC profile, "
+        "the overrides as submitted, the input structure's name, format, sha256 "
+        "and size, and the goldilocks-core version that answered it.\n"
+    ) in readme
+    assert _manifest_keys_named(files["CITATIONS.md"].decode("utf-8")) == [
+        "citations",
+        "records",
+    ]

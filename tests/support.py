@@ -48,6 +48,11 @@ from goldilocks_core.analysis.geometry import GeometryFacts, SlabGeometry
 from goldilocks_core.assets.records import AssetFile, AssetSpec
 from goldilocks_core.assets.runtime import statuses
 from goldilocks_core.assets.store import AssetStore, asset_root
+from goldilocks_core.inputs.structure import (
+    InMemoryStructureSource,
+    StructureSourceDocument,
+    normalize_structure,
+)
 from goldilocks_core.resolution import Provenance, Resolved
 
 if TYPE_CHECKING:
@@ -83,6 +88,13 @@ def run_cli(
         text=True,
         timeout=timeout,
     )
+
+
+def in_memory_source(structure: Structure) -> StructureSourceDocument:
+    """The source identity a structure built in memory publishes in a
+    bundle's ``request`` (no submitted text, so no sha256), for tests that
+    pass a pymatgen ``Structure`` to ``advise`` and then bundle it (#176)."""
+    return normalize_structure(InMemoryStructureSource(structure)).source
 
 
 def magnetic_decision(

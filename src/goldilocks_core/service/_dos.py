@@ -32,19 +32,20 @@ own values read ``heuristic``, naming the protocol in ``source_note``.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from pymatgen.core import Structure
 
 from goldilocks_core.advisors.dos import DosDecision, dos_settings
 from goldilocks_core.assets.store import AssetStore
-from goldilocks_core.bundle import BundleInput
+from goldilocks_core.bundle import BundleInput, StructureIdentity
 from goldilocks_core.checks import CheckReport, collect_blocked
 from goldilocks_core.generation.quantum_espresso.dos import write_qe_dos
 from goldilocks_core.inputs.hpc import HpcProfile
 from goldilocks_core.resolution import FieldState, Warning, collect_warnings
 from goldilocks_core.service._advice import Advice, RunOverrides
-from goldilocks_core.service._bundle import assemble_bundle_input
+from goldilocks_core.service._bundle import assemble_bundle_input, request_identity
 from goldilocks_core.service._generate import AdviceIncomplete, generate
 from goldilocks_core.service._pipeline import advise_steps, check
 from goldilocks_core.service._step_protocol import DOS_NSCF_PROTOCOL
@@ -189,6 +190,11 @@ def to_bundle_input_dos(
     steps: tuple[Step, ...],
     submission_script: str,
     ctx: SharedContext,
+    *,
+    code: str,
+    hpc: HpcProfile,
+    assignments: Mapping[str, object],
+    source: StructureIdentity,
 ) -> BundleInput:
     """``service/_bundle.py``'s ``to_bundle_input``, for a ``dos``
     task. The pseudopotential files and their licence come from
@@ -201,4 +207,7 @@ def to_bundle_input_dos(
         ctx,
         advice.records(),
         advice.warnings(),
+        request_identity(
+            "dos", code=code, hpc=hpc, assignments=assignments, source=source
+        ),
     )

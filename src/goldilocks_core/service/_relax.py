@@ -21,6 +21,7 @@ key on a relax (``press``) is refused before it (#154).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -32,12 +33,16 @@ from goldilocks_core.advisors.relax import (
     relax_settings,
 )
 from goldilocks_core.assets.store import AssetStore
-from goldilocks_core.bundle import BundleInput
+from goldilocks_core.bundle import BundleInput, StructureIdentity
 from goldilocks_core.checks import CheckReport
 from goldilocks_core.inputs.hpc import HpcProfile
 from goldilocks_core.resolution import FieldState, collect_warnings
 from goldilocks_core.service._advice import Advice, RunOverrides
-from goldilocks_core.service._bundle import assemble_bundle_input, render_submission
+from goldilocks_core.service._bundle import (
+    assemble_bundle_input,
+    render_submission,
+    request_identity,
+)
 from goldilocks_core.service._generate import AdviceIncomplete, generate
 from goldilocks_core.service._magnetic import cell_geometry
 from goldilocks_core.service._pipeline import advise_steps, check
@@ -146,7 +151,14 @@ def to_bundle_input_relax(
     steps: tuple[Step, ...],
     submission_script: str,
     ctx: SharedContext,
+    *,
+    code: str,
+    hpc: HpcProfile,
+    assignments: Mapping[str, object],
+    source: StructureIdentity,
 ) -> BundleInput:
+    """``service/_bundle.py``'s ``to_bundle_input``, for a ``relax`` or
+    ``vc-relax`` task: the request names ``advice.calculation``."""
     return assemble_bundle_input(
         advice.advice.system.pseudo,
         steps,
@@ -154,4 +166,11 @@ def to_bundle_input_relax(
         ctx,
         advice.records(),
         advice.warnings(),
+        request_identity(
+            advice.calculation,
+            code=code,
+            hpc=hpc,
+            assignments=assignments,
+            source=source,
+        ),
     )

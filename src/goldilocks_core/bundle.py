@@ -72,6 +72,7 @@ import json
 import os
 import shutil
 import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, TypedDict
@@ -83,9 +84,26 @@ from goldilocks_core.resolution import (
     collect_citations,
     records_document,
 )
+from goldilocks_core.serialization import to_portable
 
 _COMPLETE_MARKER = ".complete"
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
+_MANIFEST_KEYS = {
+    "citations": "every citation the records carry, as `CITATIONS.md` lists them",
+    "files": "the role, sha256 and size of every file in the bundle but "
+    "`goldilocks.json` itself",
+    "records": "every decision behind the input files, with its source and provenance",
+    "request": "the request the bundle answers: code, task, HPC profile, the "
+    "overrides as submitted, the input structure's name, format, sha256 and "
+    "size, and the goldilocks-core version that answered it",
+    "schema_version": "the layout version of `goldilocks.json`",
+    "warnings": "every warning raised while deciding the records, each naming "
+    "the record it concerns",
+}
+"""What each top-level ``goldilocks.json`` key holds: ``README.md`` and
+``CITATIONS.md`` describe the manifest from the keys it is written with,
+through this table, so neither claims a key the manifest lacks (#176)."""
+_CITATION_KEYS = ("citations", "records")
 
 
 class Publication(TypedDict):
@@ -94,25 +112,54 @@ class Publication(TypedDict):
     files: list[str]
 
 
+class StructureIdentity(TypedDict):
+    """The input structure as submitted: ``inputs.structure``'s source
+    document without its content. ``sha256``/``size_bytes`` are those of
+    the submitted text, and ``None`` for a structure built in memory."""
+
+    name: str
+    format: str
+    sha256: str | None
+    size_bytes: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class RequestIdentity:
+    """The request a bundle answers, the manifest's ``request`` (#176):
+    ``code``/``task``, the HPC profile its submission script was written
+    for, the goldilocks-core version that answered it, the overrides as
+    submitted (the assignments ``set_overrides.build_overrides`` received,
+    ``steps.<step>.`` prefixes kept) and the input structure."""
+
+    code: str
+    task: str
+    hpc: str
+    core_version: str
+    overrides: dict[str, object]
+    structure: StructureIdentity
+
+
 @dataclass(frozen=True, slots=True)
 class BundleInput:
     """Everything one calculation's published output needs -- content
     (``artifacts``), the facts/decisions behind it (``records``, tri
-    -state) and the warnings about them. Deliberately not code/task
-    -specific: a QE bundle and a future VASP bundle both build one of these
-    the same way.
+    -state), the warnings about them and the request it answers. Code and
+    task are values of ``request``, not types: a QE bundle and a future
+    VASP bundle both build one of these the same way.
 
     ``warnings`` is the list the transports return for the same advice
     (``advice.warnings()``, each tagged with its ``record``); the
     manifest carries it unchanged rather than collecting its own (#152).
     What to cite is read off the records themselves
     (``resolution.collect_citations``): the selected pseudopotential table
-    and every model that decided a record (#156).
+    and every model that decided a record (#156). ``request`` has no
+    default, so no bundle is built without the request it answers (#176).
     """
 
     artifacts: tuple[InputArtifact, ...]
     records: dict[str, FieldState[Any]]
     warnings: tuple[dict[str, object], ...]
+    request: RequestIdentity
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,17 +194,23 @@ def bundle_files(bundle_input: BundleInput) -> tuple[InputArtifact, ...]:
     ``goldilocks.json`` is strict JSON: a non-finite float in a record
     raises ``ValueError`` instead of being written as ``Infinity``/``NaN``,
     which strict parsers reject (#137)."""
-    files: dict[str, tuple[bytes, str]] = {}
-    for artifact in bundle_input.artifacts:
-        _add(files, artifact["path"], artifact["content"], artifact["role"])
-    _add(files, "CITATIONS.md", _citations(bundle_input).encode("utf-8"), "citations")
-    _add(files, "README.md", _readme(bundle_input).encode("utf-8"), "readme")
-
-    manifest = {
+    document = {
         "schema_version": _SCHEMA_VERSION,
+        "request": to_portable(bundle_input.request),
         "records": records_document(bundle_input.records),
         "warnings": list(bundle_input.warnings),
         "citations": collect_citations(bundle_input.records),
+    }
+    keys = sorted((*document, "files"))
+    files: dict[str, tuple[bytes, str]] = {}
+    for artifact in bundle_input.artifacts:
+        _add(files, artifact["path"], artifact["content"], artifact["role"])
+    citations = _citations(bundle_input, keys)
+    _add(files, "CITATIONS.md", citations.encode("utf-8"), "citations")
+    _add(files, "README.md", _readme(bundle_input, keys).encode("utf-8"), "readme")
+
+    manifest = {
+        **document,
         "files": {
             path: {
                 "role": role,
@@ -286,10 +339,17 @@ def _validate_publication_path(path: str) -> None:
         raise ValueError(f"unsafe publication path: {path!r}")
 
 
-def _citations(bundle_input: BundleInput) -> str:
+def _manifest_lines(keys: Iterable[str]) -> str:
+    """One Markdown list item per manifest key in ``keys``: what it holds
+    (``_MANIFEST_KEYS``)."""
+    return "".join(f"- `{key}`: {_MANIFEST_KEYS[key]}.\n" for key in keys)
+
+
+def _citations(bundle_input: BundleInput, keys: list[str]) -> str:
     """The records' citations, then each ``licence`` artifact: a table's
     licence material, which holds the per-family references the records do
-    not cite (#157)."""
+    not cite (#157). Last, the manifest keys among ``keys`` (those
+    ``goldilocks.json`` is written with) that hold the citations (#176)."""
     entries = "".join(
         f"- {citation}\n" for citation in collect_citations(bundle_input.records)
     )
@@ -307,21 +367,28 @@ def _citations(bundle_input: BundleInput) -> str:
         if licences
         else ""
     )
+    provenance = _manifest_lines(key for key in keys if key in _CITATION_KEYS)
     return (
         "# Citations\n\n"
-        "Goldilocks records complete provenance in `goldilocks.json`. Cite the "
-        "selected pseudopotential and model sources when publishing results.\n\n"
+        "Cite the selected pseudopotential and model sources when publishing "
+        "results.\n\n"
         f"{entries}{licence_section}"
+        "\n## Provenance\n\n"
+        "`goldilocks.json` holds:\n\n"
+        f"{provenance}"
     )
 
 
-def _readme(bundle_input: BundleInput) -> str:
+def _readme(bundle_input: BundleInput, keys: list[str]) -> str:
+    """What ``goldilocks.json`` holds, key by key for ``keys`` (those it is
+    written with, #176), then every artifact path. Names no code: the
+    code is a value of the manifest's ``request``."""
     paths = sorted(artifact["path"] for artifact in bundle_input.artifacts)
     listing = "".join(f"- `{path}`\n" for path in paths)
     return (
         "# Goldilocks DFT Input Data\n\n"
-        "Machine-readable provenance for every value in this bundle -- and "
-        "which code/task it targets -- is in `goldilocks.json`.\n\n"
-        "## Contents\n\n"
+        "`goldilocks.json` holds:\n\n"
+        f"{_manifest_lines(keys)}"
+        "\n## Contents\n\n"
         f"{listing}"
     )

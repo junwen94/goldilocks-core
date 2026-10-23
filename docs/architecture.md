@@ -57,11 +57,20 @@ A `run` (or `explain`) request follows this path:
    SLURM script via `submission/slurm.py`. Each step is followed by the
    completion check its writer declared (`Step.completion`), and the script
    stops with a `goldilocks:` message when one fails.
-6. `service.to_bundle_input(advice, steps, submission_script, ctx)` assembles
-   a `bundle.BundleInput`: the rendered input file(s), the pseudopotential
-   bytes read straight off disk for each selected element, the submission
-   script, every advisor decision as a tri-state record (`advice.records()`),
-   and the advice's warnings (`advice.warnings()`). Records stay typed until
+6. `service.to_bundle_input(advice, steps, submission_script, ctx, *, code,
+   hpc, assignments, source)` assembles a `bundle.BundleInput`: the rendered
+   input file(s), each selected element's UPF and the table's licence
+   (`licences/<table-id>.txt`), read through the installation's verified
+   inventory (`service._pseudo.pseudo_artifacts`), the submission script,
+   every advisor decision as a tri-state record (`advice.records()`), the
+   advice's warnings
+   (`advice.warnings()`), and the request it answers (`bundle.RequestIdentity`,
+   the manifest's `request`): the code, the task (each `to_bundle_input*`
+   names its own), the HPC profile, the goldilocks-core version, the
+   overrides as submitted (the `assignments` `build_overrides` received) and
+   the input structure's name, format, sha256 and size (`source`, a
+   `NormalizedStructure.source`). `BundleInput.request` has no default, so no
+   bundle is built without it. Records stay typed until
    they are published: `resolution.records_document` projects them once, for
    the HTTP/MCP responses, CLI `--json` and `goldilocks.json` alike, each with
    its whole `Provenance`, and `resolution.collect_citations` reads what the
@@ -280,7 +289,10 @@ requirements.
   `AssetCorrupt` for one that no longer matches it, so a UPF's bytes are those
   its `pseudopotentials` record hashes. `bundle.py` hashes every artifact while
   assembling the `goldilocks.json` manifest, and writes the same in-memory
-  bytes it hashed — never rereading a source after hashing. Publication uses a
+  bytes it hashed — never rereading a source after hashing. `README.md` and
+  `CITATIONS.md` describe the manifest key by key from the keys it is written
+  with (`bundle._MANIFEST_KEYS`), so neither claims one it lacks; a new
+  manifest key needs a description there and a `schema_version` bump. Publication uses a
   completion-marker protocol, not v1's staging-directory-plus-atomic-rename:
   `target.mkdir()` (directories) or an exclusive `open(path, "xb")` (archives)
   claims the destination, raising `FileExistsError` if it already exists;

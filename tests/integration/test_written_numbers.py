@@ -20,7 +20,12 @@ from decimal import Decimal
 
 import pytest
 from pymatgen.core import Structure
-from support import carbon_dioxide, sssp_fixture_table_spec, strict_json
+from support import (
+    carbon_dioxide,
+    in_memory_source,
+    sssp_fixture_table_spec,
+    strict_json,
+)
 
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
@@ -114,12 +119,20 @@ def test_a_spinel_scf_bundle_writes_conv_thr_as_its_decimal(store, tmp_path) -> 
     ``pw_frame`` sets the residues the turn leaves where its lattice vectors
     have a zero to 0."""
     hpc = load_hpc_profile("scarf")
-    advice = advise(
-        Structure.from_str(_MC3D_65529_SPINEL_CIF, fmt="cif"), hpc=hpc, store=store
-    )
+    spinel = Structure.from_str(_MC3D_65529_SPINEL_CIF, fmt="cif")
+    advice = advise(spinel, hpc=hpc, store=store)
     steps = generate(advice, check(advice))
     script = render_submission(advice, hpc, "quantum_espresso", steps)
-    bundle = to_bundle_input(advice, steps, script, default_shared_context())
+    bundle = to_bundle_input(
+        advice,
+        steps,
+        script,
+        default_shared_context(),
+        code="quantum_espresso",
+        hpc=hpc,
+        assignments={},
+        source=in_memory_source(spinel),
+    )
     publish(bundle, DirectoryOutput(tmp_path / "bundle"))
 
     text = (tmp_path / "bundle" / "scf.in").read_text()
@@ -137,12 +150,20 @@ def test_a_dry_ice_vc_relax_bundle_writes_etot_conv_thr_as_its_decimal(
     """CO2 dry ice, nat 12: the float product 12 * 1e-5 is
     0.00012000000000000002, which both records and vc-relax.in carried."""
     hpc = load_hpc_profile("scarf")
-    advice = advise_relax(
-        carbon_dioxide(), calculation="vc-relax", hpc=hpc, store=store
-    )
+    dry_ice = carbon_dioxide()
+    advice = advise_relax(dry_ice, calculation="vc-relax", hpc=hpc, store=store)
     steps = generate_relax(advice, check_relax(advice))
     script = render_submission_relax(advice, hpc, "quantum_espresso", steps)
-    bundle = to_bundle_input_relax(advice, steps, script, default_shared_context())
+    bundle = to_bundle_input_relax(
+        advice,
+        steps,
+        script,
+        default_shared_context(),
+        code="quantum_espresso",
+        hpc=hpc,
+        assignments={},
+        source=in_memory_source(dry_ice),
+    )
     publish(bundle, DirectoryOutput(tmp_path / "bundle"))
 
     text = (tmp_path / "bundle" / "vc-relax.in").read_text()

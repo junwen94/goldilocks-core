@@ -89,6 +89,8 @@ def test_skill_workflow_publishes_recommended_grid(
     manifest = json.loads((tmp_path / "run-dir" / "goldilocks.json").read_text())
     assert manifest["records"]["composition"]["value"]["elements"] == ["Si"]
     assert manifest["records"]["k_sampling"]["value"]["mesh"] == [4, 4, 4]
+    assert manifest["request"]["overrides"] == {"k_grid": [4, 4, 4]}
+    assert manifest["request"]["structure"]["name"] == "structure.cif"
     assert (tmp_path / "run-dir" / "scf.in").read_text().startswith("&CONTROL\n")
 
 

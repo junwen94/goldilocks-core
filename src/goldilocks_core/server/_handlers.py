@@ -125,8 +125,10 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
     """Returns both the JSON-ready summary and the ``BundleInput`` it
     was built from -- HTTP's archive response mode reuses the latter to
     build the zip without recomputing the pipeline; MCP only ever needs
-    the former."""
-    structure = normalize_structure(_structure_source(document)).structure
+    the former. The bundle records the request (#176): the body's
+    ``overrides`` as sent and the submitted structure's identity."""
+    normalized = normalize_structure(_structure_source(document))
+    structure = normalized.structure
     hpc = resolve_hpc_profile(document.hpc, field=_HPC_FIELD_NAME)
     overrides = build_overrides(document.overrides, task=document.task)
     ctx = default_shared_context()
@@ -141,7 +143,16 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
         dos_report = check_dos(dos_advice)
         steps = generate_dos(dos_advice, dos_report, ctx=ctx)
         script = render_submission_dos(dos_advice, hpc, document.code, steps)
-        bundle_input = to_bundle_input_dos(dos_advice, steps, script, ctx)
+        bundle_input = to_bundle_input_dos(
+            dos_advice,
+            steps,
+            script,
+            ctx,
+            code=document.code,
+            hpc=hpc,
+            assignments=document.overrides,
+            source=normalized.source,
+        )
         records, adv_warnings = dos_advice.records(), dos_advice.warnings()
     elif document.task in ("relax", "vc-relax"):
         relax_advice = advise_relax(
@@ -156,7 +167,16 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
         # raises AdviceIncomplete if not ok
         steps = generate_relax(relax_advice, relax_report, ctx=ctx)
         script = render_submission_relax(relax_advice, hpc, document.code, steps)
-        bundle_input = to_bundle_input_relax(relax_advice, steps, script, ctx)
+        bundle_input = to_bundle_input_relax(
+            relax_advice,
+            steps,
+            script,
+            ctx,
+            code=document.code,
+            hpc=hpc,
+            assignments=document.overrides,
+            source=normalized.source,
+        )
         records, adv_warnings = relax_advice.records(), relax_advice.warnings()
     else:
         advice = advise(
@@ -169,7 +189,16 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
         report = check(advice)
         steps = generate(advice, report)  # raises AdviceIncomplete if not ok
         script = render_submission(advice, hpc, document.code, steps)
-        bundle_input = to_bundle_input(advice, steps, script, ctx)
+        bundle_input = to_bundle_input(
+            advice,
+            steps,
+            script,
+            ctx,
+            code=document.code,
+            hpc=hpc,
+            assignments=document.overrides,
+            source=normalized.source,
+        )
         records, adv_warnings = advice.records(), advice.warnings()
     summary = {
         "files": [file["path"] for file in bundle_files(bundle_input)],

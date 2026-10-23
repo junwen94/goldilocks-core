@@ -72,6 +72,12 @@ memory and prints a preview listing each file's path and byte size — there is
 no auto-picked output directory (v1's `goldilocks_out`, `goldilocks_out_1`, …
 naming no longer exists in any form).
 
+A bundle's `goldilocks.json` records the request it answers under `request`:
+`--code`, `--task`, the HPC profile used, the goldilocks-core version, the
+overrides as submitted (`--config` then `--set`, typed, with any
+`steps.<step>.` prefix) and the structure file's name, format, sha256 and size.
+HTTP and MCP `run` record the same block for the same structure and overrides.
+
 `--json` changes the shape of `run`'s output rather than being combined with
 an output flag: without `-o/--out` it prints `{"files": [...], "records":
 {...}, "warnings": [...]}`; with `-o/--out` it prints `{"files": [...],

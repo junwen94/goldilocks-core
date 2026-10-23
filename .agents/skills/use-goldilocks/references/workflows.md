@@ -22,9 +22,11 @@ from goldilocks_core.resolution import Resolved
 from goldilocks_core.service import advise
 from goldilocks_core.set_overrides import build_overrides
 
-structure = normalize_structure(PathStructureSource("structure.cif")).structure
+normalized = normalize_structure(PathStructureSource("structure.cif"))
+structure = normalized.structure
 hpc = load_hpc_profile("scarf")
-overrides = build_overrides({"k_grid": (4, 4, 4)}, task="scf_single_point")
+assignments = {"k_grid": (4, 4, 4)}
+overrides = build_overrides(assignments, task="scf_single_point")
 
 advice = advise(structure, hpc=hpc, overrides=overrides)
 
@@ -61,11 +63,26 @@ if not report.ok:
 ctx = default_shared_context()
 steps = generate(advice, report, ctx=ctx)
 script = render_submission(advice, hpc, "quantum_espresso", steps)
-bundle_input = to_bundle_input(advice, steps, script, ctx)
+bundle_input = to_bundle_input(
+    advice,
+    steps,
+    script,
+    ctx,
+    code="quantum_espresso",
+    hpc=hpc,
+    assignments=assignments,
+    source=normalized.source,
+)
 
 publication = publish(bundle_input, DirectoryOutput("run-dir"))
 print(publication["path"])
 ```
+
+`to_bundle_input`'s keywords are the request the bundle answers, which
+`goldilocks.json` records under `request` with the task and the goldilocks-core
+version: pass the assignments given to `build_overrides` (the overrides as
+submitted) and `normalized.source` (the structure's name, format, sha256 and
+size).
 
 `check()` never raises; always inspect `report.ok`/`report.blocking` before
 calling `generate()`, which raises `AdviceIncomplete` on an incomplete
@@ -76,7 +93,7 @@ The destination must not exist. Use `ArchiveOutput("run.zip")` for a ZIP, or
 skip `publish` entirely and call `bundle_files(bundle_input)` for a
 memory-only preview. Directory and ZIP outputs contain the same logical
 files: inputs, selected UPFs, a submission script, licences, citations, and
-`goldilocks.json` (records, warnings, checksums).
+`goldilocks.json` (the request, records, warnings, citations, checksums).
 
 CLI equivalents:
 

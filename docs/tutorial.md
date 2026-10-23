@@ -18,13 +18,16 @@ from goldilocks_core.inputs.structure import PathStructureSource, normalize_stru
 from goldilocks_core.service import advise
 
 source = PathStructureSource(structure("Si.cif"))
-silicon = normalize_structure(source).structure
+normalized = normalize_structure(source)
+silicon = normalized.structure
 hpc = load_hpc_profile("scarf")
 
 advice = advise(silicon, hpc=hpc)
 ```
 
 Replace `structure("Si.cif")` with a path to your own CIF or POSCAR.
+`normalized.source` identifies the file you read (its name, format, sha256
+and size), which a published bundle records.
 `load_hpc_profile` loads a named profile from `inputs/profiles/`, the same
 profiles `--hpc` names on the CLI (see the [CLI reference](cli.md)).
 `advise()` runs every analysis/advisor stage (structure facts, functional
@@ -72,7 +75,8 @@ setting no step of the task reads (`press` on an scf) is refused:
 ```python
 from goldilocks_core.set_overrides import build_overrides
 
-overrides = build_overrides({"k_grid": (4, 4, 4)}, task="scf_single_point")
+assignments = {"k_grid": (4, 4, 4)}
+overrides = build_overrides(assignments, task="scf_single_point")
 advice = advise(silicon, hpc=hpc, overrides=overrides)
 
 k_sampling = advice.step.kpoints.k_sampling
@@ -120,8 +124,25 @@ from goldilocks_core.bundle import ArchiveOutput, DirectoryOutput, bundle_files,
 from goldilocks_core.service import render_submission, to_bundle_input
 
 script = render_submission(advice, hpc, "quantum_espresso", steps)
-bundle_input = to_bundle_input(advice, steps, script, ctx)
+bundle_input = to_bundle_input(
+    advice,
+    steps,
+    script,
+    ctx,
+    code="quantum_espresso",
+    hpc=hpc,
+    assignments=assignments,
+    source=normalized.source,
+)
 ```
+
+The keywords name the request the bundle answers, which `goldilocks.json`
+records under `request` with the task (`to_bundle_input` is the
+`scf_single_point` task's) and the goldilocks-core version: the code, the HPC
+profile, the overrides as submitted (the assignments you passed to
+`build_overrides`, `steps.<step>.` prefixes kept) and the input structure's
+name, format, sha256 and size. A structure you built in memory
+(`InMemoryStructureSource`) has no sha256 or size.
 
 | Output                            | Result                             |
 | ---------------------------------- | ----------------------------------- |
@@ -159,15 +180,23 @@ from goldilocks_core.service import (
     to_bundle_input_dos,
 )
 
-dos_overrides = build_overrides(
-    {"steps.nscf.k_grid": (12, 12, 12), "delta_e": 0.05}, task="dos"
-)
+dos_assignments = {"steps.nscf.k_grid": (12, 12, 12), "delta_e": 0.05}
+dos_overrides = build_overrides(dos_assignments, task="dos")
 dos_advice = advise_dos(silicon, hpc=hpc, overrides=dos_overrides)
 dos_report = check_dos(dos_advice)
 if dos_report.ok:
     dos_steps = generate_dos(dos_advice, dos_report, ctx=ctx)
     dos_script = render_submission_dos(dos_advice, hpc, "quantum_espresso", dos_steps)
-    dos_bundle = to_bundle_input_dos(dos_advice, dos_steps, dos_script, ctx)
+    dos_bundle = to_bundle_input_dos(
+        dos_advice,
+        dos_steps,
+        dos_script,
+        ctx,
+        code="quantum_espresso",
+        hpc=hpc,
+        assignments=dos_assignments,
+        source=normalized.source,
+    )
     print([step.name for step in dos_steps])
 ```
 

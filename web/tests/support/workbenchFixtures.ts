@@ -364,7 +364,20 @@ export const runResult: RunResult = {
 };
 
 const MANIFEST_TEXT = JSON.stringify({
-  schema_version: 1,
+  schema_version: 2,
+  request: {
+    code: "quantum_espresso",
+    task: "scf_single_point",
+    hpc: "scarf",
+    core_version: "0.1.1",
+    overrides: { pseudo_table_id: "pseudodojo-pbesol-efficiency-sr" },
+    structure: {
+      name: "Si.cif",
+      format: "cif",
+      sha256: "f".repeat(64),
+      size_bytes: 812,
+    },
+  },
   records: scientificRecords,
   warnings: [],
   citations: ["van Setten et al."],

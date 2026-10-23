@@ -13,13 +13,18 @@ from __future__ import annotations
 
 import argparse
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import get_args
 
 from pymatgen.core import Structure
 
 from goldilocks_core.inputs.hpc import HpcProfile, resolve_hpc_profile
-from goldilocks_core.inputs.structure import PathStructureSource, normalize_structure
+from goldilocks_core.inputs.structure import (
+    PathStructureSource,
+    StructureSourceDocument,
+    normalize_structure,
+)
 from goldilocks_core.resolution import Blocked, FieldState, Resolved, records_document
 from goldilocks_core.serialization import to_portable
 from goldilocks_core.service import RunOverrides
@@ -80,22 +85,47 @@ def add_fetch_missing_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class Request:
+    """One ``run``/``explain`` invocation, resolved: the structure read
+    from its path and that file's identity (``NormalizedStructure.source``),
+    the HPC profile, the overrides as submitted (``assignments``: ``--config``
+    then ``--set``, typed) and those overrides routed for ``--task``."""
+
+    structure: Structure
+    source: StructureSourceDocument
+    hpc: HpcProfile
+    assignments: dict[str, object]
+    overrides: RunOverrides
+
+
 def resolve_structure(path: str) -> Structure:
     return normalize_structure(PathStructureSource(path=path)).structure
 
 
-def resolve_hpc(name: str | None) -> HpcProfile:
-    return resolve_hpc_profile(name, field="--hpc")
+def resolve_request(args: argparse.Namespace) -> Request:
+    """The structure, then ``--hpc``, then the overrides: each raises its
+    own operator error, in that order."""
+    normalized = normalize_structure(PathStructureSource(path=args.structure))
+    hpc = resolve_hpc_profile(args.hpc, field="--hpc")
+    assignments = _assignments(args)
+    return Request(
+        structure=normalized.structure,
+        source=normalized.source,
+        hpc=hpc,
+        assignments=assignments,
+        overrides=build_overrides(assignments, task=args.task),
+    )
 
 
-def resolve_overrides(args: argparse.Namespace) -> RunOverrides:
-    """``--config`` then ``--set`` (which wins), routed for ``--task``."""
+def _assignments(args: argparse.Namespace) -> dict[str, object]:
+    """``--config`` then ``--set`` (which wins), typed."""
     assignments: dict[str, object] = {}
     if args.config is not None:
         with args.config.open("rb") as source:
             assignments.update(config_assignments(tomllib.load(source)))
     assignments.update(coerce_cli_assignments(parse_set_flags(args.set)))
-    return build_overrides(assignments, task=args.task)
+    return assignments
 
 
 def format_field_state(state: FieldState[object]) -> str:

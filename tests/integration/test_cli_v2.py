@@ -19,11 +19,21 @@ from pathlib import Path
 
 import pytest
 from pymatgen.core import Lattice, Structure
-from support import run_cli as _run_cli, strict_json
+from support import (
+    run_cli as _run_cli,
+    sssp_fixture_table_spec,
+    strict_json,
+    write_registry,
+)
 
 from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
+from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
+from goldilocks_core.assets.store import AssetStore
+from goldilocks_core.bundle import bundle_files
 from goldilocks_core.capabilities import capabilities
 from goldilocks_core.examples.structures import structure
+from goldilocks_core.server import _handlers
+from goldilocks_core.server.documents import ComputeRequestDocument
 
 
 def test_help_lists_the_design_docs_commands() -> None:
@@ -983,3 +993,61 @@ class TestPerStepOverrides:
         assert completed.returncode == 2
         assert "Traceback" not in completed.stderr
         assert message in completed.stderr
+
+
+def test_run_out_records_the_request_the_http_path_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#176: ``goldilocks run -o`` wrote a goldilocks.json with no code, task,
+    version, overrides or structure hash. It now records the same request
+    block ``/run`` does for the same structure and overrides: the CLI's are
+    its ``--config`` then ``--set`` assignments as typed, step prefixes kept.
+    Offline: one synthetic Si table, registered for the subprocess."""
+    spec, table = sssp_fixture_table_spec(tmp_path / "sources")
+    AssetStore().install(spec, sssp_preparer(table))
+    registry = tmp_path / "registry.toml"
+    write_registry(registry, table)
+    monkeypatch.setenv("GOLDILOCKS_PSEUDO_REGISTRY", str(registry))
+    content = structure("Si.cif").read_text()
+    path = tmp_path / "Si.cif"
+    path.write_text(content)
+    config = tmp_path / "dos.toml"
+    config.write_text("k_distance = 0.3\n\n[steps.dos]\ndelta_e = 0.05\n")
+
+    completed = _run_cli(
+        "run",
+        str(path),
+        "--hpc",
+        "scarf",
+        "--task",
+        "dos",
+        "--config",
+        str(config),
+        "--set",
+        "k_distance=0.2",
+        "-o",
+        str(tmp_path / "out"),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    published = strict_json((tmp_path / "out" / "goldilocks.json").read_text())
+    _summary, bundle_input = _handlers.run(
+        ComputeRequestDocument(
+            structure_content=content,
+            structure_name="Si.cif",
+            hpc="scarf",
+            task="dos",
+            overrides={"k_distance": 0.2, "steps.dos.delta_e": 0.05},
+        )
+    )
+    (answered,) = (
+        strict_json(file["content"])
+        for file in bundle_files(bundle_input)
+        if file["path"] == "goldilocks.json"
+    )
+    assert published["request"] == answered["request"]
+    assert published["request"]["overrides"] == {
+        "k_distance": 0.2,
+        "steps.dos.delta_e": 0.05,
+    }
+    assert published["request"]["task"] == "dos"

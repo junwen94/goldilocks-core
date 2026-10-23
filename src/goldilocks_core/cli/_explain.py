@@ -18,9 +18,7 @@ from goldilocks_core.cli._common import (
     format_field_state,
     notice_lines,
     records_to_json,
-    resolve_hpc,
-    resolve_overrides,
-    resolve_structure,
+    resolve_request,
 )
 from goldilocks_core.cli._output import write_json
 from goldilocks_core.service import (
@@ -46,34 +44,32 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
 
 
 def run(args: argparse.Namespace, out: TextIO) -> None:
-    structure = resolve_structure(args.structure)
-    hpc = resolve_hpc(args.hpc)
-    overrides = resolve_overrides(args)
+    request = resolve_request(args)
     if args.task == "dos":
         advice = advise_dos(
-            structure,
+            request.structure,
             code=args.code,
-            hpc=hpc,
-            overrides=overrides,
+            hpc=request.hpc,
+            overrides=request.overrides,
             fetch_missing=args.fetch_missing,
         )
         report = check_dos(advice)
     elif args.task in ("relax", "vc-relax"):
         advice = advise_relax(
-            structure,
+            request.structure,
             calculation=args.task,
             code=args.code,
-            hpc=hpc,
-            overrides=overrides,
+            hpc=request.hpc,
+            overrides=request.overrides,
             fetch_missing=args.fetch_missing,
         )
         report = check_relax(advice)
     else:
         advice = advise(
-            structure,
+            request.structure,
             code=args.code,
-            hpc=hpc,
-            overrides=overrides,
+            hpc=request.hpc,
+            overrides=request.overrides,
             fetch_missing=args.fetch_missing,
         )
         report = check(advice)
