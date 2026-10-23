@@ -289,6 +289,18 @@ requirements.
   `CITATIONS.md` also names each `licence` file, which carries per-family
   references the records do not. ML model licence material is not shipped:
   bundles do not contain the models.
+- **Label each record from what its advisor consumed.** The `magnetic`,
+  `occupations`, `k_sampling`, `hubbard`, `convergence` and `relax`
+  decisions build their `Provenance` with `resolution.field_sources_from` and
+  `Provenance.from_field_sources`, from the settings they applied and the
+  inputs they read, so a setting reads `human` exactly when the request set
+  it and the decision kept it, and `source` is the highest tier among them.
+  The other decisions that apply several settings (`cutoffs`, `dos`, `job`,
+  `nbnd`, `parallelisation`, `vdw`) still stamp one record-level `source`
+  and publish no `field_sources`, so their `human` means only that the
+  request set at least one of their settings. A rule that follows another
+  record keeps `heuristic` and names that record in `derived_from` rather
+  than copying its tier.
 - **Keep remote callers away from local paths.** HTTP and MCP accept inline
   structures and registered table IDs, not filesystem sources, model
   locations, or publication paths. Published records name no local path

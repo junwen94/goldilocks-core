@@ -91,7 +91,7 @@ output, not this heuristic's.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 from pydantic import Field
 from pymatgen.core import Structure
@@ -110,7 +110,9 @@ from goldilocks_core.resolution import (
     FieldState,
     Provenance,
     Resolved,
+    Source,
     Warning,
+    field_sources_from,
 )
 
 if TYPE_CHECKING:
@@ -224,7 +226,9 @@ def k_sampling(
             k_distance=None,
             warnings=warnings,
         )
-        return Resolved(_with_k_index(decision, structure), Provenance(source="human"))
+        return Resolved(
+            _with_k_index(decision, structure), _provenance(human, None, "k_grid")
+        )
     if human.k_index is not None:
         resolved = _from_k_index(structure, human.k_index, human.shift)
         if isinstance(resolved, str):
@@ -243,13 +247,13 @@ def k_sampling(
             k_index=resolved.k_index,
             k_distance_interval=resolved.k_distance_interval,
         )
-        return Resolved(decision, Provenance(source="human"))
+        return Resolved(decision, _provenance(human, None, "k_index"))
     if human.k_distance is not None:
         return Resolved(
             _with_k_index(
                 _from_k_distance(structure, human.k_distance, human.shift), structure
             ),
-            Provenance(source="human"),
+            _provenance(human, None, "k_distance"),
         )
     prediction = _ml_k_distance(structure)
     if prediction is not None:
@@ -258,30 +262,55 @@ def k_sampling(
                 _from_k_distance(structure, float(prediction.value), human.shift),
                 structure,
             ),
-            prediction.provenance,
+            _provenance(
+                human,
+                None,
+                "k_distance",
+                decided="ml",
+                model=prediction.provenance.model,
+                citations=prediction.provenance.citations,
+            ),
         )
     if llm.k_distance is not None:
+        # This branch reads no human shift.
         return Resolved(
             _with_k_index(_from_k_distance(structure, llm.k_distance, None), structure),
-            Provenance(source="llm"),
+            _provenance(None, llm, "k_distance"),
         )
 
     if isinstance(is_metal, Blocked):
         return Blocked(by=is_metal)
-    if is_metal.ok and is_metal.value == "non_metal":
-        return Resolved(
-            _with_k_index(
-                _from_k_distance(structure, _NON_METAL_K_DISTANCE, human.shift),
-                structure,
-            ),
-            Provenance(source="heuristic"),
-        )
-    return Resolved(
-        _with_k_index(
-            _from_k_distance(structure, _METAL_K_DISTANCE, human.shift), structure
-        ),
-        Provenance(source="heuristic"),
+    k_distance = (
+        _NON_METAL_K_DISTANCE
+        if is_metal.ok and is_metal.value == "non_metal"
+        else _METAL_K_DISTANCE
     )
+    return Resolved(
+        _with_k_index(_from_k_distance(structure, k_distance, human.shift), structure),
+        _provenance(human, None, "k_distance", derived_from=("is_metal",)),
+    )
+
+
+def _provenance(
+    human: KSamplingHumanInput | None,
+    llm: KSamplingLlmInput | None,
+    mesh_from: str,
+    *,
+    decided: Source = "heuristic",
+    **provenance: Any,
+) -> Provenance:
+    """The provenance of a decision whose mesh came from the setting
+    ``mesh_from`` (``k_grid``, ``k_index`` or ``k_distance``), read from the
+    inputs its branch applied (#173): ``mesh_from`` and ``shift`` each
+    ``human`` or ``llm`` where that input set it, otherwise ``mesh_from``
+    the tier that decided it (``decided``) and ``shift`` the heuristic
+    Gamma default. ``provenance`` sets the rest: the model's evidence for
+    QRF95's k_distance, ``derived_from`` for the heuristic's, which follows
+    ``is_metal``."""
+    field_sources = field_sources_from(
+        human, llm, fields=(mesh_from, "shift"), decided={mesh_from: decided}
+    )
+    return Provenance.from_field_sources(field_sources, **provenance)
 
 
 def _ml_k_distance(structure: Structure) -> MlPrediction | None:

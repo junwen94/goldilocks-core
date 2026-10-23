@@ -78,13 +78,12 @@ respectively -- ``conv_thr``/``etot_conv_thr``/``mixing_beta``/
 ``electron_maxstep`` depend on neither, so this module never blocks on
 them.
 
-**``Provenance.field_sources``, populated here first.** The one
-``Provenance`` on this whole ``ConvergenceDecision`` answers "did a
-human/llm touch *anything* in here" (``source`` above); v2 epic 9
-(#9)'s scenario 2 needs the finer "did a human touch *this specific*
-field" (overriding ``mixing_beta`` alone must not make ``conv_thr``/
-``mixing_mode`` look human-sourced too) -- ``field_sources`` carries
-that, one entry per field, using the same priority order as ``_pick``.
+**``Provenance.field_sources``, populated here first.** v2 epic 9
+(#9)'s scenario 2 needs "did a human touch *this specific* field"
+(overriding ``mixing_beta`` alone must not make ``conv_thr``/
+``mixing_mode`` look human-sourced too): ``field_sources`` has one entry
+per field, from ``resolution.field_sources_from`` in ``_pick``'s priority
+order, and the record's ``source`` is the highest of them (#173).
 """
 
 from __future__ import annotations
@@ -98,7 +97,13 @@ from pydantic import Field
 from goldilocks_core.advisors.hubbard_u import HubbardUDecision
 from goldilocks_core.analysis.geometry import GeometryFacts
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
-from goldilocks_core.resolution import FieldState, Provenance, Resolved, Warning
+from goldilocks_core.resolution import (
+    FieldState,
+    Provenance,
+    Resolved,
+    Warning,
+    field_sources_from,
+)
 
 MixingMode = Literal["plain", "local-TF"]
 
@@ -196,16 +201,10 @@ def convergence(
         mixing_fixed_ns=mixing_fixed_ns,
         warnings=_frozen_ns_warnings(mixing_fixed_ns, hubbard),
     )
-    field_sources = {
-        "conv_thr": _field_source(human.conv_thr),
-        "etot_conv_thr": _field_source(human.etot_conv_thr),
-        "mixing_beta": _field_source(human.mixing_beta, llm.mixing_beta),
-        "electron_maxstep": _field_source(human.electron_maxstep, llm.electron_maxstep),
-        "mixing_mode": _field_source(human.mixing_mode, llm.mixing_mode),
-        "mixing_fixed_ns": _field_source(human.mixing_fixed_ns, llm.mixing_fixed_ns),
-    }
-    source = "human" if _any_set(human) else "llm" if _any_set(llm) else "heuristic"
-    return Resolved(decision, Provenance(source=source, field_sources=field_sources))
+    field_sources = field_sources_from(
+        human, llm, fields=ConvergenceHumanInput.model_fields
+    )
+    return Resolved(decision, Provenance.from_field_sources(field_sources))
 
 
 def _frozen_ns_warnings(
@@ -227,18 +226,3 @@ def _pick[T](human_value: T | None, llm_value: T | None, default: T) -> T:
     if llm_value is not None:
         return llm_value
     return default
-
-
-def _field_source(human_value: object | None, llm_value: object | None = None) -> str:
-    """Per-scalar counterpart to ``_pick``'s priority order -- used to
-    populate ``Provenance.field_sources`` (v2 epic 9, #9, scenario 2)
-    without changing what value each field itself resolves to."""
-    if human_value is not None:
-        return "human"
-    if llm_value is not None:
-        return "llm"
-    return "heuristic"
-
-
-def _any_set(overrides: HumanInput) -> bool:
-    return bool(overrides.model_dump(exclude_defaults=True))

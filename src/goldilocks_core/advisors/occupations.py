@@ -95,6 +95,7 @@ from goldilocks_core.resolution import (
     Provenance,
     Resolved,
     Warning,
+    field_sources_from,
 )
 from goldilocks_core.types import SmearingType
 
@@ -155,14 +156,16 @@ def whole_spin_channels(nelec: float, tot_magnetization: float) -> bool:
 class _Spin:
     """What the occupations choice reads of the run's spin: its mode,
     whether it is spin-polarized, the admitted human moment, whether the
-    applied ordering is compensated by symmetry, and the electron count
-    when known."""
+    applied ordering is compensated by symmetry, the electron count when
+    known, and whether these spin facts are a resolved magnetic record's
+    (``from_magnetic``; without one the run reads as spin-unpolarized)."""
 
     mode: SpinMode
     polarized: bool
     requested: float | None
     compensated: bool
     nelec: float | None
+    from_magnetic: bool
 
     @property
     def fixed_moment(self) -> float | None:
@@ -188,6 +191,29 @@ class _Spin:
             return False
         return self.nelec is None or whole_spin_channels(self.nelec, moment)
 
+    @property
+    def fixed_runs_records(self) -> tuple[str, ...]:
+        """The records whose facts ``fixed_runs`` reads (#173): ``magnetic``
+        when its spin facts are that record's, and ``electron_count`` when
+        it tests the count's parity (``counts_parity``)."""
+        records = ("magnetic",) if self.from_magnetic else ()
+        return (*records, "electron_count") if self.counts_parity else records
+
+    @property
+    def counts_parity(self) -> bool:
+        """Whether ``fixed_runs`` tests a known electron count's parity:
+        against 0 without spin polarization, a requested integer moment, or
+        the 0 of a compensated collinear ordering. A spin-polarized
+        noncollinear run needs no count, and a collinear one with no such
+        moment cannot run fixed whatever the count."""
+        if self.nelec is None or (self.polarized and self.mode == "noncollinear"):
+            return False
+        if not self.polarized:
+            return True
+        if self.requested is None:
+            return self.compensated
+        return self.requested == int(self.requested)
+
 
 def _spin(
     magnetic: FieldState[MagneticConfigFacts] | None,
@@ -207,6 +233,7 @@ def _spin(
             requested=None,
             compensated=False,
             nelec=nelec,
+            from_magnetic=False,
         )
     facts = magnetic.value
     return _Spin(
@@ -215,6 +242,7 @@ def _spin(
         requested=facts.tot_magnetization,
         compensated=facts.ordering.compensated,
         nelec=nelec,
+        from_magnetic=True,
     )
 
 
@@ -245,44 +273,75 @@ def occupations(
     llm: OccupationsLlmInput | None = None,
 ) -> FieldState[OccupationsDecision]:
     """The occupations scheme and the moment it pins (module docstring):
-    a human, ml or llm choice, else smearing for a metal or an
-    unconfirmed one, else, for a non-metal, fixed where fixed occupations
-    can run and smearing otherwise. ``Blocked`` only when ``is_metal`` is
-    and nothing chose."""
+    a human or llm choice, else smearing for a metal or an unconfirmed
+    one, else, for a non-metal, fixed where fixed occupations can run and
+    smearing otherwise. ``Blocked`` only when ``is_metal`` is and nothing
+    chose. The provenance names who set each applied setting and the
+    records the decision followed: for the heuristic choice, ``is_metal``
+    and, for a non-metal, the records that decided whether fixed
+    occupations can run (``_Spin.fixed_runs_records``); on every branch,
+    the records a pinned moment came from (``_provenance``, #173)."""
     human = human or OccupationsHumanInput()
     llm = llm or OccupationsLlmInput()
     spin = _spin(magnetic, electron_count)
 
     if human.occupations is not None:
-        return Resolved(
-            _decision_for(human.occupations, human.smearing_type, human.degauss, spin),
-            Provenance(source="human"),
+        decision = _decision_for(
+            human.occupations, human.smearing_type, human.degauss, spin
         )
-    ml_value: Occupations | None = None  # no ml model wired yet; stubbed until epic 11
-    if ml_value is not None:
-        return Resolved(
-            _decision_for(ml_value, None, None, spin), Provenance(source="ml")
-        )
+        return Resolved(decision, _provenance(decision, human, None, spin))
     if llm.occupations is not None:
-        return Resolved(
-            _decision_for(llm.occupations, None, None, spin),
-            Provenance(source="llm"),
-        )
+        # This branch reads no human smearing value.
+        decision = _decision_for(llm.occupations, None, None, spin)
+        return Resolved(decision, _provenance(decision, None, llm, spin))
 
     if isinstance(is_metal, Blocked):
         return Blocked(by=is_metal)
-    if is_metal.ok and is_metal.value == "non_metal" and spin.fixed_runs:
-        return Resolved(_fixed_decision(spin), Provenance(source="heuristic"))
-    # A metal, an unconfirmed one (Unavailable: "heuristic tried, could not
-    # tell") and a non-metal whose fixed occupations could not run all land
-    # here: smearing is the safe universal default, since unlike fixed it
-    # depends neither on the classification being right nor on a known
-    # moment (#138). Treating "could not tell" as "assume non-metal" would
-    # risk exactly the silent-wrong-answer failure mode fixed occupations
-    # produces on an actual metal -- see this module's docstring.
-    return Resolved(
-        _smearing_decision(human.smearing_type, human.degauss, spin),
-        Provenance(source="heuristic"),
+    non_metal = is_metal.ok and is_metal.value == "non_metal"
+    if non_metal and spin.fixed_runs:
+        decision = _fixed_decision(spin)
+    else:
+        # A metal, an unconfirmed one (Unavailable: "heuristic tried, could
+        # not tell") and a non-metal whose fixed occupations could not run
+        # all land here: smearing is the safe universal default, since
+        # unlike fixed it depends neither on the classification being right
+        # nor on a known moment (#138). Treating "could not tell" as "assume
+        # non-metal" would risk exactly the silent-wrong-answer failure mode
+        # fixed occupations produces on an actual metal -- see this module's
+        # docstring.
+        decision = _smearing_decision(human.smearing_type, human.degauss, spin)
+    rule = ("is_metal", *spin.fixed_runs_records) if non_metal else ("is_metal",)
+    return Resolved(decision, _provenance(decision, human, None, spin, rule))
+
+
+def _provenance(
+    decision: OccupationsDecision,
+    human: OccupationsHumanInput | None,
+    llm: OccupationsLlmInput | None,
+    spin: _Spin,
+    rule: tuple[str, ...] = (),
+) -> Provenance:
+    """``decision``'s provenance from the inputs its branch read (#173):
+    ``occupations`` always, ``smearing_type`` and ``degauss`` only under
+    smearing, each ``human`` or ``llm`` where that input set it, else
+    ``heuristic``. ``derived_from`` names the records the decision followed:
+    ``rule``, those the heuristic choice read, then ``magnetic`` where
+    ``decision`` pins a moment -- the magnetic record's admitted request, or
+    the 0 of its compensated ordering -- and ``electron_count`` where that 0
+    needed an even count."""
+    applied = (
+        ("occupations", "smearing_type", "degauss")
+        if decision.occupations == "smearing"
+        else ("occupations",)
+    )
+    derived = list(rule)
+    if decision.tot_magnetization is not None:
+        derived.append("magnetic")
+        if spin.requested is None:
+            derived.append("electron_count")
+    return Provenance.from_field_sources(
+        field_sources_from(human, llm, fields=applied),
+        derived_from=tuple(dict.fromkeys(derived)),
     )
 
 

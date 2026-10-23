@@ -131,8 +131,11 @@ checked for compatibility.
 
 `is_metal`, `is_magnetic`, and `k_distance` (v2 epic 11) each resolve through
 a `human > ml > llm > heuristic` priority: `explain --json`'s
-`records[...].source` says which tier actually produced a value. When it is
-`ml`, `records[...].model` names the model (`model_id`, and `asset`, the
+`records[...].source` says which tier actually produced a value, and
+`records[...].field_sources` which tier produced each setting of a compound
+record (a `--set shift=...` reads `human` beside QRF95's `ml` `k_distance`).
+When a model decided the value or one of its settings, `records[...].model`
+names the model (`model_id`, and `asset`, the
 installed release as `<id>@<version>`) and keeps what it returned
 (`details`, such as a classifier's `score` and `threshold` or QRF95's
 `interval`, and `warnings`), and `records[...].citations` says what to cite.

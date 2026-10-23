@@ -579,24 +579,32 @@ def _k_sampling_of(structure: Structure):
 
 
 @pytest.mark.parametrize(
-    ("decide", "target", "record_value"),
+    ("decide", "target", "record_value", "field_sources"),
     [
-        pytest.param(is_metal, "is_metal", "non_metal", id="is_metal"),
-        pytest.param(is_magnetic, "is_magnetic", "magnetic", id="is_magnetic"),
-        pytest.param(_k_sampling_of, "k_distance", None, id="k_sampling"),
+        pytest.param(is_metal, "is_metal", "non_metal", None, id="is_metal"),
+        pytest.param(is_magnetic, "is_magnetic", "magnetic", None, id="is_magnetic"),
+        pytest.param(
+            _k_sampling_of,
+            "k_distance",
+            None,
+            {"k_distance": "ml", "shift": "heuristic"},
+            id="k_sampling",
+        ),
     ],
 )
 def test_a_record_decided_by_a_model_carries_its_prediction_s_provenance(
     decide,
     target: str,
     record_value: str | None,
+    field_sources: dict[str, str] | None,
     tmp_path: Path,
     backbone: Path,
     mace_packages: set[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The ML tiers of is_metal, is_magnetic and k_sampling resolve with the
-    prediction's own ``Provenance``, not a bare ``source="ml"``."""
+    prediction's own ``Provenance``, not a bare ``source="ml"``; k_sampling's
+    also names the setting the model decided (#173)."""
     monkeypatch.setattr(predict_module, "AssetStore", lambda: _PerAssetStore(tmp_path))
     monkeypatch.setattr(
         "goldilocks_ml.inference.load_model",
@@ -619,7 +627,9 @@ def test_a_record_decided_by_a_model_carries_its_prediction_s_provenance(
 
     state = decide(_SILICON)
 
-    assert state.provenance == prediction.provenance
+    assert state.provenance == prediction.provenance.model_copy(
+        update={"field_sources": field_sources}
+    )
     if record_value is not None:
         assert state.value == record_value
     else:

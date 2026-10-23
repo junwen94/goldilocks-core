@@ -14,6 +14,7 @@ from support import magnetic_decision, molybdenum_disulfide_monolayer
 from goldilocks_core.advisors import magnetic_config as magnetic_config_module
 from goldilocks_core.advisors.magnetic_config import (
     MagneticConfigHumanInput,
+    MagneticConfigLlmInput,
     MomentDirection,
     OrderingRecord,
     enumerate_magnetic_orderings,
@@ -1362,6 +1363,115 @@ def test_an_unset_ordering_leaves_spin_polarization_to_the_classifier() -> None:
     assert state.value.spin_polarized is False
     assert state.source == "heuristic"
     assert state.value.warnings == ()
+
+
+def test_a_requested_spin_orbit_coupling_reads_human() -> None:
+    """#173: spin_orbit_coupling=true on bcc Fe read 'heuristic' with no
+    field_sources, so no record said the user enabled SOC. Spin
+    polarization still follows is_magnetic, which the record names."""
+    human = MagneticConfigHumanInput(spin_orbit_coupling=True)
+
+    state = magnetic_decision(_BCC_IRON, is_magnetic(_BCC_IRON), human=human)
+
+    assert state.value.spin_orbit_enabled is True
+    assert state.source == "human"
+    assert state.provenance.field_sources == {
+        "spin_polarized": "heuristic",
+        "spin_orbit_coupling": "human",
+        "magnetic_ordering": "heuristic",
+        "starting_magnetization": "heuristic",
+        "moment_direction": "heuristic",
+    }
+    assert state.provenance.derived_from == ("is_magnetic",)
+
+
+def test_a_requested_afm_ordering_reads_human(afm_candidate) -> None:
+    """#173: the ordering the request asked for is the request's, and so is
+    the spin polarization it implies (#145); the seeds are the
+    heuristic's."""
+    state = magnetic_decision(_ROCK_SALT_NIO, _CLASSIFIED_NON_MAGNETIC, human=_AFM)
+
+    assert state.value.ordering.applied == "afm-1"
+    assert state.source == "human"
+    assert state.provenance.field_sources == {
+        "spin_polarized": "human",
+        "spin_orbit_coupling": "heuristic",
+        "magnetic_ordering": "human",
+        "starting_magnetization": "heuristic",
+    }
+    assert state.provenance.derived_from == ()
+
+
+def test_following_is_magnetic_stays_heuristic_and_names_it() -> None:
+    """#173: a magnetic record that follows the is_magnetic fact keeps
+    'heuristic', whatever tier decided the fact, and links to it."""
+    state = magnetic_decision(_BCC_CHROMIUM, _CLASSIFIED_NON_MAGNETIC)
+
+    assert state.value.spin_polarized is False
+    assert state.source == "heuristic"
+    assert state.provenance.field_sources == {
+        "spin_polarized": "heuristic",
+        "spin_orbit_coupling": "heuristic",
+    }
+    assert state.provenance.derived_from == ("is_magnetic",)
+
+
+def test_requested_moments_read_human_where_the_cell_applies_them() -> None:
+    human = MagneticConfigHumanInput(
+        tot_magnetization=4.0, starting_magnetization={"Fe": 0.5}
+    )
+
+    state = magnetic_decision(_BCC_IRON, is_magnetic(_BCC_IRON), human=human)
+
+    assert state.value.starting_magnetization == {"Fe": 0.5}
+    assert state.source == "human"
+    assert state.provenance.field_sources == {
+        "spin_polarized": "human",
+        "spin_orbit_coupling": "heuristic",
+        "magnetic_ordering": "heuristic",
+        "starting_magnetization": "human",
+        "tot_magnetization": "human",
+    }
+    assert state.provenance.derived_from == ()
+
+
+def test_requests_an_explicit_spin_polarized_false_ignores_do_not_read_human() -> None:
+    """#173: a field the request set but the decision dropped (with its
+    warning) is not the request's value, so it gets no entry."""
+    human = MagneticConfigHumanInput(
+        spin_polarized=False,
+        magnetic_ordering="afm",
+        tot_magnetization=2.0,
+        moment_direction=(0.0, 0.0, 1.0),
+    )
+
+    state = magnetic_decision(_BCC_CHROMIUM, is_magnetic(_BCC_CHROMIUM), human=human)
+
+    assert state.provenance.field_sources == {
+        "spin_polarized": "human",
+        "spin_orbit_coupling": "heuristic",
+    }
+
+
+def test_an_llm_spin_polarization_reads_llm_and_its_ignored_soc_does_not() -> None:
+    """The llm tier may decide spin polarization; spin-orbit coupling takes
+    only the human switch, so an llm one is not applied."""
+    llm = MagneticConfigLlmInput(spin_polarized=True, spin_orbit_coupling=True)
+
+    state = magnetic_cell(_DIAMOND_SILICON, is_magnetic(_DIAMOND_SILICON), llm=llm)
+
+    assert (state.value.spin_polarized, state.value.spin_orbit_enabled) == (
+        True,
+        False,
+    )
+    assert state.source == "llm"
+    assert state.provenance.field_sources == {
+        "spin_polarized": "llm",
+        "spin_orbit_coupling": "heuristic",
+        "magnetic_ordering": "heuristic",
+        "starting_magnetization": "heuristic",
+    }
+    assert state.provenance.derived_from == ()
 
 
 @pytest.mark.skipif(

@@ -222,7 +222,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import numpy as np
 import spglib
@@ -247,9 +247,11 @@ from goldilocks_core.resolution import (
     FieldState,
     Provenance,
     Resolved,
+    Source,
     Unavailable,
     Warning,
     blocked_by,
+    field_sources_from,
 )
 
 _MAX_MAGNETIC_SITES_FOR_AFM_ENUMERATION = 8
@@ -727,7 +729,8 @@ def magnetic_cell(
     when a disordered structure resolves spin-polarized: seeds are set per
     site species, which a fractionally occupied site does not have, and
     such a structure's magnetism is undecidable, so it defaults to
-    spin-polarized (#142)."""
+    spin-polarized (#142). The provenance names, per setting, who decided
+    it (``_provenance``, #173)."""
     human = human or MagneticConfigHumanInput()
     llm = llm or MagneticConfigLlmInput()
 
@@ -737,7 +740,8 @@ def magnetic_cell(
         # the former leaves nothing safe to default to.
         return Blocked(by=is_magnetic)
 
-    spin_polarized, source, warnings = _resolve_spin_polarized(is_magnetic, human, llm)
+    spin = _resolve_spin_polarized(is_magnetic, human, llm)
+    spin_polarized, warnings = spin.polarized, spin.warnings
     if spin_polarized and not structure.is_ordered:
         return Blocked(by=_DISORDERED_SPIN_POLARIZED)
     spin_orbit_enabled = human.spin_orbit_coupling is True
@@ -786,7 +790,36 @@ def magnetic_cell(
         moment_direction=direction,
         warnings=warnings,
     )
-    return Resolved(facts, Provenance(source=source))
+    return Resolved(facts, _provenance(facts, human, spin))
+
+
+def _provenance(
+    facts: MagneticCell, human: MagneticConfigHumanInput, spin: _SpinChoice
+) -> Provenance:
+    """The magnetic record's provenance (#173), over the settings ``facts``
+    applies: ``spin_polarized`` and ``spin_orbit_coupling`` always; the
+    ordering and the starting magnetization on a spin-polarized cell;
+    ``tot_magnetization`` and ``moment_direction`` where the cell kept one.
+    ``spin_polarized`` reads the tier that decided it, ``derived_from``
+    naming ``is_magnetic`` when that fact did; every other setting reads
+    ``human`` when the request set it, else ``heuristic``. No llm input is
+    read here: the llm's ``spin_polarized`` is in ``spin.source`` and
+    spin-orbit coupling takes the human switch alone."""
+    applied = {
+        "spin_polarized": True,
+        "spin_orbit_coupling": True,
+        "magnetic_ordering": facts.spin_polarized,
+        "starting_magnetization": facts.spin_polarized,
+        "tot_magnetization": facts.tot_magnetization is not None,
+        "moment_direction": facts.moment_direction is not None,
+    }
+    field_sources = field_sources_from(
+        human,
+        None,
+        fields=[name for name, used in applied.items() if used],
+        decided={"spin_polarized": spin.source},
+    )
+    return Provenance.from_field_sources(field_sources, derived_from=spin.derived_from)
 
 
 def magnetic_config(
@@ -1123,40 +1156,59 @@ def _spin_requests(human: MagneticConfigHumanInput) -> tuple[Warning, ...]:
     )
 
 
+_IS_MAGNETIC = ("is_magnetic",)
+"""``derived_from`` of a spin decision the ``is_magnetic`` fact made."""
+
+
+class _SpinChoice(NamedTuple):
+    """Whether the run is spin-polarized, the tier that decided it, the
+    record it followed (``("is_magnetic",)`` when that fact decided), and
+    the warnings the decision carries."""
+
+    polarized: bool
+    source: Source
+    derived_from: tuple[str, ...] = ()
+    warnings: tuple[Warning, ...] = ()
+
+
 def _resolve_spin_polarized(
     is_magnetic: FieldState[Magnetism],
     human: MagneticConfigHumanInput,
     llm: MagneticConfigLlmInput,
-) -> tuple[bool, str, tuple[Warning, ...]]:
-    """Whether the run is spin-polarized, the deciding source, and the
-    warnings: an explicit human ``spin_polarized`` first, then any human
-    spin request (``_spin_requests``) as true, then the llm, then
-    ``is_magnetic``, defaulting to true when that is ``Unavailable``."""
+) -> _SpinChoice:
+    """Whether the run is spin-polarized: an explicit human
+    ``spin_polarized`` first, then any human spin request
+    (``_spin_requests``) as true, then the llm, then ``is_magnetic``,
+    defaulting to true when that is ``Unavailable``. The magnetism
+    classifier is ``is_magnetic``'s ML tier, so this step has none of its
+    own."""
     requests = _spin_requests(human)
     if human.spin_polarized is not None:
         # An explicit spin_polarized is a human override and wins, but a
         # request it overrides is reported, never silently dropped (#34,
         # #145).
-        return human.spin_polarized, "human", () if human.spin_polarized else requests
+        return _SpinChoice(
+            human.spin_polarized,
+            "human",
+            warnings=() if human.spin_polarized else requests,
+        )
     if requests:
         # A human request for moments or an ordering is a request for a
         # spin-polarized run, whatever the classifier says: it used to be
         # dropped whenever spin_polarized otherwise resolved false (#34,
         # #145).
-        return True, "human", ()
-    ml_value: bool | None = None  # no ml model wired yet; stubbed until epic 11
-    if ml_value is not None:
-        return ml_value, "ml", ()
+        return _SpinChoice(True, "human")
     if llm.spin_polarized is not None:
-        return llm.spin_polarized, "llm", ()
+        return _SpinChoice(llm.spin_polarized, "llm")
     if is_magnetic.ok:
-        return is_magnetic.value == "magnetic", "heuristic", ()
+        return _SpinChoice(is_magnetic.value == "magnetic", "heuristic", _IS_MAGNETIC)
     # #142: an SCF can quench a seeded moment, but a spin-unpolarized run
     # can never find one -- a wrong default this way costs compute time,
     # never a silently missing moment.
-    return (
+    return _SpinChoice(
         True,
         "heuristic",
+        _IS_MAGNETIC,
         (
             Warning(
                 code="magnetic.magnetism_unknown_defaulted_spin_polarized",

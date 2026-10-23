@@ -224,3 +224,24 @@ def test_no_overrides_gives_heuristic_source() -> None:
     state = convergence(nat=10)
 
     assert state.source == "heuristic"
+
+
+def test_every_convergence_field_reads_the_tier_that_set_it() -> None:
+    """#173: one entry per applied field; the record's source is the
+    highest of them."""
+    state = convergence(
+        nat=10,
+        human=ConvergenceHumanInput(mixing_beta=0.3),
+        llm=ConvergenceLlmInput(mixing_beta=0.2, electron_maxstep=120),
+    )
+
+    assert state.source == "human"
+    assert state.provenance.field_sources == {
+        "conv_thr": "heuristic",
+        "etot_conv_thr": "heuristic",
+        "mixing_beta": "human",
+        "electron_maxstep": "llm",
+        "mixing_mode": "heuristic",
+        "mixing_fixed_ns": "heuristic",
+    }
+    assert state.provenance.derived_from == ()

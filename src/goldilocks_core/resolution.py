@@ -50,13 +50,16 @@ exempt, for the reason above: they have no single owning domain.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 from goldilocks_core.serialization import to_portable
+
+if TYPE_CHECKING:
+    from goldilocks_core.inputs.overrides import HumanInput
 
 Status = Literal["resolved", "unavailable", "blocked"]
 
@@ -64,6 +67,8 @@ Source = Literal["human", "ml", "llm", "heuristic"]
 """Order is priority, highest first: a human-set value always wins
 over one an ml model, llm, or heuristic would have chosen; likewise ml
 over llm over heuristic."""
+
+_TIERS: tuple[Source, ...] = get_args(Source)
 
 WarningLevel = Literal["info", "warning", "error"]
 
@@ -124,7 +129,15 @@ class ModelEvidence(BaseModel):
 class Provenance(BaseModel):
     """Where a resolved value came from. ``ResolvedField`` publishes every
     field: one added here needs a twin of the same name there, or every
-    projection fails instead of dropping it (#156)."""
+    projection fails instead of dropping it (#156). Unknown keywords are
+    refused, so a misspelt field cannot be dropped at construction either.
+
+    An advisor whose decision applies several settings builds its
+    provenance with ``from_field_sources`` over ``field_sources_from``, from
+    the inputs it consumed, so a setting the request set reads ``human``
+    exactly when the decision applied it (#173)."""
+
+    model_config = ConfigDict(extra="forbid")
 
     source: Source
     source_note: str | None = None
@@ -133,24 +146,75 @@ class Provenance(BaseModel):
     "package default, nothing else applied") -- now just prose here
     instead of a family of source literals."""
     field_sources: dict[str, Source] | None = None
-    """Opt-in, per-scalar override of ``source`` for compound decisions
-    whose own dataclass bundles several independently-overridable
-    fields (e.g. ``ConvergenceDecision``'s ``conv_thr``/``mixing_beta``/
-    ``mixing_mode``) -- added for v2 epic 9 (#9)'s scenario 2
-    ("explicit single-field override is field-level, not whole-group
-    skip"). ``source`` above still answers "was *anything* in this
-    decision human/ml/llm-touched", which is what every advisor
-    computed before this field existed and what most callers still only
-    need; this is additive, only populated by advisors precise enough
-    to know which of their own scalars came from which tier, and
-    ``None`` (the default) for every other advisor's ``Provenance``."""
+    """One source per setting a compound decision applied, keyed by its
+    override field name (``ConvergenceDecision``'s ``conv_thr``/
+    ``mixing_beta``/...; ``magnetic``'s ``spin_orbit_coupling``): ``human``
+    or ``llm`` for a value that tier set, otherwise the tier that decided
+    it. A setting the decision did not apply (a smearing width under fixed
+    occupations, ``press`` on a relax) has no entry. ``source`` is then the
+    highest tier among them (``from_field_sources``). ``None`` for a
+    decision that applies no setting of its own (an analysis fact, the
+    selected pseudopotentials)."""
+    derived_from: tuple[str, ...] = ()
+    """The records whose answers this record's own rule followed, by
+    record name: ``("is_metal",)`` for occupations chosen from the
+    metallicity fact, ``("magnetic",)`` for the relativistic treatment
+    spin-orbit coupling asks for. ``source`` stays the tier that applied
+    the rule (``heuristic``), never the upstream record's, so the link is
+    how a reader finds what decided it (#173)."""
     model: ModelEvidence | None = None
-    """The model that decided the value and what it returned, when
-    ``source`` is ``"ml"`` (``ml.predict.MlPrediction.provenance``)."""
+    """The model that decided the value, or its ``ml`` field
+    (``field_sources``), and what it returned
+    (``ml.predict.MlPrediction.provenance``)."""
     citations: tuple[str, ...] = ()
     """What to cite for the value: the registry citation of the model that
     decided it, or of the pseudopotential table selected. A bundle's
     ``CITATIONS.md`` lists every record's (``collect_citations``)."""
+
+    @classmethod
+    def from_field_sources(
+        cls, field_sources: Mapping[str, Source], **provenance: Any
+    ) -> Provenance:
+        """The provenance of a decision whose applied settings came from
+        ``field_sources`` (at least one): ``source`` is the highest tier
+        among them, in ``Source``'s order, so a decision with one
+        request-set setting reads ``human``. ``provenance`` sets the other
+        fields (``derived_from``, ``model``, ``citations``)."""
+        return cls(
+            source=min(field_sources.values(), key=_TIERS.index),
+            field_sources=dict(field_sources),
+            **provenance,
+        )
+
+
+def field_sources_from(
+    human: HumanInput | None,
+    llm: HumanInput | None = None,
+    *,
+    fields: Iterable[str],
+    decided: Mapping[str, Source] | None = None,
+) -> dict[str, Source]:
+    """One source per setting in ``fields``, the settings a decision
+    applied: ``"human"`` when ``human`` set it, else ``"llm"`` when ``llm``
+    set it, else its tier in ``decided`` (the tier that chose it, such as
+    QRF95's ``"ml"`` k_distance), else ``"heuristic"``. A field is set when
+    the input has it and its value is not ``None``.
+
+    The caller passes only the fields its decision applied and only the
+    inputs it read -- ``None`` for an input a higher tier overrode -- so a
+    request-set setting reads ``human`` exactly when its value is in the
+    decision (#173)."""
+    decided = decided or {}
+    return {
+        name: (
+            "human"
+            if getattr(human, name, None) is not None
+            else "llm"
+            if getattr(llm, name, None) is not None
+            else decided.get(name, "heuristic")
+        )
+        for name in fields
+    }
 
 
 class BlockedValueError(Exception):
@@ -265,8 +329,8 @@ class ResolvedField[T](BaseModel):
     host-local fields.
 
     A resolved field carries every ``Provenance`` field under its own name
-    (``source``, ``source_note``, ``field_sources``, ``model``,
-    ``citations``). Extra keys are forbidden and ``from_state`` passes the
+    (``source``, ``source_note``, ``field_sources``, ``derived_from``,
+    ``model``, ``citations``). Extra keys are forbidden and ``from_state`` passes the
     whole provenance, so a ``Provenance`` field without a twin here fails
     projection rather than being dropped from every published record
     (#156)."""
@@ -278,6 +342,7 @@ class ResolvedField[T](BaseModel):
     source: Source | None = None
     source_note: str | None = None
     field_sources: dict[str, Source] | None = None
+    derived_from: tuple[str, ...] = ()
     model: ModelEvidence | None = None
     citations: tuple[str, ...] = ()
     reason: str | None = None

@@ -664,12 +664,39 @@ blocked record carries `blocked_by`, naming the upstream fact that could not
 be resolved. There is no separate "provenance block" distinct from structure
 analysis -- both use this same shape.
 
-This describes a decision as a whole, not necessarily each field inside it
-separately: overriding one convergence setting (e.g. `mixing_beta`) does not
-by itself mark the whole convergence decision `human`-sourced. Advisors precise
-enough to track that instead populate an opt-in `field_sources` map naming
-which individual scalar was overridden, alongside the decision's own overall
-`source`. Per-decision warnings live inside that decision's own value (e.g.
+A decision that applies several settings (the magnetic decision,
+occupations, k-point sampling, Hubbard +U, convergence, relaxation) also
+carries `field_sources`, one source per setting it applied, keyed by the
+setting's override name: `human` (or `llm`) for a value that tier set,
+otherwise the tier that chose it. The record's `source` is the highest of
+them, so `mixing_beta=0.3` alone makes `convergence` `human` while
+`field_sources` keeps `conv_thr` `heuristic`, and `spin_orbit_coupling=true`
+makes `magnetic` `human` while spin polarization still reads `heuristic`. A
+setting the decision did not apply has no entry and cannot make the record
+`human`: a `degauss` under fixed occupations, `press` on a `relax`, or a
+`magnetic_ordering` that an explicit `spin_polarized=false` ignores. Hubbard's
+switch is keyed `needs_correlation`, its override field, though `--set` calls
+it `hubbard_needs_correlation`. A pinned `pseudo_table_id` makes
+`pseudo_table` `human`.
+
+A record whose own rule followed another record's answer keeps the tier that
+applied the rule, `heuristic`, and names that record in `derived_from`:
+`magnetic` names `is_magnetic` when that fact decided spin polarization,
+`occupations` and a heuristic `k_sampling` name `is_metal`, `hubbard` names
+`needs_correlation` (or `functional` for a hybrid functional), an
+automatically selected `pseudo_table` names `functional` and `magnetic`,
+`relativistic` names `magnetic`, and `pseudopotentials` names
+`pseudo_table`. A non-metal's `occupations` also names the records that
+decided whether fixed occupations can run: `magnetic`, and `electron_count`
+where its parity was tested. An `occupations` that pins a `tot_magnetization`
+names `magnetic` too, whichever tier chose the occupations (a requested
+`occupations` reads `human` and still names it): the moment is the request
+that record admitted, or the 0 of its compensated ordering, which also names
+`electron_count`, since that 0 needs an even count. The upstream record's
+`source` is not copied: `occupations`
+reads `heuristic` even when the classifier decided `is_metal` (`ml`), and you
+follow `derived_from` to find that. Per-decision warnings live inside that
+decision's own value (e.g.
 `job.warnings`, `cutoffs.warnings`), and every run, whatever its task, also
 carries one aggregated top-level `warnings` list: every record's warnings, in
 record-name order, each naming the record it came from in `record`. A `dos`
@@ -679,8 +706,9 @@ task's nscf step keeps its own, under `nscf_`-prefixed records: a notice on
 A resolved record also carries the rest of its provenance: `source_note`,
 the advisor's rationale where it gives one (such as why a molecule gets a
 Coulomb cutoff), and `citations`, what to cite for it. A record that a
-machine-learning model decided (`source` `ml`: `is_metal`, `is_magnetic`,
-`k_sampling`) names the model in `model`: `model_id` (goldilocks-ml's id and
+machine-learning model decided, whole or in one setting (`source` or
+`field_sources` `ml`: `is_metal`, `is_magnetic`, `k_sampling`'s
+`k_distance`), names the model in `model`: `model_id` (goldilocks-ml's id and
 feature contract, such as `metallicity.is_metal.cgcnn@crystal_graph.v1`),
 `asset` (the installed release, such as `models/is-metal-classifier@1`),
 `target_contract`, the model's own `value`, its `details` as returned (a

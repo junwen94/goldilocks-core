@@ -13,6 +13,7 @@ from goldilocks_core.advisors.pseudo_selection import (
 from goldilocks_core.assets.pseudopotentials.registry import PseudoTable, load_tables
 from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.assets.records import AssetFile, AssetSpec
+from goldilocks_core.resolution import Provenance
 
 
 def _table(
@@ -97,6 +98,41 @@ def test_the_selected_table_record_cites_that_table(table_id: str | None) -> Non
 
     assert state.value.id == "sssp"
     assert state.provenance.citations == ("Prandini et al.",)
+
+
+def test_a_pinned_table_reads_human() -> None:
+    """#173: pseudo_table_id=sssp-pbesol-efficiency-sr on bcc Fe read
+    'heuristic'. A pinned table is the request's choice."""
+    tables = {"dojo": _table("dojo"), "sssp": _table("sssp", provider="sssp")}
+
+    state = select_pseudopotential_table(
+        tables, table_id="sssp", elements={"Si"}, requirements=_requirements()
+    )
+
+    assert state.value.id == "sssp"
+    assert state.provenance == Provenance(
+        source="human",
+        field_sources={"pseudo_table_id": "human"},
+        citations=("fixture citation",),
+    )
+
+
+def test_an_automatic_table_names_the_records_its_requirements_come_from() -> None:
+    """#173: automatic selection follows the functional and the magnetic
+    decision's spin-orbit switch, so it stays 'heuristic' and names both."""
+    tables = {"dojo": _table("dojo"), "sssp": _table("sssp", provider="sssp")}
+
+    state = select_pseudopotential_table(
+        tables, table_id=None, elements={"Si"}, requirements=_requirements()
+    )
+
+    assert state.value.id == "dojo"
+    assert state.provenance.derived_from == ("functional", "magnetic")
+    assert state.provenance == Provenance(
+        source="heuristic",
+        derived_from=("functional", "magnetic"),
+        citations=("fixture citation",),
+    )
 
 
 def test_explicit_unknown_table_id_is_unavailable_not_a_raise() -> None:
@@ -310,6 +346,10 @@ class TestSelectMetadataForElements:
 
         assert state.ok
         assert {item.element for item in state.value} == {"Si", "O"}
+        assert state.provenance.derived_from == ("pseudo_table",)
+        assert state.provenance == Provenance(
+            source="heuristic", derived_from=("pseudo_table",)
+        )
 
     def test_missing_element_is_unavailable_not_a_raise(self) -> None:
         metadata = (

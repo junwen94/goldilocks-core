@@ -7,7 +7,7 @@ import pytest
 from pydantic import BaseModel
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.inputs.overrides import HumanInput
+from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import (
     Blocked,
     BlockedValueError,
@@ -21,6 +21,7 @@ from goldilocks_core.resolution import (
     blocked_by,
     collect_citations,
     collect_warnings,
+    field_sources_from,
     records_document,
 )
 from goldilocks_core.serialization import Portable
@@ -147,6 +148,7 @@ class TestResolvedFieldBoundaryProjection:
             "value": 0.4,
             "source": "heuristic",
             "field_sources": None,
+            "derived_from": (),
             "source_note": None,
             "model": None,
             "citations": (),
@@ -232,6 +234,7 @@ class TestResolvedFieldPublishesTheWholeProvenance:
             source="ml",
             source_note="classified by the published mMACE + MLP classifier",
             field_sources={"is_magnetic": "ml"},
+            derived_from=("composition",),
             model=_IS_MAGNETIC_EVIDENCE,
             citations=("Goldilocks mMACE + MLP magnetism classifier.",),
         )
@@ -246,6 +249,102 @@ class TestResolvedFieldPublishesTheWholeProvenance:
 
         published = projection.model_dump(include=set(Provenance.model_fields))
         assert Provenance.model_validate(published) == provenance
+
+
+class _MixingHumanInput(HumanInput):
+    conv_thr: float | None = None
+    mixing_beta: float | None = None
+    mixing_mode: str | None = None
+
+
+class _MixingLlmInput(LlmInput):
+    mixing_beta: float | None = None
+    mixing_mode: str | None = None
+
+
+class TestFieldSources:
+    """#173: a record's provenance follows what its advisor consumed, so a
+    field the request set reads ``human`` exactly when the decision applied
+    it, and ``source`` is the highest tier among the fields."""
+
+    def test_each_applied_field_reads_the_tier_that_set_it(self) -> None:
+        sources = field_sources_from(
+            _MixingHumanInput(mixing_beta=0.3),
+            _MixingLlmInput(mixing_beta=0.2, mixing_mode="local-TF"),
+            fields=("conv_thr", "mixing_beta", "mixing_mode"),
+        )
+
+        assert sources == {
+            "conv_thr": "heuristic",
+            "mixing_beta": "human",
+            "mixing_mode": "llm",
+        }
+
+    def test_a_field_the_decision_did_not_apply_gets_no_entry(self) -> None:
+        sources = field_sources_from(
+            _MixingHumanInput(conv_thr=1e-9, mixing_mode="plain"),
+            None,
+            fields=("mixing_beta",),
+        )
+
+        assert sources == {"mixing_beta": "heuristic"}
+
+    def test_a_decided_tier_names_who_chose_a_field_the_request_left_unset(
+        self,
+    ) -> None:
+        """An advisor passes the tier that decided a field (QRF95's
+        k_distance, the spin decision); a request-set field stays human."""
+        sources = field_sources_from(
+            _MixingHumanInput(mixing_mode="plain"),
+            _MixingLlmInput(mixing_beta=0.2),
+            fields=("conv_thr", "mixing_beta", "mixing_mode"),
+            decided={"conv_thr": "ml", "mixing_mode": "ml"},
+        )
+
+        assert sources == {
+            "conv_thr": "ml",
+            "mixing_beta": "llm",
+            "mixing_mode": "human",
+        }
+
+    @pytest.mark.parametrize(
+        ("field_sources", "source"),
+        [
+            ({"a": "heuristic"}, "heuristic"),
+            ({"a": "heuristic", "b": "llm"}, "llm"),
+            ({"a": "llm", "b": "ml", "c": "heuristic"}, "ml"),
+            ({"a": "ml", "b": "human", "c": "llm"}, "human"),
+        ],
+    )
+    def test_the_record_source_is_the_highest_tier_among_its_fields(
+        self, field_sources: dict, source: str
+    ) -> None:
+        provenance = Provenance.from_field_sources(
+            field_sources, derived_from=("is_metal",), citations=("A paper.",)
+        )
+
+        assert provenance == Provenance(
+            source=source,
+            field_sources=field_sources,
+            derived_from=("is_metal",),
+            citations=("A paper.",),
+        )
+
+    def test_derived_from_is_published_with_the_record(self) -> None:
+        records = {
+            "occupations": Resolved(
+                "smearing",
+                Provenance.from_field_sources(
+                    {"occupations": "heuristic"}, derived_from=("is_metal",)
+                ),
+            )
+        }
+
+        document = records_document(records)
+
+        assert document["occupations"]["source"] == "heuristic"
+        assert document["occupations"]["field_sources"] == {"occupations": "heuristic"}
+        assert document["occupations"]["derived_from"] == ["is_metal"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -340,6 +439,7 @@ class TestRecordsDocument:
             },
             "source": "heuristic",
             "field_sources": None,
+            "derived_from": [],
             "source_note": None,
             "model": None,
             "citations": [],

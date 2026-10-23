@@ -25,9 +25,12 @@ export interface ResolvedField<T = unknown> {
   readonly value?: T | null;
   readonly source?: Source | null;
   readonly field_sources?: Readonly<Record<string, Source>> | null;
+  /** The records whose answers this record's rule followed, by name. */
+  readonly derived_from?: readonly string[];
   /** The advisor's rationale, where it gives one. */
   readonly source_note?: string | null;
-  /** The model that decided the value, when `source` is `ml`. */
+  /** The model that decided the value or one of its settings (a
+   * `field_sources` entry `ml`). */
   readonly model?: ModelEvidence | null;
   /** What to cite for the value (a model's or the table's citation). */
   readonly citations?: readonly string[];

@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 from support import geometry_facts
 
-from goldilocks_core.advisors.convergence import convergence
+from goldilocks_core.advisors.convergence import ConvergenceHumanInput, convergence
 from goldilocks_core.advisors.relax import (
     CellDofree,
     RelaxHumanInput,
@@ -269,3 +269,44 @@ def test_an_llm_cell_dofree_on_a_wire_is_kept() -> None:
 
     assert state.value.cell_dofree == "z"
     assert state.provenance.field_sources["cell_dofree"] == "llm"
+
+
+def test_a_vc_relax_key_on_a_relax_is_not_the_request_s() -> None:
+    """#173: a relax applies no press, so a human press leaves the record
+    heuristic instead of labelling it 'human' (#154)."""
+    state = relax_settings("relax", _CONVERGENCE, human=RelaxHumanInput(press=5.0))
+
+    assert not hasattr(state.value, "press")
+    assert state.source == "heuristic"
+    assert "press" not in state.provenance.field_sources
+
+
+def test_every_applied_relax_field_reads_the_tier_that_set_it() -> None:
+    convergence_state = convergence(
+        nat=4, human=ConvergenceHumanInput(etot_conv_thr=1e-6)
+    )
+
+    state = relax_settings(
+        "vc-relax",
+        convergence_state,
+        geometry=_geometry("3d"),
+        human=RelaxHumanInput(press=5.0, forc_conv_thr=1e-4),
+        llm=RelaxLlmInput(nstep=80, press=1.0),
+    )
+
+    assert state.source == "human"
+    assert state.provenance.field_sources == {
+        "ion_dynamics": "heuristic",
+        "forc_conv_thr": "human",
+        "etot_conv_thr": "human",
+        "nstep": "llm",
+        "trust_radius_max": "heuristic",
+        "trust_radius_min": "heuristic",
+        "trust_radius_ini": "heuristic",
+        "remove_rigid_rot": "heuristic",
+        "fix_bottom_layers": "heuristic",
+        "cell_dofree": "heuristic",
+        "press": "human",
+        "press_conv_thr": "heuristic",
+        "cell_factor": "heuristic",
+    }

@@ -113,6 +113,7 @@ def test_manifest_records_are_tri_state_aware(tmp_path: Path) -> None:
         "value": "PBEsol",
         "source": "human",
         "field_sources": None,
+        "derived_from": [],
         "source_note": None,
         "model": None,
         "citations": [],

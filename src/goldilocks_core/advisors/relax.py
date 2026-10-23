@@ -75,7 +75,7 @@ deferred").
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Literal
 
 from pydantic import Field
@@ -88,9 +88,9 @@ from goldilocks_core.resolution import (
     FieldState,
     Provenance,
     Resolved,
-    Source,
     Warning,
     blocked_by,
+    field_sources_from,
 )
 
 IonDynamics = Literal["bfgs", "damp", "fire"]
@@ -255,7 +255,12 @@ def relax_settings(
     this module's own docstring on why that value is read off
     ``convergence``, not recomputed. A vc-relax is also ``Blocked`` when
     ``geometry`` gives the cell no default ``cell_dofree`` and no human or
-    llm value is set (a wire, or a slab outside the xy frame)."""
+    llm value is set (a wire, or a slab outside the xy frame).
+
+    ``field_sources`` has one entry per field of the decision, so a
+    vc-relax key on a relax (``press``) is not the request's and leaves the
+    record ``heuristic`` (#173, #154); ``etot_conv_thr`` reads its source on
+    ``convergence``."""
     human = human or RelaxHumanInput()
     llm = llm or RelaxLlmInput()
 
@@ -284,67 +289,52 @@ def relax_settings(
         "remove_rigid_rot": _pick(human.remove_rigid_rot, llm.remove_rigid_rot, False),
         "fix_bottom_layers": _pick(human.fix_bottom_layers, None, None),
     }
-    field_sources: dict[str, Source] = {
-        "ion_dynamics": _field_source(human.ion_dynamics, llm.ion_dynamics),
-        "forc_conv_thr": _field_source(human.forc_conv_thr),
-        "etot_conv_thr": etot_conv_thr_source,
-        "nstep": _field_source(human.nstep, llm.nstep),
-        "trust_radius_max": _field_source(human.trust_radius_max),
-        "trust_radius_min": _field_source(human.trust_radius_min),
-        "trust_radius_ini": _field_source(human.trust_radius_ini),
-        "remove_rigid_rot": _field_source(human.remove_rigid_rot, llm.remove_rigid_rot),
-        "fix_bottom_layers": _field_source(human.fix_bottom_layers),
-    }
 
     if calculation == "vc-relax":
         cell_dofree = _resolve_cell_dofree(human.cell_dofree, llm.cell_dofree, geometry)
         if isinstance(cell_dofree, Blocked):
             return cell_dofree
-        cell_dofree_value, cell_dofree_source = cell_dofree
         decision: RelaxOptions | VcRelaxOptions = VcRelaxOptions(
             **base_kwargs,
-            cell_dofree=cell_dofree_value,
+            cell_dofree=cell_dofree,
             press=_pick(human.press, llm.press, _PRESS_DEFAULT),
             press_conv_thr=_pick(human.press_conv_thr, None, _PRESS_CONV_THR_DEFAULT),
             cell_factor=_pick(human.cell_factor, None, _CELL_FACTOR_DEFAULT),
         )
-        field_sources.update(
-            {
-                "cell_dofree": cell_dofree_source,
-                "press": _field_source(human.press, llm.press),
-                "press_conv_thr": _field_source(human.press_conv_thr),
-                "cell_factor": _field_source(human.cell_factor),
-            }
-        )
     else:
         decision = RelaxOptions(**base_kwargs)
 
-    source = "human" if _any_set(human) else "llm" if _any_set(llm) else "heuristic"
-    return Resolved(decision, Provenance(source=source, field_sources=field_sources))
+    field_sources = field_sources_from(
+        human,
+        llm,
+        fields=[field.name for field in fields(decision) if field.name != "warnings"],
+        decided={"etot_conv_thr": etot_conv_thr_source},
+    )
+    return Resolved(decision, Provenance.from_field_sources(field_sources))
 
 
 def _resolve_cell_dofree(
     human_value: CellDofree | None,
     llm_value: CellDofree | None,
     geometry: FieldState[GeometryFacts] | None,
-) -> tuple[CellDofree, Source] | Blocked:
+) -> CellDofree | Blocked:
     """A human or llm value wins; otherwise the vacuum decides, as this
     module's docstring describes. Without a resolved geometry the default
     is QE's own, 'all'."""
     if human_value is not None:
-        return human_value, "human"
+        return human_value
     if llm_value is not None:
-        return llm_value, "llm"
+        return llm_value
     if geometry is None or not geometry.ok:
-        return _DEFAULT_CELL_DOFREE, "heuristic"
+        return _DEFAULT_CELL_DOFREE
     slab = geometry.value.slab
     if slab is not None and slab.xy_frame:
-        return _SLAB_CELL_DOFREE, "heuristic"
+        return _SLAB_CELL_DOFREE
     if slab is not None:
         return Blocked(by=_slab_outside_xy_frame(slab))
     if len(geometry.value.vacuum_axes) == 2:
         return Blocked(by=_wire(geometry.value.vacuum_axes))
-    return _DEFAULT_CELL_DOFREE, "heuristic"
+    return _DEFAULT_CELL_DOFREE
 
 
 def _slab_outside_xy_frame(slab: SlabGeometry) -> str:
@@ -380,17 +370,3 @@ def _pick[T](human_value: T | None, llm_value: T | None, default: T) -> T:
     if llm_value is not None:
         return llm_value
     return default
-
-
-def _field_source(
-    human_value: object | None, llm_value: object | None = None
-) -> Source:
-    if human_value is not None:
-        return "human"
-    if llm_value is not None:
-        return "llm"
-    return "heuristic"
-
-
-def _any_set(overrides: HumanInput) -> bool:
-    return bool(overrides.model_dump(exclude_defaults=True))

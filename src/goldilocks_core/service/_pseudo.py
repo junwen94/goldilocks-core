@@ -120,9 +120,11 @@ def resolve_pseudopotentials(
 
     # A table was actually selected, so the relativistic treatment it
     # implies is confirmed, not merely requested -- true regardless of
-    # whether the asset itself is installed yet below.
+    # whether the asset itself is installed yet below. It follows the
+    # magnetic decision's spin-orbit switch, which it names (#173).
     relativistic_state: FieldState[RelativisticTreatment] = Resolved(
-        requirements.relativistic, Provenance(source="heuristic")
+        requirements.relativistic,
+        Provenance(source="heuristic", derived_from=("magnetic",)),
     )
 
     table = table_state.value

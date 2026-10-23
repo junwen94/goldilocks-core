@@ -121,7 +121,7 @@ def _select_explicit_table(
             reason=f"unknown pseudopotential table {table_id!r}; available: {choices}"
         )
     if not _table_problems(table, elements, requirements):
-        return _selected(table)
+        return _selected(table, pinned=True)
     return _refusal(tables, elements, requirements, pinned=table)
 
 
@@ -141,13 +141,28 @@ def _select_automatic_table(
     table = min(
         matches, key=lambda candidate: (candidate.provider != provider, candidate.id)
     )
-    return _selected(table)
+    return _selected(table, pinned=False)
 
 
-def _selected(table: PseudoTable) -> Resolved[PseudoTable]:
+def _selected(table: PseudoTable, *, pinned: bool) -> Resolved[PseudoTable]:
     """``table`` as the selection, citing it: a bundle cites what its records
-    cite (#156)."""
-    return Resolved(table, Provenance(source="heuristic", citations=(table.citation,)))
+    cite (#156). A pinned ``pseudo_table_id`` is the request's choice
+    (``human``); an automatic one is the heuristic's, from requirements set
+    by the ``functional`` and ``magnetic`` records (``pseudo_requirements``:
+    the spin-orbit switch picks the relativistic treatment), which it names
+    (#173)."""
+    citations = (table.citation,)
+    if pinned:
+        return Resolved(
+            table,
+            Provenance.from_field_sources(
+                {"pseudo_table_id": "human"}, citations=citations
+            ),
+        )
+    provenance = Provenance(
+        source="heuristic", derived_from=("functional", "magnetic"), citations=citations
+    )
+    return Resolved(table, provenance)
 
 
 def _refusal(
@@ -251,7 +266,8 @@ def select_metadata_for_elements(
     `assets.pseudopotentials.importers.load_installed_table`) therefore
     already satisfies the request -- there is nothing left to rank, only to
     look up by element and confirm the table gives exactly one file per
-    element (not zero, not several)."""
+    element (not zero, not several). The selection follows the table, so it
+    names the ``pseudo_table`` record (#173)."""
     by_element: dict[str, list[PseudoMetadata]] = {}
     for item in metadata:
         if item.element is not None:
@@ -271,4 +287,6 @@ def select_metadata_for_elements(
                 )
             )
         selected.append(candidates[0])
-    return Resolved(tuple(selected), Provenance(source="heuristic"))
+    return Resolved(
+        tuple(selected), Provenance(source="heuristic", derived_from=("pseudo_table",))
+    )
