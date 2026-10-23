@@ -46,7 +46,7 @@ def test_etot_conv_thr_is_inherited_from_convergence_not_recomputed() -> None:
     state = relax_settings("relax", tight_convergence)
 
     assert state.value.etot_conv_thr == tight_convergence.value.etot_conv_thr
-    assert state.value.etot_conv_thr == 200 * 1e-5
+    assert state.value.etot_conv_thr == 0.002
 
 
 def test_blocked_convergence_blocks_relax_settings() -> None:

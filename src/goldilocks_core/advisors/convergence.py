@@ -17,9 +17,13 @@ formula supplied. This adopts aiida-quantumespresso's actual
 ``etot_conv_thr = nat * etot_conv_thr_per_atom``, using its
 production-validated balanced-tier constants
 (``conv_thr_per_atom=0.2e-9``, ``etot_conv_thr_per_atom=1e-5``) rather
-than invented ones. ``mixing_beta``/``electron_maxstep`` keep v1's own
-flat defaults (``0.4``, ``80`` -- ``advice/parameters.py:17-18``); no
-source in this codebase scales those with system size.
+than invented ones. The products are taken in decimal, so the recorded
+value is exactly the decimal the formula names (``2.8e-09`` for nat 14):
+the float product ``14 * 0.2e-9`` is ``2.8000000000000003e-09``, which
+``goldilocks.json`` recorded and the input printed (#178).
+``mixing_beta``/``electron_maxstep`` keep v1's own flat defaults
+(``0.4``, ``80`` -- ``advice/parameters.py:17-18``); no source in this
+codebase scales those with system size.
 
 **`mixing_mode='local-TF'` for a cell with a vacuum region**
 (goldilocks-core-design.md:2907, "F26"): QE's default ``'plain'``
@@ -86,6 +90,7 @@ that, one entry per field, using the same priority order as ``_pick``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import Field
@@ -97,8 +102,8 @@ from goldilocks_core.resolution import FieldState, Provenance, Resolved, Warning
 
 MixingMode = Literal["plain", "local-TF"]
 
-_CONV_THR_PER_ATOM = 0.2e-9
-_ETOT_CONV_THR_PER_ATOM = 1e-5
+_CONV_THR_PER_ATOM = Decimal("0.2e-9")
+_ETOT_CONV_THR_PER_ATOM = Decimal("1e-5")
 _DEFAULT_MIXING_BETA = 0.4
 """Matches v1's DEFAULT_MIXING_BETA (advice/parameters.py:17)."""
 _DEFAULT_ELECTRON_MAXSTEP = 80
@@ -169,7 +174,9 @@ def convergence(
     local_tf = bool(geometry is not None and geometry.ok and geometry.value.vacuum_axes)
 
     conv_thr = (
-        human.conv_thr if human.conv_thr is not None else nat * _CONV_THR_PER_ATOM
+        human.conv_thr
+        if human.conv_thr is not None
+        else float(nat * _CONV_THR_PER_ATOM)
     )
     mixing_fixed_ns = _pick(human.mixing_fixed_ns, llm.mixing_fixed_ns, None)
     decision = ConvergenceDecision(
@@ -177,7 +184,7 @@ def convergence(
         etot_conv_thr=(
             human.etot_conv_thr
             if human.etot_conv_thr is not None
-            else nat * _ETOT_CONV_THR_PER_ATOM
+            else float(nat * _ETOT_CONV_THR_PER_ATOM)
         ),
         mixing_beta=_pick(human.mixing_beta, llm.mixing_beta, _DEFAULT_MIXING_BETA),
         electron_maxstep=_pick(

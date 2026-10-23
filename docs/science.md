@@ -185,6 +185,11 @@ A supercell, such as the 8-atom conventional cell of diamond, gets no
 fractional translations in pw.x, so it keeps only the operations that need
 none (24 of diamond's 48), and is counted that way.
 
+The cards write lattice components and fractional coordinates to 10
+significant digits, and any smaller than 1e-10 in magnitude as `0`: the
+1e-16 Å left where a lattice built from its angles, or turned into its
+standard orientation, has a zero, and the 1e-36 coordinates some CIFs list.
+
 ## Check pseudopotentials and cutoffs
 
 A pseudopotential replaces the core-electron potential with an effective

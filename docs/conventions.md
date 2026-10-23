@@ -77,7 +77,9 @@ k-point across its vacuum and a molecule in a box the Γ-point alone, for any
 
 `conv_thr`/`etot_conv_thr` scale with the structure's atom count `nat`, not a
 fixed constant: for Si (`nat=8`) this gives `conv_thr = 1.6e-9` Ry and
-`etot_conv_thr = 8e-5` Ry, matching real `goldilocks explain` output.
+`etot_conv_thr = 8e-5` Ry, matching real `goldilocks explain` output. The
+products are exact decimals (`nat=14` gives `2.8e-9`), and the input writes
+every real namelist value to at most 12 significant digits.
 `mixing_beta` and `electron_maxstep` are fixed defaults. `mixing_fixed_ns` is
 never set by default; see [Check SCF convergence](science.md#check-scf-convergence).
 

@@ -550,6 +550,75 @@ def test_the_cell_s_species_labels_are_rendered_as_given(
     assert [line.split()[0] for line in positions[:2]] == ["Fe1", "Fe2"]
 
 
+def _card(content: str, header: str) -> str:
+    """The card under ``header``, header line excluded."""
+    return content.split(f"{header}\n")[1].split("\n\n")[0]
+
+
+def test_near_zero_cell_and_coordinate_components_are_written_as_0(
+    pseudo_metadata_factory,
+) -> None:
+    """#178: rutile CrO2 (MC3D mc3d-19282) as its CIF gives it. pymatgen's
+    90-degree lattice carries cos(90 deg) noise of +-2.7e-16 A, and the CIF
+    itself lists an O at z = 7.8e-36; both used to reach the input
+    verbatim (``2.687762398e-16``, ``-2.687762398e-16``)."""
+    structure = Structure(
+        Lattice.from_parameters(
+            4.3894491049454, 4.3894491049454, 2.8896400953665, 90.0, 90.0, 90.0
+        ),
+        ["Cr", "Cr", "O", "O", "O", "O"],
+        [
+            [0.5, 0.5, 0.5000000000000172],
+            [0.0, 0.0, 0.0],
+            [0.19679960233908333, 0.8032003976381348, 0.5000000000000172],
+            [0.8032003976381348, 0.19679960233908333, 0.5000000000000172],
+            [0.3032003976381348, 0.3032003976381348, 0.0],
+            [0.6967996023390833, 0.6967996023390833, 7.814225964670207e-36],
+        ],
+    )
+    system = _system(structure, pseudo_metadata_factory)
+
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+
+    assert _card(content, "CELL_PARAMETERS angstrom") == (
+        "  4.389449105  0  0\n  0  4.389449105  0\n  0  0  2.889640095"
+    )
+    assert _card(content, "ATOMIC_POSITIONS crystal") == (
+        "  Cr  0.5  0.5  0.5\n"
+        "  Cr  0  0  0\n"
+        "  O  0.1967996023  0.8032003976  0.5\n"
+        "  O  0.8032003976  0.1967996023  0.5\n"
+        "  O  0.3032003976  0.3032003976  0\n"
+        "  O  0.6967996023  0.6967996023  0"
+    )
+
+
+@pytest.mark.parametrize(
+    ("x", "written"),
+    [
+        (1e-10, "1e-10"),
+        (-1e-10, "-1e-10"),
+        (9.9e-11, "0"),
+        (-9.9e-11, "0"),
+        (-0.0, "0"),
+    ],
+)
+def test_card_components_below_1e_10_are_written_as_0_never_minus_0(
+    diamond_silicon, pseudo_metadata_factory, x: float, written: str
+) -> None:
+    """#178: the snap is |x| < 1e-10, far below CIF precision and pw.x's
+    1e-5 tolerances, so 1e-10 itself is kept; a snapped or negative zero
+    is written as 0."""
+    structure = diamond_silicon.copy()
+    structure.replace(0, "Si", [x, 0.0, 0.0])
+    system = _system(structure, pseudo_metadata_factory)
+
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+
+    first_site = _card(content, "ATOMIC_POSITIONS crystal").splitlines()[0]
+    assert first_site == f"  Si  {written}  0  0"
+
+
 def test_vdw_method_translates_to_qe_keyword(
     silicon_structure, pseudo_metadata_factory
 ) -> None:

@@ -42,6 +42,15 @@ very different tools bundled under one name:
   resolved ``starting_magnetization``/``angle1``/``angle2`` (already
   keyed by QE species index, see ``scf.py``) pass through unchanged.
 
+**Floats are written to 12 significant digits** (#178). ``to_string``
+writes a float's ``repr``, so float noise from upstream arithmetic
+reached the input verbatim (``conv_thr = 2.8000000000000003e-09``).
+``render_namelist`` rounds every float, indexed keys included, to 12
+significant digits as a positive-zero Python float, whose ``repr`` is
+the shortest decimal (``2.8e-09``). Nothing is snapped to zero: a
+``conv_thr`` of ``1e-12`` is a legitimate request. Near-zero snapping
+belongs to card geometry (``scf.py``).
+
 **Empty sections are dropped.** ``to_nested`` always populates every
 section ``ALL_KEYS['pw']`` knows about (``&IONS``/``&CELL``/``&FCP``/
 ``&RISM``), even when nothing was supplied for them -- confirmed
@@ -68,6 +77,7 @@ from ase.io.espresso_namelist.namelist import Namelist
 from goldilocks_core.generation.errors import GenerationError
 
 _DEFAULT_BINARY = "pw"
+_SIGNIFICANT_DIGITS = 12
 
 
 def render_namelist(keywords: dict[str, object], binary: str = _DEFAULT_BINARY) -> str:
@@ -85,11 +95,14 @@ def render_namelist(keywords: dict[str, object], binary: str = _DEFAULT_BINARY) 
     version 2026-09-14), a flat single-section list rather than pw.x's
     ``&CONTROL``/``&SYSTEM``/... split -- ``to_nested`` handles both
     shapes the same way, so no dos-specific branch is needed here.
+
+    Floats are written to 12 significant digits, never as ``-0.0``
+    (module docstring).
     """
     if not keywords:
         raise GenerationError("no Quantum ESPRESSO namelist keywords to render")
 
-    namelist = Namelist(keywords)
+    namelist = Namelist({key: _rounded(value) for key, value in keywords.items()})
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", UserWarning)
         namelist.to_nested(binary, warn=True)
@@ -107,3 +120,11 @@ def render_namelist(keywords: dict[str, object], binary: str = _DEFAULT_BINARY) 
             f"no keyword mapped to a known {binary}.x namelist section"
         )
     return populated.to_string()
+
+
+def _rounded(value: object) -> object:
+    """A float rounded to ``_SIGNIFICANT_DIGITS`` as a Python float, ``-0.0``
+    as ``0.0``; any other value unchanged (``bool`` is not a float)."""
+    if not isinstance(value, float):
+        return value
+    return float(f"{value:.{_SIGNIFICANT_DIGITS}g}") + 0.0
