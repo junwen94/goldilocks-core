@@ -33,6 +33,8 @@ module into one file. Split by pipeline phase instead, matching
   ``system_settings.SystemSettings``'s own field list one layer up
 - ``_step.py`` -- per-step advisors (epics 6-7), mirrors
   ``step_settings.PwSettings``'s own field list one layer up
+- ``_step_protocol.py`` -- ``StepProtocol``, a task's own defaults for one
+  of its steps, a tier below the request (the dos nscf protocol, #174)
 - ``_advice.py`` -- ``Advice``/``RunOverrides``, composing the three
   phases above
 - ``_pipeline.py`` -- ``advise()``/``check()``, and ``advise_steps``,

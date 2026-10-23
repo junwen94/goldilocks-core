@@ -13,6 +13,7 @@ from goldilocks_core.advisors.magnetic_config import (
 from goldilocks_core.advisors.occupations import (
     OccupationsHumanInput,
     OccupationsLlmInput,
+    OccupationsProtocol,
     occupations,
     whole_spin_channels,
 )
@@ -625,3 +626,85 @@ def test_a_chosen_occupations_reads_its_tier_and_no_fact() -> None:
         "degauss": "heuristic",
     }
     assert llm.provenance.derived_from == ()
+
+
+_PROTOCOL = OccupationsProtocol(
+    occupations="tetrahedra_opt", note="A task protocol's nscf occupations."
+)
+"""A step's protocol occupations, as the dos task's nscf step gets them."""
+
+
+@pytest.mark.parametrize("metallicity", [_ML_METAL, _NON_METAL], ids=["metal", "non"])
+def test_a_protocol_occupations_outranks_the_llm_and_the_is_metal_heuristic(
+    metallicity,
+) -> None:
+    """#174: a step's protocol occupations rank above an llm choice and the
+    is_metal rule, and read 'heuristic' with the protocol as their note, not
+    'human'."""
+    state = occupations(
+        metallicity,
+        llm=OccupationsLlmInput(occupations="smearing"),
+        protocol=_PROTOCOL,
+    )
+
+    assert state.value.occupations == "tetrahedra_opt"
+    assert state.value.smearing_type is None
+    assert state.value.degauss is None
+    assert state.provenance == Provenance(
+        source="heuristic",
+        source_note="A task protocol's nscf occupations.",
+        field_sources={"occupations": "heuristic"},
+    )
+
+
+def test_a_human_occupations_outranks_the_protocol() -> None:
+    state = occupations(
+        _NON_METAL,
+        human=OccupationsHumanInput(occupations="smearing", degauss=0.02),
+        protocol=_PROTOCOL,
+    )
+
+    assert (state.value.occupations, state.value.degauss) == ("smearing", 0.02)
+    assert state.provenance == Provenance(
+        source="human",
+        field_sources={
+            "occupations": "human",
+            "smearing_type": "heuristic",
+            "degauss": "human",
+        },
+    )
+
+
+def test_a_human_degauss_is_not_applied_under_the_protocol_s_tetrahedra() -> None:
+    """#174: a smearing width alone does not displace the protocol's
+    occupations; tetrahedra_opt applies no width, so it gets no entry."""
+    state = occupations(
+        _ML_METAL,
+        human=OccupationsHumanInput(smearing_type="mp", degauss=0.02),
+        protocol=_PROTOCOL,
+    )
+
+    assert state.value.occupations == "tetrahedra_opt"
+    assert state.value.degauss is None
+    assert state.source == "heuristic"
+    assert state.provenance.field_sources == {"occupations": "heuristic"}
+
+
+def test_a_smearing_protocol_applies_the_human_smearing_width() -> None:
+    protocol = OccupationsProtocol(occupations="smearing", note="Smearing protocol.")
+
+    state = occupations(
+        _NON_METAL, human=OccupationsHumanInput(degauss=0.02), protocol=protocol
+    )
+
+    assert (state.value.occupations, state.value.smearing_type) == ("smearing", "cold")
+    assert state.value.degauss == 0.02
+    assert state.provenance == Provenance(
+        source="human",
+        source_note="Smearing protocol.",
+        field_sources={
+            "occupations": "heuristic",
+            "smearing_type": "heuristic",
+            "degauss": "human",
+        },
+    )

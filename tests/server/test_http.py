@@ -377,6 +377,45 @@ class TestExplain:
         assert records["nscf_occupations"]["value"]["occupations"] == ("tetrahedra_opt")
         assert records["dos"]["value"]["delta_e"] == 0.01
 
+    def test_dos_nscf_protocol_values_read_heuristic_not_your_override(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        """#174: with no overrides the dos task's nscf protocol values read
+        'heuristic', naming the protocol in source_note; the same values set
+        in the request read 'human'. Both used to read 'human'."""
+
+        def nscf_records(overrides: dict[str, object]) -> list[dict]:
+            response = client.post(
+                "/explain",
+                json={
+                    "structure_content": silicon_cif,
+                    "hpc": "scarf",
+                    "task": "dos",
+                    "overrides": overrides,
+                },
+            )
+            assert response.status_code == 200
+            records = response.json()["records"]
+            return [records["nscf_k_sampling"], records["nscf_occupations"]]
+
+        defaults = nscf_records({})
+        requested = nscf_records({"k_distance": 0.1, "occupations": "tetrahedra_opt"})
+
+        assert [record["value"] for record in defaults] == [
+            record["value"] for record in requested
+        ]
+        assert defaults[0]["value"]["k_distance"] == 0.1
+        assert defaults[1]["value"]["occupations"] == "tetrahedra_opt"
+        for record in defaults:
+            assert record["source"] == "heuristic"
+            assert record["source_note"] == (
+                "Protocol default for the dos task's nscf step: "
+                "aiida-quantumespresso's pdos.yaml, balanced."
+            )
+        for record in requested:
+            assert record["source"] == "human"
+            assert record["source_note"] is None
+
     def test_relax_task_returns_a_relax_record(
         self, client: TestClient, real_assets, silicon_cif: str
     ) -> None:

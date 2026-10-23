@@ -168,12 +168,19 @@ if dos_report.ok:
 
 `dos_advice.records()` keys the shared system-level fields and the task's
 one `job` unprefixed, the nscf step's own fields under an `nscf_`-prefixed
-name, and the DOS decision itself under `"dos"`. The three steps run in one
-allocation, so there is one job, sized over both `pw.x` steps. `pw.x`
-counts `max_seconds` from its own start, so the job splits 95% of the
-walltime between the scf and the nscf by estimated workload
-(`job.max_seconds_by_step`), and each input gets its own share; `dos.x`
-runs in what is left. Both `pw.x` steps run on the whole allocation;
+name, and the DOS decision itself under `"dos"`. Unless the request sets
+them, the nscf step takes its k-point spacing (0.10 Å⁻¹) and occupations
+(`tetrahedra_opt`) from the dos protocol, aiida-quantumespresso's `pdos.yaml`
+(balanced), ahead of the ML tier: `nscf_k_sampling` and `nscf_occupations`
+read `heuristic` and name the protocol in `source_note`. A value you set
+replaces the protocol's field by field and reads `human`; a `shift` alone
+keeps the protocol's mesh, and a `degauss` alone keeps `tetrahedra_opt`.
+
+The three steps run in one allocation, so there is one job, sized over both
+`pw.x` steps. `pw.x` counts `max_seconds` from its own start, so the job
+splits 95% of the walltime between the scf and the nscf by estimated
+workload (`job.max_seconds_by_step`), and each input gets its own share;
+`dos.x` runs in what is left. Both `pw.x` steps run on the whole allocation;
 `dos.x` runs on one task of it (`srun --nodes=1 --ntasks=1`), because every
 extra task would repeat the whole DOS and `dos.x` aborts when a task owns no
 FFT plane.

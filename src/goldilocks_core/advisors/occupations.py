@@ -38,8 +38,13 @@ classification).
 goldilocks-core-design.md's per-step pipeline sketch) is not decided by
 this heuristic: no source in this codebase specifies when it should win
 over smearing/fixed, so this module does not guess. It remains a valid
-override value -- ``human``/``llm`` can request it directly -- just not
-something the heuristic tier will ever choose on its own.
+override value -- ``human``/``llm`` can request it directly -- and a
+task protocol can give it to one of its steps (``OccupationsProtocol``,
+the dos task's nscf step, #174), just not something the ``is_metal`` rule
+will ever choose on its own. A protocol ranks below a request's
+``occupations`` and above the llm; its record reads ``heuristic`` with
+the protocol named in ``source_note``. A request's ``smearing_type``/
+``degauss`` apply under it only where it chooses smearing.
 
 **Why ``magnetic`` and ``electron_count`` are inputs (#138).** One QE
 constraint couples the occupations, the moment and the electron count:
@@ -265,22 +270,37 @@ class OccupationsLlmInput(LlmInput):
     occupations: Occupations | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class OccupationsProtocol:
+    """A task protocol's occupations for one of its steps (#174), such as
+    the dos task's ``tetrahedra_opt`` nscf step: ranked below a request's
+    ``occupations`` and above the llm and the ``is_metal`` rule. Not a
+    request value, so its record reads ``heuristic``, with ``note`` naming
+    the protocol as its ``source_note``."""
+
+    occupations: Occupations
+    note: str
+
+
 def occupations(
     is_metal: FieldState[Metallicity],
     magnetic: FieldState[MagneticConfigFacts] | None = None,
     electron_count: FieldState[ElectronCountDecision] | None = None,
     human: OccupationsHumanInput | None = None,
     llm: OccupationsLlmInput | None = None,
+    protocol: OccupationsProtocol | None = None,
 ) -> FieldState[OccupationsDecision]:
     """The occupations scheme and the moment it pins (module docstring):
-    a human or llm choice, else smearing for a metal or an unconfirmed
-    one, else, for a non-metal, fixed where fixed occupations can run and
-    smearing otherwise. ``Blocked`` only when ``is_metal`` is and nothing
-    chose. The provenance names who set each applied setting and the
-    records the decision followed: for the heuristic choice, ``is_metal``
-    and, for a non-metal, the records that decided whether fixed
-    occupations can run (``_Spin.fixed_runs_records``); on every branch,
-    the records a pinned moment came from (``_provenance``, #173)."""
+    a human choice, else the step's ``protocol``, else an llm choice, else
+    smearing for a metal or an unconfirmed one, else, for a non-metal, fixed
+    where fixed occupations can run and smearing otherwise. ``Blocked`` only
+    when ``is_metal`` is and nothing chose. The provenance names who set
+    each applied setting and the records the decision followed: for the
+    heuristic choice, ``is_metal`` and, for a non-metal, the records that
+    decided whether fixed occupations can run (``_Spin.fixed_runs_records``);
+    on every branch, the records a pinned moment came from (``_provenance``,
+    #173). A protocol's choice reads ``heuristic`` with the protocol's note
+    (#174)."""
     human = human or OccupationsHumanInput()
     llm = llm or OccupationsLlmInput()
     spin = _spin(magnetic, electron_count)
@@ -290,6 +310,14 @@ def occupations(
             human.occupations, human.smearing_type, human.degauss, spin
         )
         return Resolved(decision, _provenance(decision, human, None, spin))
+    if protocol is not None:
+        decision = _decision_for(
+            protocol.occupations, human.smearing_type, human.degauss, spin
+        )
+        return Resolved(
+            decision,
+            _provenance(decision, human, None, spin, source_note=protocol.note),
+        )
     if llm.occupations is not None:
         # This branch reads no human smearing value.
         decision = _decision_for(llm.occupations, None, None, spin)
@@ -320,6 +348,7 @@ def _provenance(
     llm: OccupationsLlmInput | None,
     spin: _Spin,
     rule: tuple[str, ...] = (),
+    source_note: str | None = None,
 ) -> Provenance:
     """``decision``'s provenance from the inputs its branch read (#173):
     ``occupations`` always, ``smearing_type`` and ``degauss`` only under
@@ -328,7 +357,8 @@ def _provenance(
     ``rule``, those the heuristic choice read, then ``magnetic`` where
     ``decision`` pins a moment -- the magnetic record's admitted request, or
     the 0 of its compensated ordering -- and ``electron_count`` where that 0
-    needed an even count."""
+    needed an even count. ``source_note`` names the protocol that chose
+    (#174)."""
     applied = (
         ("occupations", "smearing_type", "degauss")
         if decision.occupations == "smearing"
@@ -342,6 +372,7 @@ def _provenance(
     return Provenance.from_field_sources(
         field_sources_from(human, llm, fields=applied),
         derived_from=tuple(dict.fromkeys(derived)),
+        source_note=source_note,
     )
 
 

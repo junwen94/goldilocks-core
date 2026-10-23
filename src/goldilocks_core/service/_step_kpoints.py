@@ -12,6 +12,11 @@ signature, not a convention invented here): ``occupations`` before
 resolves without it; ``nbnd`` needs its *plain* ``nelec`` (already
 resolved by phase 2) so it is ``Blocked`` outright if that failed.
 
+A step's ``KpointsOverrides`` hold request values only; its task's
+protocol for it (``StepProtocol``, ``_step_protocol.py``: the dos task's
+nscf mesh and occupations) reaches ``occupations`` and ``k_sampling`` as
+a tier of its own, below the request (#174).
+
 **Every structural input is the simulated cell** (``system.cell``, #128):
 ``k_sampling`` and ``n_irr_k`` mesh its reciprocal lattice -- ``n_irr_k``
 with its moments, for a spin-orbit run (#172) -- and ``convergence``
@@ -51,6 +56,7 @@ from goldilocks_core.advisors.occupations import (
 )
 from goldilocks_core.resolution import Blocked, FieldState, blocked_by
 from goldilocks_core.service._analysis import AnalysisFacts
+from goldilocks_core.service._step_protocol import StepProtocol
 from goldilocks_core.service._system import SystemAdvice
 
 
@@ -95,16 +101,20 @@ def electronic_step_advice(
     analysis: AnalysisFacts,
     system: SystemAdvice,
     overrides: KpointsOverrides,
+    protocol: StepProtocol,
 ) -> ElectronicStepAdvice:
+    """One step's electronic advice from its request ``overrides`` and its
+    task's ``protocol`` for it, a tier below the overrides (#174)."""
     occupations_state = occupations(
         analysis.is_metal,
         system.magnetic,
         system.electron_count,
         human=overrides.occupations,
         llm=overrides.occupations_llm,
+        protocol=protocol.occupations,
     )
     k_sampling_state, n_irr_k_state, convergence_state = _cell_sampling(
-        analysis, system, occupations_state, overrides
+        analysis, system, occupations_state, overrides, protocol
     )
 
     if system.electron_count.ok:
@@ -133,6 +143,7 @@ def _cell_sampling(
     system: SystemAdvice,
     occupations_state: FieldState[OccupationsDecision],
     overrides: KpointsOverrides,
+    protocol: StepProtocol,
 ) -> tuple[
     FieldState[KSamplingDecision], FieldState[int], FieldState[ConvergenceDecision]
 ]:
@@ -148,6 +159,7 @@ def _cell_sampling(
         occupations_state,
         overrides.k_sampling,
         overrides.k_sampling_llm,
+        protocol=protocol.k_sampling,
     )
     return (
         k_sampling_state,

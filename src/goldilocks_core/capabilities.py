@@ -933,7 +933,9 @@ def _tasks() -> list[dict[str, object]]:
             "name": "Density of states",
             "description": (
                 "scf, then a denser nscf pass, then dos.x -- three steps "
-                "sharing one prefix/outdir (v2 epic 9, #9)."
+                "sharing one prefix/outdir (v2 epic 9, #9). Unless set, the "
+                "nscf step takes k_distance 0.10 and tetrahedra_opt "
+                "occupations from aiida-quantumespresso's pdos.yaml protocol."
             ),
             "codes": [_CODE],
             "step_count": 3,

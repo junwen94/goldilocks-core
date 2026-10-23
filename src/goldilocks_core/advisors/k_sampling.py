@@ -32,6 +32,15 @@ QRF95, not another name for it, despite
 ``capabilities.py`` having (incorrectly) pointed ``k_distance``'s
 ``ml_target`` at ``"k_index"`` until this same change fixed it.
 
+**A step's protocol** (#174). A task can give one of its steps its own
+k_distance (``KSamplingProtocol``; the dos task's nscf step,
+``service/_step_protocol.py``). It ranks below the request's own
+``k_grid``/``k_index``/``k_distance`` and above QRF95 and the llm: QRF95
+is trained on scf meshes, and a denser mesh is the point of that step. Its
+record reads ``heuristic``, with the protocol named in ``source_note``,
+since the request did not set it; a request's ``shift`` still applies on
+it.
+
 ``occupations`` is accepted as an explicit input -- not because either
 the heuristic or the now-wired QRF95 ml tier uses it (neither does;
 QRF95's own feature contract is composition/structure/SOAP/lattice/
@@ -204,13 +213,31 @@ class KSamplingLlmInput(LlmInput):
     k_distance: float | None = Field(default=None, gt=0)
 
 
+@dataclass(frozen=True, slots=True)
+class KSamplingProtocol:
+    """A task protocol's k-point spacing for one of its steps (#174), such
+    as the dos task's denser nscf mesh: ranked below the request's own mesh
+    settings and above QRF95 and the llm. Not a request value, so its
+    record reads ``heuristic``, with ``note`` naming the protocol as its
+    ``source_note``."""
+
+    k_distance: float
+    """1/angstrom, as ``KSamplingHumanInput.k_distance``."""
+    note: str
+
+
 def k_sampling(
     is_metal: FieldState[Metallicity],
     structure: Structure,
     occupations: FieldState[OccupationsDecision] | None = None,
     human: KSamplingHumanInput | None = None,
     llm: KSamplingLlmInput | None = None,
+    protocol: KSamplingProtocol | None = None,
 ) -> FieldState[KSamplingDecision]:
+    """The mesh from a human ``k_grid``, else a human ``k_index``, else the
+    k_distance of the first tier that gives one (``_k_distance_tier``):
+    human, the step's ``protocol``, QRF95, llm, then the ``is_metal``
+    heuristic."""
     human = human or KSamplingHumanInput()
     llm = llm or KSamplingLlmInput()
 
@@ -248,20 +275,42 @@ def k_sampling(
             k_distance_interval=resolved.k_distance_interval,
         )
         return Resolved(decision, _provenance(human, None, "k_index"))
+    tier = _k_distance_tier(is_metal, structure, human, llm, protocol)
+    if isinstance(tier, Blocked):
+        return tier
+    k_distance, shift, provenance = tier
+    return Resolved(
+        _with_k_index(_from_k_distance(structure, k_distance, shift), structure),
+        provenance,
+    )
+
+
+def _k_distance_tier(
+    is_metal: FieldState[Metallicity],
+    structure: Structure,
+    human: KSamplingHumanInput,
+    llm: KSamplingLlmInput,
+    protocol: KSamplingProtocol | None,
+) -> tuple[float, tuple[int, int, int] | None, Provenance] | Blocked:
+    """The k_distance of the first tier that gives one, in rank order --
+    human, the step's ``protocol``, QRF95, llm, the ``is_metal`` heuristic --
+    with the shift and the provenance that tier applies. Only the llm tier
+    reads no human shift. A protocol skips QRF95, which is trained on scf
+    meshes (#174). ``Blocked`` when the heuristic decides and ``is_metal``
+    is blocked."""
     if human.k_distance is not None:
-        return Resolved(
-            _with_k_index(
-                _from_k_distance(structure, human.k_distance, human.shift), structure
-            ),
-            _provenance(human, None, "k_distance"),
+        return human.k_distance, human.shift, _provenance(human, None, "k_distance")
+    if protocol is not None:
+        return (
+            protocol.k_distance,
+            human.shift,
+            _provenance(human, None, "k_distance", source_note=protocol.note),
         )
     prediction = _ml_k_distance(structure)
     if prediction is not None:
-        return Resolved(
-            _with_k_index(
-                _from_k_distance(structure, float(prediction.value), human.shift),
-                structure,
-            ),
+        return (
+            float(prediction.value),
+            human.shift,
             _provenance(
                 human,
                 None,
@@ -272,12 +321,7 @@ def k_sampling(
             ),
         )
     if llm.k_distance is not None:
-        # This branch reads no human shift.
-        return Resolved(
-            _with_k_index(_from_k_distance(structure, llm.k_distance, None), structure),
-            _provenance(None, llm, "k_distance"),
-        )
-
+        return llm.k_distance, None, _provenance(None, llm, "k_distance")
     if isinstance(is_metal, Blocked):
         return Blocked(by=is_metal)
     k_distance = (
@@ -285,8 +329,9 @@ def k_sampling(
         if is_metal.ok and is_metal.value == "non_metal"
         else _METAL_K_DISTANCE
     )
-    return Resolved(
-        _with_k_index(_from_k_distance(structure, k_distance, human.shift), structure),
+    return (
+        k_distance,
+        human.shift,
         _provenance(human, None, "k_distance", derived_from=("is_metal",)),
     )
 
@@ -306,7 +351,7 @@ def _provenance(
     the tier that decided it (``decided``) and ``shift`` the heuristic
     Gamma default. ``provenance`` sets the rest: the model's evidence for
     QRF95's k_distance, ``derived_from`` for the heuristic's, which follows
-    ``is_metal``."""
+    ``is_metal``, and the protocol's ``source_note`` for a protocol's."""
     field_sources = field_sources_from(
         human, llm, fields=(mesh_from, "shift"), decided={mesh_from: decided}
     )

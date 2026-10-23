@@ -126,7 +126,10 @@ if dos_report.ok:
 `DosAdvice.records()` keys the shared system-level fields and the task's one
 `job` unprefixed, the nscf step's own fields under `nscf_`, and the DOS
 decision itself under `"dos"`. The job splits 95% of `walltime_h` between the
-scf and nscf inputs as `max_seconds` (`job.max_seconds_by_step`).
+scf and nscf inputs as `max_seconds` (`job.max_seconds_by_step`). Unless the
+request sets them, the nscf step's k-point spacing and occupations come from
+the dos protocol (aiida-quantumespresso `pdos.yaml`); those records read
+`heuristic` with the protocol in `source_note`, never `human`.
 CLI/HTTP/MCP equivalent: pass `task="dos"` (CLI: `--task dos`).
 
 ## Optional transports

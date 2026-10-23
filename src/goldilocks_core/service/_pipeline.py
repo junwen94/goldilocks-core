@@ -18,7 +18,8 @@ one job for the whole task (``_step.py``) -- the steps run one after
 another in one allocation, so the job is sized over all of them and
 splits the walltime between them. It returns one ``Advice`` per step,
 all sharing the same analysis, system and job. ``advise()`` is its
-one-scf-step case; ``service/_dos.py`` (scf + nscf) and
+one-scf-step case; ``service/_dos.py`` (scf + nscf, the nscf with the dos
+protocol, ``_step_protocol.py``) and
 ``service/_relax.py`` (one relax/vc-relax step) call it directly.
 
 The input structure reaches only the analysis and the system phase,
@@ -40,6 +41,7 @@ from goldilocks_core.resolution import FieldState
 from goldilocks_core.service._advice import Advice, RunOverrides
 from goldilocks_core.service._analysis import analyze
 from goldilocks_core.service._step import StepOverrides, steps_advice
+from goldilocks_core.service._step_protocol import StepProtocol
 from goldilocks_core.service._system import system_advice
 
 
@@ -88,12 +90,15 @@ def advise_steps(
     steps: Mapping[str, StepOverrides],
     store: AssetStore | None,
     fetch_missing: bool,
+    protocols: Mapping[str, StepProtocol] | None = None,
 ) -> dict[str, Advice]:
     """One ``Advice`` per entry of ``steps`` (a pw.x step's purpose -> its
     own step overrides, in run order), for one task. ``overrides`` gives
     the analysis and system overrides and the task-level job overrides
     (``overrides.step.resources.job``/``job_llm``); ``overrides.step``'s
-    other fields reach a step only through ``steps``."""
+    other fields reach a step only through ``steps``. ``protocols`` gives
+    a step its task's protocol (``StepProtocol``, by purpose), a tier below
+    that step's overrides and above the ML tier (#174)."""
     analysis = analyze(structure, overrides.analysis)
     system = system_advice(
         structure,
@@ -104,7 +109,7 @@ def advise_steps(
     )
     task_job = overrides.step.resources
     advice_by_step = steps_advice(
-        analysis, system, hpc, steps, task_job.job, task_job.job_llm
+        analysis, system, hpc, steps, task_job.job, task_job.job_llm, protocols or {}
     )
     return {
         purpose: Advice(analysis=analysis, system=system, step=step)

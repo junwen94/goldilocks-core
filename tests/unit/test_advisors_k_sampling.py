@@ -15,6 +15,7 @@ from support import (
 from goldilocks_core.advisors.k_sampling import (
     KSamplingHumanInput,
     KSamplingLlmInput,
+    KSamplingProtocol,
     k_sampling,
 )
 from goldilocks_core.advisors.species_split import split_species
@@ -588,3 +589,92 @@ def test_the_setting_the_mesh_came_from_reads_its_tier(
     assert state.provenance.field_sources == field_sources
     assert state.source == ("llm" if llm else "human")
     assert state.provenance.derived_from == ()
+
+
+_PROTOCOL = KSamplingProtocol(k_distance=0.1, note="A task protocol's nscf spacing.")
+"""A step's protocol k-point spacing, as the dos task's nscf step gets one."""
+
+
+def test_a_protocol_k_distance_outranks_qrf95_and_the_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#174: a step's protocol spacing ranks above QRF95, which is never
+    asked (it is trained on scf meshes), and above an llm spacing. The
+    record reads 'heuristic' with the protocol as its note, not 'human'."""
+
+    def predict(_structure: Structure) -> MlPrediction:
+        raise AssertionError("QRF95 is not asked when the step has a protocol")
+
+    monkeypatch.setattr(predict_module, "predict_k_distance", predict)
+
+    state = k_sampling(
+        _NON_METAL,
+        _BCC_IRON,
+        llm=KSamplingLlmInput(k_distance=0.4),
+        protocol=_PROTOCOL,
+    )
+
+    assert state.value.k_distance == 0.1
+    assert state.value.mesh == k_distance_to_mesh(_BCC_IRON, 0.1)
+    assert state.value.shift == (0, 0, 0)
+    assert state.provenance == Provenance(
+        source="heuristic",
+        source_note="A task protocol's nscf spacing.",
+        field_sources={"k_distance": "heuristic", "shift": "heuristic"},
+    )
+
+
+def test_without_a_protocol_qrf95_decides_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prediction = _stub_qrf95(monkeypatch, 0.25)
+
+    state = k_sampling(_NON_METAL, _BCC_IRON, protocol=None)
+
+    assert state.value.k_distance == 0.25
+    assert state.provenance.model == prediction.provenance.model
+    assert state.provenance.source_note is None
+
+
+@pytest.mark.parametrize(
+    ("human", "mesh_from"),
+    [
+        (KSamplingHumanInput(k_distance=0.2), "k_distance"),
+        (KSamplingHumanInput(k_grid=(5, 5, 5)), "k_grid"),
+        (KSamplingHumanInput(k_index=2), "k_index"),
+    ],
+    ids=["k_distance", "k_grid", "k_index"],
+)
+def test_a_human_mesh_outranks_the_protocol(
+    human: KSamplingHumanInput, mesh_from: str
+) -> None:
+    """#174: the request's own mesh setting wins over the step's protocol
+    and reads 'human', without the protocol's note."""
+    state = k_sampling(_NON_METAL, _BCC_IRON, human=human, protocol=_PROTOCOL)
+
+    assert state.value == k_sampling(_NON_METAL, _BCC_IRON, human=human).value
+    assert state.value.k_distance != 0.1
+    assert state.provenance == Provenance(
+        source="human",
+        field_sources={mesh_from: "human", "shift": "heuristic"},
+    )
+
+
+def test_a_human_shift_applies_on_the_protocol_k_distance() -> None:
+    """#174: the request's shift and the protocol's spacing merge field by
+    field: a shift alone keeps the protocol mesh."""
+    state = k_sampling(
+        _NON_METAL,
+        _BCC_IRON,
+        human=KSamplingHumanInput(shift=(1, 1, 1)),
+        protocol=_PROTOCOL,
+    )
+
+    assert state.value.k_distance == 0.1
+    assert state.value.mesh == k_distance_to_mesh(_BCC_IRON, 0.1)
+    assert state.value.shift == (1, 1, 1)
+    assert state.provenance == Provenance(
+        source="human",
+        source_note="A task protocol's nscf spacing.",
+        field_sources={"k_distance": "heuristic", "shift": "human"},
+    )

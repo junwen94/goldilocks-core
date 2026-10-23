@@ -87,7 +87,10 @@ summary (`server/http.py`).
 `service.advise_dos`/`check_dos`/`generate_dos` (`service/_dos.py`), rather
 than any generic graph: nothing about resolving one step's own settings
 changes between an scf task and dos's scf/nscf steps, so both steps get the
-same per-step advisors, the nscf with nscf-specific overrides. Analysis and
+same per-step advisors and the same request overrides. The nscf step also gets
+the dos task's protocol (`StepProtocol`, `service/_step_protocol.py`): a tier
+of its own, below the request and above the ML tier for that step only, whose
+values read `heuristic` with the protocol in `source_note`. Analysis and
 system advice run once, and the steps share one job, because they run one
 after another in one allocation: it is sized over both steps, and each
 `pw.x` step gets its own `max_seconds` share of the walltime, since `pw.x`

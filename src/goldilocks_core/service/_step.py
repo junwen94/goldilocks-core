@@ -33,6 +33,7 @@ from goldilocks_core.service._step_kpoints import (
     KpointsOverrides,
     electronic_step_advice,
 )
+from goldilocks_core.service._step_protocol import StepProtocol
 from goldilocks_core.service._step_resources import (
     ResourceOverrides,
     ResourceStepAdvice,
@@ -86,14 +87,21 @@ def steps_advice(
     steps: Mapping[str, StepOverrides],
     job_human: JobHumanInput | None,
     job_llm: JobLlmInput | None,
+    protocols: Mapping[str, StepProtocol],
 ) -> dict[str, StepAdvice]:
     """One ``StepAdvice`` per entry of ``steps`` (a pw.x step's purpose ->
     its overrides, in run order), all on the simulated cell
     ``system.cell``. The steps share one job, sized with the task-level
     ``job_human``/``job_llm``; each step's own overrides give its
-    k-point/band advice and npool/ndiag."""
+    k-point/band advice and npool/ndiag, over its task's protocol for it
+    in ``protocols`` (by purpose; a step without one has none, #174)."""
     electronic = {
-        purpose: electronic_step_advice(analysis, system, step.kpoints)
+        purpose: electronic_step_advice(
+            analysis,
+            system,
+            step.kpoints,
+            protocols.get(purpose, StepProtocol()),
+        )
         for purpose, step in steps.items()
     }
     resources = task_resources(

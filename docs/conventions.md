@@ -130,6 +130,14 @@ heuristic`; see `goldilocks settings` for each key's actual sources).
 - `k_grid` wins over `k_distance`; either one bypasses the heuristic
   k-point sizing entirely (the `k_sampling.grid_and_distance_conflict` info
   warning fires if both are given).
+- A `dos` task's nscf step has a protocol tier between your settings and
+  the ML tier, for that step only: k_distance 0.10 Å⁻¹ and `tetrahedra_opt`
+  occupations (aiida-quantumespresso's `pdos.yaml`, balanced). Its values read
+  `heuristic` with the protocol named in `source_note`; `human` means only a
+  value set in the request. A setting you give replaces the protocol field by
+  field: a `shift` alone keeps the protocol's k_distance, and a
+  `smearing_type`/`degauss` alone keeps `tetrahedra_opt` and is not applied
+  to the nscf step.
 - `smearing_type` and `degauss` are independent overrides in the
   `occupations` group; `degauss` defaults to `0.01` Ry (the metallic
   cold-smearing default) if smearing is chosen without an explicit value.

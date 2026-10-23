@@ -18,10 +18,11 @@ the real upstream value directly (the nscf step's own resolved
 implicitly by reading the previous calculation's save file -- consistent
 with this codebase writing every value explicitly rather than relying on
 implicit QE fallbacks. When the nscf step used a tetrahedron method
-(no smearing width exists at all -- exactly what ``service/_dos.py``'s
-``_nscf_overrides`` forces, per aiida-quantumespresso's own
-``pdos.yaml`` protocol, confirmed against its source 2026-09-14),
-``broadening`` is correctly left ``None``: QE's
+(no smearing width exists at all -- the ``tetrahedra_opt`` the dos task's
+nscf protocol gives unless the request sets occupations,
+``service/_step_protocol.py``'s ``DOS_NSCF_PROTOCOL``, per
+aiida-quantumespresso's own ``pdos.yaml`` protocol, confirmed against its
+source 2026-09-14), ``broadening`` is correctly left ``None``: QE's
 own ``bz_sum`` default already switches to a tetrahedron integration
 method whenever no ``degauss`` is given, so leaving it unset here is the
 physically correct choice, not a gap.

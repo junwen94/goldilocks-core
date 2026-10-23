@@ -695,8 +695,10 @@ that record admitted, or the 0 of its compensated ordering, which also names
 `electron_count`, since that 0 needs an even count. The upstream record's
 `source` is not copied: `occupations`
 reads `heuristic` even when the classifier decided `is_metal` (`ml`), and you
-follow `derived_from` to find that. Per-decision warnings live inside that
-decision's own value (e.g.
+follow `derived_from` to find that. `human` only ever means a value set in the
+request: a `dos` task's nscf protocol values (`nscf_k_sampling`'s k_distance,
+`nscf_occupations`) read `heuristic`, with `source_note` naming the protocol.
+Per-decision warnings live inside that decision's own value (e.g.
 `job.warnings`, `cutoffs.warnings`), and every run, whatever its task, also
 carries one aggregated top-level `warnings` list: every record's warnings, in
 record-name order, each naming the record it came from in `record`. A `dos`
