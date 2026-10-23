@@ -71,6 +71,22 @@ QE's ``angle1``/``angle2`` for the cell as written
 k-points with the same moments. Any other run ignores a
 ``moment_direction`` with the warning ``magnetic.moment_direction_ignored``.
 
+**A Hubbard U on an odd shell (#147).** QE's Dudarev potential is
+U(1/2 - n_sigma) per spin (QE 7.3 ``PW/src/v_of_rho.f90:771-869``), and a
+spin-unpolarized run gives each spin half of the occupation matrix
+(``PW/src/new_ns.f90:126``). An odd d or f count -- Cu2+ d9 -- then leaves
+a fractional count per spin (4.5) that fills no whole orbital, so +U can
+neither form the moment nor open the gap, and pw.x converges to the wrong
+state without complaint. So when the Hubbard decision applies a U to an
+element whose d or f count (``local_moments``' ``shell_counts``) is odd,
+spin polarization is on, over a spin-unpolarized answer of the llm or of
+``is_magnetic`` (whose classifier called tenorite CuO non-magnetic), with
+the warning ``magnetic.spin_polarized_for_hubbard_open_shell`` naming the
+elements and the answer overridden. A human ``spin_polarized`` still
+wins. The rule reads the count, not "U implies nspin=2": low-spin Co3+ d6
+in LiCoO2 keeps a non-magnetic answer, and so does an element whose count
+``local_moments`` cannot fix (no anion, or no oxidation-state guess).
+
 **Two steps, around pseudopotential selection (#128).** ``magnetic_cell``
 decides what selection depends on, and the simulated cell: spin
 polarization, spin-orbit coupling (selection reads it for the relativistic
@@ -230,6 +246,7 @@ from pydantic import Field, field_validator
 from pymatgen.core import Lattice, Structure
 from pymatgen.symmetry.groups import SpaceGroup
 
+from goldilocks_core.advisors.hubbard_u import HubbardUDecision
 from goldilocks_core.advisors.magnetic_enumeration import (
     enumerate_orderings,
     enumlib_installed,
@@ -442,6 +459,8 @@ run."""
 
 _CELL_FRAMED = "magnetic.cell_framed"
 
+_HUBBARD_OPEN_SHELL = "magnetic.spin_polarized_for_hubbard_open_shell"
+
 WARNING_CATALOGUE = (
     Warning(
         code="magnetic.soc_suggested",
@@ -466,6 +485,16 @@ WARNING_CATALOGUE = (
         level="warning",
         category="magnetic",
         message="magnetism could not be determined; defaulted to spin-polarized.",
+    ),
+    Warning(
+        code=_HUBBARD_OPEN_SHELL,
+        level="warning",
+        category="magnetic",
+        message=(
+            "a Hubbard U acts on an odd d or f electron count, which only a "
+            "spin-polarized run can polarize; spin polarization is turned on "
+            "over the llm's or is_magnetic's spin-unpolarized answer."
+        ),
     ),
     Warning(
         code="magnetic.afm_ordering_unavailable",
@@ -511,11 +540,12 @@ WARNING_CATALOGUE = (
 ``warnings[]`` catalogue aggregates one of these tuples per advisor. The
 real, per-occurrence messages for
 ``magnetic.magnetism_unknown_defaulted_spin_polarized``,
+``magnetic.spin_polarized_for_hubbard_open_shell``,
 ``magnetic.afm_ordering_unavailable``, ``magnetic.cell_framed`` and the
 two spin-orbit notices name the actual reason (built at their call sites
-in ``_resolve_spin_polarized``, ``_afm_unavailable``, ``_frame_notice``
-and ``_soc_notice`` below); these are the generic descriptions,
-for a caller that has not seen them fire."""
+in ``_resolve_spin_polarized``, ``_hubbard_spin``, ``_afm_unavailable``,
+``_frame_notice`` and ``_soc_notice`` below); these are the generic
+descriptions, for a caller that has not seen them fire."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -716,12 +746,16 @@ def magnetic_cell(
     is_magnetic: FieldState[Magnetism],
     human: MagneticConfigHumanInput | None = None,
     llm: MagneticConfigLlmInput | None = None,
+    *,
+    hubbard: FieldState[HubbardUDecision] | None = None,
 ) -> FieldState[MagneticCell]:
     """The simulated cell (module docstring): spin polarization,
     spin-orbit coupling, the admitted ``tot_magnetization``, the moment
     direction (#172), and ``structure`` with the requested ordering
     applied -- the one enumeration of a calculation -- split into species.
-    ``Blocked`` when
+    ``hubbard``, the run's Hubbard decision, turns spin polarization on
+    where it applies a U to an odd d or f count (``_hubbard_spin``, #147);
+    ``None`` or an unresolved decision applies no U. ``Blocked`` when
     ``is_magnetic`` is, when a human ``tot_magnetization`` comes with
     spin-orbit coupling (#146), when ``magnetic_ordering`` names a
     candidate the enumeration does not produce (#170), when a human
@@ -740,7 +774,12 @@ def magnetic_cell(
         # the former leaves nothing safe to default to.
         return Blocked(by=is_magnetic)
 
-    spin = _resolve_spin_polarized(is_magnetic, human, llm)
+    spin = _hubbard_spin(
+        _resolve_spin_polarized(is_magnetic, human, llm),
+        structure,
+        is_magnetic,
+        hubbard,
+    )
     spin_polarized, warnings = spin.polarized, spin.warnings
     if spin_polarized and not structure.is_ordered:
         return Blocked(by=_DISORDERED_SPIN_POLARIZED)
@@ -801,7 +840,8 @@ def _provenance(
     ordering and the starting magnetization on a spin-polarized cell;
     ``tot_magnetization`` and ``moment_direction`` where the cell kept one.
     ``spin_polarized`` reads the tier that decided it, ``derived_from``
-    naming ``is_magnetic`` when that fact did; every other setting reads
+    naming ``is_magnetic`` when that fact did, or ``hubbard`` when a U on
+    an odd shell did (#147); every other setting reads
     ``human`` when the request set it, else ``heuristic``. No llm input is
     read here: the llm's ``spin_polarized`` is in ``spin.source`` and
     spin-orbit coupling takes the human switch alone."""
@@ -1222,6 +1262,68 @@ def _resolve_spin_polarized(
                 ),
             ),
         ),
+    )
+
+
+_HUBBARD = ("hubbard",)
+"""``derived_from`` of a spin decision a Hubbard U on an odd shell made."""
+
+_ODD_SHELL_COUNTS = frozenset(range(1, 14, 2))
+"""The odd d (1-9) and f (1-13) electron counts."""
+
+
+def _hubbard_spin(
+    spin: _SpinChoice,
+    structure: Structure,
+    is_magnetic: FieldState[Magnetism],
+    hubbard: FieldState[HubbardUDecision] | None,
+) -> _SpinChoice:
+    """``spin``, or a spin-polarized run when ``spin`` is a
+    spin-unpolarized answer of the llm or of ``is_magnetic`` and
+    ``hubbard`` applies a U to an odd d or f count (``_odd_shells``; module
+    docstring, #147), with the warning naming the shells and the answer
+    overridden. A human ``spin_polarized`` and a spin-polarized answer
+    stand, so the rule only ever turns spin polarization on."""
+    if spin.polarized or spin.source == "human" or hubbard is None or not hubbard.ok:
+        return spin
+    shells = _odd_shells(structure, hubbard.value)
+    if not shells:
+        return spin
+    overridden = (
+        "the llm's spin_polarized=false"
+        if spin.source == "llm"
+        else f"is_magnetic={is_magnetic.value!r} ({is_magnetic.source})"
+    )
+    warning = Warning(
+        code=_HUBBARD_OPEN_SHELL,
+        level="warning",
+        category="magnetic",
+        message=(
+            f"a Hubbard U acts on an odd d or f electron count: {shells}. "
+            "Without spin polarization each spin holds half of that count, "
+            "which fills no whole orbital, so +U can neither form the moment "
+            f"nor open the gap. Spin polarization is turned on over {overridden}; "
+            "set spin_polarized=false to keep a spin-unpolarized run."
+        ),
+    )
+    return _SpinChoice(True, "heuristic", _HUBBARD, (warning,))
+
+
+def _odd_shells(structure: Structure, decision: HubbardUDecision) -> str:
+    """The elements ``decision`` applies a U to whose d or f count
+    (``local_moments``' ``shell_counts``) is odd, as ``Cu 3d9``, joined;
+    empty without a U on one, or when ``local_moments`` cannot count the
+    shells (a disordered structure, an undecided element)."""
+    if not decision.u_values:
+        return ""
+    moments = local_moments(structure)
+    if not moments.ok:
+        return ""
+    counts = moments.value.shell_counts
+    return ", ".join(
+        f"{entry.element} {entry.manifold}{counts[entry.element]:g}"
+        for entry in decision.u_values
+        if counts.get(entry.element) in _ODD_SHELL_COUNTS
     )
 
 

@@ -3,8 +3,11 @@ once (#128).
 
 These decisions depend on one another in a fixed order:
 
-1. the functional and ``magnetic_cell`` -- spin polarization, spin-orbit
-   coupling, and the requested magnetic ordering applied to the structure,
+1. the functional, the Hubbard decision, which reads it, and
+   ``magnetic_cell`` -- spin polarization, which reads the Hubbard
+   decision (a U on an odd d or f count needs a spin-polarized run,
+   #147), spin-orbit coupling, and the requested magnetic ordering applied
+   to the structure,
    which is the calculation's only enumlib call, split into one species per
    element and starting-magnetization class (#170) -- ending with
    ``framed_cell``, which writes that cell in the frame where pw.x keeps
@@ -36,6 +39,7 @@ from dataclasses import dataclass
 from pymatgen.core import Structure
 
 from goldilocks_core.advisors.functional import functional
+from goldilocks_core.advisors.hubbard_u import HubbardUDecision, hubbard_u
 from goldilocks_core.advisors.magnetic_config import (
     MagneticCell,
     MagneticConfigFacts,
@@ -65,6 +69,7 @@ class MagneticAdvice:
     boundary advisor reads (#144)."""
 
     functional: FieldState[str]
+    hubbard: FieldState[HubbardUDecision]
     cell: FieldState[MagneticCell]
     symmetry_eff: FieldState[SymmetryFacts]
     geometry_eff: FieldState[GeometryFacts]
@@ -80,11 +85,24 @@ def magnetic_advice(
     store: AssetStore | None,
     fetch_missing: bool,
 ) -> MagneticAdvice:
-    """The functional, the simulated cell, its symmetry, the
-    pseudopotentials and the starting moments for ``structure``."""
+    """The functional, the Hubbard decision, the simulated cell, its
+    symmetry, the pseudopotentials and the starting moments for
+    ``structure``. The Hubbard decision is keyed by element, so it reads
+    ``structure`` and holds for the cell."""
     functional_state = functional(overrides.functional, overrides.functional_llm)
+    hubbard = hubbard_u(
+        structure,
+        analysis.needs_correlation,
+        functional_state.value,
+        overrides.hubbard,
+        overrides.hubbard_llm,
+    )
     cell = magnetic_cell(
-        structure, analysis.is_magnetic, overrides.magnetic, overrides.magnetic_llm
+        structure,
+        analysis.is_magnetic,
+        overrides.magnetic,
+        overrides.magnetic_llm,
+        hubbard=hubbard,
     )
     if cell.ok:
         cell = Resolved(framed_cell(cell.value), cell.provenance)
@@ -108,6 +126,7 @@ def magnetic_advice(
         symmetry_eff = geometry_eff = soc_table = cause
     return MagneticAdvice(
         functional=functional_state,
+        hubbard=hubbard,
         cell=cell,
         symmetry_eff=symmetry_eff,
         geometry_eff=geometry_eff,

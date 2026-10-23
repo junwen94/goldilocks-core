@@ -667,6 +667,68 @@ def test_a_compensated_afm_insulator_pins_a_zero_moment_on_fixed_occupations(
     assert _keyword(content, "tot_charge") is None
 
 
+def _tenorite_cuo() -> Structure:
+    """Tenorite CuO (C2/c, Asbrink & Norrby 1970), its 4-atom primitive
+    cell: Cu2+, 3d9."""
+    return Structure.from_spacegroup(
+        "C2/c",
+        Lattice.monoclinic(4.6837, 3.4226, 5.1288, 99.54),
+        ["Cu", "O"],
+        [[0.25, 0.25, 0.0], [0.0, 0.4184, 0.25]],
+    ).get_primitive_structure()
+
+
+@pytest.fixture
+def cuo_store(tmp_path, monkeypatch) -> AssetStore:
+    spec, registry_table = sssp_fixture_table_spec(
+        tmp_path / "sources", {"Cu": 19.0, "O": 6.0}
+    )
+    monkeypatch.setattr(
+        "goldilocks_core.service._pseudo.load_tables",
+        lambda *a, **kw: {registry_table.id: registry_table},
+    )
+    installed = AssetStore(tmp_path / "store")
+    installed.install(spec, sssp_preparer(registry_table))
+    return installed
+
+
+@pytest.mark.parametrize(
+    ("spin_polarized", "nspin", "occupations"),
+    [(None, "2", "'smearing'"), (False, None, "'fixed'")],
+    ids=["default", "spin_polarized=false"],
+)
+def test_a_u_on_an_odd_d_shell_writes_a_spin_polarized_deck(
+    spin_polarized: bool | None,
+    nspin: str | None,
+    occupations: str,
+    cuo_store: AssetStore,
+) -> None:
+    """#147: with the classifier calling tenorite CuO non-magnetic, its
+    default deck carried U Cu-3d 4 and no nspin: the Hubbard decision was
+    resolved apart from the spin decision. The U on Cu2+ d9 now turns spin
+    polarization on, under a warning, and the non-metal then runs on
+    smearing, since nothing knows its moment (#138). An explicit
+    spin_polarized=false still writes the unpolarized deck."""
+    settings: dict[str, object] = {
+        "is_magnetic": "non_magnetic",
+        "is_metal": "non_metal",
+    }
+    if spin_polarized is not None:
+        settings["spin_polarized"] = spin_polarized
+
+    steps, (content,) = _run("scf", _tenorite_cuo(), settings, cuo_store)
+
+    advice = steps[0]
+    assert advice.analysis.is_magnetic.value == "non_magnetic"
+    assert content.endswith("HUBBARD (ortho-atomic)\n  U  Cu-3d  4\n")
+    assert _keyword(content, "nspin") == nspin
+    assert _keyword(content, "occupations") == occupations
+    codes = {warning["code"] for warning in advice.warnings()}
+    assert ("magnetic.spin_polarized_for_hubbard_open_shell" in codes) is (
+        spin_polarized is None
+    )
+
+
 def _corundum_fe2o3() -> Structure:
     """Hematite Fe2O3 (R-3c, MC3D mc3d-44692) in its 10-site rhombohedral
     primitive cell, 4 of them Fe3+."""

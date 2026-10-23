@@ -191,6 +191,17 @@ class TestTopLevelShape:
                 "magnetic",
             )
 
+    def test_warnings_catalogue_lists_the_hubbard_spin_polarization_warning(
+        self,
+    ) -> None:
+        """#147: the warning that a U on an odd d or f count turned spin
+        polarization on is published, so a frontend can filter on it before
+        any run has emitted it."""
+        by_code = {entry["code"]: entry for entry in capabilities()["warnings"]}
+
+        entry = by_code["magnetic.spin_polarized_for_hubbard_open_shell"]
+        assert (entry["level"], entry["category"]) == ("warning", "magnetic")
+
     def test_warnings_catalogue_lists_a_model_warning_per_ml_record(self) -> None:
         """#156: the caveat a model returns with a prediction is published
         under its record's code, so a frontend can filter on it before any

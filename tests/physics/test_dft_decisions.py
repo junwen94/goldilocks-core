@@ -27,8 +27,11 @@ from support import fcc_lead, hcp_gadolinium, magnetic_decision
 from goldilocks_core.advisors.convergence import ConvergenceHumanInput, convergence
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
 from goldilocks_core.advisors.functional import DEFAULT_FUNCTIONAL
-from goldilocks_core.advisors.hubbard_u import hubbard_u
-from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
+from goldilocks_core.advisors.hubbard_u import HubbardUHumanInput, hubbard_u
+from goldilocks_core.advisors.magnetic_config import (
+    MagneticConfigHumanInput,
+    magnetic_cell,
+)
 from goldilocks_core.advisors.nbnd import NbndDecision, nbnd
 from goldilocks_core.advisors.occupations import occupations
 from goldilocks_core.advisors.pseudo_selection import (
@@ -37,7 +40,7 @@ from goldilocks_core.advisors.pseudo_selection import (
     select_pseudopotential_table,
 )
 from goldilocks_core.analysis.composition import composition
-from goldilocks_core.analysis.is_magnetic import is_magnetic
+from goldilocks_core.analysis.is_magnetic import IsMagneticHumanInput, is_magnetic
 from goldilocks_core.analysis.is_metal import IsMetalHumanInput, is_metal
 from goldilocks_core.analysis.needs_correlation import needs_correlation
 from goldilocks_core.analysis.needs_soc import needs_soc
@@ -387,3 +390,136 @@ def test_hubbard_u_input_leaves_the_occupation_matrix_free_to_converge() -> None
     assert [warning.code for warning in frozen.value.warnings] == [
         "convergence.mixing_fixed_ns_freezes_hubbard_occupations"
     ]
+
+
+def _tenorite_cuo() -> Structure:
+    """Tenorite CuO (C2/c, Asbrink & Norrby 1970), its 4-atom primitive
+    cell: Cu2+, 3d9."""
+    return Structure.from_spacegroup(
+        "C2/c",
+        Lattice.monoclinic(4.6837, 3.4226, 5.1288, 99.54),
+        ["Cu", "O"],
+        [[0.25, 0.25, 0.0], [0.0, 0.4184, 0.25]],
+    ).get_primitive_structure()
+
+
+def _la2cuo4() -> Structure:
+    """T-type La2CuO4 (Materials Project mp-19735), its 7-atom primitive
+    cell: La3+ 4f0, Cu2+ 3d9."""
+    return Structure(
+        Lattice.from_parameters(3.8138, 3.8138, 7.1412, 105.4875, 105.4875, 90.0),
+        ["La", "La", "Cu", "O", "O", "O", "O"],
+        [
+            [0.360893, 0.360893, 0.721786],
+            [0.639107, 0.639107, 0.278214],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.5, 0.0],
+            [0.5, 0.0, 0.0],
+            [0.186226, 0.186226, 0.372452],
+            [0.813774, 0.813774, 0.627548],
+        ],
+    )
+
+
+def _a_type_ce2o3() -> Structure:
+    """A-type Ce2O3 (Materials Project mp-2721): Ce3+, 4f1."""
+    return Structure.from_spacegroup(
+        "P-3m1",
+        Lattice.hexagonal(3.89, 6.06),
+        ["Ce", "O", "O"],
+        [[1 / 3, 2 / 3, 0.2454], [0, 0, 0], [1 / 3, 2 / 3, 0.6471]],
+    )
+
+
+def _layered_licoo2() -> Structure:
+    """Layered LiCoO2 (MC3D mc3d-75346), its 4-atom rhombohedral cell:
+    low-spin Co3+, 3d6."""
+    return Structure(
+        Lattice.from_parameters(4.8783, 4.8783, 4.8783, 33.5076, 33.5076, 33.5076),
+        ["Li", "Co", "O", "O"],
+        [[0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [0.26092] * 3, [0.73908] * 3],
+    )
+
+
+_ML_NON_MAGNETIC = Resolved("non_magnetic", Provenance(source="ml"))
+"""What the is_magnetic classifier answered for CuO (0.101), La2CuO4
+(0.0055) and LiCoO2 against its 0.324 threshold."""
+
+
+def _spin_with_u(
+    structure: Structure,
+    magnetism: FieldState[str],
+    *,
+    u_by_element: dict[str, float] | None = None,
+    spin_polarized: bool | None = None,
+):
+    hubbard = hubbard_u(
+        structure,
+        needs_correlation(composition(structure)),
+        DEFAULT_FUNCTIONAL,
+        HubbardUHumanInput(u_by_element=u_by_element),
+    )
+    assert hubbard.value.u_values
+    return magnetic_cell(
+        structure,
+        magnetism,
+        MagneticConfigHumanInput(spin_polarized=spin_polarized),
+        hubbard=hubbard,
+    )
+
+
+@pytest.mark.parametrize(
+    ("structure", "magnetism", "u_by_element"),
+    [
+        (_tenorite_cuo, lambda _s: _ML_NON_MAGNETIC, None),
+        (
+            _tenorite_cuo,
+            lambda s: is_magnetic(s, IsMagneticHumanInput(is_magnetic="non_magnetic")),
+            None,
+        ),
+        (_la2cuo4, lambda _s: _ML_NON_MAGNETIC, {"Cu": 4.0}),
+        (_a_type_ce2o3, lambda _s: _ML_NON_MAGNETIC, None),
+    ],
+    ids=["CuO-ml", "CuO-human-is_magnetic", "La2CuO4-u_by_element", "Ce2O3-ml"],
+)
+def test_a_hubbard_u_on_an_odd_d_shell_runs_spin_polarized(
+    structure, magnetism, u_by_element
+) -> None:
+    """#147: QE's Dudarev potential is U(1/2 - n_sigma) per spin (QE 7.3
+    PW/src/v_of_rho.f90:771-869), and with nspin=1 each spin holds half of
+    the occupation matrix (PW/src/new_ns.f90:126). Cu2+ d9 then has 4.5
+    electrons per spin, which fill no whole orbital, so +U can neither form
+    the moment nor open the gap, and pw.x converges to the wrong state
+    without complaint. On SCARF (QE 7.5) the generated nspin=1 CuO deck
+    converged to a metal; with nspin=2 it formed 0.66 uB per Cu, 25.6
+    meV/atom lower. La2CuO4 with U(Cu) 4.0: a zero-moment metal against
+    0.50 uB/cell, 32.5 meV/cell lower. However the classifier was told
+    non-magnetic, a U on an odd d or f count (Ce3+ 4f1 too) turns spin
+    polarization on."""
+    cell = structure()
+
+    state = _spin_with_u(cell, magnetism(cell), u_by_element=u_by_element)
+
+    assert state.value.spin_polarized is True
+    assert [warning.code for warning in state.value.warnings] == [
+        "magnetic.spin_polarized_for_hubbard_open_shell"
+    ]
+
+
+def test_low_spin_d6_licoo2_with_u_stays_unpolarized() -> None:
+    """#147: the rule reads the shell count, not "U implies nspin=2":
+    LiCoO2's low-spin Co3+ d6 (U Co 3.32) is non-magnetic, and a
+    classifier saying so is kept. (The heuristic tier alone calls any open
+    d6 shell magnetic, so the label is the ML tier's.)"""
+    state = _spin_with_u(_layered_licoo2(), _ML_NON_MAGNETIC)
+
+    assert state.value.spin_polarized is False
+    assert state.value.warnings == ()
+
+
+def test_an_explicit_spin_polarized_false_keeps_cuo_with_u_unpolarized() -> None:
+    state = _spin_with_u(_tenorite_cuo(), _ML_NON_MAGNETIC, spin_polarized=False)
+
+    assert state.value.spin_polarized is False
+    assert state.source == "human"
+    assert state.value.warnings == ()

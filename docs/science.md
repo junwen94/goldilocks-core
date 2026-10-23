@@ -257,6 +257,20 @@ reads CrTe3 as d0 Cr6+): set `spin_polarized` when you know better. A
 structure with fractional site occupancies is undecidable too, and since a
 spin-polarized run needs one species per site to seed, its magnetic setup is
 blocked until you set `spin_polarized` to false or upload an ordered cell.
+
+A [Hubbard U](#check-hubbard-u) on an element whose d or f count (from the
+ionic oxidation-state guess above) is odd also makes the run spin-polarized,
+with the warning `magnetic.spin_polarized_for_hubbard_open_shell`, even when
+`is_magnetic` says `non_magnetic`, whichever tier said so, your own override
+included. Quantum ESPRESSO applies the Dudarev potential per spin, and
+without spin polarization each spin holds half of the shell's electrons: 4.5
+for Cu2+ (d9), which fills no whole orbital, so +U can neither form the
+moment nor open the gap, and pw.x converges to the wrong state without
+complaint. The classifier calls tenorite CuO non-magnetic, yet spin-polarized
+it forms 0.66 Bohr magnetons per Cu and lies 25.6 meV/atom lower. The rule
+reads the shell count, so low-spin Co3+ (d6) in LiCoO2 keeps a non-magnetic
+answer. Only an explicit `spin_polarized=false` overrides it.
+
 Spin-polarized inputs get a `starting_magnetization` for every species;
 review it for your calculation. Neither tier predicts magnetic *order* (see
 `magnetic_ordering` below for that). Override either tier with
@@ -684,7 +698,8 @@ at least one of their settings.
 
 A record whose own rule followed another record's answer keeps the tier that
 applied the rule, `heuristic`, and names that record in `derived_from`:
-`magnetic` names `is_magnetic` when that fact decided spin polarization,
+`magnetic` names `is_magnetic` when that fact decided spin polarization (or
+`hubbard` when a U on an odd d or f count did),
 `occupations` and a heuristic `k_sampling` name `is_metal`, `hubbard` names
 `needs_correlation` (or `functional` for a hybrid functional), an
 automatically selected `pseudo_table` names `functional` and `magnetic`,

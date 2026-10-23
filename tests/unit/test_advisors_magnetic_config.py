@@ -12,6 +12,12 @@ from pymatgen.electronic_structure.core import Magmom
 from support import magnetic_decision, molybdenum_disulfide_monolayer
 
 from goldilocks_core.advisors import magnetic_config as magnetic_config_module
+from goldilocks_core.advisors.functional import DEFAULT_FUNCTIONAL
+from goldilocks_core.advisors.hubbard_u import (
+    HubbardUDecision,
+    HubbardUHumanInput,
+    hubbard_u,
+)
 from goldilocks_core.advisors.magnetic_config import (
     MagneticConfigHumanInput,
     MagneticConfigLlmInput,
@@ -1362,6 +1368,124 @@ def test_an_unset_ordering_leaves_spin_polarization_to_the_classifier() -> None:
 
     assert state.value.spin_polarized is False
     assert state.source == "heuristic"
+    assert state.value.warnings == ()
+
+
+_TENORITE_CUO = Structure.from_spacegroup(
+    "C2/c",
+    Lattice.monoclinic(4.6837, 3.4226, 5.1288, 99.54),
+    ["Cu", "O"],
+    [[0.25, 0.25, 0.0], [0.0, 0.4184, 0.25]],
+).get_primitive_structure()
+"""Tenorite CuO (C2/c, Asbrink & Norrby 1970) in its 4-atom primitive
+cell: Cu2+ is d9, and the built-in table gives Cu 4.0 eV."""
+
+_CORRELATED = Resolved(True, Provenance(source="heuristic"))
+
+
+def _tabulated_u(
+    structure: Structure, human: HubbardUHumanInput | None = None
+) -> Resolved[HubbardUDecision]:
+    return hubbard_u(structure, _CORRELATED, DEFAULT_FUNCTIONAL, human)
+
+
+_HUBBARD_SPIN = "magnetic.spin_polarized_for_hubbard_open_shell"
+
+
+def test_a_hubbard_u_on_an_odd_d_count_turns_spin_polarization_on() -> None:
+    """#147: the ML tier called tenorite CuO non-magnetic (score 0.101), so
+    its +U input went out with nspin=1. A Dudarev U on Cu2+ d9 then has
+    4.5 electrons per spin channel to act on, which fill no whole orbital:
+    it can neither form the moment nor open the gap. A U on an odd d or f
+    count turns spin polarization on, says so, and names what it
+    overrode."""
+    state = magnetic_cell(
+        _TENORITE_CUO, _CLASSIFIED_NON_MAGNETIC, hubbard=_tabulated_u(_TENORITE_CUO)
+    )
+
+    assert state.value.spin_polarized is True
+    assert state.value.magnetic_elements == ("Cu",)
+    assert state.source == "heuristic"
+    assert state.provenance.field_sources == {
+        "spin_polarized": "heuristic",
+        "spin_orbit_coupling": "heuristic",
+        "magnetic_ordering": "heuristic",
+        "starting_magnetization": "heuristic",
+    }
+    assert state.provenance.derived_from == ("hubbard",)
+    (warning,) = state.value.warnings
+    assert warning.code == _HUBBARD_SPIN
+    assert warning.level == "warning"
+    assert warning.category == "magnetic"
+    assert "odd d or f electron count: Cu 3d9." in warning.message
+    assert "is_magnetic='non_magnetic' (ml)" in warning.message
+    assert "spin_polarized=false" in warning.message
+
+
+def test_the_hubbard_rule_outranks_an_llm_spin_polarized_false() -> None:
+    """#147: the rule sits above the llm's spin_polarized, as above
+    is_magnetic; the warning names the llm's answer."""
+    llm = MagneticConfigLlmInput(spin_polarized=False)
+
+    without_u = magnetic_cell(_TENORITE_CUO, is_magnetic(_TENORITE_CUO), llm=llm)
+    with_u = magnetic_cell(
+        _TENORITE_CUO,
+        is_magnetic(_TENORITE_CUO),
+        llm=llm,
+        hubbard=_tabulated_u(_TENORITE_CUO),
+    )
+
+    assert (without_u.value.spin_polarized, without_u.source) == (False, "llm")
+    assert (with_u.value.spin_polarized, with_u.source) == (True, "heuristic")
+    (warning,) = with_u.value.warnings
+    assert warning.code == _HUBBARD_SPIN
+    assert "the llm's spin_polarized=false" in warning.message
+
+
+@pytest.mark.parametrize(
+    "hubbard",
+    [
+        None,
+        Blocked(by="synthetic failure"),
+        Resolved(HubbardUDecision(), Provenance(source="human")),
+        _tabulated_u(_TENORITE_CUO, HubbardUHumanInput(u_by_element={"Ni": 6.2})),
+    ],
+    ids=["no-decision", "unresolved", "no-u", "u-on-another-element"],
+)
+def test_the_hubbard_rule_needs_a_u_on_the_open_shell(hubbard) -> None:
+    """#147: without a U on Cu (no decision, an unresolved one, none at
+    all, or one only on an element CuO does not contain) the classifier
+    decides."""
+    state = magnetic_cell(_TENORITE_CUO, _CLASSIFIED_NON_MAGNETIC, hubbard=hubbard)
+
+    assert state.value.spin_polarized is False
+    assert state.provenance.derived_from == ("is_magnetic",)
+    assert state.value.warnings == ()
+
+
+def test_an_explicit_spin_polarized_false_wins_over_the_hubbard_rule() -> None:
+    state = magnetic_cell(
+        _TENORITE_CUO,
+        _CLASSIFIED_NON_MAGNETIC,
+        MagneticConfigHumanInput(spin_polarized=False),
+        hubbard=_tabulated_u(_TENORITE_CUO),
+    )
+
+    assert state.value.spin_polarized is False
+    assert state.source == "human"
+    assert state.value.warnings == ()
+
+
+def test_the_hubbard_rule_leaves_a_magnetic_classification_as_it_was() -> None:
+    """#147: the rule only changes a spin-unpolarized answer, so a
+    classifier that already says magnetic keeps deciding, and the record
+    keeps naming it."""
+    state = magnetic_cell(
+        _TENORITE_CUO, is_magnetic(_TENORITE_CUO), hubbard=_tabulated_u(_TENORITE_CUO)
+    )
+
+    assert state.value.spin_polarized is True
+    assert state.provenance.derived_from == ("is_magnetic",)
     assert state.value.warnings == ()
 
 
