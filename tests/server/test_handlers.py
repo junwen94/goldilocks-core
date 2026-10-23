@@ -9,6 +9,7 @@ import hashlib
 from importlib.metadata import version
 
 import pytest
+from pymatgen.core import Lattice, Structure
 from support import strict_json
 
 from goldilocks_core.bundle import bundle_files
@@ -30,6 +31,37 @@ class TestInspect:
         inspection = _handlers.inspect(document)
 
         assert inspection["structure"]["reduced_formula"] == "Si"
+
+    def test_site_labels_are_the_keys_starting_magnetization_takes(self) -> None:
+        """#185: the labels /inspect reports are the keys a
+        starting_magnetization on the same structure takes, and
+        records.magnetic lists them (no pseudopotential table needed: the
+        seeds fall back to the flat fraction)."""
+        nio = Structure(
+            Lattice.from_parameters(2.95, 2.95, 2.95, 60, 60, 60),
+            ["Ni", "O"],
+            [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+            labels=["Ni1", "O1"],
+        )
+        content = nio.to(fmt="cif")
+
+        inspection = _handlers.inspect(
+            InlineStructureDocument(structure_content=content)
+        )
+        labels = [site["label"] for site in inspection["structure"]["sites"]]
+        result = _handlers.explain(
+            ComputeRequestDocument(
+                structure_content=content,
+                hpc="scarf",
+                overrides={"starting_magnetization": {labels[0]: 0.5}},
+            )
+        )
+
+        assert labels == ["Ni1", "O1"]
+        magnetic = result["records"]["magnetic"]
+        assert magnetic["value"]["site_labels"] == labels
+        assert magnetic["value"]["human_seeded_labels"] == ["Ni"]
+        assert magnetic["value"]["starting_magnetization"] == {"Ni": 0.5, "O": 0.1}
 
 
 class TestMagneticOrderings:

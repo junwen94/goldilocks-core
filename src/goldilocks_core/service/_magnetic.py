@@ -131,7 +131,7 @@ def magnetic_advice(
         symmetry_eff=symmetry_eff,
         geometry_eff=geometry_eff,
         pseudo=pseudo,
-        magnetic=_seeded(cell, pseudo, soc_table, analysis, overrides),
+        magnetic=_seeded(cell, pseudo, soc_table, analysis),
     )
 
 
@@ -155,7 +155,6 @@ def _seeded(
     pseudo: PseudoAdvice,
     soc_table: FieldState[PseudoTable],
     analysis: AnalysisFacts,
-    overrides: SystemOverrides,
 ) -> FieldState[MagneticConfigFacts]:
     """``magnetic_config`` on the selected table's z_valence. A table that
     is not installed yet (``Unavailable``, a normal preview) leaves the
@@ -175,6 +174,4 @@ def _seeded(
         if pseudo.metadata.ok
         else None
     )
-    return magnetic_config(
-        cell, analysis.needs_soc, soc_table, z_valences, overrides.magnetic
-    )
+    return magnetic_config(cell, analysis.needs_soc, soc_table, z_valences)

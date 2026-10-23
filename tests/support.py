@@ -111,7 +111,7 @@ def magnetic_decision(
     advisor-level tests that need one structure's whole magnetic
     decision (#128)."""
     cell = magnetic_cell(structure, is_magnetic, human)
-    return magnetic_config(cell, needs_soc, soc_table, z_valences, human)
+    return magnetic_config(cell, needs_soc, soc_table, z_valences)
 
 
 def strict_json(document: str | bytes) -> Any:
@@ -790,10 +790,11 @@ def written_cell(structure: Structure) -> Resolved[MagneticConfigFacts]:
     of ``checks.check_all`` read."""
     facts = MagneticConfigFacts(
         cell=structure,
-        ordering=OrderingRecord(requested="fm", applied="fm", compensated=False),
+        ordering=OrderingRecord(requested="fm", applied="fm"),
         spin_polarized=False,
         magnetic_elements=(),
         starting_magnetization=None,
+        compensated=False,
         tot_magnetization=None,
         spin_orbit_enabled=False,
         angle1=None,

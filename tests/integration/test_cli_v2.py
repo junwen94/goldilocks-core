@@ -80,6 +80,26 @@ def test_inspect_reports_structure_in_json_and_human_forms() -> None:
     assert document["structure"]["reduced_formula"] == "Si"
 
 
+def test_inspect_prints_the_site_labels_starting_magnetization_takes(
+    tmp_path: Path,
+) -> None:
+    """#185: the keys a starting_magnetization takes are discoverable
+    before a request fails: the CIF's own site labels, in site order."""
+    nio = Structure(
+        Lattice.from_parameters(2.95, 2.95, 2.95, 60, 60, 60),
+        ["Ni", "O"],
+        [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+        labels=["Ni1", "O1"],
+    )
+    path = tmp_path / "NiO.cif"
+    path.write_text(nio.to(fmt="cif"), encoding="utf-8")
+
+    completed = _run_cli("inspect", str(path))
+
+    assert completed.returncode == 0, completed.stderr
+    assert "site labels: Ni1, O1\n" in completed.stdout
+
+
 def test_inspect_missing_structure_is_an_operator_error_not_a_traceback() -> None:
     completed = _run_cli("inspect", "/no/such/structure.cif")
 

@@ -13,7 +13,8 @@ uv run goldilocks explain structure.cif --json
 uv run goldilocks run structure.cif --out silicon-run
 ```
 
-`inspect` reports structure metadata. `explain` runs analysis and every
+`inspect` reports structure metadata, including the site labels a
+`starting_magnetization` takes. `explain` runs analysis and every
 advisor, printing each decision and its source (`human`, `ml`, `llm`, or
 `heuristic`), then a `notice: <message>` line for each setting given without a
 step that reached several steps, then the checks `run` applies, printing one

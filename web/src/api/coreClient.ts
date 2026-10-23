@@ -174,6 +174,9 @@ export interface SpeciesOccupancy {
 export interface StructureSite {
   readonly fractional_coordinates: readonly [number, number, number];
   readonly cartesian_coordinates_angstrom: readonly [number, number, number];
+  /** The site's label (a CIF's `_atom_site_label`), which keys
+   * `starting_magnetization`. */
+  readonly label: string;
   readonly species: readonly SpeciesOccupancy[];
 }
 

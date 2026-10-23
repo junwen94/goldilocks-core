@@ -45,10 +45,11 @@ def _magnetic(
 ) -> MagneticConfigFacts:
     return MagneticConfigFacts(
         cell=structure,
-        ordering=OrderingRecord(requested="fm", applied="fm", compensated=False),
+        ordering=OrderingRecord(requested="fm", applied="fm"),
         spin_polarized=spin_polarized,
         magnetic_elements=(),
         starting_magnetization=starting_magnetization,
+        compensated=False,
         tot_magnetization=None,
         spin_orbit_enabled=spin_orbit_enabled,
         angle1=angle1,

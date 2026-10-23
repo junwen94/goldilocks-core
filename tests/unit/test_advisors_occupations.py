@@ -43,12 +43,12 @@ def _applied_ordering(*, compensated: bool, spin_orbit: bool = False):
         ordering=OrderingRecord(
             requested="afm",
             applied="afm-1",
-            compensated=compensated,
             criterion="smallest_cell",
         ),
         spin_polarized=True,
         magnetic_elements=("Fe",),
         starting_magnetization={"Fe1": 0.3, "Fe2": -0.3},
+        compensated=compensated,
         tot_magnetization=None,
         spin_orbit_enabled=spin_orbit,
         angle1=None,

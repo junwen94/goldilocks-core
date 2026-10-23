@@ -27,10 +27,11 @@ def _magnetic(*, spin_polarized: bool, spin_orbit_enabled: bool) -> MagneticConf
     )
     return MagneticConfigFacts(
         cell=feco,
-        ordering=OrderingRecord(requested="fm", applied="fm", compensated=False),
+        ordering=OrderingRecord(requested="fm", applied="fm"),
         spin_polarized=spin_polarized,
         magnetic_elements=("Co", "Fe") if spin_polarized else (),
         starting_magnetization={"Fe": 0.3, "Co": 0.2} if spin_polarized else None,
+        compensated=False,
         tot_magnetization=None,
         spin_orbit_enabled=spin_orbit_enabled,
         angle1=None,

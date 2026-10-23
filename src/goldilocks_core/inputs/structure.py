@@ -41,8 +41,13 @@ class SpeciesOccupancy(TypedDict):
 
 
 class StructureSite(TypedDict):
+    """One site: its coordinates, its label (the CIF's ``_atom_site_label``;
+    a POSCAR's element symbol), which keys ``starting_magnetization``
+    (#185), and its species with their occupancies."""
+
     fractional_coordinates: Annotated[list[float], Portable(Vector3)]
     cartesian_coordinates_angstrom: Annotated[list[float], Portable(Vector3)]
+    label: str
     species: list[SpeciesOccupancy]
 
 
@@ -245,6 +250,7 @@ def structure_document(structure: Structure) -> StructureDocument:
         {
             "fractional_coordinates": list(_vector(site.frac_coords)),
             "cartesian_coordinates_angstrom": list(_vector(site.coords)),
+            "label": site.label,
             "species": [
                 {
                     "symbol": species.symbol,

@@ -538,10 +538,10 @@ def test_afm_orders_the_four_fe_of_olivine_lifepo4(olivine_store: AssetStore) ->
     assert magnetic.ordering == OrderingRecord(
         requested="afm",
         applied="afm-1",
-        compensated=True,
         criterion="smallest_cell",
         alternatives=("afm-2", "afm-3"),
     )
+    assert magnetic.compensated is True
     assert len(magnetic.cell) == 28
     assert {site.label for site in magnetic.cell} == {"Li", "Fe1", "Fe2", "P", "O"}
     assert magnetic.starting_magnetization["Fe1"] == pytest.approx(5.0 / 16.0)
@@ -587,10 +587,10 @@ def test_an_afm_request_writes_an_afm_deck_for_a_non_magnetic_classification(
     assert magnetic.ordering == OrderingRecord(
         requested="afm",
         applied="afm-1",
-        compensated=True,
         criterion="smallest_cell",
         alternatives=("afm-2",),
     )
+    assert magnetic.compensated is True
     assert _keyword(content, "nspin") == "2"
     assert _keyword(content, "nat") == "2"
     assert _keyword(content, "ntyp") == "2"
@@ -654,10 +654,10 @@ def test_a_compensated_afm_insulator_pins_a_zero_moment_on_fixed_occupations(
     assert magnetic.ordering == OrderingRecord(
         requested="afm",
         applied="afm-1",
-        compensated=True,
         criterion="smallest_cell",
         alternatives=("afm-2",),
     )
+    assert magnetic.compensated is True
     assert magnetic.tot_magnetization is None
     assert occupations.occupations == "fixed"
     assert occupations.tot_magnetization == 0.0
@@ -665,6 +665,31 @@ def test_a_compensated_afm_insulator_pins_a_zero_moment_on_fixed_occupations(
     assert float(_keyword(content, "tot_magnetization")) == 0.0
     assert _keyword(content, "nbnd") == "24"
     assert _keyword(content, "tot_charge") is None
+
+
+@_needs_enumlib
+@pytest.mark.parametrize(
+    "seeds", [{"Ni1": 5.0 / 18.0}, {"Ni2": -5.0 / 18.0}], ids=["Ni1", "Ni2"]
+)
+def test_restating_one_sublattice_s_seed_keeps_the_afm_insulator_compensated(
+    seeds: dict[str, float], store: AssetStore
+) -> None:
+    """#185: a starting_magnetization that restates one sublattice's
+    computed seed (Ni's 5/18 here) writes the seeds the ordering computes,
+    so it writes the compensated deck: fixed occupations with
+    tot_magnetization = 0, not smearing."""
+    settings: dict[str, object] = {"magnetic_ordering": "afm", "is_metal": "non_metal"}
+    _, (computed,) = _run("scf", _primitive_nio(), settings, store)
+
+    steps, (content,) = _run(
+        "scf", _primitive_nio(), {**settings, "starting_magnetization": seeds}, store
+    )
+
+    magnetic = steps[0].system.magnetic.value
+    assert magnetic.human_seeded_labels == tuple(seeds)
+    assert magnetic.compensated is True
+    assert content == computed
+    assert float(_keyword(content, "tot_magnetization")) == 0.0
 
 
 def _tenorite_cuo() -> Structure:
@@ -784,14 +809,14 @@ def test_a_requested_label_writes_that_ordering_and_records_its_alternatives(
     advice = steps[0]
     assert advice.system.symmetry_eff.value.space_group_symbol == "R-3"
     assert _keyword(content, "nat") == "10"
-    record = advice.records()["magnetic"].value.ordering
-    assert record == OrderingRecord(
+    magnetic = advice.records()["magnetic"].value
+    assert magnetic.ordering == OrderingRecord(
         requested=label,
         applied=label,
-        compensated=True,
         criterion="requested",
         alternatives=tuple(others),
     )
+    assert magnetic.compensated is True
     assert len(others) == 2
 
 

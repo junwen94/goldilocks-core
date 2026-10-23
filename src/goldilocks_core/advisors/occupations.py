@@ -60,7 +60,7 @@ default is one ``checks.py`` refuses. ``OccupationsDecision
 writer renders: the human request admitted by ``magnetic_config`` on
 every collinear run, plus, under fixed occupations only, 0 for an applied
 antiferromagnetic ordering that is compensated by symmetry
-(``OrderingRecord.compensated``) and whose electron count is known and
+(``MagneticConfigFacts.compensated``) and whose electron count is known and
 even. That zero holds by construction under fixed occupations; on
 smearing it would pin a moment nobody asked for.
 
@@ -245,7 +245,7 @@ def _spin(
         mode=facts.spin_mode,
         polarized=facts.spin_polarized,
         requested=facts.tot_magnetization,
-        compensated=facts.ordering.compensated,
+        compensated=facts.compensated,
         nelec=nelec,
         from_magnetic=True,
     )

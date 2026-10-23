@@ -54,7 +54,7 @@ it (``Blocked``), since the starting magnetization alone sets a
 noncollinear run's moments. The admitted value is the human request; the
 moment the input renders is the occupations decision's
 (``advisors/occupations.py``), which adds 0 under fixed occupations for an
-ordering ``OrderingRecord.compensated`` says has no net moment (#138).
+ordering ``MagneticConfigFacts.compensated`` says has no net moment (#138).
 
 **Moment direction (#172).** A magnetic noncollinear run -- spin-orbit
 coupling on a spin-polarized run -- starts every moment along one
@@ -163,11 +163,26 @@ a bulk van der Waals magnet keeps its interlayer orderings.
 
 **Species (#170).** The cell holds one species per element and
 starting-magnetization class (`advisors/species_split.py`): the class of a
-site is the human `starting_magnetization` of its label, else its
-heuristic spin sign -- +1 for the ferromagnetic default, the enumerated
+site is the value a human `starting_magnetization` requests for it, else
+its heuristic spin sign -- +1 for the ferromagnetic default, the enumerated
 sign on an applied ordering's sublattice and 0 on its other sites. The
 split happens here, before `symmetry_eff` and `n_irr_k` are counted, so
 they see the species pw.x is given; the writer renders them unchanged.
+
+**Requested seeds (#185).** A human `starting_magnetization` is keyed by
+the site labels of the cell it applies to -- the input's, or an applied
+ordering's sublattice labels (`Ni1`/`Ni2`/`O`), listed as
+`MagneticCell.site_labels` whether or not the run is spin-polarized -- or
+by an element symbol, shorthand for all of that element's sites. An
+element key is refused where an applied ordering seeds that element's
+sites differently, the ambiguity #46 refused every element key for; a
+label beats its element. The request is merged onto the computed seeds
+site by site, so a site it leaves out keeps its own seed, and
+`MagneticCell.human_seeded_labels` names the species it set
+(`_requested_seeds`). Whether the applied ordering is compensated
+(`MagneticConfigFacts.compensated`) is decided by `magnetic_config` on the
+seeds as written, to rounding, not on the species classes, which hold
+requested values and spin signs on two scales (`_compensated`).
 
 **The written frame (#140).** pw.x finds symmetry by testing fixed
 Cartesian rotations against the cell as written, so `framed_cell` -- the
@@ -238,7 +253,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
-from typing import Literal, NamedTuple
+from typing import Annotated, Literal, NamedTuple
 
 import numpy as np
 import spglib
@@ -295,6 +310,16 @@ candidate's lattice basis for it to count as a lattice vector (#144).
 pymatgen builds each candidate's lattice from integer combinations of the
 primitive cell's, so the coordinates of a vector the lattice holds are
 integers to rounding error."""
+
+_SEED_TOLERANCE = 1e-6
+"""How far apart two starting magnetizations, as fractions of the valence
+charge, may be and still count as equal or opposite in ``_compensated``:
+rounding only (#185). A seed copied to six significant digits or more
+(the input writes twelve, #178) restates the computed one; a hand-rounded
+(0.28 for Ni's 5/18) or deliberately different value does not. Left to
+spglib, the seeds would be compared at its ``symprec``, ``SYMPREC``, a
+length in Angstrom: seeds within 0.01 of opposite, or a parallel start
+below 0.005, would count as compensated."""
 
 _ENUMLIB_FOUND_NO_ORDERING = "Unable to enumerate"
 """The message of the ``ValueError`` pymatgen's
@@ -558,18 +583,14 @@ class OrderingRecord:
     otherwise ``"fm"`` -- the input cell kept (the FM identity
     pass-through, as for every spin-unpolarized run).
 
-    ``compensated``: the applied candidate's cell, split by its
-    starting-magnetization classes, has an operation that maps every site
-    onto one of the opposite class (``_compensated``), so its net moment
-    is zero by symmetry (#138). Always false for ``"fm"``.
-
     ``criterion`` says why ``applied`` was written and ``alternatives``
     lists the other candidates with as many sites, by label (#144); the
-    defaults are the FM identity's."""
+    defaults are the FM identity's. Whether the applied ordering is
+    compensated depends on the seeds, so it is
+    ``MagneticConfigFacts.compensated``, not part of this record (#185)."""
 
     requested: str | None
     applied: str
-    compensated: bool
     criterion: OrderingCriterion = "identity"
     alternatives: tuple[str, ...] = ()
 
@@ -618,7 +639,13 @@ class MagneticCell:
     rendered moment is ``OccupationsDecision.tot_magnetization`` (#138).
 
     ``moment_direction`` is set exactly when the run is spin-polarized with
-    spin-orbit coupling (module docstring, #172)."""
+    spin-orbit coupling (module docstring, #172).
+
+    ``site_labels`` are the labels a human ``starting_magnetization`` is
+    keyed by, in site order (module docstring, #185): the input's, or an
+    applied ordering's sublattice labels; the input's when the run is not
+    spin-polarized. ``human_seeded_labels`` are the species labels of
+    ``structure`` whose class is a requested value, not a spin sign."""
 
     structure: Structure
     spin_polarized: bool
@@ -629,6 +656,8 @@ class MagneticCell:
     tot_magnetization: float | None
     moment_direction: MomentDirection | None = None
     frame: PwFrame | None = None
+    site_labels: tuple[str, ...] = ()
+    human_seeded_labels: tuple[str, ...] = ()
     warnings: tuple[Warning, ...] = ()
 
     @property
@@ -657,10 +686,20 @@ class MagneticConfigFacts:
     ``spin_polarized``, ``magnetic_elements``, ``tot_magnetization``,
     ``spin_orbit_enabled`` and ``moment_direction`` are copied from the
     ``MagneticCell`` (``cell`` is the same object as
-    ``MagneticCell.structure``), and so is ``frame``, the record of how
-    the cell is written (#140); ``warnings`` are the cell's plus this
+    ``MagneticCell.structure``), and so are ``frame``, the record of how
+    the cell is written (#140), and ``site_labels`` and
+    ``human_seeded_labels``, the keys a ``starting_magnetization`` takes
+    and the species it set (#185); ``warnings`` are the cell's plus this
     step's. ``angle1``/``angle2`` are QE's angles of the moment direction
     (``_angles``), one per species, set with it.
+
+    ``compensated``: the applied antiferromagnetic ordering, seeded with
+    ``starting_magnetization``, has an operation that maps every site onto
+    one of the same element with the opposite seed (``_compensated``), so
+    its net moment is zero by symmetry (#138). Decided here, on the seeds
+    as written, to rounding: a requested value restates a computed seed
+    only once the z_valences fix that seed (#185). False for ``"fm"`` and
+    for a run without spin polarization.
 
     ``seeded_moment`` is the net moment the starting magnetization seeds,
     in Bohr magnetons per cell: each site's ``starting_magnetization``
@@ -675,6 +714,7 @@ class MagneticConfigFacts:
     spin_polarized: bool
     magnetic_elements: tuple[str, ...]
     starting_magnetization: dict[str, float] | None
+    compensated: bool
     tot_magnetization: float | None
     spin_orbit_enabled: bool
     angle1: dict[str, float] | None
@@ -682,6 +722,8 @@ class MagneticConfigFacts:
     seeded_moment: float | None = None
     moment_direction: MomentDirection | None = None
     frame: PwFrame | None = None
+    site_labels: tuple[str, ...] = ()
+    human_seeded_labels: tuple[str, ...] = ()
     warnings: tuple[Warning, ...] = ()
 
     @property
@@ -695,19 +737,30 @@ class MagneticConfigFacts:
         return "collinear" if self.spin_polarized else "none"
 
 
+_Fraction = Annotated[float, Field(gt=-1.0, lt=1.0)]
+"""A starting magnetization as a fraction of the species' valence charge.
+From QE 7.3 a value of magnitude 1 or more turns every species' value into
+a moment in Bohr magnetons, divided by its valence
+(``PW/src/input.f90:1441-1442``), so the bounds are exclusive."""
+
+
 class MagneticConfigHumanInput(HumanInput):
     spin_polarized: bool | None = None
     spin_orbit_coupling: bool | None = None
     tot_magnetization: float | None = None
-    starting_magnetization: dict[str, float] | None = None
-    """A final, already-QE-scale fraction per site label -- not a moment in
-    Bohr magnetons -- matching aiida-quantumespresso's "Using the parameters"
-    path (direct `parameters['SYSTEM']['starting_magnetization']`), as
-    opposed to its "Using the SpinType" path (a physical moment scaled by
-    `z_valences`, which is what the heuristic tier below does). Keyed by
-    the input's site labels, or by an applied ordering's sublattice labels
-    (``Ni1``/``Ni2``/``O``); labels it leaves out start at 0, and the cell
-    is split by these values (module docstring)."""
+    starting_magnetization: dict[str, _Fraction] | None = None
+    """A final, already-QE-scale fraction per key, strictly between -1 and 1
+    -- not a moment in Bohr magnetons -- matching aiida-quantumespresso's
+    "Using the parameters" path (direct
+    `parameters['SYSTEM']['starting_magnetization']`), as opposed to its
+    "Using the SpinType" path (a physical moment scaled by `z_valences`,
+    which is what the heuristic tier below does). A key is a site label of
+    the cell it applies to -- the input's, or an applied ordering's
+    sublattice labels (``Ni1``/``Ni2``/``O``), ``MagneticCell.site_labels``
+    -- or an element symbol, for all of that element's sites, refused where
+    an applied ordering seeds them differently; a label beats its element.
+    Sites it leaves out keep their computed seeds, and the cell is split by
+    these values (module docstring, ``_requested_seeds``, #185)."""
     magnetic_ordering: str | None = Field(default=None, pattern=_ORDERING_PATTERN)
     """Opt-in only (unset, the input cell is kept and spin polarization is
     left to the classifier): stays off by default because attempting an
@@ -759,7 +812,8 @@ def magnetic_cell(
     ``is_magnetic`` is, when a human ``tot_magnetization`` comes with
     spin-orbit coupling (#146), when ``magnetic_ordering`` names a
     candidate the enumeration does not produce (#170), when a human
-    ``starting_magnetization`` names a label the cell does not have, or
+    ``starting_magnetization`` has a key outside its domain
+    (``_requested_seeds``, #185), or
     when a disordered structure resolves spin-polarized: seeds are set per
     site species, which a fractionally occupied site does not have, and
     such a structure's magnetism is undecidable, so it defaults to
@@ -803,30 +857,31 @@ def magnetic_cell(
         ordered = _ordered(structure, moments, requested or "fm")
         if isinstance(ordered, str):
             return Blocked(by=ordered)
-        cell = _seeded_split(ordered, human.starting_magnetization)
-        if isinstance(cell, str):
-            return Blocked(by=cell)
+        seeded = _seeded_split(ordered, human.starting_magnetization)
+        if isinstance(seeded, str):
+            return Blocked(by=seeded)
         ordering = OrderingRecord(
             requested=requested,
             applied=ordered.applied,
-            compensated=ordered.applied != "fm" and _compensated(cell),
             criterion=ordered.criterion,
             alternatives=ordered.alternatives,
         )
         warnings = (*warnings, *ordered.warnings)
     else:
-        cell = split_species(structure, None)
-        ordering = OrderingRecord(requested=requested, applied="fm", compensated=False)
+        seeded = _Seeded(split_species(structure, None), _site_labels(structure))
+        ordering = OrderingRecord(requested=requested, applied="fm")
 
     facts = MagneticCell(
-        structure=cell,
+        structure=seeded.cell,
         spin_polarized=spin_polarized,
         spin_orbit_enabled=spin_orbit_enabled,
         magnetic_elements=magnetic_elements,
         ordering=ordering,
-        cell_in_input_basis=_cell_in_input_basis(cell, structure),
+        cell_in_input_basis=_cell_in_input_basis(seeded.cell, structure),
         tot_magnetization=tot_magnetization,
         moment_direction=direction,
+        site_labels=seeded.site_labels,
+        human_seeded_labels=seeded.human_seeded_labels,
         warnings=warnings,
     )
     return Resolved(facts, _provenance(facts, human, spin))
@@ -867,30 +922,32 @@ def magnetic_config(
     needs_soc: FieldState[bool] | None = None,
     soc_table: FieldState[PseudoTable] | None = None,
     z_valences: dict[str, float] | None = None,
-    human: MagneticConfigHumanInput | None = None,
 ) -> FieldState[MagneticConfigFacts]:
-    """The starting moments on ``cell``, one per species (``_seeds``): a
-    human ``starting_magnetization`` (already split onto the cell's
-    species by ``magnetic_cell``), or the heuristic fractions, scaled by
+    """The starting moments on ``cell``, one per species (``_seeds``): the
+    value a human ``starting_magnetization`` gave a species
+    (``MagneticCell.human_seeded_labels``, split onto the cell by
+    ``magnetic_cell``), else the heuristic fraction, scaled by
     the selected pseudopotentials' ``z_valences`` when known -- with the
     net moment they seed (``_seeded_moment``), the spin-orbit notice
     (``_soc_notice``, from ``needs_soc`` and ``soc_table``, the table
-    selection spin-orbit coupling would make) and the angles of the cell's
-    moment direction (``_angles``). Copies the cell's facts, with the
-    cell's provenance; ``Blocked`` when the cell is not resolved."""
-    human = human or MagneticConfigHumanInput()
+    selection spin-orbit coupling would make), the angles of the cell's
+    moment direction (``_angles``) and whether the applied ordering,
+    seeded so, is compensated (``_compensated``). Copies the cell's other
+    facts, with the cell's provenance; ``Blocked`` when the cell is not
+    resolved."""
     if not cell.ok:
         return Blocked(by=blocked_by(cell))
     facts = cell.value
 
     starting_magnetization = (
-        _seeds(
-            facts.structure,
-            z_valences,
-            given=human.starting_magnetization is not None,
-        )
+        _seeds(facts.structure, z_valences, facts.human_seeded_labels)
         if facts.spin_polarized
         else None
+    )
+    compensated = (
+        starting_magnetization is not None
+        and facts.ordering.applied != "fm"
+        and _compensated(facts.structure, starting_magnetization)
     )
 
     warnings = (
@@ -911,6 +968,7 @@ def magnetic_config(
         spin_polarized=facts.spin_polarized,
         magnetic_elements=facts.magnetic_elements,
         starting_magnetization=starting_magnetization,
+        compensated=compensated,
         tot_magnetization=facts.tot_magnetization,
         spin_orbit_enabled=facts.spin_orbit_enabled,
         angle1=angle1,
@@ -920,6 +978,8 @@ def magnetic_config(
         ),
         moment_direction=facts.moment_direction,
         frame=facts.frame,
+        site_labels=facts.site_labels,
+        human_seeded_labels=facts.human_seeded_labels,
         warnings=warnings,
     )
     return Resolved(config, cell.provenance)
@@ -1086,41 +1146,152 @@ def _applied(
     )
 
 
+class _Seeded(NamedTuple):
+    """The split cell, the labels a ``starting_magnetization`` is keyed by
+    (``MagneticCell.site_labels``) and the species labels of the cell whose
+    class is a requested value (``MagneticCell.human_seeded_labels``)."""
+
+    cell: Structure
+    site_labels: tuple[str, ...]
+    human_seeded_labels: tuple[str, ...] = ()
+
+
+def _site_labels(structure: Structure) -> tuple[str, ...]:
+    """The distinct site labels of ``structure``, in site order."""
+    return tuple(dict.fromkeys(site.label for site in structure))
+
+
 def _seeded_split(
     ordered: _Ordered, override: dict[str, float] | None
-) -> Structure | str:
-    """``ordered.base`` split into species by each site's class: the human
-    ``override`` of its label (0 for a label it leaves out), else its
-    spin sign. The reason an override names an unknown label, instead."""
-    if override is None:
-        return split_species(ordered.base, ordered.signs)
-    invalid = _invalid_labels(override, ordered.base)
-    if invalid is not None:
-        return invalid
-    return split_species(
-        ordered.base, [override.get(site.label, 0.0) for site in ordered.base]
+) -> _Seeded | str:
+    """``ordered.base`` split into species by each site's class: the
+    value ``override`` requests for it (``_requested_seeds``), else its
+    spin sign, so a partial override is merged onto the computed seeds
+    (#185). A requested value lies strictly between -1 and 1 and a sign is
+    +1, -1 or 0, so a requested and a computed class coincide only at 0,
+    where both seeds are 0 whatever the z_valence: no species holds two
+    different seeds. The two kinds of class are on different scales, so
+    compensation is decided on the seeds (``_compensated``), not on them;
+    and a request equal to another label's computed seed of its element
+    (Ni1 set to Ni2's -5/18) still makes a species of its own, since the
+    two meet only once the z_valences are known. The reason a key is
+    refused, instead."""
+    requested: tuple[float | None, ...] = (None,) * len(ordered.base)
+    if override is not None:
+        resolved = _requested_seeds(override, ordered)
+        if isinstance(resolved, str):
+            return resolved
+        requested = resolved
+    cell = split_species(
+        ordered.base,
+        [
+            sign if value is None else value
+            for sign, value in zip(ordered.signs, requested, strict=True)
+        ],
+    )
+    human = (
+        site.label
+        for site, value in zip(cell, requested, strict=True)
+        if value is not None
+    )
+    return _Seeded(cell, _site_labels(ordered.base), tuple(dict.fromkeys(human)))
+
+
+def _requested_seeds(
+    override: dict[str, float], ordered: _Ordered
+) -> tuple[float | None, ...] | str:
+    """The value a human ``starting_magnetization`` requests for each site
+    of ``ordered.base``, ``None`` where it leaves the site to its computed
+    seed; the reason a key is refused, instead. This is the key domain
+    (#185): a site label of ``ordered.base`` -- the input's own (#32), or
+    an applied ordering's sublattice labels -- sets the sites of that
+    label; an element symbol that is not a label sets every other site of
+    that element (``_element_keys``). Any other key is refused, naming the
+    labels and element keys there are: a key that matches no site would
+    otherwise seed nothing (#46)."""
+    labels = _site_labels(ordered.base)
+    unlabelled = {key: value for key, value in override.items() if key not in labels}
+    elements = _element_keys(unlabelled, ordered)
+    if isinstance(elements, str):
+        return elements
+    unknown = sorted(unlabelled.keys() - elements.keys())
+    if unknown:
+        usable = sorted(set(ordered.base.symbol_set) - _split_elements(ordered).keys())
+        return (
+            f"starting_magnetization has unknown key(s) {unknown!r}; it takes this "
+            f"cell's site labels ({', '.join(labels)}) or an element symbol for "
+            f"all of that element's sites ({', '.join(usable)})"
+        )
+    return tuple(
+        override.get(site.label, elements.get(site.specie.symbol))
+        for site in ordered.base
     )
 
 
-def _compensated(cell: Structure) -> bool:
-    """Whether an operation of the split ``cell`` maps every site onto a
-    site of the same element whose starting-magnetization class
-    (``Species.spin``) is the negative of its own: spglib's magnetic
-    symmetry of the classes as collinear moments, which spatial operations
-    leave unchanged (``is_axial=False``), has a time-reversed operation. Only
+def _element_keys(
+    unlabelled: dict[str, float], ordered: _Ordered
+) -> dict[str, float] | str:
+    """The entries of ``unlabelled`` (keys that are not site labels) keyed
+    by an element symbol of ``ordered.base``, each shorthand for all of
+    that element's sites -- or the reason one names an element whose
+    sites carry different computed seeds, an applied ordering's up and
+    down sublattices, which one value would merge, naming the labels to
+    set instead. Element keys partly reverse #46, which refused every
+    one."""
+    split = _split_elements(ordered)
+    refused = [
+        f"starting_magnetization cannot set {element!r} by element: the applied "
+        f"magnetic ordering seeds its sites differently (labels "
+        f"{', '.join(split[element])}); set each of those labels instead"
+        for element in sorted(unlabelled.keys() & split.keys())
+    ]
+    if refused:
+        return "; ".join(refused)
+    return {
+        element: value
+        for element, value in unlabelled.items()
+        if element in ordered.base.symbol_set
+    }
+
+
+def _split_elements(ordered: _Ordered) -> dict[str, tuple[str, ...]]:
+    """The labels of each element of ``ordered.base`` whose sites carry
+    more than one spin sign, in site order."""
+    signs: dict[str, set[float]] = {}
+    labels: dict[str, dict[str, None]] = {}
+    for site, sign in zip(ordered.base, ordered.signs, strict=True):
+        signs.setdefault(site.specie.symbol, set()).add(sign)
+        labels.setdefault(site.specie.symbol, {})[site.label] = None
+    return {
+        element: tuple(labels[element])
+        for element, found in signs.items()
+        if len(found) > 1
+    }
+
+
+def _compensated(cell: Structure, seeds: dict[str, float]) -> bool:
+    """Whether an operation of ``cell`` maps every site onto a site of the
+    same element whose starting magnetization (``seeds``, by species label,
+    as written) is the negative of its own: spglib's magnetic symmetry of
+    the seeds as collinear moments, which spatial operations leave
+    unchanged (``is_axial=False``), has a time-reversed operation. Only
     then is the net moment zero by construction; balanced spin counts are
     not enough -- spinel Fe3O4's R-3m candidate has 3 Fe up and 3 down,
     but both tetrahedral Fe down, and no operation maps a tetrahedral site
-    onto an octahedral one (#138). Searched at ``SYMPREC``, the
-    tolerance ``symmetry_eff`` is counted with."""
+    onto an octahedral one (#138). The seeds decide, not the species
+    classes: a requested value restating one sublattice's computed seed
+    meets the other sublattice's seed, not its bare spin sign (#185).
+    Positions are matched at ``SYMPREC``, the tolerance ``symmetry_eff`` is
+    counted with, and seeds to rounding (``_SEED_TOLERANCE``)."""
     dataset = spglib.get_magnetic_symmetry(
         (
             cell.lattice.matrix,
             cell.frac_coords,
             [site.specie.Z for site in cell],
-            [site.specie.spin for site in cell],
+            [seeds[site.label] for site in cell],
         ),
         symprec=SYMPREC,
+        mag_symprec=_SEED_TOLERANCE,
         is_axial=False,
     )
     return dataset is not None and bool(np.any(dataset["time_reversals"]))
@@ -1702,47 +1873,28 @@ def enumerate_magnetic_orderings(
     return tuple(candidates), None if none is None else none.warning
 
 
-def _invalid_labels(override: dict[str, float], structure: Structure) -> str | None:
-    """A human-supplied ``starting_magnetization`` is keyed by site
-    *label* (``Fe0``/``Fe1``, whatever the real structure's labels are, or
-    an applied ordering's ``Ni1``/``Ni2``), not element symbol (#32).
-    Unlike the heuristic seeds, an override's keys come from outside this
-    codebase, so they need validating here rather than trusted: a bare
-    element symbol that happens not to match any real label (pymatgen's
-    own CIF reader already produces ``Fe0``/``Fe1``, not ``Fe``, for the
-    common case) would otherwise silently seed nothing -- see this issue's
-    own history (#46). Auto-expanding a bare symbol to every matching
-    label is deliberately not attempted: different labels of one element
-    can legitimately want different values (an AFM ``Fe1``/``Fe2`` pair),
-    so guessing would mask a genuine mistake rather than catch it."""
-    valid_labels = {site.label for site in structure}
-    invalid = sorted(set(override) - valid_labels)
-    if not invalid:
-        return None
-    return (
-        f"starting_magnetization has unknown site label(s) {invalid!r}; "
-        f"this structure's real labels are {sorted(valid_labels)!r}"
-    )
-
-
 def _seeds(
-    cell: Structure, z_valences: dict[str, float] | None, *, given: bool
+    cell: Structure,
+    z_valences: dict[str, float] | None,
+    human_seeded_labels: tuple[str, ...],
 ) -> dict[str, float]:
     """One starting magnetization per species label of the spin-polarized
     ``cell`` (``generation/quantum_espresso/scf.py``'s ``species_index``
     keys by the same label, #32): the species' class (``Species.spin``,
-    ``MagneticCell``) itself when ``given`` -- a human value --, otherwise
-    the class (the spin sign: +1, -1 or 0) times its element's fraction
-    (``_fraction_for``). Both paths that can apply one ordering -- plain
-    ``afm`` and a listed ``afm-<n>`` -- read the same cell, so they seed it
-    alike (#170)."""
+    ``MagneticCell``) itself for a label in ``human_seeded_labels`` -- a
+    human value --, otherwise the class (the spin sign: +1, -1 or 0) times
+    its element's fraction (``_fraction_for``). Both paths that can apply
+    one ordering -- plain ``afm`` and a listed ``afm-<n>`` -- read the same
+    cell, so they seed it alike (#170)."""
     seeds: dict[str, float] = {}
     for site in cell:
         if site.label in seeds:
             continue
         spin = site.specie.spin
         seeds[site.label] = (
-            spin if given else spin * _fraction_for(site.specie.symbol, z_valences)
+            spin
+            if site.label in human_seeded_labels
+            else spin * _fraction_for(site.specie.symbol, z_valences)
         )
     return seeds
 

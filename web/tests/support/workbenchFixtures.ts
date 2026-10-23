@@ -290,6 +290,7 @@ export const inspection: StructureInspection = {
       {
         fractional_coordinates: [0, 0, 0],
         cartesian_coordinates_angstrom: [0, 0, 0],
+        label: "Si",
         species: [
           { symbol: "Si", label: "Si", occupancy: 1, oxidation_state: null },
         ],

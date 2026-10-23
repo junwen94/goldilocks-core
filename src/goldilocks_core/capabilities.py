@@ -313,11 +313,15 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "starting_magnetization": {
         "description": (
-            "Starting spin-polarization fraction (each value in [-1, 1]) per "
-            "site label -- the uploaded structure's labels, or Ni1/Ni2/O-style "
-            "labels of an applied magnetic_ordering -- replacing the "
-            "valence-electron-based heuristic; labels left out start at 0, and "
-            "sites with different values become separate species."
+            "Starting spin-polarization fraction (each value strictly between "
+            "-1 and 1) per site label -- the uploaded structure's labels "
+            "(inspect lists them), or Ni1/Ni2/O-style labels of an applied "
+            "magnetic_ordering; records.magnetic.site_labels lists the ones "
+            "in force -- or per element symbol, for all of that element's "
+            "sites, refused where an applied magnetic_ordering seeds them "
+            "differently. A label beats its element. Sites left out keep the "
+            "valence-electron-based heuristic seed, and sites with different "
+            "values become separate species."
         ),
     },
     "magnetic_ordering": {

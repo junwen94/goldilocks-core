@@ -1228,7 +1228,7 @@ def test_the_written_cell_is_seeded_once_from_the_selected_table(
 
 
 @pytest.mark.parametrize(
-    ("settings", "cell", "ordering"),
+    ("settings", "cell", "ordering", "compensated"),
     [
         pytest.param(
             {},
@@ -1236,10 +1236,10 @@ def test_the_written_cell_is_seeded_once_from_the_selected_table(
             {
                 "requested": None,
                 "applied": "fm",
-                "compensated": False,
                 "criterion": "identity",
                 "alternatives": [],
             },
+            False,
             id="unset",
         ),
         pytest.param(
@@ -1248,10 +1248,10 @@ def test_the_written_cell_is_seeded_once_from_the_selected_table(
             {
                 "requested": "fm",
                 "applied": "fm",
-                "compensated": False,
                 "criterion": "identity",
                 "alternatives": [],
             },
+            False,
             id="fm",
         ),
         pytest.param(
@@ -1260,23 +1260,23 @@ def test_the_written_cell_is_seeded_once_from_the_selected_table(
             {
                 "requested": "afm",
                 "applied": "afm-1",
-                "compensated": True,
                 "criterion": "smallest_cell",
                 "alternatives": [],
             },
+            True,
             id="afm",
         ),
     ],
 )
 def test_the_magnetic_record_shows_the_written_cell_and_its_ordering(
-    hpc, correlated_store, counted_enumerations, settings, cell, ordering
+    hpc, correlated_store, counted_enumerations, settings, cell, ordering, compensated
 ) -> None:
     """#128: goldilocks.json records the cell the input is written for, as
     its formula and atom count (any Structure in a record projects to
     those, never to host-specific or bulky data), next to the ordering
     asked for (none when unset, unlike an explicit fm, which is a spin
-    request), the one applied, whether it is compensated (#138), why it
-    was applied and the other candidates of its size (#144)."""
+    request), the one applied, why it was applied and the other candidates
+    of its size (#144), and whether its seeds are compensated (#138, #185)."""
     advice = advise(
         _rock_salt_nio(),
         hpc=hpc,
@@ -1287,6 +1287,7 @@ def test_the_magnetic_record_shows_the_written_cell_and_its_ordering(
     record = records_document(advice.records())["magnetic"]["value"]
     assert record["cell"] == cell
     assert record["ordering"] == ordering
+    assert record["compensated"] is compensated
     assert json.loads(json.dumps(record))["cell"] == cell
 
 

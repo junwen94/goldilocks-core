@@ -292,15 +292,33 @@ bands. An `nbnd` or `extra_bands` that leaves fewer bands than pw.x accepts
 spin-orbit coupling -- is refused before generation, and one that holds the
 moment below its seed gets the warning `nbnd.moment_capped`.
 
-A `starting_magnetization` you set is keyed by site label and replaces the
-heuristic seeds; labels you leave out start at 0. The input has one species
-per element and starting value, whatever labels your file gave its sites
-(`Si1`..`Si40` are one `Si`), and sites of one element with different values
-become separate species (`Fe0` at 0.5 and `Fe1` at -0.5 are written as `Fe1`
-and `Fe2`). Symmetry and the irreducible k-points are counted on those
-species, the way pw.x counts them: that bcc Fe pair is simple cubic (Pm-3m),
-not body-centred. `records.magnetic.starting_magnetization` is keyed by the
-written species, not by your file's site labels.
+A `starting_magnetization` you set is a fraction of each species' valence
+electrons, strictly between -1 and 1: from Quantum ESPRESSO 7.3, a value of
+1 or more turns every species' value into a moment in Bohr magnetons, so it
+is refused. It is keyed by site label: your file's labels (`goldilocks
+inspect` and `/inspect` list them; a POSCAR's are its element symbols), or
+the `Ni1`/`Ni2`/`O` labels of an applied `magnetic_ordering`.
+`records.magnetic.site_labels` lists the labels in force, even for a run that
+is not spin-polarized. An element symbol sets all of that element's sites
+(`{"Ni": 0.5}` on a CIF labelled `Ni1`/`O1`), except where an applied
+ordering seeds them differently: `Ni` on the `Ni1`/`Ni2` sublattices is
+refused, naming the labels to set instead. A label beats its element, so on
+a file labelled `Fe1`..`Fe4`, `{"Fe": 0.5, "Fe1": -0.5}` starts `Fe1` at
+-0.5 and the other three at 0.5.
+Each value replaces the heuristic seed of its sites only; sites you leave out
+keep theirs, so `{"Ni1": 0.5}` on NiO's AFM cell keeps `Ni2` at its negative
+seed and `O` at 0. `records.magnetic.human_seeded_labels` names the species
+you set. The input has one species per element and starting value, whatever
+labels your file gave its sites (`Si1`..`Si40` are one `Si`), and sites of
+one element with different values become separate species (`Fe0` at 0.5 and
+`Fe1` at -0.5 are written as `Fe1` and `Fe2`). A value you set that equals
+another site's computed seed still makes its own species, since the computed
+seed is known only once the pseudopotentials are chosen. Symmetry and the
+irreducible k-points are counted on those species, the way pw.x counts them:
+that bcc Fe pair is simple cubic (Pm-3m), not body-centred.
+`records.magnetic.starting_magnetization` is keyed by the written species,
+not by your file's site labels; an element name there (`Ni`) is also a key
+you can set.
 
 Spin-orbit coupling (SOC) couples electron spin to orbital motion. Goldilocks
 flags elements at or above Rb (Z=37) whose valence character is p, d, or f for
@@ -362,16 +380,23 @@ Pt, whose moment Fe induces. Those sites are seeded up and down with the
 calibrated value (5 Bohr magnetons over the pseudopotential's valence for
 Ni, 5/18 with an 18-electron pseudopotential); every other species starts
 at 0, as in QE's own antiferromagnetic examples, so the start carries no
-net moment. `records.magnetic` records the label applied, and whether the
-ordering is compensated: whether some symmetry operation of its cell maps
-every spin onto an opposite one, so its net moment is zero by construction.
+net moment. `records.magnetic` records the label applied (`ordering`), and
+whether the ordering is compensated (`compensated`): whether some symmetry
+operation of its cell maps every spin onto an opposite one, so its net
+moment is zero by construction. `compensated` is false without an applied
+antiferromagnetic ordering, even where starting magnetizations you set on
+the uploaded cell cancel by symmetry.
 NiO's AFM-II cell is compensated. Spinel Fe3O4's R-3m candidate is not: it
 has 3 Fe up and 3 down, but both tetrahedral Fe point down, so it is a
 ferrimagnet. Nor is B2 FeCo's `afm-1`, Fe up and Co down in the uploaded
 cell: its starting moments sum to zero, but no symmetry makes the two
 elements' moments cancel. A compensated non-metal gets fixed occupations with
-`tot_magnetization = 0`. Starting magnetizations you set on the applied
-cell decide this in place of the heuristic signs.
+`tot_magnetization = 0`. This is decided on the starting magnetizations as
+written, to rounding: yours where you set them on the applied cell, the
+computed ones elsewhere. Setting one NiO sublattice to its computed seed as
+`records.magnetic` or `scf.in` gives it (any copy to six significant digits
+or more) keeps the cell compensated; setting it to 0.28 or 0.5 does not,
+since that start carries a net moment.
 A structure with no such site (closed-shell Si, or solid O2, whose moment
 belongs to the O2 molecule) keeps the ferromagnetic default with the warning
 `magnetic.afm_no_open_shell_sites`; to try an antiferromagnetic pattern
