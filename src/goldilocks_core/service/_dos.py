@@ -216,10 +216,11 @@ def to_bundle_input_dos(
     ctx: SharedContext,
 ) -> BundleInput:
     """``service/_bundle.py``'s ``to_bundle_input``, for a ``dos``
-    task. Pseudopotential file bytes come from ``advice.scf`` -- the
-    same system advice ``advice.nscf`` holds (``advise_steps``)."""
+    task. The pseudopotential files and their licence come from
+    ``advice.scf`` -- the same system advice ``advice.nscf`` holds
+    (``advise_steps``)."""
     return assemble_bundle_input(
-        advice.scf.system.pseudo.metadata,
+        advice.scf.system.pseudo,
         steps,
         submission_script,
         ctx,

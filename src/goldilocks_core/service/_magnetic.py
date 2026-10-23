@@ -102,7 +102,9 @@ def magnetic_advice(
         geometry_eff = cell_geometry(analysis.geometry, cell)
     else:
         cause = Blocked(by=blocked_by(cell))
-        pseudo = PseudoAdvice(table=cause, metadata=cause, relativistic=cause)
+        pseudo = PseudoAdvice(
+            table=cause, metadata=cause, relativistic=cause, installed=None
+        )
         symmetry_eff = geometry_eff = soc_table = cause
     return MagneticAdvice(
         functional=functional_state,

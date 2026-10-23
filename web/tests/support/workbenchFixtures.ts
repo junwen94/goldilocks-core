@@ -342,7 +342,12 @@ export const explainResult: ExplainResult = {
 };
 
 export const runResult: RunResult = {
-  files: ["scf.in", "pseudo/Si.upf", "goldilocks.json"],
+  files: [
+    "scf.in",
+    "pseudo/Si.upf",
+    "licences/pseudodojo-pbesol-efficiency-sr.txt",
+    "goldilocks.json",
+  ],
   records: scientificRecords,
   warnings: [],
 };
@@ -358,6 +363,11 @@ const MANIFEST_TEXT = JSON.stringify({
       role: "pseudopotential",
       sha256: "d".repeat(64),
       size_bytes: 128,
+    },
+    "licences/pseudodojo-pbesol-efficiency-sr.txt": {
+      role: "licence",
+      sha256: "e".repeat(64),
+      size_bytes: 43,
     },
   },
 });
@@ -383,6 +393,9 @@ export function buildArchive(
   const zipped = zipSync({
     "scf.in": u8("&CONTROL\n/\n"),
     "pseudo/Si.upf": u8("UPF content"),
+    "licences/pseudodojo-pbesol-efficiency-sr.txt": u8(
+      "PseudoDojo pseudopotentials are CC BY 4.0.\n",
+    ),
     "goldilocks.json": u8(MANIFEST_TEXT),
   });
   // Blob(...) copies exactly zipped.byteLength bytes; `zipped.buffer` is

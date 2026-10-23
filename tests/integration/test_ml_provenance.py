@@ -265,10 +265,9 @@ def test_the_bundle_cites_every_model_and_the_table() -> None:
 
     cited = sorted({_K_POINT_PAPER, _IS_MAGNETIC_CITATION, _TABLE_CITATION})
     assert manifest["citations"] == cited
-    assert (
-        files["CITATIONS.md"]
-        .decode("utf-8")
-        .endswith("".join(f"- {citation}\n" for citation in cited))
+    entries = "".join(f"- {citation}\n" for citation in cited)
+    assert f"results.\n\n{entries}\n## Licences\n" in (
+        files["CITATIONS.md"].decode("utf-8")
     )
     assert manifest["records"]["pseudo_table"]["citations"] == [_TABLE_CITATION]
 

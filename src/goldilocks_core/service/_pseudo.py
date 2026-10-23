@@ -20,9 +20,11 @@ manifest-loading + per-element narrowing behind ``resolve_pseudopotentials``
 keeps every asset-store-shaped type (``AssetStore``, ``AssetNotInstalled``,
 ``InstalledAsset``, the registry/importers modules) out of ``_system.py``'s
 own import surface entirely. ``upf_projectors`` reads the selected files'
-own headers for the job's memory estimate (#148), so it lives here too, and
+own headers for the job's memory estimate (#148), so it lives here too,
 ``soc_pseudo_table`` runs the same selection with spin-orbit coupling on,
-for the spin-orbit notice (#181).
+for the spin-orbit notice (#181), and ``pseudo_artifacts`` reads the files a
+bundle ships -- the UPFs and their table's licence -- through the
+installation's verified inventory (#157).
 """
 
 from __future__ import annotations
@@ -34,14 +36,19 @@ from goldilocks_core.advisors.pseudo_selection import (
     select_metadata_for_elements,
     select_pseudopotential_table,
 )
-from goldilocks_core.assets.pseudopotentials.importers import load_installed_table
+from goldilocks_core.assets.pseudopotentials.importers import (
+    TABLE_LICENCE,
+    load_installed_table,
+)
 from goldilocks_core.assets.pseudopotentials.registry import PseudoTable, load_tables
 from goldilocks_core.assets.pseudopotentials.upf import (
     PseudoMetadata,
     parse_upf_metadata,
 )
+from goldilocks_core.assets.records import InstalledAsset
 from goldilocks_core.assets.runtime import install as install_assets
-from goldilocks_core.assets.store import AssetNotInstalled, AssetStore
+from goldilocks_core.assets.store import AssetCorrupt, AssetNotInstalled, AssetStore
+from goldilocks_core.generation.files import InputArtifact
 from goldilocks_core.resolution import (
     Blocked,
     FieldState,
@@ -70,11 +77,17 @@ class PseudoAdvice:
     exactly when ``table`` itself could not be selected at all (v2 epic
     9, #9: the SOC-on-Ce acceptance scenario needs this as its own named,
     independently-checkable field, not only buried inside ``table``'s own
-    ``.value.relativistic``, which is unreadable once ``table`` blocks)."""
+    ``.value.relativistic``, which is unreadable once ``table`` blocks).
+
+    ``installed`` is the selected table's verified installation, ``None``
+    when none was resolved; ``metadata`` resolves only from it. It is not a
+    record: ``pseudo_artifacts`` reads the files a bundle ships through it
+    (#157)."""
 
     table: FieldState[PseudoTable]
     metadata: FieldState[tuple[PseudoMetadata, ...]]
     relativistic: FieldState[RelativisticTreatment]
+    installed: InstalledAsset | None
 
 
 def resolve_pseudopotentials(
@@ -101,7 +114,9 @@ def resolve_pseudopotentials(
     )
     if not table_state.ok:
         cause = Blocked(by=blocked_by(table_state))
-        return PseudoAdvice(table=table_state, metadata=cause, relativistic=cause)
+        return PseudoAdvice(
+            table=table_state, metadata=cause, relativistic=cause, installed=None
+        )
 
     # A table was actually selected, so the relativistic treatment it
     # implies is confirmed, not merely requested -- true regardless of
@@ -126,6 +141,7 @@ def resolve_pseudopotentials(
                     )
                 ),
                 relativistic=relativistic_state,
+                installed=None,
             )
         install_assets(table.asset.id, store=active_store)
         try:
@@ -140,6 +156,7 @@ def resolve_pseudopotentials(
                     )
                 ),
                 relativistic=relativistic_state,
+                installed=None,
             )
 
     full_metadata = load_installed_table(installed, table=table)
@@ -147,7 +164,51 @@ def resolve_pseudopotentials(
         table=table_state,
         metadata=select_metadata_for_elements(full_metadata, elements),
         relativistic=relativistic_state,
+        installed=installed,
     )
+
+
+def pseudo_artifacts(
+    pseudo: PseudoAdvice, pseudo_dir: str
+) -> tuple[InputArtifact, ...]:
+    """The files a bundle ships for ``pseudo``: each selected UPF under
+    ``pseudo_dir`` (role ``pseudopotential``) and the table's licence
+    material as ``licences/<table-id>.txt`` (role ``licence``), which the
+    UPFs' upstream licences require to accompany them and which carries
+    SSSP's per-family references. The only producer of ``pseudopotential``
+    artifacts, so no bundle ships a UPF without its licence (#157). Every
+    file is read through the installation's verified inventory, so the
+    bytes are those its ``pseudopotentials`` record hashes (#177); raises
+    ``AssetCorrupt`` for one that changed since. Empty when no
+    pseudopotentials were resolved."""
+    installed = pseudo.installed
+    if installed is None or not pseudo.metadata.ok:
+        return ()
+    upfs: list[InputArtifact] = [
+        {
+            "path": f"{pseudo_dir}/{item.filename}",
+            "role": "pseudopotential",
+            "content": _verified_bytes(installed, item.asset_path),
+        }
+        for item in pseudo.metadata.value
+    ]
+    licence: InputArtifact = {
+        "path": f"licences/{pseudo.table.value.id}.txt",
+        "role": "licence",
+        "content": _verified_bytes(installed, TABLE_LICENCE),
+    }
+    return (*upfs, licence)
+
+
+def _verified_bytes(installed: InstalledAsset, relative_path: str) -> bytes:
+    """``relative_path``'s bytes, checked against ``installed``'s inventory."""
+    try:
+        return installed.read_bytes(relative_path)
+    except (OSError, ValueError) as error:
+        raise AssetCorrupt(
+            f"{relative_path} of {installed.id}@{installed.version} "
+            "changed after its table was verified"
+        ) from error
 
 
 def soc_pseudo_table(elements: set[str], functional: str) -> FieldState[PseudoTable]:

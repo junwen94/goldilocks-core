@@ -699,18 +699,20 @@ function verifyArchive(
     readonly tableVersion: string;
   },
 ): void {
-  // Confirmed against a real /run call (respond_with: archive, 2026-09-14):
-  // bundle_files() only ever emits the generation artifacts themselves
-  // (here scf.in + pseudo/<file>), submit.sh, and the three fixed meta
+  // bundle_files() emits the generation artifacts themselves (here
+  // scf.in + pseudo/<file>), the selected table's licence beside the UPFs
+  // (licences/<table-id>.txt, #157), submit.sh, and the three fixed meta
   // files -- v2 never copies the original/canonical structure into the
-  // archive the way v1 did (no source/, structure/, or licences/ paths).
+  // archive the way v1 did (no source/ or structure/ paths).
   const names = new Set(Object.keys(entries));
+  const licence = `licences/${expected.tableId}.txt`;
   for (const required of [
     "README.md",
     "CITATIONS.md",
     "goldilocks.json",
     "scf.in",
     "submit.sh",
+    licence,
   ]) {
     expect(names).toContain(required);
   }
@@ -741,6 +743,12 @@ function verifyArchive(
     expect(names).toContain(path);
     expect(manifest.files[path]?.role).toBe("pseudopotential");
   }
+  expect(
+    Object.entries(manifest.files)
+      .filter(([, facts]) => facts.role === "licence")
+      .map(([name]) => name),
+  ).toEqual([licence]);
+  expect(textEntry(entries, "CITATIONS.md")).toContain(`- \`${licence}\``);
   expect(new Set(Object.keys(manifest.files))).toEqual(
     new Set([...names].filter((name) => name !== "goldilocks.json")),
   );

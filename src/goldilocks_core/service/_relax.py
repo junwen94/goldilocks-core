@@ -148,7 +148,7 @@ def to_bundle_input_relax(
     ctx: SharedContext,
 ) -> BundleInput:
     return assemble_bundle_input(
-        advice.advice.system.pseudo.metadata,
+        advice.advice.system.pseudo,
         steps,
         submission_script,
         ctx,

@@ -107,8 +107,10 @@ class TestAdviseEndToEnd:
         assert "pw.x" in script
 
         bundle_input = to_bundle_input(advice, steps, script, ctx)
-        assert any(a["path"] == "submit.sh" for a in bundle_input.artifacts)
-        assert any(a["path"] == "pseudo/Si.upf" for a in bundle_input.artifacts)
+        roles = {a["path"]: a["role"] for a in bundle_input.artifacts}
+        assert roles["submit.sh"] == "submission_script"
+        assert roles["pseudo/Si.upf"] == "pseudopotential"
+        assert roles["licences/sssp-fixture.txt"] == "licence"
 
         destination = tmp_path / "out"
         publish(bundle_input, DirectoryOutput(destination))
@@ -120,11 +122,13 @@ class TestAdviseEndToEnd:
         assert manifest["records"]["pseudopotentials"]["status"] == "resolved"
         assert manifest["citations"] == ["Synthetic SSSP fixture, cite me."]
         assert (
-            (destination / "CITATIONS.md")
-            .read_text()
-            .endswith("- Synthetic SSSP fixture, cite me.\n")
+            "results.\n\n- Synthetic SSSP fixture, cite me.\n\n## Licences\n"
+            in (destination / "CITATIONS.md").read_text()
         )
         assert (destination / "pseudo" / "Si.upf").read_bytes() == _UPF
+        assert (
+            destination / "licences" / "sssp-fixture.txt"
+        ).read_bytes() == b"SSSP fixture licence\n"
         assert (destination / "scf.in").exists()
         assert (destination / "submit.sh").exists()
 
@@ -146,7 +150,28 @@ class TestAdviseEndToEnd:
 
         with pytest.raises(
             AssetCorrupt,
-            match=r"^pseudopotential Si\.upf of pseudopotentials/sssp-fixture "
+            match=r"^pseudos/Si\.upf of pseudopotentials/sssp-fixture@1 "
+            r"changed after its table was verified$",
+        ):
+            to_bundle_input(advice, steps, script, default_shared_context())
+
+    def test_bundle_refuses_a_licence_changed_since_it_was_verified(
+        self, silicon, hpc, installed_table
+    ) -> None:
+        """#157: the licence the bundle ships beside the UPFs is read
+        through the table's verified inventory, like the UPFs: a LICENSE.txt
+        rewritten after the advice resolved the table is refused."""
+        store, _table = installed_table
+        advice = advise(silicon, hpc=hpc, store=store)
+        steps = generate(advice, check(advice))
+        script = render_submission(advice, hpc, "quantum_espresso", steps)
+        (metadata,) = advice.system.pseudo.metadata.value
+        installation = Path(metadata.filepath).parents[1]
+        (installation / "LICENSE.txt").write_text("Some other licence\n")
+
+        with pytest.raises(
+            AssetCorrupt,
+            match=r"^LICENSE\.txt of pseudopotentials/sssp-fixture@1 "
             r"changed after its table was verified$",
         ):
             to_bundle_input(advice, steps, script, default_shared_context())

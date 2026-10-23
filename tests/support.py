@@ -224,6 +224,30 @@ def sssp_fixture_table_spec(
     return spec, registry_table
 
 
+def write_registry(path: Path, table: PseudoTable) -> None:
+    """Write a one-table SSSP-shaped registry declaring ``table`` to ``path``,
+    for CLI subprocesses (``GOLDILOCKS_PSEUDO_REGISTRY``)."""
+    files = "".join(
+        f'\n[[tables."{table.id}".files]]\n'
+        f'role = "{file.role}"\npath = "{file.path}"\nurl = "{file.url}"\n'
+        for file in table.asset.files
+    )
+    path.write_text(
+        f'[tables."{table.id}"]\n'
+        f'provider = "{table.provider}"\n'
+        f'upstream_table = "{table.upstream_table}"\n'
+        f'version = "{table.version}"\n'
+        f'functional = "{table.functional}"\n'
+        f'relativistic = "{table.relativistic}"\n'
+        f'accuracy = "{table.accuracy}"\n'
+        f'licence = "{table.licence}"\n'
+        f'citation = "{table.citation}"\n'
+        "default = true\n"
+        f"elements = {json.dumps(list(table.elements))}\n" + files,
+        encoding="utf-8",
+    )
+
+
 def dojo_fixture_table_spec(
     tmp_path: Path,
     *,

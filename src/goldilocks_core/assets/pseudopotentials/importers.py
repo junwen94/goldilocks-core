@@ -81,6 +81,11 @@ def required_functional(value: object, label: str) -> str:
 # --- extraction + manifest (v1 pseudo/installed.py) -------------------------
 
 TABLE_MANIFEST = "pseudo-table.json"
+TABLE_LICENCE = "LICENSE.txt"
+"""The installed table's licence material, which every preparer writes: the
+provider's licence file for SSSP, the CC BY 4.0 notice for PseudoDojo. A
+bundle ships it beside the table's UPFs (``service._pseudo.pseudo_artifacts``,
+#157)."""
 _SCHEMA_VERSION = 2
 _RELATIVISTIC = frozenset({"scalar", "full", "non-relativistic"})
 _TOP_LEVEL_FIELDS = {
@@ -416,7 +421,7 @@ def pseudodojo_preparer(table: PseudoTable):
                 sources["pseudopotentials"], destination, table, reports
             )
             write_table_manifest(destination, table, entries)
-            (destination / "LICENSE.txt").write_text(
+            (destination / TABLE_LICENCE).write_text(
                 _PSEUDODOJO_LICENCE_NOTICE, encoding="utf-8"
             )
         except PseudoImportError:
@@ -588,7 +593,7 @@ def sssp_preparer(table: PseudoTable):
                 sources["pseudopotentials"], destination, metadata, table
             )
             write_table_manifest(destination, table, entries)
-            shutil.copyfile(sources["licence"], destination / "LICENSE.txt")
+            shutil.copyfile(sources["licence"], destination / TABLE_LICENCE)
         except PseudoImportError:
             raise
         except (

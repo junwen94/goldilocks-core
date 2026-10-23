@@ -4,15 +4,14 @@ v2 orchestrator (v2 epic 8, #8).
 
 from __future__ import annotations
 
-import hashlib
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 
-from goldilocks_core.assets.store import AssetCorrupt
 from goldilocks_core.bundle import BundleInput
 from goldilocks_core.generation.files import InputArtifact
 from goldilocks_core.inputs.hpc import HpcProfile
 from goldilocks_core.resolution import FieldState
 from goldilocks_core.service._advice import Advice
+from goldilocks_core.service._pseudo import PseudoAdvice, pseudo_artifacts
 from goldilocks_core.steps import SharedContext, Step
 from goldilocks_core.submission.slurm import render_slurm_script
 
@@ -33,14 +32,12 @@ def to_bundle_input(
     ctx: SharedContext,
 ) -> BundleInput:
     """Assemble one ``BundleInput``: the rendered input file(s), the
-    actual pseudopotential file bytes each step's ``ATOMIC_SPECIES``
-    card references (read off disk from ``PseudoMetadata.filepath`` and
-    checked against its ``content_sha256`` -- neither epic 5 nor epic 7
-    did this file-assembly step; see ``service/_pseudo.py``'s own
-    docstring), the submission script, every advisor decision as a
-    tri-state record, and the advice's warnings."""
+    pseudopotential files each step's ``ATOMIC_SPECIES`` card references
+    with their table's licence (``service._pseudo.pseudo_artifacts``), the
+    submission script, every advisor decision as a tri-state record, and
+    the advice's warnings."""
     return assemble_bundle_input(
-        advice.system.pseudo.metadata,
+        advice.system.pseudo,
         steps,
         submission_script,
         ctx,
@@ -50,44 +47,29 @@ def to_bundle_input(
 
 
 def assemble_bundle_input(
-    pseudopotentials: FieldState[object],
+    pseudo: PseudoAdvice,
     steps: tuple[Step, ...],
     submission_script: str,
     ctx: SharedContext,
     records: dict[str, FieldState[object]],
     warnings: list[dict[str, object]],
 ) -> BundleInput:
-    """Shared by ``to_bundle_input`` above and ``_dos.py``'s
-    ``to_bundle_input_dos`` -- the actual file-assembly logic never
-    differs between a single-step and a ``dos`` task's bundle, only
-    which pseudopotential ``FieldState``/records dict feeds it (v2
-    epic 9, #9, #28). ``warnings`` is the advice's own ``warnings()``,
-    the list every transport returns, which ``goldilocks.json`` carries
-    unchanged (#152). Raises ``AssetCorrupt`` for a pseudopotential whose
-    bytes no longer hash to its record's ``content_sha256``, so the
-    bundle never ships a file its ``pseudopotentials`` record does not
-    describe (#177)."""
+    """Shared by ``to_bundle_input`` above and the ``dos``/``relax``
+    tasks' ``to_bundle_input_dos``/``to_bundle_input_relax`` -- the
+    file-assembly logic never differs between tasks, only which
+    ``PseudoAdvice``/records dict feeds it (v2 epic 9, #9, #28).
+    ``warnings`` is the advice's own ``warnings()``, the list every
+    transport returns, which ``goldilocks.json`` carries unchanged (#152).
+    The UPFs and their table's licence come from ``pseudo_artifacts``,
+    which raises ``AssetCorrupt`` for a file changed since its table was
+    verified (#157, #177)."""
     artifacts: list[InputArtifact] = []
     for step in steps:
         for path, content in step.files.items():
             artifacts.append(
                 {"path": path, "role": "input", "content": content.encode("utf-8")}
             )
-    pseudo_dir = PurePosixPath(ctx.pseudo_dir).as_posix()
-    for metadata in pseudopotentials.value if pseudopotentials.ok else ():
-        content = Path(metadata.filepath).read_bytes()
-        if hashlib.sha256(content).hexdigest() != metadata.content_sha256:
-            raise AssetCorrupt(
-                f"pseudopotential {metadata.filename} of {metadata.table_id} "
-                "changed after its table was verified"
-            )
-        artifacts.append(
-            {
-                "path": f"{pseudo_dir}/{metadata.filename}",
-                "role": "pseudopotential",
-                "content": content,
-            }
-        )
+    artifacts.extend(pseudo_artifacts(pseudo, PurePosixPath(ctx.pseudo_dir).as_posix()))
     artifacts.append(
         {
             "path": "submit.sh",

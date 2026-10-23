@@ -689,5 +689,6 @@ Each model warning, such as the is_magnetic classifier's "has not been
 externally validated", is also in the top-level `warnings` list as
 `<record>.model_warning`. A bundle's `CITATIONS.md` and the manifest's
 `citations` list every record's citations: the selected pseudopotential table
-and every model that decided a record. Read analysis and selection warnings
+and every model that decided a record. `CITATIONS.md` also names the table's
+licence file under `licences/`, which lists SSSP's per-family references. Read analysis and selection warnings
 as well as advice; do not treat a `resolved` status as scientific validation.

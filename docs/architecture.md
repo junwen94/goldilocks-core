@@ -260,10 +260,14 @@ requirements.
   `mcp.py` call; `server/readiness.py`'s `AssetReadiness` caches
   asset-availability checks (used by `GET /ready`) across requests.
 - **Publish through one implementation.** `service/_bundle.py`'s
-  `assemble_bundle_input` reads each selected pseudopotential's bytes straight
-  off disk (`Path(metadata.filepath).read_bytes()`) once and raises
-  `AssetCorrupt` unless they hash to the `content_sha256` its
-  `pseudopotentials` record publishes. `bundle.py` hashes every artifact while
+  `assemble_bundle_input` takes the pseudopotential files from
+  `service/_pseudo.py`'s `pseudo_artifacts`, the only producer of
+  `pseudopotential` artifacts: each selected UPF and, beside them, the table's
+  `LICENSE.txt` as `licences/<table-id>.txt` (role `licence`), so no bundle
+  ships a UPF without its licence. It reads each file once through the
+  installation's verified inventory (`InstalledAsset.read_bytes`) and raises
+  `AssetCorrupt` for one that no longer matches it, so a UPF's bytes are those
+  its `pseudopotentials` record hashes. `bundle.py` hashes every artifact while
   assembling the `goldilocks.json` manifest, and writes the same in-memory
   bytes it hashed — never rereading a source after hashing. Publication uses a
   completion-marker protocol, not v1's staging-directory-plus-atomic-rename:
@@ -281,8 +285,10 @@ requirements.
   evidence (`ml.predict.MlPrediction`: goldilocks-ml id, registry asset,
   details and warnings as returned) and its `ml/registry.toml` citation; the
   `pseudo_table` record carries the selected table's. A bundle's
-  `CITATIONS.md` and manifest `citations` are every record's citations. ML
-  model licence material is not shipped: bundles do not contain the models.
+  `CITATIONS.md` and manifest `citations` are every record's citations;
+  `CITATIONS.md` also names each `licence` file, which carries per-family
+  references the records do not. ML model licence material is not shipped:
+  bundles do not contain the models.
 - **Keep remote callers away from local paths.** HTTP and MCP accept inline
   structures and registered table IDs, not filesystem sources, model
   locations, or publication paths. Published records name no local path

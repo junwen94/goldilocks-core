@@ -65,12 +65,34 @@ def test_note_and_record_reach_the_parsed_table_instead_of_being_dropped() -> No
     table = load_tables()["sssp-pbe-efficiency-sr"]
 
     assert table.note is not None
-    assert "never redistributed" in table.note
+    assert "licences including GPL-3.0" in table.note
     assert table.record == "rcyfm-68h65"
     other = load_tables()["pseudodojo-pbesol-efficiency-sr"]
     assert other.note is not None
-    assert "never redistributed" not in other.note
+    assert "licences including GPL-3.0" not in other.note
     assert other.record is None
+
+
+@pytest.mark.parametrize(
+    "table_id",
+    [
+        "sssp-pbe-efficiency-sr",
+        "sssp-pbe-precision-sr",
+        "sssp-pbesol-efficiency-sr",
+        "sssp-pbesol-precision-sr",
+    ],
+)
+def test_an_sssp_note_says_bundles_ship_its_licence(table_id: str) -> None:
+    """#157: a bundle ships an SSSP table's LICENSE.txt beside its UPFs, so
+    the note every SSSP record publishes says so, instead of claiming the
+    files are never redistributed."""
+    note = " ".join(load_tables()[table_id].note.split())
+
+    assert (
+        "a bundle that ships them ships the record's LICENSE.txt beside them, "
+        "as licences/<table-id>.txt"
+    ) in note
+    assert "never redistributed" not in note
 
 
 def test_registry_rejects_unknown_table_fields(tmp_path: Path) -> None:

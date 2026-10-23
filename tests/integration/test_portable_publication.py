@@ -23,37 +23,14 @@ from support import (
     run_cli,
     sssp_fixture_table_spec,
     strict_json,
+    write_registry,
 )
 
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
-from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.bundle import bundle_files
 from goldilocks_core.server import _handlers
 from goldilocks_core.server.documents import ComputeRequestDocument
-
-
-def _write_registry(path: Path, table: PseudoTable) -> None:
-    """A one-table registry declaring ``table``, for the CLI subprocess."""
-    files = "".join(
-        f'\n[[tables."{table.id}".files]]\n'
-        f'role = "{file.role}"\npath = "{file.path}"\nurl = "{file.url}"\n'
-        for file in table.asset.files
-    )
-    path.write_text(
-        f'[tables."{table.id}"]\n'
-        f'provider = "{table.provider}"\n'
-        f'upstream_table = "{table.upstream_table}"\n'
-        f'version = "{table.version}"\n'
-        f'functional = "{table.functional}"\n'
-        f'relativistic = "{table.relativistic}"\n'
-        f'accuracy = "{table.accuracy}"\n'
-        f'licence = "{table.licence}"\n'
-        f'citation = "{table.citation}"\n'
-        "default = true\n"
-        f"elements = {json.dumps(list(table.elements))}\n" + files,
-        encoding="utf-8",
-    )
 
 
 @pytest.fixture
@@ -70,7 +47,7 @@ def two_asset_roots(tmp_path, monkeypatch) -> tuple[Path, Path]:
         lambda *_args, **_kwargs: {table.id: table},
     )
     registry = tmp_path / "registry.toml"
-    _write_registry(registry, table)
+    write_registry(registry, table)
     monkeypatch.setenv("GOLDILOCKS_PSEUDO_REGISTRY", str(registry))
     return roots
 

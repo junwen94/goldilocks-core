@@ -214,5 +214,9 @@ to them. UPFs are downloaded separately, not bundled in the package.
   before redistribution.
 
 Installations store licence material in `LICENSE.txt`: the CC BY 4.0 notice for
-PseudoDojo, or the upstream mixed-family licence file for SSSP. Published
-calculation outputs include that material with the selected UPFs.
+PseudoDojo, or the upstream mixed-family licence file for SSSP, which gives
+each family's licence and references (GBRV under GPL-3.0, for example, and
+Topsakal & Wentzcovitch 2014 for the rare-earth PAWs). Every bundle that
+ships UPFs (CLI `run --out`, HTTP `/run` archives, Workbench downloads) also
+ships that file byte for byte as `licences/<table-id>.txt`, listed in
+`goldilocks.json`'s `files` with role `licence` and named in `CITATIONS.md`.

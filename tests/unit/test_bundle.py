@@ -198,6 +198,52 @@ def test_citations_are_those_the_records_carry_each_listed_once() -> None:
     )
 
 
+_CITATIONS_INTRO = (
+    "# Citations\n\n"
+    "Goldilocks records complete provenance in `goldilocks.json`. Cite the "
+    "selected pseudopotential and model sources when publishing results.\n\n"
+    "- A citation.\n"
+)
+
+
+def test_citations_point_at_every_shipped_licence() -> None:
+    """#157: the per-family references SSSP's licence file lists (such as
+    Topsakal & Wentzcovitch for the rare-earth PAWs) are not in the records'
+    citations, so CITATIONS.md names each ``licence`` artifact the bundle
+    ships; the manifest hashes it like any other file."""
+    licence = b"SSSP fixture licence\n"
+    bundle_input = _bundle_input(
+        artifacts=(
+            _artifact("scf.in", b"&CONTROL\n/\n"),
+            _artifact("pseudo/Si.upf", b"<UPF/>\n", "pseudopotential"),
+            _artifact("licences/sssp-fixture.txt", licence, "licence"),
+        )
+    )
+
+    files = {item["path"]: item["content"] for item in bundle_files(bundle_input)}
+
+    assert files["CITATIONS.md"].decode("utf-8") == (
+        _CITATIONS_INTRO + "\n## Licences\n\n"
+        "Pseudopotentials keep their upstream licences. Each file below holds a "
+        "table's licence material, with any per-family references to cite; read "
+        "it before redistributing the pseudopotentials.\n\n"
+        "- `licences/sssp-fixture.txt`\n"
+    )
+    assert strict_json(files["goldilocks.json"])["files"][
+        "licences/sssp-fixture.txt"
+    ] == {
+        "role": "licence",
+        "sha256": hashlib.sha256(licence).hexdigest(),
+        "size_bytes": len(licence),
+    }
+
+
+def test_citations_name_no_licence_when_the_bundle_ships_none() -> None:
+    files = {item["path"]: item["content"] for item in bundle_files(_bundle_input())}
+
+    assert files["CITATIONS.md"].decode("utf-8") == _CITATIONS_INTRO
+
+
 def test_manifest_warnings_are_the_bundle_input_s_verbatim() -> None:
     """#152: goldilocks.json carries the very list the transports return
     (``BundleInput.warnings``, from ``advice.warnings()``), each warning

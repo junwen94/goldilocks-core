@@ -287,14 +287,31 @@ def _validate_publication_path(path: str) -> None:
 
 
 def _citations(bundle_input: BundleInput) -> str:
+    """The records' citations, then each ``licence`` artifact: a table's
+    licence material, which holds the per-family references the records do
+    not cite (#157)."""
     entries = "".join(
         f"- {citation}\n" for citation in collect_citations(bundle_input.records)
+    )
+    licences = "".join(
+        f"- `{artifact['path']}`\n"
+        for artifact in bundle_input.artifacts
+        if artifact["role"] == "licence"
+    )
+    licence_section = (
+        "\n## Licences\n\n"
+        "Pseudopotentials keep their upstream licences. Each file below holds a "
+        "table's licence material, with any per-family references to cite; read "
+        "it before redistributing the pseudopotentials.\n\n"
+        f"{licences}"
+        if licences
+        else ""
     )
     return (
         "# Citations\n\n"
         "Goldilocks records complete provenance in `goldilocks.json`. Cite the "
         "selected pseudopotential and model sources when publishing results.\n\n"
-        f"{entries}"
+        f"{entries}{licence_section}"
     )
 
 

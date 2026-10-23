@@ -11,12 +11,12 @@ only their failure shape changes.
 **Scope note**: this ports the *selection* decision only, not
 `PseudoResolution`'s full `materialize()` orchestration (reading actual UPF
 bytes off an `AssetStore`, building `InputArtifact`s, licence-file handling).
-That is file-assembly, not a settings decision -- it belongs with
-`generation/`/`bundle.py` (v2 epic 7's "QE generation rewrite"), the same
-line every other advisor in this epic draws. v1's `pseudo/source.py`
-stayed untouched until it was deleted along with the rest of the v1
-tree at cutover (v2 epic 9); this is a fresh, standalone port, tested
-on its own, same as every prior epic's deliverable.
+That is file-assembly, not a settings decision, the line every other
+advisor in this epic draws: `service/_pseudo.py`'s `pseudo_artifacts`
+reads the UPFs and the table's licence for the bundle (#157). v1's
+`pseudo/source.py` stayed untouched until it was deleted along with the
+rest of the v1 tree at cutover (v2 epic 9); this is a fresh, standalone
+port, tested on its own, same as every prior epic's deliverable.
 
 Two v1 bugs fixed here, per this epic's Section (c):
 

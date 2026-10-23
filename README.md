@@ -99,9 +99,10 @@ uv run goldilocks run src/goldilocks_core/examples/structures/Si.cif --out si-ru
 ```
 
 Open `si-run/scf.in` to see the input. The directory also contains the
-pseudopotential file, a submission script, `goldilocks.json` (every setting
-with its source, and for a setting a model chose, the model with what it
-returned) and `CITATIONS.md` (the pseudopotential table and every model used).
+pseudopotential file with its table's licence, a submission script,
+`goldilocks.json` (every setting with its source, and for a setting a model
+chose, the model with what it returned) and `CITATIONS.md` (the
+pseudopotential table and every model used).
 
 Treat the recommended settings as a starting point: review warnings and check
 convergence for your calculation. The [quickstart](docs/quickstart.md) explains
