@@ -185,6 +185,14 @@ The default store is `$XDG_DATA_HOME/goldilocks/assets`, or
 
 Treat managed files as read-only; use `assets install`, `status`, and `verify`.
 
+Published records never contain this path. The `pseudopotentials` record of
+`explain`, `run` and `goldilocks.json` names each UPF by `table_id`
+(`pseudopotentials/<table-id>`), `asset_path` (its path inside the table's
+installation, such as `pseudos/Si.upf`), `filename` (its copy under `pseudo/`
+in a bundle) and `content_sha256`/`content_size_bytes`, which equal that
+copy's entry in the manifest's `files`. Two machines with the same tables
+installed publish the same records.
+
 ## Licences and citations
 
 UPFs retain their upstream licences; the Goldilocks BSD licence does not apply

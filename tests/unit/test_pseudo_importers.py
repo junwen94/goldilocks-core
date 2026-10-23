@@ -219,6 +219,22 @@ def test_sssp_normalizes_sidecar_and_verified_upfs(tmp_path: Path) -> None:
     assert installed.path("LICENSE.txt").read_text() == "SSSP fixture licence\n"
 
 
+@pytest.mark.parametrize("install", [install_sssp_fixture, install_dojo_fixture])
+def test_installed_metadata_names_its_upf_by_table_path_and_content(
+    tmp_path: Path, install
+) -> None:
+    """#177: each UPF is referenced by its path inside the installed table
+    and the hash and size of its bytes, not only by the host path it was
+    read from."""
+    installed, _ = install(tmp_path)
+
+    (metadata,) = load_installed_table(installed)
+
+    assert metadata.content_sha256 == hashlib.sha256(UPF).hexdigest()
+    assert metadata.content_size_bytes == len(UPF)
+    assert metadata.asset_path == "pseudos/Si.upf"
+
+
 def test_sssp_preserves_nonrelativistic_upf_provenance(tmp_path: Path) -> None:
     upf = UPF.replace(b'relativistic="scalar"', b'relativistic="non-relativistic"')
     installed, _ = install_sssp_fixture(tmp_path, upf=upf)

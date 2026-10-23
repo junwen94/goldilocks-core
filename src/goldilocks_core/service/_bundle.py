@@ -4,8 +4,10 @@ v2 orchestrator (v2 epic 8, #8).
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path, PurePosixPath
 
+from goldilocks_core.assets.store import AssetCorrupt
 from goldilocks_core.bundle import BundleInput
 from goldilocks_core.generation.files import InputArtifact
 from goldilocks_core.inputs.hpc import HpcProfile
@@ -32,11 +34,11 @@ def to_bundle_input(
 ) -> BundleInput:
     """Assemble one ``BundleInput``: the rendered input file(s), the
     actual pseudopotential file bytes each step's ``ATOMIC_SPECIES``
-    card references (read off disk from ``PseudoMetadata.filepath`` --
-    neither epic 5 nor epic 7 did this file-assembly step; see
-    ``service/_pseudo.py``'s own docstring), the submission script,
-    every advisor decision as a tri-state record, and the advice's
-    warnings."""
+    card references (read off disk from ``PseudoMetadata.filepath`` and
+    checked against its ``content_sha256`` -- neither epic 5 nor epic 7
+    did this file-assembly step; see ``service/_pseudo.py``'s own
+    docstring), the submission script, every advisor decision as a
+    tri-state record, and the advice's warnings."""
     return assemble_bundle_input(
         advice.system.pseudo.metadata,
         steps,
@@ -61,7 +63,10 @@ def assemble_bundle_input(
     which pseudopotential ``FieldState``/records dict feeds it (v2
     epic 9, #9, #28). ``warnings`` is the advice's own ``warnings()``,
     the list every transport returns, which ``goldilocks.json`` carries
-    unchanged (#152)."""
+    unchanged (#152). Raises ``AssetCorrupt`` for a pseudopotential whose
+    bytes no longer hash to its record's ``content_sha256``, so the
+    bundle never ships a file its ``pseudopotentials`` record does not
+    describe (#177)."""
     artifacts: list[InputArtifact] = []
     for step in steps:
         for path, content in step.files.items():
@@ -71,6 +76,11 @@ def assemble_bundle_input(
     pseudo_dir = PurePosixPath(ctx.pseudo_dir).as_posix()
     for metadata in pseudopotentials.value if pseudopotentials.ok else ():
         content = Path(metadata.filepath).read_bytes()
+        if hashlib.sha256(content).hexdigest() != metadata.content_sha256:
+            raise AssetCorrupt(
+                f"pseudopotential {metadata.filename} of {metadata.table_id} "
+                "changed after its table was verified"
+            )
         artifacts.append(
             {
                 "path": f"{pseudo_dir}/{metadata.filename}",

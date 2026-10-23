@@ -39,6 +39,13 @@ class PseudoCutoffs(TypedDict):
 
 @dataclass(frozen=True, slots=True)
 class PseudoMetadata:
+    """One UPF file's facts. ``filepath`` (where this machine reads the
+    file) and ``pseudo_info`` are ``Portable()``, so no published record
+    carries them. An installed table's file is published as ``table_id``,
+    ``asset_path`` (its path inside that table's installation, so
+    ``filepath`` is ``<asset-store>/<table_id>/<version>/<asset_path>``)
+    and ``content_sha256``/``content_size_bytes`` (#177)."""
+
     filepath: Annotated[str, Portable()]
     filename: str
     header_format: str
@@ -50,6 +57,7 @@ class PseudoMetadata:
     relativistic: RelativisticTreatment | None = None
     z_valence: float | None = None
     table_id: str | None = None
+    asset_path: str | None = None
     cutoffs: PseudoCutoffs | None = None
     source_identifier: str | None = None
     content_sha256: str | None = None
@@ -72,19 +80,26 @@ class PseudoMetadata:
             or "\\" in self.filename
         ):
             raise ValueError("PseudoMetadata.filename must be one filename")
-        for field_name in ("provider", "element", "source_identifier", "table_id"):
+        for field_name in (
+            "provider",
+            "element",
+            "source_identifier",
+            "table_id",
+            "asset_path",
+        ):
             validate_optional_nonempty_str(
                 getattr(self, field_name), f"PseudoMetadata.{field_name}"
             )
-        if self.source_identifier is not None and (
-            PurePosixPath(self.source_identifier).is_absolute()
-            or PureWindowsPath(self.source_identifier).is_absolute()
-            or self.source_identifier.startswith("~")
-        ):
-            raise ValueError(
-                "PseudoMetadata.source_identifier must be a portable source identity, "
-                "not a host path"
-            )
+        for field_name in ("source_identifier", "asset_path"):
+            value = getattr(self, field_name)
+            if value is not None and (
+                PurePosixPath(value).is_absolute()
+                or PureWindowsPath(value).is_absolute()
+                or value.startswith("~")
+            ):
+                raise ValueError(
+                    f"PseudoMetadata.{field_name} must be portable, not a host path"
+                )
         if (self.content_sha256 is None) != (self.content_size_bytes is None):
             raise ValueError(
                 "PseudoMetadata content_sha256 and content_size_bytes must both be "

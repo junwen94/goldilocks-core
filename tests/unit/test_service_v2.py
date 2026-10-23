@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import json
+from pathlib import Path
 
 import pytest
 import spglib
@@ -27,7 +28,7 @@ from goldilocks_core.advisors.parallelisation import (
 from goldilocks_core.advisors.size import Species, memory_estimate, resource_estimate
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.pseudopotentials.upf import parse_upf_metadata
-from goldilocks_core.assets.store import AssetStore
+from goldilocks_core.assets.store import AssetCorrupt, AssetStore
 from goldilocks_core.bundle import DirectoryOutput, is_complete, publish
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
 from goldilocks_core.resolution import Blocked, Unavailable, records_document
@@ -121,6 +122,29 @@ class TestAdviseEndToEnd:
         assert (destination / "pseudo" / "Si.upf").read_bytes() == _UPF
         assert (destination / "scf.in").exists()
         assert (destination / "submit.sh").exists()
+
+    def test_bundle_refuses_a_pseudopotential_changed_since_it_was_verified(
+        self, silicon, hpc, installed_table
+    ) -> None:
+        """#177: the bundle ships the bytes its pseudopotentials record
+        names. A UPF rewritten in the store after the advice read it would
+        put a file in ``goldilocks.json`` whose hash disagrees with its
+        record, so assembly refuses it."""
+        store, _table = installed_table
+        advice = advise(silicon, hpc=hpc, store=store)
+        steps = generate(advice, check(advice))
+        script = render_submission(advice, hpc, "quantum_espresso", steps)
+        (metadata,) = advice.system.pseudo.metadata.value
+        Path(metadata.filepath).write_bytes(
+            _UPF.replace(b'z_valence="4.0"', b'z_valence="4.5"')
+        )
+
+        with pytest.raises(
+            AssetCorrupt,
+            match=r"^pseudopotential Si\.upf of pseudopotentials/sssp-fixture "
+            r"changed after its table was verified$",
+        ):
+            to_bundle_input(advice, steps, script, default_shared_context())
 
     def test_generate_renders_the_advised_steps_own_max_seconds_share(
         self, silicon, hpc, installed_table

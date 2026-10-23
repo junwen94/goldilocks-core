@@ -255,10 +255,16 @@ def load_installed_table(
     *,
     table: PseudoTable | None = None,
 ) -> tuple[PseudoMetadata, ...]:
+    """One ``PseudoMetadata`` per entry of the installed table's manifest,
+    each UPF's md5 checked against it. ``asset_path`` is the entry's path
+    inside the installation, and ``content_sha256``/``content_size_bytes``
+    come from ``installed``'s verified inventory (#177). Raises
+    ``AssetCorrupt`` for a manifest or file that does not check out."""
     try:
         manifest_path = installed.path(TABLE_MANIFEST)
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
         _validate_manifest(data, installed, table)
+        inventory = {file.path: file for file in installed.files}
         metadata: list[PseudoMetadata] = []
         elements: list[str] = []
         paths: list[str] = []
@@ -270,6 +276,7 @@ def load_installed_table(
             if _md5(path) != entry["md5"].lower():
                 raise ValueError(f"entry md5 does not match {relative_path}")
             entry_relativistic = entry.get("upf_relativistic", data["relativistic"])
+            verified = inventory[relative_path]
             metadata.append(
                 PseudoMetadata(
                     filepath=str(path),
@@ -285,6 +292,7 @@ def load_installed_table(
                     relativistic=entry_relativistic,
                     z_valence=entry["z_valence"],
                     table_id=data["id"],
+                    asset_path=relative_path,
                     cutoffs={
                         field: finite_positive_cutoff(
                             entry[field], f"{element} {field}"
@@ -292,6 +300,8 @@ def load_installed_table(
                         for field in ("ecutwfc_ry", "ecutrho_ry")
                     },
                     source_identifier=entry["source_identifier"],
+                    content_sha256=verified.sha256,
+                    content_size_bytes=verified.size,
                     frozen_4f_core=entry["frozen_4f_core"],
                     pseudo_info={
                         "table_version": data["version"],

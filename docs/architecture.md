@@ -258,17 +258,19 @@ requirements.
   shared request-validation/dispatch implementation both `http.py` and
   `mcp.py` call; `server/readiness.py`'s `AssetReadiness` caches
   asset-availability checks (used by `GET /ready`) across requests.
-- **Publish through one implementation.** `bundle.py`'s `assemble_bundle_input`
-  reads each selected pseudopotential's bytes straight off disk
-  (`Path(metadata.filepath).read_bytes()`) once, hashes every artifact while
+- **Publish through one implementation.** `service/_bundle.py`'s
+  `assemble_bundle_input` reads each selected pseudopotential's bytes straight
+  off disk (`Path(metadata.filepath).read_bytes()`) once and raises
+  `AssetCorrupt` unless they hash to the `content_sha256` its
+  `pseudopotentials` record publishes. `bundle.py` hashes every artifact while
   assembling the `goldilocks.json` manifest, and writes the same in-memory
-  bytes it hashed — never rereading a source after hashing. Publication uses
-  a completion-marker protocol, not v1's staging-directory-plus-atomic-rename:
-  `target.mkdir()` (directories) or an exclusive `open(path, "xb")`
-  (archives) claims the destination, raising `FileExistsError` if it already
-  exists; every byte is written; a `.complete` marker file is written
-  strictly last. Any consumer must call `bundle.is_complete(target)` before
-  trusting a directory/archive — a killed process (SIGKILL/OOM) can leave a
+  bytes it hashed — never rereading a source after hashing. Publication uses a
+  completion-marker protocol, not v1's staging-directory-plus-atomic-rename:
+  `target.mkdir()` (directories) or an exclusive `open(path, "xb")` (archives)
+  claims the destination, raising `FileExistsError` if it already exists;
+  every byte is written; a `.complete` marker file is written strictly last.
+  Any consumer must call `bundle.is_complete(target)` before trusting a
+  directory/archive — a killed process (SIGKILL/OOM) can leave a
   real-but-incomplete directory behind with no exception ever raised, an
   explicitly accepted trade-off versus v1's staging approach, which made that
   physically impossible.
@@ -279,8 +281,13 @@ requirements.
   the `default` profile installs and uses ML models by default.
 - **Keep remote callers away from local paths.** HTTP and MCP accept inline
   structures and registered table IDs, not filesystem sources, model
-  locations, or publication paths. Keep authentication and deployment
-  controls explicit; see [CLI transport security](cli.md#http-security).
+  locations, or publication paths. Published records name no local path
+  either: a field annotated `Portable()` (`PseudoMetadata.filepath`,
+  `ModelSpec.location`) never reaches them, and a `pseudopotentials` record
+  names each UPF by `table_id`, `asset_path` and `content_sha256`, so two
+  machines with the same assets publish the same records. Keep authentication
+  and deployment controls explicit; see
+  [CLI transport security](cli.md#http-security).
 - **Keep imports direct.** Package code imports from the module defining a
   name. The top-level `goldilocks_core` package deliberately exports
   nothing; library users import directly from `goldilocks_core.service`
