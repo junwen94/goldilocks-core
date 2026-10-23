@@ -36,6 +36,16 @@ does not choose a different table merely because that table is installed. The
 table, plus the default `qrf-kpoints`, `metallicity-cgcnn`,
 `is-metal-classifier`, and `is-magnetic-classifier` models.
 
+If no registered table satisfies the request, the `pseudo_table` record is
+unavailable. Its reason lists every table with the requested functional and
+accuracy, in table-ID order, with the constraints that rejected it. For
+example, La2O3 under PBEsol with `spin_orbit_coupling=true` gives `no
+pseudopotential table satisfies PBEsol efficiency full for La, O:
+pseudodojo-pbesol-efficiency-fr: lanthanide and actinide elements require an
+SSSP table; pseudodojo-pbesol-efficiency-sr: ...; sssp-pbesol-efficiency-sr:
+relativistic treatment is scalar, requested full`. This tells a routing rule
+apart from missing coverage.
+
 To choose a table explicitly, pin `pseudo_table_id`: `--set
 pseudo_table_id=<table-id>` on the CLI, `build_overrides({"pseudo_table_id":
 "<table-id>"})` in Python (see the [Python tutorial](tutorial.md)), or

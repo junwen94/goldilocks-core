@@ -8,7 +8,7 @@ from goldilocks_core.advisors.pseudo_selection import (
     select_metadata_for_elements,
     select_pseudopotential_table,
 )
-from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
+from goldilocks_core.assets.pseudopotentials.registry import PseudoTable, load_tables
 from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.assets.records import AssetFile, AssetSpec
 
@@ -150,7 +150,115 @@ def test_automatic_selection_with_no_match_is_unavailable_not_a_raise() -> None:
     )
 
     assert not state.ok
-    assert "no pseudopotential table satisfies" in state.reason
+    assert state.reason == (
+        "no pseudopotential table satisfies PBEsol efficiency scalar for Fe: "
+        "fixture: missing elements Fe"
+    )
+
+
+class TestAutomaticRefusalAgainstTheRegistry:
+    """#182: the automatic refusal names, for every registered table that
+    matches the functional and accuracy, the constraints that rejected it,
+    so a routing rule reads differently from a coverage gap."""
+
+    def test_lanthanide_soc_names_the_sssp_rule_and_the_scalar_tables(self) -> None:
+        state = select_pseudopotential_table(
+            load_tables(),
+            table_id=None,
+            elements={"La", "O"},
+            requirements=_requirements(relativistic="full"),
+        )
+
+        assert state.status == "unavailable"
+        assert state.reason == (
+            "no pseudopotential table satisfies PBEsol efficiency full for La, O: "
+            "pseudodojo-pbesol-efficiency-fr: lanthanide and actinide elements "
+            "require an SSSP table; "
+            "pseudodojo-pbesol-efficiency-sr: relativistic treatment is scalar, "
+            "requested full and lanthanide and actinide elements require an SSSP "
+            "table; "
+            "sssp-pbesol-efficiency-sr: relativistic treatment is scalar, "
+            "requested full"
+        )
+
+    def test_uncovered_lanthanide_also_names_the_missing_element(self) -> None:
+        state = select_pseudopotential_table(
+            load_tables(),
+            table_id=None,
+            elements={"Ce", "Te"},
+            requirements=_requirements(relativistic="full"),
+        )
+
+        assert state.reason.startswith(
+            "no pseudopotential table satisfies PBEsol efficiency full for Ce, Te: "
+            "pseudodojo-pbesol-efficiency-fr: lanthanide and actinide elements "
+            "require an SSSP table and missing elements Ce; "
+        )
+        assert state.reason.endswith(
+            "; sssp-pbesol-efficiency-sr: relativistic treatment is scalar, "
+            "requested full"
+        )
+
+    def test_heavy_element_under_lda_soc_names_the_only_lda_table(self) -> None:
+        state = select_pseudopotential_table(
+            load_tables(),
+            table_id=None,
+            elements={"Pb"},
+            requirements=_requirements(functional="LDA", relativistic="full"),
+        )
+
+        assert state.reason == (
+            "no pseudopotential table satisfies LDA efficiency full for Pb: "
+            "pseudodojo-lda-efficiency-sr: relativistic treatment is scalar, "
+            "requested full"
+        )
+
+    def test_functional_without_a_table_says_none_is_registered(self) -> None:
+        state = select_pseudopotential_table(
+            load_tables(),
+            table_id=None,
+            elements={"Si"},
+            requirements=_requirements(functional="SCAN"),
+        )
+
+        assert state.reason == (
+            "no pseudopotential table satisfies SCAN efficiency scalar for Si: "
+            "no registered table has functional SCAN and accuracy efficiency"
+        )
+
+
+class TestExplicitRefusalAgainstTheRegistry:
+    """The pinned-table refusal keeps its format: the pinned table's own
+    problems, then every table that would satisfy the request."""
+
+    def test_pinned_fr_table_for_a_lanthanide_names_the_sssp_rule(self) -> None:
+        state = select_pseudopotential_table(
+            load_tables(),
+            table_id="pseudodojo-pbesol-efficiency-fr",
+            elements={"La", "O"},
+            requirements=_requirements(relativistic="full"),
+        )
+
+        assert state.reason == (
+            "pseudopotential table 'pseudodojo-pbesol-efficiency-fr' does not "
+            "satisfy the request: lanthanide and actinide elements require an "
+            "SSSP table; matching tables: none"
+        )
+
+    def test_pinned_table_with_two_problems_lists_both_and_the_match(self) -> None:
+        state = select_pseudopotential_table(
+            load_tables(),
+            table_id="pseudodojo-pbe-efficiency-sr",
+            elements={"Pb"},
+            requirements=_requirements(relativistic="full"),
+        )
+
+        assert state.reason == (
+            "pseudopotential table 'pseudodojo-pbe-efficiency-sr' does not satisfy "
+            "the request: functional is PBE, requested PBEsol; relativistic "
+            "treatment is scalar, requested full; "
+            "matching tables: pseudodojo-pbesol-efficiency-fr"
+        )
 
 
 class TestSelectMetadataForElements:

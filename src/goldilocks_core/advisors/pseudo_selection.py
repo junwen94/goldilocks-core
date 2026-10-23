@@ -23,9 +23,11 @@ Two v1 bugs fixed here, per this epic's Section (c):
 - **`PseudoTableMismatch` raise-on-failure**
   (`pseudo/source.py:159-161,172-175,200-203`) -- an unknown table id, a
   table that doesn't cover the requested elements, or no compatible table
-  at all now returns `Unavailable` with the same diagnostic text v1's
-  exception message carried, not a raised exception on the happy-adjacent
-  path.
+  at all now returns `Unavailable`, not a raised exception on the
+  happy-adjacent path. `_refusal` builds both the pinned and the automatic
+  refusal from `_table_problems`, so it names the constraint that rejected
+  each table;
+  v1's automatic-path text named only the request and the elements (#182).
 - **`materialize()`'s `StopIteration`-prone round-trip**
   (`pseudo/source.py:114-129`) -- matching each selected pseudopotential
   back to its metadata used a bare `next(... for ... if ...)` with no
@@ -118,21 +120,9 @@ def _select_explicit_table(
         return Unavailable(
             reason=f"unknown pseudopotential table {table_id!r}; available: {choices}"
         )
-    problems = _table_problems(table, elements, requirements)
-    if not problems:
+    if not _table_problems(table, elements, requirements):
         return Resolved(table, Provenance(source="heuristic"))
-    matches = [
-        candidate.id
-        for candidate in tables.values()
-        if not _table_problems(candidate, elements, requirements)
-    ]
-    alternatives = ", ".join(sorted(matches)) or "none"
-    return Unavailable(
-        reason=(
-            f"pseudopotential table {table.id!r} does not satisfy the request: "
-            f"{'; '.join(problems)}; matching tables: {alternatives}"
-        )
-    )
+    return _refusal(tables, elements, requirements, pinned=table)
 
 
 def _select_automatic_table(
@@ -146,21 +136,61 @@ def _select_automatic_table(
         if not _table_problems(table, elements, requirements)
     ]
     if not matches:
-        requested = (
-            f"{requirements.functional} {requirements.accuracy} "
-            f"{requirements.relativistic}"
-        )
-        return Unavailable(
-            reason=(
-                f"no pseudopotential table satisfies {requested} for "
-                + ", ".join(sorted(elements))
-            )
-        )
+        return _refusal(tables, elements, requirements, pinned=None)
     provider = "sssp" if requires_sssp(elements) else "pseudodojo"
     table = min(
         matches, key=lambda candidate: (candidate.provider != provider, candidate.id)
     )
     return Resolved(table, Provenance(source="heuristic"))
+
+
+def _refusal(
+    tables: dict[str, PseudoTable],
+    elements: set[str],
+    requirements: PseudoRequirements,
+    *,
+    pinned: PseudoTable | None,
+) -> Unavailable:
+    """Return the refusal for a request no registered table satisfies, built
+    from `_table_problems` in table-id order.
+
+    A pinned table reports its own problems and the tables that would satisfy
+    the request. Otherwise each near-miss table (functional and accuracy match
+    the request) reports its problems, or the reason says no table has that
+    functional and accuracy (#182).
+    """
+    ordered = sorted(tables.values(), key=lambda table: table.id)
+    problems = {
+        table.id: _table_problems(table, elements, requirements) for table in ordered
+    }
+    if pinned is not None:
+        matching = ", ".join(key for key, found in problems.items() if not found)
+        return Unavailable(
+            reason=(
+                f"pseudopotential table {pinned.id!r} does not satisfy the request: "
+                f"{'; '.join(problems[pinned.id])}; matching tables: "
+                f"{matching or 'none'}"
+            )
+        )
+    near_misses = "; ".join(
+        f"{table.id}: {' and '.join(problems[table.id])}"
+        for table in ordered
+        if table.functional == requirements.functional
+        and table.accuracy == requirements.accuracy
+    )
+    rejections = near_misses or (
+        f"no registered table has functional {requirements.functional} "
+        f"and accuracy {requirements.accuracy}"
+    )
+    requested = (
+        f"{requirements.functional} {requirements.accuracy} {requirements.relativistic}"
+    )
+    return Unavailable(
+        reason=(
+            f"no pseudopotential table satisfies {requested} for "
+            f"{', '.join(sorted(elements))}: {rejections}"
+        )
+    )
 
 
 def is_table_eligible(table: PseudoTable, elements: set[str]) -> bool:

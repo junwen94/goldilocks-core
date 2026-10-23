@@ -551,7 +551,15 @@ class TestAdviseDegradation:
         advice = advise(cerium, hpc=hpc, overrides=overrides)
 
         assert isinstance(advice.system.pseudo.table, Unavailable)
-        assert "Ce" in advice.system.pseudo.table.reason
+        reason = advice.system.pseudo.table.reason
+        assert (
+            "pseudodojo-pbesol-efficiency-fr: lanthanide and actinide elements "
+            "require an SSSP table and missing elements Ce; "
+        ) in reason
+        assert reason.endswith(
+            "sssp-pbesol-efficiency-sr: relativistic treatment is scalar, "
+            "requested full"
+        )
         assert isinstance(advice.system.pseudo.metadata, Blocked)
         assert isinstance(advice.system.pseudo.relativistic, Blocked)
         assert isinstance(advice.system.magnetic, Blocked)
