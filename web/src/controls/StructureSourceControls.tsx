@@ -185,7 +185,9 @@ function StructureSummary({
       ),
     ),
   ];
-  const periodicity = structure.periodicity.every(Boolean) ? "3D" : "Partial";
+  // No periodicity token: pymatgen marks every CIF/POSCAR fully periodic,
+  // so it never varies, and next to the formula it reads as the
+  // structure's dimensionality (a monolayer would show "3D").
   return (
     <Text
       size="sm"
@@ -194,7 +196,7 @@ function StructureSummary({
       aria-label="Inspected structure summary"
     >
       {structure.formula} · {elements.join(" ")} ·{" "}
-      {structure.lattice.volume_angstrom3.toFixed(1)} Å³ · {periodicity}
+      {structure.lattice.volume_angstrom3.toFixed(1)} Å³
     </Text>
   );
 }

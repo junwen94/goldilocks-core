@@ -526,6 +526,10 @@ test("prepares a real Core recommendation from POSCAR", async ({ page }) => {
   await expect(page.getByLabel("Crystal structure viewer")).toBeVisible();
   await expect(page.getByText("1 atomic site", { exact: true })).toBeVisible();
   await expect(page.getByText("1 site · parsed")).toBeVisible();
+  // No periodicity token: /inspect reports every POSCAR fully periodic.
+  await expect(page.getByLabel("Inspected structure summary")).toHaveText(
+    "Si1 · Si · 160.2 Å³",
+  );
   await expandAdvisorGroup(page, "Pseudopotential table");
   await page
     .getByRole("combobox", { name: "Pseudopotential table", exact: true })
