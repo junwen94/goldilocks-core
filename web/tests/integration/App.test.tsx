@@ -413,6 +413,33 @@ describe("Goldilocks Workbench", () => {
     );
   });
 
+  it("submits an Analysis fact's advertised value unchanged", async () => {
+    // #139: Core accepts exactly the values capabilities.facts advertises,
+    // so the select's string goes out as chosen.
+    const user = userEvent.setup();
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    const { container } = renderApp(core);
+
+    await openStructure(user, container);
+    const analysis = screen.getByRole("region", {
+      name: "Goldilocks analysis",
+    });
+    await user.selectOptions(
+      within(analysis).getByLabelText("is metal"),
+      "non_metal",
+    );
+
+    await waitFor(
+      () => {
+        expect(core.explainCalls.at(-1)?.overrides).toMatchObject({
+          is_metal: "non_metal",
+        });
+      },
+      { timeout: 2000 },
+    );
+  });
+
   it("keeps the old review visible and disables input generation after an edit", async () => {
     const user = userEvent.setup();
     const core = new CoreStub(Promise.resolve(capabilities));

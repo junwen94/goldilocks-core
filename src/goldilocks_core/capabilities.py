@@ -58,15 +58,22 @@ they would collide, so hubbard's is renamed to
 ``hubbard_needs_correlation`` in ``_SETTING_META`` -- the Python
 attribute name is untouched, only the exposed capabilities key differs.
 
-**`facts[]` is hand-written, not reflected**: only the four analysis
-facts that are both scalar-valued *and* overridable (``is_metal``,
-``is_magnetic``, ``needs_soc``, ``needs_correlation``) are listed, per
-the design doc's own illustrative shape (``{"key", "type": "enum",
-"values", "ml_target", "overridable", "description"}``) -- ``composition``/
-``geometry``/``symmetry`` are structural, multi-field records with no
-override at all (``analysis/composition.py``'s and
-``analysis/symmetry.py``'s own docstrings say so explicitly) and don't
-fit this shape; they are not exposed here.
+**`facts[]` lists the four scalar analysis facts** (``is_metal``,
+``is_magnetic``, ``needs_soc``, ``needs_correlation``) in the design
+doc's illustrative shape (``{"key", "type": "enum", "values",
+"ml_target", "overridable", "description"}``). Only which facts exist,
+their ``ml_target`` and their description are hand-written (``_FACTS``).
+``type``/``values`` come from the fact's record type on
+``service.AnalysisFacts`` (``FieldState[Literal[...]]`` is an enum of the
+Literal's members, ``FieldState[bool]`` a boolean), and ``overridable``
+is whether the key has an analysis binding. The overrides are typed with
+the same record Literals, so every advertised value is an accepted one
+(#139: ``is_metal`` advertised ``metal``/``non_metal`` while its override
+took only booleans). ``composition``/``geometry``/``symmetry`` are
+structural, multi-field records with no override at all
+(``analysis/composition.py``'s and ``analysis/symmetry.py``'s own
+docstrings say so explicitly) and don't fit this shape; they are not
+exposed here.
 
 **`warnings[]` is aggregated, not hand-listed**, the same reflection
 -over-imports-elsewhere-in-the-codebase spirit as `settings[]`: every
@@ -106,12 +113,11 @@ from typing import Literal, TypedDict
 from goldilocks_core.advisors.warning_catalogue import (
     WARNING_CATALOGUE as _ADVISOR_WARNING_CATALOGUE,
 )
-from goldilocks_core.analysis.is_magnetic import Magnetism
-from goldilocks_core.analysis.is_metal import Metallicity
 from goldilocks_core.assets.pseudopotentials.registry import load_tables
 from goldilocks_core.inputs.hpc import list_hpc_profiles, load_hpc_profile
 from goldilocks_core.ml.predict import model_ready
 from goldilocks_core.service import (
+    AnalysisFacts,
     AnalysisOverrides,
     KpointsOverrides,
     RelaxOverrides,
@@ -581,43 +587,38 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
 }
 
-_FACTS: tuple[Fact, ...] = (
-    Fact(
+
+@dataclass(frozen=True, slots=True)
+class _FactMeta:
+    """What a fact's record type cannot say: its ML model target and its
+    description. ``_facts()`` derives the rest."""
+
+    key: str
+    ml_target: str | None
+    description: str
+
+
+_FACTS: tuple[_FactMeta, ...] = (
+    _FactMeta(
         key="is_metal",
-        type="enum",
-        values=list(typing.get_args(Metallicity)),
         ml_target="is_metal",
-        approaches=[],  # computed fresh per call -- see _facts()
-        overridable=True,
         description="Whether the structure is metallic, from composition alone.",
     ),
-    Fact(
+    _FactMeta(
         key="is_magnetic",
-        type="enum",
-        values=list(typing.get_args(Magnetism)),
         ml_target="is_magnetic",
-        approaches=[],  # computed fresh per call -- see _facts()
-        overridable=True,
         description="Whether the structure is expected to be magnetic.",
     ),
-    Fact(
+    _FactMeta(
         key="needs_soc",
-        type="boolean",
-        values=None,
         ml_target=None,
-        approaches=[],  # computed fresh per call -- see _facts()
-        overridable=True,
         description=(
             "Whether spin-orbit coupling is likely relevant for this structure."
         ),
     ),
-    Fact(
+    _FactMeta(
         key="needs_correlation",
-        type="boolean",
-        values=None,
         ml_target=None,
-        approaches=[],  # computed fresh per call -- see _facts()
-        overridable=True,
         description="Whether a Hubbard +U (or hybrid) correction is likely needed.",
     ),
 )
@@ -707,10 +708,11 @@ def _leaves_from_human_input(
     for name in human_input_cls.model_fields:
         # Analysis leaves always keep their bare field name: they must
         # match `_FACTS`'s own keys exactly (`_settings()` filters them
-        # out by that same key), and `_SETTING_META`'s one rename entry
-        # ("needs_correlation" -> "hubbard_needs_correlation") exists
-        # for hubbard_u's *own* field of the same inner name, not this
-        # one -- see this module's own docstring on that collision.
+        # out and `_facts()` derives `overridable` by that same key), and
+        # `_SETTING_META`'s one rename entry ("needs_correlation" ->
+        # "hubbard_needs_correlation") exists for hubbard_u's *own* field
+        # of the same inner name, not this one -- see this module's own
+        # docstring on that collision.
         extra = _SETTING_META.get(name, {}) if branch != "analysis" else {}
         leaves.append(
             SettingBinding(
@@ -814,24 +816,51 @@ def _setting_from_leaf(leaf: SettingBinding) -> Setting:
 def _settings() -> list[Setting]:
     """Every ``--set``-able leaf *except* the four analysis facts
     (``is_metal``/``is_magnetic``/``needs_soc``/``needs_correlation``):
-    those are already fully described in ``facts()`` (their real type is
-    the fact's own enum/boolean meaning, not the raw ``bool`` their
-    ``HumanInput`` happens to store it as) -- listing them a second time
-    here, with a different declared ``type``, would contradict ``facts()``
-    instead of complementing it. They still walk through ``_leaves()``
-    so ``bindings()`` (the `--set`/override construction path) accepts
-    them; only this JSON projection skips them."""
-    fact_keys = {fact["key"] for fact in _FACTS}
+    ``facts()`` already describes them, with the type and values of the
+    record their override is typed by. They still walk through
+    ``_leaves()`` so ``bindings()`` (the `--set`/override construction
+    path) accepts them; only this JSON projection skips them."""
+    fact_keys = {fact.key for fact in _FACTS}
     return [_setting_from_leaf(leaf) for leaf in _leaves() if leaf.key not in fact_keys]
 
 
+def _fact_schema(record: object) -> tuple[str, list[str] | None]:
+    """A fact's published ``type`` and ``values`` from its ``AnalysisFacts``
+    record type ``FieldState[T]``: ``("enum", members)`` for a ``Literal``
+    ``T``, ``("boolean", None)`` for ``bool``. Raises ``TypeError`` for any
+    other ``T``, which has no scalar fact shape."""
+    (value_type,) = typing.get_args(record)
+    json_type = _json_type(value_type)
+    if "enum" in json_type:
+        return "enum", list(json_type["enum"])
+    if json_type["type"] == "boolean":
+        return "boolean", None
+    raise TypeError(f"fact record type {value_type!r} is neither a Literal nor bool")
+
+
 def _facts() -> list[Fact]:
-    """``_FACTS``' own ``approaches`` entries are placeholders (``[]``)
-    -- recomputed fresh here, not frozen at import time, since
-    ``_approaches`` checks live installed-asset state (v2 epic 11, #11):
-    a model installed or removed after this module was first imported
-    must still be reflected on the next call."""
-    return [{**fact, "approaches": _approaches(fact["ml_target"])} for fact in _FACTS]
+    """``_FACTS`` projected to the published shape. ``approaches`` is
+    computed per call, not at import time, since ``_approaches`` checks
+    live installed-asset state (v2 epic 11, #11). A fact is overridable
+    exactly when its key has an analysis binding (a ``HumanInput`` on
+    ``AnalysisOverrides``)."""
+    records = typing.get_type_hints(AnalysisFacts)
+    overridable = {leaf.key for leaf in _leaves() if leaf.branch == "analysis"}
+    facts: list[Fact] = []
+    for meta in _FACTS:
+        fact_type, values = _fact_schema(records[meta.key])
+        facts.append(
+            Fact(
+                key=meta.key,
+                type=fact_type,
+                values=values,
+                ml_target=meta.ml_target,
+                approaches=_approaches(meta.ml_target),
+                overridable=meta.key in overridable,
+                description=meta.description,
+            )
+        )
+    return facts
 
 
 def _pseudopotential_tables() -> list[dict[str, object]]:

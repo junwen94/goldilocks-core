@@ -175,17 +175,29 @@ class TestBuildOverrides:
     def test_analysis_fact_settings_land_under_analysis(self) -> None:
         overrides = build_overrides(
             {
-                "is_metal": True,
-                "is_magnetic": False,
+                "is_metal": "non_metal",
+                "is_magnetic": "magnetic",
                 "needs_soc": True,
                 "needs_correlation": True,
             }
         )
 
-        assert overrides.analysis.is_metal.is_metal is True
-        assert overrides.analysis.is_magnetic.is_magnetic is False
+        assert overrides.analysis.is_metal.is_metal == "non_metal"
+        assert overrides.analysis.is_magnetic.is_magnetic == "magnetic"
         assert overrides.analysis.needs_soc.needs_soc is True
         assert overrides.analysis.needs_correlation.needs_correlation is True
+
+    @pytest.mark.parametrize(
+        ("key", "values"),
+        [("is_metal", "'metal' or 'non_metal'"), ("is_magnetic", "'magnetic' or")],
+    )
+    def test_a_boolean_metallicity_or_magnetism_is_refused(
+        self, key: str, values: str
+    ) -> None:
+        """#139: these overrides take the record's own labels, the values
+        /capabilities advertises; no boolean alias."""
+        with pytest.raises(InvalidSetting, match=values):
+            build_overrides({key: False})
 
     def test_needs_correlation_and_hubbard_needs_correlation_are_independent(
         self,
@@ -381,3 +393,18 @@ class TestBuildOverridesFromCli:
     def test_typo_surfaces_as_invalid_setting(self) -> None:
         with pytest.raises(InvalidSetting):
             build_overrides_from_cli(["ecutwf_ry=30"])
+
+    def test_metallicity_and_magnetism_flags_take_the_advertised_labels(
+        self,
+    ) -> None:
+        """#139: `--set is_metal=non_metal` exited 2 with "is not a boolean"."""
+        overrides = build_overrides_from_cli(
+            ["is_metal=non_metal", "is_magnetic=non_magnetic"]
+        )
+
+        assert overrides.analysis.is_metal.is_metal == "non_metal"
+        assert overrides.analysis.is_magnetic.is_magnetic == "non_magnetic"
+
+    def test_a_boolean_metallicity_flag_is_refused(self) -> None:
+        with pytest.raises(InvalidSetting, match="'metal' or 'non_metal'"):
+            build_overrides_from_cli(["is_metal=false"])

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.analysis.is_metal import (
@@ -135,7 +136,7 @@ def test_metalloid_oxide_is_unavailable_not_a_guessed_non_metal() -> None:
 def test_human_override_wins_over_heuristic() -> None:
     silica = _structure("Si", "O", "O")
 
-    state = is_metal(silica, human=IsMetalHumanInput(is_metal=True))
+    state = is_metal(silica, human=IsMetalHumanInput(is_metal="metal"))
 
     assert state.ok
     assert state.value == "metal"
@@ -145,7 +146,7 @@ def test_human_override_wins_over_heuristic() -> None:
 def test_llm_override_is_used_when_no_human_override_is_given() -> None:
     silica = _structure("Si", "O", "O")
 
-    state = is_metal(silica, llm=IsMetalLlmInput(is_metal=False))
+    state = is_metal(silica, llm=IsMetalLlmInput(is_metal="non_metal"))
 
     assert state.ok
     assert state.value == "non_metal"
@@ -157,9 +158,20 @@ def test_human_override_takes_priority_over_llm_override() -> None:
 
     state = is_metal(
         silica,
-        human=IsMetalHumanInput(is_metal=True),
-        llm=IsMetalLlmInput(is_metal=False),
+        human=IsMetalHumanInput(is_metal="metal"),
+        llm=IsMetalLlmInput(is_metal="non_metal"),
     )
 
     assert state.value == "metal"
     assert state.source == "human"
+
+
+@pytest.mark.parametrize("override", [IsMetalHumanInput, IsMetalLlmInput])
+@pytest.mark.parametrize("value", [True, False, "true", "insulator"])
+def test_an_override_takes_only_the_record_s_own_values(
+    override: type[IsMetalHumanInput], value: object
+) -> None:
+    """#139: the override takes the record's Literal, the values
+    /capabilities advertises; a boolean is refused, not mapped."""
+    with pytest.raises(ValidationError, match="'metal' or 'non_metal'"):
+        override(is_metal=value)

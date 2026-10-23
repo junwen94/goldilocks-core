@@ -133,13 +133,23 @@ def test_magnetic_orderings_rank_degrades_without_a_configured_checkpoint(
 
 
 def test_settings_json_matches_the_capabilities_contract() -> None:
+    """Every --set-able key: capabilities' settings[] and its overridable
+    facts[] (#139), the same objects /capabilities publishes."""
     completed = _run_cli("settings", "--json")
 
     assert completed.returncode == 0, completed.stderr
-    settings = json.loads(completed.stdout)
-    keys = {setting["key"] for setting in settings}
+    document = json.loads(completed.stdout)
+    caps = capabilities()
+    assert document == {
+        "settings": caps["settings"],
+        "facts": [fact for fact in caps["facts"] if fact["overridable"]],
+    }
+    keys = {setting["key"] for setting in document["settings"]}
     assert "functional" in keys
     assert "ecutwfc_ry" in keys
+    facts = {fact["key"]: fact for fact in document["facts"]}
+    assert facts["is_metal"]["values"] == ["metal", "non_metal"]
+    assert facts["is_magnetic"]["values"] == ["magnetic", "non_magnetic"]
 
 
 def test_settings_human_output_lists_sources() -> None:
@@ -147,6 +157,20 @@ def test_settings_human_output_lists_sources() -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert "sources: human . heuristic" in completed.stdout
+
+
+def test_settings_human_output_lists_the_facts_and_their_values() -> None:
+    """#139: is_metal/is_magnetic are --set-able, but `goldilocks settings`,
+    which an unknown key points to, never listed them or their values."""
+    completed = _run_cli("settings")
+
+    assert completed.returncode == 0, completed.stderr
+    lines = completed.stdout.splitlines()
+    is_metal = lines.index("is_metal [analysis] enum")
+    assert lines[is_metal + 1] == "  values: metal, non_metal"
+    is_magnetic = lines.index("is_magnetic [analysis] enum")
+    assert lines[is_magnetic + 1] == "  values: magnetic, non_magnetic"
+    assert "needs_soc [analysis] boolean" in lines
 
 
 def test_capabilities_json_matches_the_real_capabilities_payload() -> None:
@@ -388,6 +412,32 @@ def test_a_non_finite_set_value_is_an_operator_error() -> None:
     assert completed.returncode == 2
     assert "Traceback" not in completed.stderr
     assert "finite number" in completed.stderr
+
+
+def test_a_metallicity_override_takes_the_advertised_label() -> None:
+    """#139: `--set is_metal=non_metal`, a value capabilities advertises,
+    exited 2 with "is not a boolean (true/false)". explain reports the
+    record without real assets."""
+    silicon = structure("Si.cif")
+
+    completed = _run_cli(
+        "explain", str(silicon), "--hpc", "scarf", "--set", "is_metal=non_metal"
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "is_metal: 'non_metal' (source=human)" in completed.stdout
+
+
+def test_a_boolean_metallicity_override_is_an_operator_error() -> None:
+    silicon = structure("Si.cif")
+
+    completed = _run_cli(
+        "explain", str(silicon), "--hpc", "scarf", "--set", "is_metal=false"
+    )
+
+    assert completed.returncode == 2
+    assert "Traceback" not in completed.stderr
+    assert "'metal' or 'non_metal'" in completed.stderr
 
 
 def test_blocked_pipeline_reports_deduplicated_reasons_and_exits_nonzero() -> None:

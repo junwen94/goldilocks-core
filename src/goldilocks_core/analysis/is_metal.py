@@ -18,6 +18,10 @@ like ``metal``.
 The heuristic never guesses ``non_metal``: composition cannot rule out a
 metal that looks insulator-like. An all-metal ``metal`` can still be wrong,
 for intermetallic semiconductors such as CsAu or Mg2Sn.
+
+The human and LLM overrides take the record's own values, ``metal`` or
+``non_metal``, the values ``/capabilities`` advertises; a boolean is
+refused (#139).
 """
 
 from __future__ import annotations
@@ -34,11 +38,11 @@ Metallicity = Literal["metal", "non_metal"]
 
 
 class IsMetalHumanInput(HumanInput):
-    is_metal: bool | None = None
+    is_metal: Metallicity | None = None
 
 
 class IsMetalLlmInput(LlmInput):
-    is_metal: bool | None = None
+    is_metal: Metallicity | None = None
 
 
 def is_metal(
@@ -49,16 +53,12 @@ def is_metal(
     human = human or IsMetalHumanInput()
     llm = llm or IsMetalLlmInput()
     if human.is_metal is not None:
-        return Resolved(
-            "metal" if human.is_metal else "non_metal", Provenance(source="human")
-        )
+        return Resolved(human.is_metal, Provenance(source="human"))
     ml_value = _ml_is_metal(structure)
     if ml_value is not None:
         return Resolved("metal" if ml_value else "non_metal", Provenance(source="ml"))
     if llm.is_metal is not None:
-        return Resolved(
-            "metal" if llm.is_metal else "non_metal", Provenance(source="llm")
-        )
+        return Resolved(llm.is_metal, Provenance(source="llm"))
     return _heuristic(structure)
 
 

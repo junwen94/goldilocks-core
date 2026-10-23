@@ -12,17 +12,22 @@ from goldilocks_core.advisors import magnetic_ordering_ml
 from goldilocks_core.capabilities import (
     SOURCES,
     VOCABULARY_VERSION,
+    SettingBinding,
     _json_type,
     _unwrap_optional,
+    bindings,
     capabilities,
 )
 from goldilocks_core.ml import predict as predict_module
 from goldilocks_core.service import (
+    AnalysisFacts,
     KpointsOverrides,
     RelaxOverrides,
     ResourceOverrides,
+    RunOverrides,
     SystemOverrides,
 )
+from goldilocks_core.set_overrides import build_overrides
 
 
 def _install_every_model(monkeypatch, root) -> None:
@@ -33,6 +38,33 @@ def _install_every_model(monkeypatch, root) -> None:
         "AssetStore",
         lambda: SimpleNamespace(resolve_spec=lambda spec: SimpleNamespace(root=root)),
     )
+
+
+def _record_value_type(key: str) -> object:
+    """``T`` of the ``FieldState[T]`` ``AnalysisFacts`` declares for ``key``."""
+    (value_type,) = typing.get_args(typing.get_type_hints(AnalysisFacts)[key])
+    return value_type
+
+
+def _advertised_values(entry: dict[str, object]) -> list[object]:
+    """Every value a settings[] or facts[] entry tells a client it may send:
+    each enum member, or true/false for a boolean."""
+    if entry["type"] == "boolean":
+        return [True, False]
+    return list(entry.get("enum") or entry.get("values") or [])
+
+
+def _landed(overrides: RunOverrides, binding: SettingBinding) -> object:
+    """The value ``build_overrides`` stored for ``binding``'s key."""
+    branch = {
+        "analysis": overrides.analysis,
+        "system": overrides.system,
+        "kpoints": overrides.step.kpoints,
+        "resources": overrides.step.resources,
+        "relax": overrides.step.relax,
+    }[binding.branch]
+    outer = getattr(branch, binding.outer_field)
+    return outer if binding.inner_field is None else getattr(outer, binding.inner_field)
 
 
 def _expected_setting_field_count() -> int:
@@ -336,25 +368,82 @@ class TestFacts:
 
         assert facts["is_magnetic"]["approaches"] == ["human", "ml", "heuristic"]
 
-    def test_all_facts_are_overridable(self) -> None:
+    def test_a_fact_is_overridable_exactly_when_it_has_an_analysis_binding(
+        self,
+    ) -> None:
+        """`overridable` is a promise about `--set`/override support, not a
+        display flag: it once shipped True for all four facts while
+        `bindings()` had no entry for any of them, so `--set is_metal=...`
+        failed with "unknown setting"."""
+        analysis_keys = {
+            binding.key
+            for binding in bindings().values()
+            if binding.branch == "analysis"
+        }
+        facts = {f["key"]: f for f in capabilities()["facts"]}
+
+        for key, fact in facts.items():
+            assert fact["overridable"] is (key in analysis_keys), key
+        assert facts["is_metal"]["overridable"] is True
+        assert facts["is_magnetic"]["overridable"] is True
+
+
+class TestOverrideContract:
+    """#139: /capabilities advertised is_metal/is_magnetic as the enums
+    metal/non_metal and magnetic/non_magnetic, while their overrides took
+    only booleans, so every advertised value was a 422. Every value a
+    client is told it may send must be accepted, on every key."""
+
+    def test_each_fact_publishes_its_record_s_type_and_values(self) -> None:
         for fact in capabilities()["facts"]:
-            assert fact["overridable"] is True
+            value_type = _record_value_type(fact["key"])
+            if typing.get_origin(value_type) is typing.Literal:
+                expected = ("enum", sorted(typing.get_args(value_type)))
+            else:
+                assert value_type is bool, fact["key"]
+                expected = ("boolean", None)
+            assert (fact["type"], fact["values"]) == expected, fact["key"]
 
-    def test_every_fact_marked_overridable_actually_has_a_set_binding(self) -> None:
-        """`overridable: True` is a promise the settings-schema reflection
-        makes about `--set`/override support, not just a display flag --
-        this once shipped True for all four facts while `bindings()` (the
-        thing `--set` actually consults) had no entry for any of them, so
-        `--set is_metal=true` failed with "unknown setting". Every
-        overridable fact's key must resolve in `bindings()`."""
-        from goldilocks_core.capabilities import bindings
+    def test_metallicity_and_magnetism_are_the_record_labels(self) -> None:
+        facts = {f["key"]: f for f in capabilities()["facts"]}
 
+        assert (facts["is_metal"]["type"], facts["is_metal"]["values"]) == (
+            "enum",
+            ["metal", "non_metal"],
+        )
+        assert (facts["is_magnetic"]["type"], facts["is_magnetic"]["values"]) == (
+            "enum",
+            ["magnetic", "non_magnetic"],
+        )
+
+    def test_an_overridable_fact_s_binding_takes_its_record_s_type(self) -> None:
         catalogue = bindings()
+
         for fact in capabilities()["facts"]:
             if fact["overridable"]:
-                assert fact["key"] in catalogue, (
-                    f"{fact['key']!r} claims overridable=True but has no --set binding"
-                )
+                expected = _json_type(_record_value_type(fact["key"]))
+                assert catalogue[fact["key"]].json_type == expected, fact["key"]
+
+    def test_every_advertised_fact_value_is_accepted(self) -> None:
+        catalogue = bindings()
+        overridable = [f for f in capabilities()["facts"] if f["overridable"]]
+
+        assert overridable
+        for fact in overridable:
+            for value in _advertised_values(fact):
+                overrides = build_overrides({fact["key"]: value})
+                assert _landed(overrides, catalogue[fact["key"]]) == value
+
+    def test_every_advertised_setting_value_is_accepted(self) -> None:
+        catalogue = bindings()
+        checked = 0
+
+        for setting in capabilities()["settings"]:
+            for value in _advertised_values(setting):
+                overrides = build_overrides({setting["key"]: value})
+                assert _landed(overrides, catalogue[setting["key"]]) == value
+                checked += 1
+        assert checked > 0
 
 
 class TestPseudopotentialTablesAndHpcProfiles:

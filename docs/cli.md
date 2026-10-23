@@ -39,9 +39,10 @@ instead of failing.
 Narrower slices are also available directly:
 
 - `uv run goldilocks settings --json` — every `--set`-able key, its type,
-  default, and sources (the same objects as `capabilities`'s `settings[]`;
-  run this command for the current key count rather than trusting a number
-  in these docs).
+  default, and sources: `{"settings": [...], "facts": [...]}`, the same
+  objects as `capabilities`'s `settings[]` and its overridable `facts[]`
+  (`is_metal`, `is_magnetic`, ...); run this command for the current key
+  count rather than trusting a number in these docs.
 - `uv run goldilocks models --json` — every model `ml/registry.toml`
   registers, whether or not it is actually installed (see [Scientific
   controls](#scientific-controls)).
@@ -105,6 +106,7 @@ its type, default, and description; a selection of commonly used keys:
 | ------------------------------------ | --------------------------------------------------------------------- |
 | `functional`                        | Exchange-correlation functional (default `PBEsol`)                    |
 | `pseudo_table_id`                   | Pin a registered pseudopotential table id instead of automatic selection |
+| `is_metal`, `is_magnetic`           | Correct a classification: `metal`/`non_metal`, `magnetic`/`non_magnetic` (the record's own values, not `true`/`false`) |
 | `k_grid`                            | Explicit Monkhorst-Pack mesh, e.g. `--set 'k_grid=[8,8,8]'`            |
 | `k_distance`                        | Target k-point spacing along each periodic axis; axes the point group mixes share the larger count, and a vacuum axis always gets one k-point (heuristic default 0.15 for metals or when metallicity is unknown, 0.30 for a confirmed non-metal) |
 | `smearing_type`                     | Smearing function when `occupations=smearing` (default `cold`)        |

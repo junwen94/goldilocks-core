@@ -570,7 +570,7 @@ def test_an_afm_request_writes_an_afm_deck_for_a_non_magnetic_classification(
     steps, (content,) = _run(
         "scf",
         _bcc_chromium(),
-        {"is_magnetic": False, "magnetic_ordering": "afm"},
+        {"is_magnetic": "non_magnetic", "magnetic_ordering": "afm"},
         chromium_store,
     )
 
@@ -612,7 +612,7 @@ def test_a_magnetic_insulator_s_default_passes_the_gate_on_smearing(
     steps, (content,) = _run(
         "scf",
         structure(),
-        {"is_metal": False},
+        {"is_metal": "non_metal"},
         request.getfixturevalue(store_fixture),
     )
 
@@ -635,7 +635,10 @@ def test_a_compensated_afm_insulator_pins_a_zero_moment_on_fixed_occupations(
     tot_magnetization = 0, both spin channels holding 24 electrons, and a
     neutral cell (#128). The request itself carries no moment."""
     steps, (content,) = _run(
-        task, _primitive_nio(), {"magnetic_ordering": "afm", "is_metal": False}, store
+        task,
+        _primitive_nio(),
+        {"magnetic_ordering": "afm", "is_metal": "non_metal"},
+        store,
     )
 
     magnetic = steps[0].system.magnetic.value

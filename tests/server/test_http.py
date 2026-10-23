@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import json
 import math
+import re
 import zipfile
 from pathlib import Path
 
@@ -407,6 +408,49 @@ class TestExplain:
         assert k_sampling["k_index"] == 1
         assert k_sampling["k_distance_interval"] == _SILICON_GAMMA_INTERVAL
 
+    def test_metallicity_and_magnetism_overrides_take_the_advertised_labels(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        """#139: /capabilities advertises metal/non_metal and
+        magnetic/non_magnetic; each was a 422 bool_parsing."""
+        response = client.post(
+            "/explain",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "overrides": {"is_metal": "non_metal", "is_magnetic": "magnetic"},
+            },
+        )
+
+        assert response.status_code == 200
+        records = response.json()["records"]
+        assert (records["is_metal"]["value"], records["is_metal"]["source"]) == (
+            "non_metal",
+            "human",
+        )
+        assert (
+            records["is_magnetic"]["value"],
+            records["is_magnetic"]["source"],
+        ) == ("magnetic", "human")
+
+    def test_a_boolean_metallicity_override_is_a_422(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        """#139: no boolean alias for the advertised labels."""
+        response = client.post(
+            "/explain",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "overrides": {"is_metal": False},
+            },
+        )
+
+        assert response.status_code == 422
+        error = response.json()["error"]
+        assert error["kind"] == "invalid_setting"
+        assert "'metal' or 'non_metal'" in error["message"]
+
     def test_a_non_finite_override_is_a_422(
         self, client: TestClient, silicon_cif: str
     ) -> None:
@@ -476,6 +520,29 @@ class TestRun:
         records = strict_json(response.text)["records"]
         interval = records["k_sampling"]["value"]["k_distance_interval"]
         assert interval == _SILICON_GAMMA_INTERVAL
+
+    def test_a_metal_override_reaches_the_generated_occupations(
+        self, client: TestClient, silicon_fixture_table, silicon_cif: str
+    ) -> None:
+        """#139: the advertised label, not a boolean, now corrects the
+        classification, and the input follows it: smearing for a metal."""
+        response = client.post(
+            "/run",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "overrides": {"is_metal": "metal"},
+                "respond_with": "archive",
+            },
+        )
+
+        assert response.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            manifest = strict_json(archive.read("goldilocks.json"))
+            scf_in = archive.read("scf.in").decode()
+        assert manifest["records"]["is_metal"]["value"] == "metal"
+        assert manifest["records"]["is_metal"]["source"] == "human"
+        assert re.search(r"occupations\s*=\s*'smearing'", scf_in)
 
     def test_archive_manifest_is_strict_json_for_a_gamma_only_mesh(
         self, client: TestClient, silicon_fixture_table, silicon_cif: str

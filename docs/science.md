@@ -36,8 +36,8 @@ MgO look the same to it as metallic RuO2 and TiN. Unavailable -- like an
 actual `metal` result -- still defaults to smearing, not fixed occupations,
 because assuming "fixed" on an undetected metal risks silent
 non-convergence. A confident `non_metal` result is reachable via a human
-override, the ML classifier, or an LLM override. Neither the heuristic nor
-the ML model determines a band structure.
+override (`--set is_metal=non_metal`), the ML classifier, or an LLM override.
+Neither the heuristic nor the ML model determines a band structure.
 
 Fixed occupations fill whole bands in each spin channel: pw.x puts
 (nelec + `tot_magnetization`)/2 electrons in the spin-up channel and
@@ -64,7 +64,9 @@ Check the `is_metal` record's `status`, `source`, and `reason` (via
 `records.is_metal`), and the `occupations` record's own `warnings` array. A
 composition-only `metal` result can still be wrong -- intermetallic
 semiconductors such as CsAu or Mg2Sn contain only metals -- and give the
-wrong occupation choice for your system. Override the scheme itself with
+wrong occupation choice for your system. Correct the classification with
+`is_metal` (`metal` or `non_metal`, the record's own values; `true`/`false`
+are refused), or override the scheme itself with
 `occupations` (`fixed`, `smearing`, or `tetrahedra_opt`); when using
 smearing, refine it with `smearing_type` (default `cold`) and `degauss` (Ry,
 default 0.01). Test the width together with the k-point mesh.
@@ -240,7 +242,8 @@ blocked until you set `spin_polarized` to false or upload an ordered cell.
 Spin-polarized inputs get a `starting_magnetization` for every species;
 review it for your calculation. Neither tier predicts magnetic *order* (see
 `magnetic_ordering` below for that). Override either tier with
-`spin_polarized`.
+`spin_polarized`, or correct the classification with `is_magnetic`
+(`magnetic` or `non_magnetic`).
 
 Bands are counted per spin channel, and the default follows pw.x's own rule
 (QE setup.f90), sized so the majority channel holds (nelec + |M|)/2 electrons.

@@ -180,6 +180,37 @@ test("applies a paired smearing treatment and width override", async ({
   await expect(input).toContainText("degauss = 0.02");
 });
 
+test("corrects the metallicity classification from the Analysis card", async ({
+  page,
+}) => {
+  // #139: every value the is_metal select offers was a 422 that disabled
+  // Download.
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
+  await waitForBundleReady(page);
+
+  const corrected = page.waitForResponse((response) => {
+    if (new URL(response.url()).pathname !== "/explain") return false;
+    const body = response.request().postDataJSON() as {
+      overrides?: Record<string, unknown>;
+    } | null;
+    return body?.overrides?.is_metal === "non_metal";
+  });
+  await page
+    .getByRole("region", { name: "Goldilocks analysis" })
+    .getByRole("combobox", { name: "is metal" })
+    .selectOption("non_metal");
+  expect((await corrected).status()).toBe(200);
+
+  await waitForBundleReady(page);
+  await expect(page.getByText("Check your overrides")).toHaveCount(0);
+  await page.getByRole("button", { name: /^scf\.in/ }).click();
+  await expect(page.getByLabel("Generated input scf.in")).toContainText(
+    "occupations = 'fixed'",
+  );
+});
+
 test("keeps an old Result visible until the recommendation auto-recomputes", async ({
   page,
 }) => {

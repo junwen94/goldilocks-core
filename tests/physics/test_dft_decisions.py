@@ -255,7 +255,7 @@ def test_a_pinned_moment_gets_bands_for_its_majority_channel() -> None:
     )
     count = _electron_count(nelec)
     scheme = occupations(
-        is_metal(oxygen, IsMetalHumanInput(is_metal=False)), magnetism, count
+        is_metal(oxygen, IsMetalHumanInput(is_metal="non_metal")), magnetism, count
     )
     bands = nbnd(nelec, scheme, magnetic=magnetism)
 

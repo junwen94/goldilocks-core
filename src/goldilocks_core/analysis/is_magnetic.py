@@ -16,6 +16,10 @@ for v1, which spin-polarized any transition-metal presence): elemental Ni
 read as Ni0 d10, FePt and FeCo had no guess, metallic TiN and WC read as
 Ti3+ d1 and W4+ d2, any lanthanide or actinide counted as magnetic (f0
 ThO2), and no p-block radical ever did (solid O2).
+
+The human and LLM overrides take the record's own values, ``magnetic`` or
+``non_magnetic``, the values ``/capabilities`` advertises; a boolean is
+refused (#139).
 """
 
 from __future__ import annotations
@@ -32,11 +36,11 @@ Magnetism = Literal["magnetic", "non_magnetic"]
 
 
 class IsMagneticHumanInput(HumanInput):
-    is_magnetic: bool | None = None
+    is_magnetic: Magnetism | None = None
 
 
 class IsMagneticLlmInput(LlmInput):
-    is_magnetic: bool | None = None
+    is_magnetic: Magnetism | None = None
 
 
 def is_magnetic(
@@ -47,20 +51,14 @@ def is_magnetic(
     human = human or IsMagneticHumanInput()
     llm = llm or IsMagneticLlmInput()
     if human.is_magnetic is not None:
-        return Resolved(
-            "magnetic" if human.is_magnetic else "non_magnetic",
-            Provenance(source="human"),
-        )
+        return Resolved(human.is_magnetic, Provenance(source="human"))
     ml_value = _ml_is_magnetic(structure)
     if ml_value is not None:
         return Resolved(
             "magnetic" if ml_value else "non_magnetic", Provenance(source="ml")
         )
     if llm.is_magnetic is not None:
-        return Resolved(
-            "magnetic" if llm.is_magnetic else "non_magnetic",
-            Provenance(source="llm"),
-        )
+        return Resolved(llm.is_magnetic, Provenance(source="llm"))
     return _heuristic(structure)
 
 

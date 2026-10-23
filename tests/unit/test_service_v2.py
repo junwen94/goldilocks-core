@@ -226,7 +226,7 @@ class TestAdviseEndToEnd:
 
         store, _ = installed_table
         overrides = RunOverrides(
-            analysis=AnalysisOverrides(is_metal=IsMetalHumanInput(is_metal=True))
+            analysis=AnalysisOverrides(is_metal=IsMetalHumanInput(is_metal="metal"))
         )
 
         advice = advise(silicon, hpc=hpc, store=store, overrides=overrides)

@@ -144,8 +144,8 @@ _SCENARIOS = {
     "LaCuO3": _Scenario(lambda: _perovskite("La", "Cu", 3.82), ("U  Cu-3d  4",)),
     # A spin-polarized non-metal without a known moment runs on smearing
     # (#138).
-    "NiO is_metal false": _Scenario(
-        lambda: _rock_salt("Ni", 4.17), ("U  Ni-3d  6.2",), {"is_metal": False}
+    "NiO is_metal non_metal": _Scenario(
+        lambda: _rock_salt("Ni", 4.17), ("U  Ni-3d  6.2",), {"is_metal": "non_metal"}
     ),
     # Overrides.
     "TiO2 u_by_element": _Scenario(
@@ -213,7 +213,7 @@ _REFUSALS = {
     ),
 }
 
-_MULTI_TASK_SCENARIOS = ("NiO", "LaCuO3", "TiO2", "NiO is_metal false")
+_MULTI_TASK_SCENARIOS = ("NiO", "LaCuO3", "TiO2", "NiO is_metal non_metal")
 
 _FROZEN_NS = "convergence.mixing_fixed_ns_freezes_hubbard_occupations"
 

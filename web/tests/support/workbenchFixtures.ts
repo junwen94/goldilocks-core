@@ -71,6 +71,15 @@ export const capabilities: Capabilities = {
   ],
   facts: [
     {
+      key: "is_metal",
+      type: "enum",
+      values: ["metal", "non_metal"],
+      ml_target: "is_metal",
+      approaches: ["human", "heuristic"],
+      overridable: true,
+      description: "Whether the structure is metallic.",
+    },
+    {
       key: "needs_soc",
       type: "boolean",
       values: null,
