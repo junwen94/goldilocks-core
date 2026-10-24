@@ -277,6 +277,118 @@ test("shows needs soc as read-only advice beside the spin-orbit setting", async 
   await expectNoAxeViolations(page);
 });
 
+test("shows each setting's recorded value, captioned only by the tier that set it", async ({
+  page,
+}) => {
+  // #187: the Workbench read record.value[setting.key], so spin orbit
+  // coupling (recorded as spin_orbit_enabled) and magnetic ordering
+  // (ordering.applied) showed nothing under a tier caption, nosym (no field
+  // in the n_irr_k count) "—" under "Heuristic default", and pinning spin
+  // polarized captioned the untouched tot magnetization "Your override".
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.locator('input[type="file"]').setInputFiles(IRON_BCC_CIF);
+  await waitForBundleReady(page);
+
+  await expandAdvisorGroup(page, "Magnetic");
+  const magnetic = page.getByRole("region", { name: "Magnetic", exact: true });
+  await pinOverride(
+    page,
+    magnetic.getByRole("combobox", { name: "spin polarized" }),
+    "true",
+    { spin_polarized: true },
+  );
+  const spinOrbit = magnetic.getByRole("combobox", {
+    name: "spin orbit coupling",
+  });
+  await expect(spinOrbit).toHaveValue("false");
+  await expect(spinOrbit).toHaveAccessibleDescription(
+    /never auto-enabled\)\. · Heuristic default$/,
+  );
+  const ordering = magnetic.getByRole("textbox", { name: "magnetic ordering" });
+  await expect(ordering).toHaveValue("fm");
+  await expect(ordering).toHaveAccessibleDescription(/ · Heuristic default$/);
+  const moment = magnetic.getByRole("spinbutton", {
+    name: "tot magnetization",
+  });
+  await expect(moment).toHaveValue("");
+  await expect(moment).toHaveAccessibleDescription(/smearing otherwise\.$/);
+  await expect(
+    magnetic.getByRole("combobox", { name: "spin polarized" }),
+  ).toHaveAccessibleDescription(/ · Your override$/);
+
+  await expandAdvisorGroup(page, "K sampling");
+  const nosym = page.getByRole("combobox", { name: "nosym" });
+  await expect(nosym).toHaveValue("");
+  await expect(nosym).toHaveAccessibleDescription(
+    "Disable symmetry reduction of the k-point mesh entirely.",
+  );
+  await expectNoAxeViolations(page);
+});
+
+test("shows no magnetic ordering for a run without spin polarization", async ({
+  page,
+}) => {
+  // #187: such a run applies no ordering, yet magnetic ordering read "fm"
+  // under "Heuristic default" next to spin polarized off, and "fm" as an
+  // override asks for spin polarization.
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
+  await waitForBundleReady(page);
+
+  await expandAdvisorGroup(page, "Magnetic");
+  const magnetic = page.getByRole("region", { name: "Magnetic", exact: true });
+  await expect(
+    magnetic.getByRole("combobox", { name: "spin polarized" }),
+  ).toHaveValue("false");
+  const ordering = magnetic.getByRole("textbox", { name: "magnetic ordering" });
+  await expect(ordering).toHaveValue("");
+  await expect(ordering).toHaveAccessibleDescription(
+    /that is not listed is refused\.$/,
+  );
+});
+
+test("lists a dos task's nscf decisions under their step in Advisors", async ({
+  page,
+}) => {
+  // #187: a record counted as an advisor's only when its key equalled a
+  // settings group, so the nscf_ records landed under Analysis.
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
+  await waitForBundleReady(page);
+
+  const explained = page.waitForResponse((response) => {
+    if (new URL(response.url()).pathname !== "/explain") return false;
+    const body = response.request().postDataJSON() as { task?: string } | null;
+    return body?.task === "dos";
+  });
+  await page.getByLabel("Task", { exact: true }).selectOption("dos");
+  expect((await explained).status()).toBe(200);
+  await waitForBundleReady(page);
+
+  const advisors = page.getByRole("region", { name: "Goldilocks advisors" });
+  const nscf = advisors.getByRole("region", { name: "nscf step" });
+  await expect(nscf.getByRole("button")).toHaveText([
+    /^Nscf Occupations\s*nscf_occupations$/,
+    /^Nscf K Sampling\s*nscf_k_sampling$/,
+    /^Nscf N Irr K\s*nscf_n_irr_k$/,
+    /^Nscf Nbnd\s*nscf_nbnd$/,
+    /^Nscf Convergence\s*nscf_convergence$/,
+    /^Nscf Parallelisation\s*nscf_parallelisation$/,
+  ]);
+  await expect(
+    advisors.getByRole("button", { name: "Pseudopotentials pseudopotentials" }),
+  ).toBeVisible();
+  const analysis = page.getByRole("region", { name: "Goldilocks analysis" });
+  await expect(analysis.getByRole("button", { name: /nscf_/ })).toHaveCount(0);
+  await expect(
+    analysis.getByRole("button", { name: /relativistic/ }),
+  ).toHaveCount(0);
+  await expectNoAxeViolations(page);
+});
+
 test("resets every kind of pinned select to automatic with a mouse click", async ({
   page,
 }) => {
@@ -801,22 +913,32 @@ test("keeps the document static and scrolls long content inside its own card", a
 
   await expectDocumentWithinViewportHeight(page);
 
-  for (const name of [
-    "Composition composition",
-    "Geometry geometry",
-    "Symmetry symmetry",
-    "Relativistic relativistic",
-    "Symmetry Eff symmetry_eff",
-  ]) {
-    await page.getByRole("button", { name }).click();
+  // The structure records are the Analysis card's; relativistic and
+  // symmetry_eff are system advice, read-only in the Advisors card (#187).
+  const records = {
+    analysis: [
+      "Composition composition",
+      "Geometry geometry",
+      "Symmetry symmetry",
+    ],
+    advisors: ["Relativistic relativistic", "Symmetry Eff symmetry_eff"],
+  } as const;
+  for (const [card, names] of Object.entries(records)) {
+    const region = page.getByRole("region", { name: `Goldilocks ${card}` });
+    for (const name of names) {
+      await region.getByRole("button", { name }).click();
+    }
   }
-  const analysisBody = page.locator(".card-analysis .card-body");
-  const lastRecord = page.locator(".card-analysis .record-card").last();
-  await analysisBody.focus();
-  await analysisBody.evaluate(
-    "(element) => { element.scrollTop = element.scrollHeight; }",
-  );
-  await expect(lastRecord).toBeInViewport();
+  await expectDocumentWithinViewportHeight(page);
+  for (const card of Object.keys(records)) {
+    const body = page.locator(`.card-${card} .card-body`);
+    const lastRecord = page.locator(`.card-${card} .record-card`).last();
+    await body.focus();
+    await body.evaluate(
+      "(element) => { element.scrollTop = element.scrollHeight; }",
+    );
+    await expect(lastRecord).toBeInViewport();
+  }
 });
 
 test("fits all five columns once the viewport clears their floors", async ({

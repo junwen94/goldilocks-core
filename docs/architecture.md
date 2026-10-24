@@ -82,7 +82,11 @@ A `run` (or `explain`) request follows this path:
 `explain` (CLI, HTTP `POST /explain` and the MCP `explain` tool) is
 `advise()` -> `check()` (`check_dos()`/`check_relax()` for those tasks): every
 decision plus `blocking`, the reasons `run` would refuse to generate, without
-rendering anything. CLI's `run` is `advise()` -> `check()` -> `generate()` ->
+rendering anything. Its `layout`, which `run`'s JSON summary carries too, names
+each record's tier -- `analysis` (the structure alone) or `system` (shared by
+every step) -- or step. Every advice type's `tiers()` (`service.RecordTiers`)
+gives both its flat `records()` and that `layout`, so the two list the same
+records. CLI's `run` is `advise()` -> `check()` -> `generate()` ->
 `render_submission()` -> `to_bundle_input()` -> `bundle.publish()`/preview.
 Omitting `-o/--out` gives a memory-only preview (file names and byte sizes
 only, nothing written); a directory path publishes a directory; a path
@@ -324,6 +328,13 @@ requirements.
   set at least one of their settings. A rule that follows another record
   keeps `heuristic` and names that record in `derived_from` rather than
   copying its tier.
+- **Say where each value is published.** `/capabilities` gives every setting
+  a `resolved_in`: the record of the decision it feeds and the path of its
+  value in that record, or no path where the record holds none (an
+  input-only knob such as `extra_bands`). A response's `layout` gives each
+  record's tier and step. Clients read a setting's value, its tier and a
+  record's place from these, never by matching setting names to record
+  names.
 - **Keep remote callers away from local paths.** HTTP and MCP accept inline
   structures and registered table IDs, not filesystem sources, model
   locations, or publication paths. Published records name no local path
@@ -398,6 +409,14 @@ Workbench keeps the editable draft and reviewed response in its browser store.
 The Analysis card offers an override control for a fact only when
 `/capabilities` marks it `overridable`, and shows the others, such as
 `needs_soc`, read-only.
+It places records by the response's `layout`: the Analysis card shows the
+analysis tier; the Advisors card shows every other record with the settings
+whose `resolved_in` names it, or read-only after them, a multi-step task's
+per-step records (a `dos` task's `nscf_` records) under their step. Each
+setting control shows the value its `resolved_in` path leads to, captioned
+with the tier that produced that value: the record's per-setting source, or
+its own source -- except a record-level `human`, which another of the
+record's settings caused. A setting without a recorded value has no caption.
 Opening another structure keeps the draft's code, task, HPC profile and the
 overrides of settings that `/capabilities` does not mark `structure_specific`;
 it clears the structure-specific overrides and every fact override, and the

@@ -41,18 +41,20 @@ _NI_O = Resolved(
 def _cell(
     structure: Structure,
     cell_in_input_basis=_IDENTITY,
-    applied: str = "fm",
+    applied: str | None = None,
 ) -> Resolved[MagneticCell]:
+    """The written cell, spin-polarized with the ``applied`` ordering, or
+    without spin polarization, which applies none."""
     return Resolved(
         MagneticCell(
             structure=structure,
-            spin_polarized=applied == "afm",
+            spin_polarized=applied is not None,
             spin_orbit_enabled=False,
             magnetic_elements=(),
             ordering=OrderingRecord(
                 requested=applied,
                 applied=applied,
-                criterion="identity" if applied == "fm" else "requested",
+                criterion="identity" if applied is None else "requested",
             ),
             cell_in_input_basis=cell_in_input_basis,
             tot_magnetization=None,

@@ -5,6 +5,7 @@ import type {
   Capabilities,
   ExplainResult,
   PseudopotentialTable,
+  RecordLayout,
   ResolvedField,
   RunResult,
   StructureInput,
@@ -104,6 +105,7 @@ export const capabilities: Capabilities = {
       programs: null,
       scope: "system",
       structure_specific: false,
+      resolved_in: { record: "functional", path: [] },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Exchange-correlation functional label.",
@@ -119,6 +121,7 @@ export const capabilities: Capabilities = {
       programs: null,
       scope: "system",
       structure_specific: true,
+      resolved_in: { record: "pseudo_table", path: ["id"] },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Pin an explicit pseudopotential table id.",
@@ -134,6 +137,7 @@ export const capabilities: Capabilities = {
       programs: null,
       scope: "system",
       structure_specific: true,
+      resolved_in: { record: "magnetic", path: ["spin_polarized"] },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Force spin-polarized vs non-spin-polarized.",
@@ -149,6 +153,10 @@ export const capabilities: Capabilities = {
       programs: null,
       scope: "system",
       structure_specific: true,
+      resolved_in: {
+        record: "magnetic",
+        path: ["spin_orbit_enabled"],
+      },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Enable noncollinear spin-orbit-coupling mode.",
@@ -165,6 +173,7 @@ export const capabilities: Capabilities = {
       programs: ["pw.x"],
       scope: "per_step",
       structure_specific: false,
+      resolved_in: { record: "occupations", path: ["smearing_type"] },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Smearing function used when occupations=smearing.",
@@ -180,6 +189,7 @@ export const capabilities: Capabilities = {
       programs: ["pw.x"],
       scope: "per_step",
       structure_specific: false,
+      resolved_in: { record: "occupations", path: ["degauss"] },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Smearing width used when occupations=smearing.",
@@ -195,6 +205,7 @@ export const capabilities: Capabilities = {
       programs: ["pw.x"],
       scope: "per_step",
       structure_specific: true,
+      resolved_in: { record: "k_sampling", path: ["mesh"] },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Explicit Monkhorst-Pack mesh dimensions.",
@@ -210,6 +221,7 @@ export const capabilities: Capabilities = {
       programs: ["pw.x"],
       scope: "per_step",
       structure_specific: false,
+      resolved_in: { record: "k_sampling", path: ["k_distance"] },
       ml_target: "k_distance",
       approaches: ["human", "ml", "heuristic"],
       description: "Target reciprocal-space spacing between k-points.",
@@ -225,6 +237,7 @@ export const capabilities: Capabilities = {
       programs: ["pw.x"],
       scope: "per_step",
       structure_specific: false,
+      resolved_in: { record: "n_irr_k", path: null },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Disable symmetry reduction when counting k-points.",
@@ -240,6 +253,7 @@ export const capabilities: Capabilities = {
       programs: null,
       scope: "system",
       structure_specific: true,
+      resolved_in: { record: "hubbard", path: null },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Force whether a Hubbard +U correction is applied.",
@@ -255,6 +269,7 @@ export const capabilities: Capabilities = {
       programs: null,
       scope: "system",
       structure_specific: true,
+      resolved_in: { record: "hubbard", path: null },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Dudarev U_eff in eV (> 0) per element symbol.",
@@ -270,6 +285,7 @@ export const capabilities: Capabilities = {
       programs: null,
       scope: "task",
       structure_specific: false,
+      resolved_in: { record: "job", path: ["account"] },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "HPC accounting/billing code.",
@@ -287,6 +303,7 @@ export const capabilities: Capabilities = {
       programs: ["pw.x"],
       scope: "per_step",
       structure_specific: false,
+      resolved_in: { record: "relax", path: ["ion_dynamics"] },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Ionic relaxation algorithm for relax/vc-relax.",
@@ -451,10 +468,19 @@ export const scientificRecords: Readonly<Record<string, ResolvedField>> = {
   },
 };
 
+/** Where each of `scientificRecords` belongs, as `/explain` lays out an
+ * scf task's records. */
+export const scientificLayout: RecordLayout = {
+  analysis: [],
+  system: ["cutoffs", "magnetic"],
+  steps: [{ name: "scf", records: ["k_sampling", "n_irr_k"] }],
+};
+
 export const explainResult: ExplainResult = {
   records: scientificRecords,
   warnings: [],
   blocking: [],
+  layout: scientificLayout,
 };
 
 export const runResult: RunResult = {
@@ -466,6 +492,7 @@ export const runResult: RunResult = {
   ],
   records: scientificRecords,
   warnings: [],
+  layout: scientificLayout,
 };
 
 const MANIFEST_TEXT = JSON.stringify({

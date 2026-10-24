@@ -89,7 +89,7 @@ def _run_dos(request, args, ctx):
         assignments=request.assignments,
         source=request.source,
     )
-    return bundle_input, dos_advice.warnings()
+    return bundle_input, dos_advice
 
 
 def _run_relax(request, args, ctx):
@@ -116,7 +116,7 @@ def _run_relax(request, args, ctx):
         assignments=request.assignments,
         source=request.source,
     )
-    return bundle_input, relax_advice.warnings()
+    return bundle_input, relax_advice
 
 
 def _run_scf(request, args, ctx):
@@ -142,18 +142,18 @@ def _run_scf(request, args, ctx):
         assignments=request.assignments,
         source=request.source,
     )
-    return bundle_input, advice.warnings()
+    return bundle_input, advice
 
 
 def run(args: argparse.Namespace, out: TextIO) -> None:
     request = resolve_request(args)
     ctx = default_shared_context()
     if args.task == "dos":
-        bundle_input, advice_warnings = _run_dos(request, args, ctx)
+        bundle_input, advice = _run_dos(request, args, ctx)
     elif args.task in ("relax", "vc-relax"):
-        bundle_input, advice_warnings = _run_relax(request, args, ctx)
+        bundle_input, advice = _run_relax(request, args, ctx)
     else:
-        bundle_input, advice_warnings = _run_scf(request, args, ctx)
+        bundle_input, advice = _run_scf(request, args, ctx)
 
     if args.out is not None:
         output = (
@@ -177,7 +177,8 @@ def run(args: argparse.Namespace, out: TextIO) -> None:
             {
                 "files": [file["path"] for file in files],
                 "records": records_to_json(bundle_input.records),
-                "warnings": advice_warnings,
+                "warnings": advice.warnings(),
+                "layout": advice.tiers().layout(),
             },
         )
         return

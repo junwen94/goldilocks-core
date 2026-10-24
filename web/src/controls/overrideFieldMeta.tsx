@@ -56,10 +56,11 @@ export function automaticPlaceholder(meta: OverrideFieldMeta): string {
     : `Automatic (${stringifyValue(meta.default)})`;
 }
 
-/** A boolean/enum `OverrideControl`'s own description names whichever
- * tier actually produced the value the select shows -- "Your override"
- * once pinned, else whatever tier resolved it (heuristic/ml/llm),
- * else the field's own description alone when nothing has resolved yet. */
+/** An override control's own description names the tier that produced
+ * the value it shows -- "Your override" once pinned, else `source`, which
+ * the caller derives from the value shown (`resolvedSource`: a setting
+ * without a recorded value has none, #187), else the field's own
+ * description alone. */
 export function describeSource(
   description: string,
   pinned: boolean,

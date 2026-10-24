@@ -19,7 +19,9 @@ import type {
   MagneticOrderingsRequest,
   MagneticOrderingsResult,
   PseudopotentialTable,
+  ResolvedField,
   RunResult,
+  Setting,
   StructureInput,
   StructureInspection,
 } from "../../src/api/coreClient";
@@ -1163,6 +1165,7 @@ describe("Goldilocks Workbench", () => {
         },
         warnings: [],
         blocking: [],
+        layout: explainResult.layout,
       }),
     ];
     const { container } = renderApp(core);
@@ -1209,6 +1212,7 @@ describe("Goldilocks Workbench", () => {
         },
         warnings: [],
         blocking: [],
+        layout: explainResult.layout,
       }),
     ];
     const { container } = renderApp(core);
@@ -1325,6 +1329,212 @@ describe("Goldilocks Workbench", () => {
     ).not.toBeInTheDocument();
     expect(within(calculation).getByText(missing)).toBeInTheDocument();
     expectHubbardOverrideControls(calculation);
+  });
+
+  it("shows each magnetic setting's recorded value, captioned only by the tier that set it", async () => {
+    // #187: a setting's value was read as record.value[setting.key], but
+    // the magnetic record holds spin_orbit_coupling as spin_orbit_enabled
+    // and magnetic_ordering as ordering.applied, so both showed nothing
+    // under a tier caption; and with spin_polarized pinned, the record's own
+    // "human" captioned the untouched tot_magnetization "Your override".
+    const user = userEvent.setup();
+    const core = new CoreStub(Promise.resolve(magneticCapabilities()));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [
+      Promise.resolve(explainResult),
+      Promise.resolve(ironReviewWithSpinPolarizedPinned()),
+    ];
+    const { container } = renderApp(core);
+
+    await openStructure(user, container);
+    await screen.findByRole("button", { name: "Download (.zip)" });
+    const calculation = advisorsPanel();
+    await user.click(
+      within(calculation).getByRole("button", { name: "Magnetic" }),
+    );
+    await user.selectOptions(
+      within(calculation).getByRole("combobox", { name: "spin polarized" }),
+      "true",
+    );
+
+    const spinOrbit = within(calculation).getByRole("combobox", {
+      name: "spin orbit coupling",
+    });
+    await waitFor(
+      () => {
+        expect(spinOrbit).toHaveValue("false");
+      },
+      { timeout: 2000 },
+    );
+    expect(spinOrbit).toHaveAccessibleDescription(
+      "Enable noncollinear spin-orbit-coupling mode. · Heuristic default",
+    );
+    const ordering = within(calculation).getByRole("textbox", {
+      name: "magnetic ordering",
+    });
+    expect(ordering).toHaveValue("fm");
+    expect(ordering).toHaveAccessibleDescription(
+      "Opt in to an antiferromagnetic ordering. · Heuristic default",
+    );
+    const moment = within(calculation).getByRole("spinbutton", {
+      name: "tot magnetization",
+    });
+    expect(moment).toHaveValue("");
+    expect(moment).toHaveAccessibleDescription(
+      "Total magnetization of a collinear spin-polarized run.",
+    );
+    expect(
+      within(calculation).getByRole("combobox", { name: "spin polarized" }),
+    ).toHaveAccessibleDescription(
+      "Force spin-polarized vs non-spin-polarized. · Your override",
+    );
+  });
+
+  it("captions no setting whose record holds no value of it", async () => {
+    // #187: n_irr_k is a bare count and hubbard lists the U values applied,
+    // so nosym and hubbard_needs_correlation have no recorded value, yet
+    // both showed "—" captioned "Heuristic default".
+    const user = userEvent.setup();
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [
+      Promise.resolve(withHubbard({ u_values: [], warnings: [] })),
+    ];
+    const { container } = renderApp(core);
+
+    await openStructure(user, container);
+    await screen.findByRole("button", { name: "Download (.zip)" });
+    const calculation = advisorsPanel();
+    await user.click(within(calculation).getByText("K sampling"));
+    await user.click(within(calculation).getByText("Hubbard"));
+
+    const nosym = within(calculation).getByRole("combobox", { name: "nosym" });
+    expect(nosym).toHaveValue("");
+    expect(nosym).toHaveAccessibleDescription(
+      "Disable symmetry reduction when counting k-points.",
+    );
+    const needsCorrelation = within(calculation).getByRole("combobox", {
+      name: "hubbard needs correlation",
+    });
+    expect(needsCorrelation).toHaveValue("");
+    expect(needsCorrelation).toHaveAccessibleDescription(
+      "Force whether a Hubbard +U correction is applied.",
+    );
+    // The scalar n_irr_k record still shows its count and its tier.
+    expect(
+      within(calculation).getByText(/Irreducible k-points: 10/),
+    ).toHaveTextContent("Irreducible k-points: 10 · Heuristic default");
+  });
+
+  it("does not caption a value derived from another setting's override as yours", async () => {
+    // #187: a record without per-setting sources reads "human" once any of
+    // its settings is set, and that captioned the ecutrho_ry derived from a
+    // pinned ecutwfc_ry "Your override".
+    const user = userEvent.setup();
+    const core = new CoreStub(Promise.resolve(cutoffsCapabilities()));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [
+      Promise.resolve(explainResult),
+      Promise.resolve({
+        ...explainResult,
+        records: {
+          ...explainResult.records,
+          cutoffs: {
+            status: "resolved",
+            value: { ecutwfc_ry: 60, ecutrho_ry: 240, warnings: [] },
+            source: "human",
+          },
+        },
+      }),
+    ];
+    const { container } = renderApp(core);
+
+    await openStructure(user, container);
+    await screen.findByRole("button", { name: "Download (.zip)" });
+    const calculation = advisorsPanel();
+    await user.click(
+      within(calculation).getByRole("button", {
+        name: "Pseudopotential table",
+      }),
+    );
+    fireEvent.change(within(calculation).getByLabelText("ecutwfc ry · Ry"), {
+      target: { value: "60" },
+    });
+    await waitFor(
+      () => {
+        expect(core.explainCalls.at(-1)?.overrides).toMatchObject({
+          ecutwfc_ry: 60,
+        });
+      },
+      { timeout: 2000 },
+    );
+
+    const ecutrho = within(calculation).getByLabelText("ecutrho ry · Ry");
+    await waitFor(
+      () => {
+        expect(ecutrho).toHaveValue("240");
+      },
+      { timeout: 2000 },
+    );
+    expect(ecutrho).toHaveAccessibleDescription("Charge-density cutoff.");
+    expect(
+      within(calculation).getByLabelText("ecutwfc ry · Ry"),
+    ).toHaveAccessibleDescription(
+      "Plane-wave wavefunction kinetic-energy cutoff. · Your override",
+    );
+  });
+
+  it("places each record in the card of the tier the response lays it out in", async () => {
+    // #187: a record counted as an advisor's only when its key equalled a
+    // settings group, so a dos task's nscf_ records, relativistic and
+    // symmetry_eff landed under Analysis, the structure-only tier.
+    const user = userEvent.setup();
+    const core = new CoreStub(Promise.resolve(dosCapabilities()));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [Promise.resolve(explainResult), dosReview()];
+    const { container } = renderApp(core);
+
+    await openStructure(user, container);
+    await screen.findByRole("button", { name: "Download (.zip)" });
+    await user.selectOptions(screen.getByLabelText("Task"), "dos");
+    const calculation = advisorsPanel();
+    const nscf = await within(calculation).findByRole(
+      "region",
+      { name: "nscf step" },
+      { timeout: 2000 },
+    );
+
+    expect(
+      within(nscf)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual([
+      "Nscf Occupationsnscf_occupations",
+      "Nscf K Samplingnscf_k_sampling",
+    ]);
+    for (const name of [
+      "Relativistic relativistic",
+      "Symmetry Eff symmetry_eff",
+    ]) {
+      expect(
+        within(calculation).getByRole("button", { name }),
+      ).toBeInTheDocument();
+    }
+    // The dos record belongs to the dos settings, not a read-only row.
+    expect(
+      within(calculation).getByRole("button", { name: "Dos" }),
+    ).toBeInTheDocument();
+    expect(
+      within(calculation).queryByRole("button", { name: "Dos dos" }),
+    ).not.toBeInTheDocument();
+    const analysis = screen.getByRole("region", {
+      name: "Goldilocks analysis",
+    });
+    expect(
+      within(analysis)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Compositioncomposition"]);
   });
 
   it("announces structured scientific warnings returned with a recommendation", async () => {
@@ -1466,6 +1676,193 @@ function withHubbard(decision: {
   };
 }
 
+/** A settings entry of `capabilities` for every task, with what its tests
+ * need declared. */
+function setting(
+  overrides: Pick<Setting, "key" | "group" | "type" | "resolved_in"> &
+    Partial<Setting>,
+): Setting {
+  return {
+    unit: null,
+    codes: ["quantum_espresso"],
+    tasks: ["scf_single_point", "relax"],
+    steps: null,
+    programs: null,
+    scope: "system",
+    structure_specific: true,
+    ml_target: null,
+    approaches: ["human", "heuristic"],
+    description: "",
+    ...overrides,
+  };
+}
+
+/** `capabilities` plus the magnetic settings the magnetic record holds
+ * under their own names or none. */
+function magneticCapabilities(): Capabilities {
+  return {
+    ...capabilities,
+    settings: [
+      ...capabilities.settings,
+      setting({
+        key: "tot_magnetization",
+        group: "magnetic",
+        type: "number",
+        resolved_in: { record: "magnetic", path: ["tot_magnetization"] },
+        description: "Total magnetization of a collinear spin-polarized run.",
+      }),
+      setting({
+        key: "magnetic_ordering",
+        group: "magnetic",
+        type: "string",
+        resolved_in: { record: "magnetic", path: ["ordering", "applied"] },
+        description: "Opt in to an antiferromagnetic ordering.",
+      }),
+    ],
+  };
+}
+
+/** `capabilities` plus both cutoffs, which share one record. */
+function cutoffsCapabilities(): Capabilities {
+  return {
+    ...capabilities,
+    settings: [
+      ...capabilities.settings,
+      setting({
+        key: "ecutwfc_ry",
+        group: "cutoffs",
+        type: "number",
+        unit: "Ry",
+        resolved_in: { record: "cutoffs", path: ["ecutwfc_ry"] },
+        description: "Plane-wave wavefunction kinetic-energy cutoff.",
+      }),
+      setting({
+        key: "ecutrho_ry",
+        group: "cutoffs",
+        type: "number",
+        unit: "Ry",
+        resolved_in: { record: "cutoffs", path: ["ecutrho_ry"] },
+        description: "Charge-density cutoff.",
+      }),
+    ],
+  };
+}
+
+/** `capabilities` with the dos task, every setting offered for it, and one
+ * dos.x setting. */
+function dosCapabilities(): Capabilities {
+  return {
+    ...capabilities,
+    tasks: [
+      ...capabilities.tasks,
+      {
+        id: "dos",
+        name: "Density of states",
+        description: "scf, then a denser nscf pass, then dos.x.",
+        codes: ["quantum_espresso"],
+        step_count: 3,
+        executables: ["pw.x", "pw.x", "dos.x"],
+      },
+    ],
+    settings: [
+      ...capabilities.settings.map((entry) => ({
+        ...entry,
+        tasks: [...entry.tasks, "dos"],
+      })),
+      setting({
+        key: "delta_e",
+        group: "dos",
+        type: "number",
+        unit: "eV",
+        tasks: ["dos"],
+        steps: ["dos"],
+        programs: ["dos.x"],
+        scope: "per_step",
+        structure_specific: false,
+        resolved_in: { record: "dos", path: ["delta_e"] },
+        description: "dos.x energy step of the DOS grid.",
+      }),
+    ],
+  };
+}
+
+/** bcc Fe's magnetic record (MC3D mc3d-17673) as /explain returns it with
+ * spin_polarized pinned on. */
+function ironReviewWithSpinPolarizedPinned(): ExplainResult {
+  return {
+    ...explainResult,
+    records: {
+      ...explainResult.records,
+      magnetic: {
+        status: "resolved",
+        value: {
+          cell: { formula: "Fe2", nat: 2 },
+          ordering: {
+            requested: null,
+            applied: "fm",
+            criterion: "identity",
+            alternatives: [],
+          },
+          spin_polarized: true,
+          magnetic_elements: ["Fe"],
+          starting_magnetization: { Fe: 0.3125 },
+          compensated: false,
+          tot_magnetization: null,
+          spin_orbit_enabled: false,
+          angle1: null,
+          angle2: null,
+          seeded_moment: 10,
+          moment_direction: null,
+          site_labels: ["Fe0", "Fe1"],
+          human_seeded_labels: [],
+          warnings: [],
+        },
+        source: "human",
+        field_sources: {
+          spin_polarized: "human",
+          spin_orbit_coupling: "heuristic",
+          magnetic_ordering: "heuristic",
+          starting_magnetization: "heuristic",
+        },
+        derived_from: [],
+      },
+    },
+  };
+}
+
+/** A dos task's review: its nscf step's records under nscf_ names, the
+ * dos.x record, a structure record and two system records no setting
+ * resolves into, laid out as /explain lays them out. */
+function dosReview(): Promise<ExplainResult> {
+  const resolved = (value: unknown): ResolvedField => ({
+    status: "resolved",
+    value,
+    source: "heuristic",
+  });
+  return Promise.resolve({
+    records: {
+      ...explainResult.records,
+      composition: resolved({ elements: ["Si"] }),
+      relativistic: resolved("scalar"),
+      symmetry_eff: resolved({ space_group_number: 227 }),
+      nscf_occupations: resolved({ occupations: "tetrahedra_opt" }),
+      nscf_k_sampling: resolved({ mesh: [12, 12, 12], shift: [0, 0, 0] }),
+      dos: resolved({ delta_e: 0.01 }),
+    },
+    warnings: [],
+    blocking: [],
+    layout: {
+      analysis: ["composition"],
+      system: ["relativistic", "magnetic", "symmetry_eff", "cutoffs"],
+      steps: [
+        { name: "scf", records: ["k_sampling", "n_irr_k"] },
+        { name: "nscf", records: ["nscf_occupations", "nscf_k_sampling"] },
+        { name: "dos", records: ["dos"] },
+      ],
+    },
+  });
+}
+
 /** The Hubbard section keeps both override controls next to the decision:
  * they are how a missing or unwanted U is fixed. */
 function expectHubbardOverrideControls(calculation: HTMLElement): void {
@@ -1534,6 +1931,7 @@ function magneticReview({
     },
     warnings: [],
     blocking: [],
+    layout: explainResult.layout,
   };
 }
 

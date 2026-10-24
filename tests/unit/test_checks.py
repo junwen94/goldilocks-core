@@ -73,7 +73,9 @@ def _magnetic(
     angles = {"Fe": 0.0} if spin_polarized and spin_orbit_enabled else None
     facts = MagneticConfigFacts(
         cell=structure,
-        ordering=OrderingRecord(requested="fm", applied="fm"),
+        ordering=OrderingRecord(
+            requested=None, applied="fm" if spin_polarized else None
+        ),
         spin_polarized=spin_polarized,
         magnetic_elements=("Fe",) if spin_polarized else (),
         starting_magnetization={"Fe": 0.1} if spin_polarized else None,

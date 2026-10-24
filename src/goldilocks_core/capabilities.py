@@ -53,6 +53,21 @@ supplies the facts pydantic's type system cannot know (what unit a
 ``float`` is in, whether an ml model is planned for it, whether a value
 still holds for another structure).
 
+**`resolved_in` says where a setting's resolved value is published
+(#187)**, so a client reads it without matching setting names against
+record names: ``record`` is the record of the decision the setting feeds,
+``path`` the keys of the setting's own value inside that record's value.
+Both default structurally -- the record of the setting's group (each
+composing field feeds the advisor whose record bears its name) and the
+setting's own field name -- and ``_SETTING_META`` declares the
+exceptions: ``pseudo_table_id`` resolves in ``pseudo_table.id``,
+``spin_orbit_coupling`` in ``magnetic.spin_orbit_enabled``,
+``magnetic_ordering`` in ``magnetic.ordering.applied``, ``k_grid`` in
+``k_sampling.mesh``, and a knob no record holds a value of
+(``extra_bands``, ``nosym``, the Hubbard switches) has no path. Neither has
+a setting published under a key other than its field name, since a
+record's ``field_sources`` names settings by field name.
+
 **One real key collision, resolved by renaming, not by luck**:
 ``advisors/hubbard_u.py``'s own ``HubbardUHumanInput.needs_correlation``
 and ``analysis/needs_correlation.py``'s fact-level override both use the
@@ -207,13 +222,26 @@ def _approaches(ml_target: str | None) -> list[str]:
     return ["human", "heuristic"]
 
 
+class ResolvedIn(TypedDict):
+    """Where a setting's resolved value is published (#187): ``record`` is
+    the record of the decision the setting feeds, in ``explain``/``run``'s
+    ``records``; ``path`` the keys leading to the setting's own value inside
+    that record's ``value`` -- ``[]`` for the value itself, ``None`` where
+    the record holds no value of the setting (an input-only knob such as
+    ``extra_bands``, which only shifts ``nbnd``)."""
+
+    record: str
+    path: list[str] | None
+
+
 class Setting(TypedDict, total=False):
     """One ``--set``-able key. ``tasks`` are the tasks it applies to;
     ``steps``/``programs`` are the steps (purposes, the names of
     ``steps.<purpose>.<key>``) and programs a ``per_step`` setting applies
     to, ``None`` for a ``system`` or ``task`` setting, set once per task.
     ``structure_specific`` is whether a value is a judgement about the
-    structure it was set for (#188, ``_SettingExtra``)."""
+    structure it was set for (#188, ``_SettingExtra``); ``resolved_in``
+    where its resolved value is published (#187)."""
 
     key: str
     group: str
@@ -228,6 +256,7 @@ class Setting(TypedDict, total=False):
     programs: list[str] | None
     scope: _Scope
     structure_specific: bool
+    resolved_in: ResolvedIn
     ml_target: str | None
     approaches: list[str]
     description: str
@@ -265,7 +294,12 @@ class _SettingExtra(TypedDict, total=False):
     or k-mesh -- and false for a method, accuracy or job choice. When another
     structure is opened, the Workbench keeps the values of the settings for
     which it is false and clears the rest, and every fact override, since a
-    fact is a judgement about the structure by definition."""
+    fact is a judgement about the structure by definition.
+
+    ``record`` and ``path`` (#187) are declared only where the published
+    ``resolved_in`` differs from its default: the record of the setting's
+    group and, as the path, the setting's own field name. ``path`` ``None``
+    declares that the record holds no value of the setting."""
 
     key: str
     unit: str | None
@@ -274,18 +308,23 @@ class _SettingExtra(TypedDict, total=False):
     ml_target: str | None
     steps: tuple[str, ...]
     structure_specific: Required[bool]
+    record: str
+    path: tuple[str, ...] | None
     description: str
 
 
 _SETTING_META: dict[str, _SettingExtra] = {
     "functional": {
         "structure_specific": False,
+        "path": (),
         "default": "PBEsol",
         "enum_from": "pseudopotential_tables.functional",
         "description": "Exchange-correlation functional label (e.g. PBE, PBEsol).",
     },
     "pseudo_table_id": {
         "structure_specific": True,
+        "record": "pseudo_table",
+        "path": ("id",),
         "description": (
             "Pin an explicit pseudopotential table id instead of automatic selection."
         ),
@@ -323,6 +362,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "spin_orbit_coupling": {
         "structure_specific": True,
+        "path": ("spin_orbit_enabled",),
         "description": (
             "Enable noncollinear spin-orbit-coupling mode (always opt-in, "
             "never auto-enabled)."
@@ -355,6 +395,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "magnetic_ordering": {
         "structure_specific": True,
+        "path": ("ordering", "applied"),
         "description": (
             "Opt in to an antiferromagnetic ordering instead of the "
             "ferromagnetic default ('fm' or unset), over the sites that carry "
@@ -371,6 +412,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "moment_direction": {
         "structure_specific": True,
+        "path": ("moment_direction", "uvw"),
         "description": (
             "Direction the moments of a spin-polarized spin_orbit_coupling run "
             "start along, as a lattice direction [u, v, w] of the uploaded "
@@ -416,6 +458,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
     "needs_correlation": {
         "key": "hubbard_needs_correlation",
         "structure_specific": True,
+        "path": None,
         "description": (
             "Force whether a Hubbard +U correction is applied, overriding even "
             "a human-set needs_correlation fact: false runs without +U, true "
@@ -424,6 +467,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "u_by_element": {
         "structure_specific": True,
+        "path": None,
         "unit": "eV",
         "description": (
             "Dudarev U_eff in eV (> 0) per element symbol; replaces the built-in "
@@ -465,6 +509,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "k_grid": {
         "structure_specific": True,
+        "path": ("mesh",),
         "description": (
             "Explicit Monkhorst-Pack mesh dimensions (nk1, nk2, nk3); wins "
             "outright over k_index/k_distance if more than one is set."
@@ -498,6 +543,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "nosym": {
         "structure_specific": False,
+        "path": None,
         "default": False,
         "description": "Disable symmetry reduction of the k-point mesh entirely.",
     },
@@ -514,6 +560,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "extra_bands": {
         "structure_specific": False,
+        "path": None,
         "description": (
             "Extra bands added on top of the default band count (pw.x's "
             "setup.f90 rule, with a collinear smearing run's majority channel "
@@ -969,6 +1016,19 @@ def _listed(values: tuple[str, ...] | None) -> list[str] | None:
     return None if values is None else list(values)
 
 
+def _resolved_in(leaf: SettingBinding, extra: _SettingExtra) -> ResolvedIn:
+    """Where ``leaf``'s resolved value is published: by default in the
+    record of its group (the advisor its override feeds, named like the
+    override field), under its own field name; ``extra`` declares the
+    exceptions (``_SettingExtra``)."""
+    field = leaf.inner_field or leaf.outer_field
+    path = extra.get("path", (field,))
+    return {
+        "record": extra.get("record", leaf.group),
+        "path": _listed(path),
+    }
+
+
 def _setting_from_leaf(leaf: SettingBinding) -> Setting:
     """``leaf`` projected to the published shape. Raises ``KeyError`` for a
     setting without a ``_SETTING_META`` entry or without its
@@ -986,6 +1046,7 @@ def _setting_from_leaf(leaf: SettingBinding) -> Setting:
         "programs": _listed(leaf.programs),
         "scope": leaf.scope,
         "structure_specific": extra["structure_specific"],
+        "resolved_in": _resolved_in(leaf, extra),
         "ml_target": ml_target,
         "approaches": _approaches(ml_target),
         "description": extra.get("description", ""),

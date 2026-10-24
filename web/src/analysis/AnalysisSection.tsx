@@ -2,21 +2,20 @@ import { Accordion, Stack, Text } from "@mantine/core";
 
 import { OverrideControl } from "../controls/OverrideControl";
 import { RecordAccordionItem } from "../review/RecordAccordionItem";
-import { isAdvisorRecordKey } from "../workspace/recordGroups";
+import { analysisRecordNames } from "../workspace/recordGroups";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
 import { FactSummary } from "./FactSummary";
 
 /** goldilocks-core's own analysis tier only ever needs the structure --
  * `capabilities.facts` (is_metal/is_magnetic/needs_soc/needs_correlation)
- * plus any other resolved record that isn't tied to a settings group
- * (composition/geometry/symmetry/... -- see recordGroups.ts for exactly
- * how that split is derived). A fact is an override control only when
- * `Fact.overridable` says the core takes a value for it; the others
- * (needs_soc, advice that only a notice reads, #186) are read-only
- * `FactSummary`s. Advisor records live in the Advisors card instead, next
- * to the override control they belong to. Rendered inside `AnalysisCard`,
- * which owns the "Analysis" heading -- this component starts directly
- * with its content. */
+ * plus the other records the response lays out in its analysis tier
+ * (composition/geometry/symmetry, `RecordLayout.analysis`, #187). A fact
+ * is an override control only when `Fact.overridable` says the core takes
+ * a value for it; the others (needs_soc, advice that only a notice reads,
+ * #186) are read-only `FactSummary`s. Every other record lives in the
+ * Advisors card, next to the setting it belongs to or read-only after
+ * them. Rendered inside `AnalysisCard`, which owns the "Analysis" heading
+ * -- this component starts directly with its content. */
 export function AnalysisSection() {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
@@ -27,11 +26,16 @@ export function AnalysisSection() {
 
   const disabled = snapshot.operation === "inspect" || inspection === null;
   const overrides = draft.overrides;
-  const factKeys = new Set(capabilities.facts.map((fact) => fact.key));
 
-  const analysisOnlyRecords = Object.entries(reviewed?.records ?? {}).filter(
-    ([key]) => !factKeys.has(key) && !isAdvisorRecordKey(key, capabilities),
-  );
+  const analysisOnlyRecords =
+    reviewed === null
+      ? []
+      : analysisRecordNames(reviewed.layout, capabilities.facts).flatMap(
+          (name) => {
+            const field = reviewed.records[name];
+            return field === undefined ? [] : [[name, field] as const];
+          },
+        );
 
   return (
     <Stack gap="sm">

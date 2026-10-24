@@ -72,6 +72,16 @@ export interface RecordWarning extends AdvisorWarning {
 // and the Setting/Fact projections `_settings()`/`_facts()` build.
 // ---------------------------------------------------------------------
 
+/** Where a setting's resolved value is published (#187): `record` names
+ * the record of the decision the setting feeds, `path` the keys leading to
+ * the setting's own value inside that record's `value` -- `[]` for the
+ * value itself, `null` where the record holds no value of the setting (an
+ * input-only knob such as `extra_bands`, which only shifts `nbnd`). */
+export interface ResolvedIn {
+  readonly record: string;
+  readonly path: readonly string[] | null;
+}
+
 /** `tasks` are the tasks a setting applies to; a request for any other
  * task is refused. `steps`/`programs` are the steps (the names
  * `steps.<step>.<key>` takes) and programs a `per_step` setting applies to,
@@ -79,7 +89,9 @@ export interface RecordWarning extends AdvisorWarning {
  * `structure_specific` says whether a value is a judgement about the
  * structure it was set for (its elements, magnetism, geometry, size or
  * k-mesh) rather than a method, accuracy or job choice; opening another
- * structure clears it from the draft (#188). */
+ * structure clears it from the draft (#188). `resolved_in` is the only way
+ * to its resolved value: a setting's key need not name its record or the
+ * record's field (#187). */
 export interface Setting {
   readonly key: string;
   readonly group: string;
@@ -94,6 +106,7 @@ export interface Setting {
   readonly programs: readonly string[] | null;
   readonly scope: "system" | "task" | "per_step";
   readonly structure_specific: boolean;
+  readonly resolved_in: ResolvedIn;
   readonly ml_target: string | null;
   readonly approaches: readonly Source[];
   readonly description: string;
@@ -229,6 +242,25 @@ export interface StructureInspection {
 // .inspection`) has ever set one.
 // ---------------------------------------------------------------------
 
+/** One step of a `RecordLayout`: its purpose (`scf`, `nscf`, `dos`,
+ * `relax`, `vc-relax`) and its records. */
+export interface StepLayout {
+  readonly name: string;
+  readonly records: readonly string[];
+}
+
+/** Mirrors `service.RecordLayout`: the tier and step of each record of a
+ * response, by name (#187). `analysis` holds what the structure alone
+ * decides, `system` what every step of the task shares, then each step's
+ * own records in run order -- the task's one `job` with its first step, a
+ * `dos` task's nscf decisions under their `nscf_` names. Every record is
+ * in exactly one list. */
+export interface RecordLayout {
+  readonly analysis: readonly string[];
+  readonly system: readonly string[];
+  readonly steps: readonly StepLayout[];
+}
+
 export interface ExplainResult {
   readonly records: Readonly<Record<string, ResolvedField>>;
   readonly warnings: readonly RecordWarning[];
@@ -236,12 +268,14 @@ export interface ExplainResult {
    * for (the task's `check()` verdict, in first-seen order); empty when
    * those checks pass. */
   readonly blocking: readonly string[];
+  readonly layout: RecordLayout;
 }
 
 export interface RunResult {
   readonly files: readonly string[];
   readonly records: Readonly<Record<string, ResolvedField>>;
   readonly warnings: readonly RecordWarning[];
+  readonly layout: RecordLayout;
 }
 
 // ---------------------------------------------------------------------

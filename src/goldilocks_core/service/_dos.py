@@ -43,8 +43,8 @@ from goldilocks_core.bundle import BundleInput, StructureIdentity
 from goldilocks_core.checks import CheckReport, collect_blocked
 from goldilocks_core.generation.quantum_espresso.dos import write_qe_dos
 from goldilocks_core.inputs.hpc import HpcProfile
-from goldilocks_core.resolution import FieldState, Warning, collect_warnings
-from goldilocks_core.service._advice import Advice, RunOverrides
+from goldilocks_core.resolution import FieldState, Warning
+from goldilocks_core.service._advice import Advice, RecordTiers, RunOverrides
 from goldilocks_core.service._bundle import assemble_bundle_input, request_identity
 from goldilocks_core.service._generate import AdviceIncomplete, generate
 from goldilocks_core.service._pipeline import advise_steps, check
@@ -67,7 +67,7 @@ class DosAdvice:
     def field_states(self) -> tuple[FieldState[object], ...]:
         return self.scf.field_states() + self.nscf.field_states() + (self.dos,)
 
-    def records(self) -> dict[str, FieldState[object]]:
+    def tiers(self) -> RecordTiers:
         """``scf``'s records unprefixed (system-level fields --
         ``functional``/``cutoffs``/``pseudopotentials``/``magnetic``/
         etc. -- and the task's one ``job`` are the same objects in
@@ -75,22 +75,26 @@ class DosAdvice:
         fields under an ``nscf_`` prefix (v2 epic 9, #9, #28's
         delivery-layer routing -- the first caller that ever needs to
         tell the two steps' k-sampling/occupations/nbnd/convergence/
-        parallelisation apart), plus ``dos`` itself."""
-        merged: dict[str, FieldState[object]] = dict(self.scf.records())
-        merged.update(
-            {
-                f"nscf_{name}": state
-                for name, state in self.nscf.step.records().items()
-                if name != "job"
-            }
+        parallelisation apart), plus ``dos`` itself, each step's under its
+        purpose."""
+        nscf = {
+            f"nscf_{name}": state
+            for name, state in self.nscf.step.records().items()
+            if name != "job"
+        }
+        return (
+            self.scf.tiers("scf")
+            .with_records("nscf", nscf)
+            .with_records("dos", {"dos": self.dos})
         )
-        merged["dos"] = self.dos
-        return merged
+
+    def records(self) -> dict[str, FieldState[object]]:
+        return self.tiers().records()
 
     def warnings(self) -> list[dict[str, object]]:
         """Every record's warnings, then the routing notices, tagged with
         the record ``overrides``."""
-        return collect_warnings(self.records()) + [
+        return self.tiers().warnings() + [
             {**notice.model_dump(), "record": "overrides"} for notice in self.routing
         ]
 

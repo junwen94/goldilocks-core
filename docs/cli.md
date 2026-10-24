@@ -81,11 +81,16 @@ HTTP and MCP `run` record the same block for the same structure and overrides.
 
 `--json` changes the shape of `run`'s output rather than being combined with
 an output flag: without `-o/--out` it prints `{"files": [...], "records":
-{...}, "warnings": [...]}`; with `-o/--out` it prints `{"files": [...],
-"kind": "directory"|"archive", "path": "..."}`. `explain --json` prints
-`{"records": {...}, "warnings": [...], "blocking": [...]}`, where `blocking`
-lists the distinct reasons `run` would refuse to generate an input and is empty
-when its checks pass. `warnings` holds every record's warnings, for every task,
+{...}, "warnings": [...], "layout": {...}}`; with `-o/--out` it prints
+`{"files": [...], "kind": "directory"|"archive", "path": "..."}`. `explain
+--json` prints `{"records": {...}, "warnings": [...], "blocking": [...],
+"layout": {...}}`, where `blocking` lists the distinct reasons `run` would
+refuse to generate an input and is empty when its checks pass. `layout` names
+each record's tier and step: `analysis` (what the structure alone decides),
+`system` (what every step shares), then `steps`, one `{"name", "records"}`
+per step of the task in run order -- the task's one `job` with its first step,
+a `dos` task's nscf decisions under their `nscf_` names. Every record is in
+exactly one list. `warnings` holds every record's warnings, for every task,
 each as `{"code", "level", "category", "message", "record"}`, where `record`
 names the record it came from (`nscf_parallelisation` for a `dos` task's nscf
 step), then the request's routing notices under the `record` `overrides`
@@ -169,6 +174,21 @@ or k-mesh, such as `k_grid`, `u_by_element`, `starting_magnetization` or
 `functional`, `conv_thr` or `account`. When another structure is opened, the
 Workbench keeps the values of the settings that are not structure-specific
 and clears the others and every fact override (`is_metal`, ...).
+
+Each setting's `resolved_in` says where `explain` and `run` publish its
+resolved value: `record`, the record of the decision it feeds, and `path`,
+the keys of its value inside that record's `value`. Most settings resolve in
+their group's record under their own name (`conv_thr` in
+`convergence.conv_thr`); `functional` is the `functional` record itself
+(`path` `[]`), `pseudo_table_id` resolves in `pseudo_table.id`,
+`spin_orbit_coupling` in `magnetic.spin_orbit_enabled`, `magnetic_ordering`
+in `magnetic.ordering.applied` (`null` for a run without spin polarization,
+which applies no ordering), `moment_direction` in
+`magnetic.moment_direction.uvw` and `k_grid` in `k_sampling.mesh`. `path` is
+`null` where the record holds no value of the setting: `extra_bands` only
+shifts `nbnd`, `nosym` only changes the `n_irr_k` count, and
+`hubbard_needs_correlation` and `u_by_element` decide which U values the
+`hubbard` record lists.
 
 Quote `--set` values that contain brackets or braces (e.g. `--set
 'k_grid=[8,8,8]'`) so the shell does not glob-expand them; array and object
@@ -284,7 +304,7 @@ the address. `--static-root DIRECTORY` also serves a built Workbench; a relative
 | ------------------- | --------------------------------------------------------------------------------- |
 | `GET /capabilities` | Codes, tasks, facts, settings, pseudopotential tables, HPC profiles, models, warnings |
 | `POST /inspect`     | Structure inspection (inline `structure_content`, not a path)                     |
-| `POST /explain`     | Analysis and advisor decisions, plus `blocking`: the reasons `/run` would refuse; never writes anything |
+| `POST /explain`     | Analysis and advisor decisions with their `layout`, plus `blocking`: the reasons `/run` would refuse; never writes anything |
 | `POST /run`         | Generate a runnable input; `respond_with: "json"` (default) returns a JSON summary, `respond_with: "archive"` returns ZIP bytes |
 | `GET /health`       | Process health                                                                     |
 | `GET /ready`        | Asset readiness; 503 for missing or corrupt assets                                |
@@ -313,9 +333,10 @@ uv run --extra mcp goldilocks serve mcp
 ```
 
 The stdio tools are `capabilities`, `inspect_structure`, `explain`, and `run`.
-MCP's `explain` tool returns the same `records`, `warnings`, and `blocking` as
-`POST /explain`. MCP's `run` tool never writes to the server's filesystem — it
-always returns only the published file list, every resolved decision (with its
-source), and a warnings array the caller must relay verbatim. To obtain actual
-file bytes, use the CLI (`goldilocks run ... -o/--out`) or the HTTP transport's
-`/run` endpoint with `respond_with: "archive"`.
+MCP's `explain` tool returns the same `records`, `warnings`, `blocking` and
+`layout` as `POST /explain`. MCP's `run` tool never writes to the server's
+filesystem — it always returns only the published file list, every resolved
+decision (with its source) and their `layout`, and a warnings array the caller
+must relay verbatim. To obtain actual file bytes, use the CLI (`goldilocks run
+... -o/--out`) or the HTTP transport's `/run` endpoint with `respond_with:
+"archive"`.

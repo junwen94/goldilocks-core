@@ -4,7 +4,8 @@ then one ``notice:`` line per routing notice of the request (#154), then one
 ``blocked:`` line per distinct reason ``run`` would refuse to generate an
 input for (#165). A scientifically incomplete or blocked request still
 prints and exits 0: ``service.advise()`` marks what it cannot decide
-unavailable or blocked instead of raising.
+unavailable or blocked instead of raising. ``--json`` adds each record's tier
+and step as ``layout`` (#187), as HTTP and MCP ``explain`` do.
 """
 
 from __future__ import annotations
@@ -73,7 +74,8 @@ def run(args: argparse.Namespace, out: TextIO) -> None:
             fetch_missing=args.fetch_missing,
         )
         report = check(advice)
-    records = advice.records()
+    tiers = advice.tiers()
+    records = tiers.records()
     warnings = advice.warnings()
     blocking = list(dict.fromkeys(report.blocking))
     if args.json:
@@ -83,6 +85,7 @@ def run(args: argparse.Namespace, out: TextIO) -> None:
                 "records": records_to_json(records),
                 "warnings": warnings,
                 "blocking": blocking,
+                "layout": tiers.layout(),
             },
         )
         return

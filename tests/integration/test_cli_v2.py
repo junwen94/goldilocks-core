@@ -577,16 +577,18 @@ class TestRunAndExplainAgainstRealAssets:
         self, real_assets: None
     ) -> None:
         """Matches HTTP/MCP's own ``/explain`` shape
-        (``{"records", "warnings", "blocking"}``) -- v2 epic 8's own
-        "warnings array in every CLI/HTTP/MCP response" requirement."""
+        (``{"records", "warnings", "blocking", "layout"}``) -- v2 epic 8's own
+        "warnings array in every CLI/HTTP/MCP response" requirement, and the
+        tier and step of every record (#187)."""
         silicon = structure("Si.cif")
 
         completed = _run_cli("explain", str(silicon), "--hpc", "scarf", "--json")
 
         assert completed.returncode == 0, completed.stderr
         document = json.loads(completed.stdout)
-        assert document.keys() == {"records", "warnings", "blocking"}
+        assert document.keys() == {"records", "warnings", "blocking", "layout"}
         assert document["blocking"] == []
+        assert [step["name"] for step in document["layout"]["steps"]] == ["scf"]
         assert document["warnings"]
         assert any(
             warning["code"] == "job.walltime_defaulted"
@@ -853,11 +855,13 @@ class TestRunAndExplainAgainstRealAssets:
 
         assert completed.returncode == 0, completed.stderr
         document = json.loads(completed.stdout)
+        assert document.keys() == {"files", "records", "warnings", "layout"}
         assert "scf.in" in document["files"]
         assert any(
             warning["code"] == "job.walltime_defaulted"
             for warning in document["warnings"]
         )
+        assert [step["name"] for step in document["layout"]["steps"]] == ["scf"]
         # P2: sort_keys=True -- re-serializing must reproduce the same text.
         assert json.dumps(
             document, indent=2, sort_keys=True

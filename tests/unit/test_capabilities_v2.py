@@ -510,6 +510,107 @@ class TestStructureSpecific:
             assert settings[key]["structure_specific"] is False, key
 
 
+class TestResolvedIn:
+    """#187: the Workbench looked a setting's resolved value up by the
+    setting's own name and its record by the group's, so spin_orbit_coupling
+    (recorded as spin_orbit_enabled), k_grid (mesh) and magnetic_ordering
+    (ordering.applied) showed "—", and so did the knobs no record holds a
+    value of, all under a tier caption. Each setting now names the record of
+    the decision it feeds and the path of its resolved value in that
+    record's value, or no path where the record holds none."""
+
+    def _settings(self) -> dict[str, dict[str, object]]:
+        return {s["key"]: s for s in capabilities()["settings"]}
+
+    def test_every_setting_names_its_record_and_a_path_or_none(self) -> None:
+        for setting in capabilities()["settings"]:
+            resolved_in = setting["resolved_in"]
+            assert resolved_in.keys() == {"record", "path"}, setting["key"]
+            assert isinstance(resolved_in["record"], str), setting["key"]
+            assert resolved_in["record"], setting["key"]
+            path = resolved_in["path"]
+            assert path is None or isinstance(path, list), setting["key"]
+            assert all(isinstance(key, str) and key for key in path or ())
+
+    def test_a_setting_resolves_in_its_group_s_record_under_its_own_name(
+        self,
+    ) -> None:
+        settings = self._settings()
+
+        for key in (
+            "ecutwfc_ry",
+            "nelec",
+            "spin_polarized",
+            "tot_magnetization",
+            "isolation",
+            "account",
+            "occupations",
+            "k_distance",
+            "nbnd",
+            "conv_thr",
+            "npool",
+            "press",
+            "delta_e",
+        ):
+            setting = settings[key]
+            expected = {"record": setting["group"], "path": [key]}
+            assert setting["resolved_in"] == expected, key
+
+    def test_settings_recorded_under_another_name(self) -> None:
+        settings = self._settings()
+
+        assert settings["functional"]["resolved_in"] == {
+            "record": "functional",
+            "path": [],
+        }
+        assert settings["pseudo_table_id"]["resolved_in"] == {
+            "record": "pseudo_table",
+            "path": ["id"],
+        }
+        assert settings["spin_orbit_coupling"]["resolved_in"] == {
+            "record": "magnetic",
+            "path": ["spin_orbit_enabled"],
+        }
+        assert settings["magnetic_ordering"]["resolved_in"] == {
+            "record": "magnetic",
+            "path": ["ordering", "applied"],
+        }
+        assert settings["moment_direction"]["resolved_in"] == {
+            "record": "magnetic",
+            "path": ["moment_direction", "uvw"],
+        }
+        assert settings["k_grid"]["resolved_in"] == {
+            "record": "k_sampling",
+            "path": ["mesh"],
+        }
+
+    def test_input_only_knobs_name_their_record_but_no_path(self) -> None:
+        """extra_bands only shifts nbnd, nosym only changes the k-point
+        count, and the Hubbard switches only decide which U values apply:
+        no record holds a value of any of them."""
+        settings = self._settings()
+
+        for key, record in (
+            ("extra_bands", "nbnd"),
+            ("nosym", "n_irr_k"),
+            ("hubbard_needs_correlation", "hubbard"),
+            ("u_by_element", "hubbard"),
+        ):
+            expected = {"record": record, "path": None}
+            assert settings[key]["resolved_in"] == expected, key
+
+    def test_a_renamed_setting_records_no_value(self) -> None:
+        """A record's field_sources are keyed by the override's field name,
+        so a client can read a setting's tier as field_sources[key] only
+        where the published key is that name."""
+        catalogue = bindings()
+
+        for setting in capabilities()["settings"]:
+            binding = catalogue[setting["key"]]
+            if setting["key"] != (binding.inner_field or binding.outer_field):
+                assert setting["resolved_in"]["path"] is None, setting["key"]
+
+
 class TestFacts:
     def test_exactly_the_four_scalar_facts(self) -> None:
         keys = {f["key"] for f in capabilities()["facts"]}

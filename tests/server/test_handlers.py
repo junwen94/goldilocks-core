@@ -185,6 +185,53 @@ class TestExplain:
         summary, _bundle_input = _handlers.run(document)
         assert "scf.in" in summary["files"]
 
+    @pytest.mark.parametrize(
+        ("task", "steps"),
+        [
+            ("scf_single_point", ["scf"]),
+            ("dos", ["scf", "nscf", "dos"]),
+            ("relax", ["relax"]),
+            ("vc-relax", ["vc-relax"]),
+        ],
+    )
+    def test_lays_out_every_record_by_tier_and_step(
+        self, silicon_cif, task, steps
+    ) -> None:
+        """#187: the Workbench placed a record by matching its name to a
+        settings group, so a dos task's nscf_ records landed under Analysis.
+        explain() now names the tier and the step of every record it
+        returns. No real assets: an unresolved record is laid out too."""
+        document = ComputeRequestDocument(
+            structure_content=silicon_cif, hpc="scarf", task=task
+        )
+
+        result = _handlers.explain(document)
+
+        layout = result["layout"]
+        by_step = {step["name"]: step["records"] for step in layout["steps"]}
+        placed = [
+            *layout["analysis"],
+            *layout["system"],
+            *(name for records in by_step.values() for name in records),
+        ]
+        assert list(by_step) == steps
+        assert sorted(placed) == sorted(result["records"])
+        assert layout["analysis"][:3] == ["composition", "geometry", "symmetry"]
+        assert "relativistic" in layout["system"]
+        assert "job" in by_step[steps[0]]
+        if task == "dos":
+            assert by_step["nscf"] == [
+                "nscf_occupations",
+                "nscf_k_sampling",
+                "nscf_n_irr_k",
+                "nscf_nbnd",
+                "nscf_convergence",
+                "nscf_parallelisation",
+            ]
+            assert by_step["dos"] == ["dos"]
+        if task in ("relax", "vc-relax"):
+            assert by_step[task][-1] == "relax"
+
     def test_blocking_names_a_cross_parameter_rule(
         self, real_assets, silicon_cif
     ) -> None:
@@ -243,6 +290,21 @@ class TestRun:
 
         assert summary["records"]["functional"]["value"] == "PBE"
         assert summary["records"]["functional"]["source"] == "human"
+
+    @pytest.mark.parametrize("task", ["scf_single_point", "dos", "relax", "vc-relax"])
+    def test_returns_the_layout_explain_returns(
+        self, silicon_fixture_table, silicon_cif, task
+    ) -> None:
+        """#187: the summary's records come with the same layout as
+        explain's."""
+        document = ComputeRequestDocument(
+            structure_content=silicon_cif, hpc="scarf", task=task
+        )
+
+        summary, _bundle_input = _handlers.run(document)
+
+        assert summary["layout"] == _handlers.explain(document)["layout"]
+        assert summary.keys() == {"files", "records", "warnings", "layout"}
 
     @pytest.mark.parametrize(
         ("task", "overrides"),
