@@ -17,6 +17,7 @@ import { AppHeader } from "./layout/AppHeader";
 import { FailureBanner } from "./status/FailureBanner";
 import { OperationStatus } from "./status/OperationStatus";
 import { colorSchemeManager, workbenchTheme } from "./theme";
+import { bannerFailure, needsAttention } from "./workspace/pipelineStatus";
 import { useAutoCompute } from "./workspace/useAutoCompute";
 import { useWorkspace, useWorkspaceSnapshot } from "./workspace/useWorkspace";
 import "./App.css";
@@ -56,27 +57,33 @@ export function WorkbenchContent() {
     snapshot.reviewed?.records.magnetic,
   );
   const columns = showMagneticOrderings ? 5 : 4;
+  // Every failure offers Retry, a deterministic 4xx too: it sends the failed
+  // request once more. Dismiss only hides the banner; the failure stays the
+  // outcome of its draft, so nothing is sent again on its own (#150).
+  const banner = bannerFailure(snapshot);
 
   return (
     <>
       <OperationStatus
         operation={snapshot.operation}
-        hasFailure={snapshot.failure !== null}
+        needsAttention={needsAttention(snapshot)}
       />
 
-      {snapshot.failure === null ? null : (
+      {banner === null ? null : (
         <FailureBanner
-          failure={snapshot.failure}
-          retryAvailable={
-            snapshot.failure.retryable ||
-            snapshot.failureOperation === "capabilities"
-          }
-          dismissAvailable={snapshot.capabilities !== null}
+          failure={banner.failure}
+          dismissAvailable={banner.operation !== "capabilities"}
           onRetry={() => {
-            void workspace.dispatch({ type: "failure.retry" });
+            void workspace.dispatch({
+              type: "failure.retry",
+              operation: banner.operation,
+            });
           }}
           onDismiss={() => {
-            void workspace.dispatch({ type: "failure.dismiss" });
+            void workspace.dispatch({
+              type: "failure.dismiss",
+              operation: banner.operation,
+            });
           }}
         />
       )}

@@ -350,9 +350,12 @@ describe("Goldilocks Workbench", () => {
     ).toBeEnabled();
   });
 
-  it("keeps a failed listing's error on its card without re-sending it", async () => {
-    // A failed listing is the open structure's listing: the card shows its
-    // error and does not list the structure again on its own.
+  it("keeps a failed listing's error on its card and lists again only on Retry", async () => {
+    // #150: a failed listing was re-sent without limit and its error never
+    // stayed on screen. It is the open structure's listing: the card shows
+    // its error, does not list the structure again on its own, and offers
+    // Retry, which lists it once more.
+    const user = userEvent.setup();
     let failListing: (reason: unknown) => void = () => undefined;
     const core = new CoreStub(Promise.resolve(capabilities));
     core.inspectionResults = [Promise.resolve(inspection)];
@@ -361,9 +364,10 @@ describe("Goldilocks Workbench", () => {
       new Promise((_, reject) => {
         failListing = reject;
       }),
+      Promise.resolve(orderingsListing(2, "fm", "afm-1")),
     ];
     const { container } = renderApp(core);
-    await openStructure(userEvent.setup(), container);
+    await openStructure(user, container);
     await waitFor(
       () => {
         expect(core.magneticOrderingsCalls).toHaveLength(1);
@@ -373,22 +377,32 @@ describe("Goldilocks Workbench", () => {
 
     failListing(
       new CoreFailure(
-        "orderings_unavailable",
-        "Orderings could not be listed.",
-        false,
+        "network_error",
+        "Cannot reach Goldilocks Core: Failed to fetch",
       ),
     );
 
-    expect(
-      await within(await orderingsCard()).findByRole("alert"),
-    ).toHaveTextContent("Orderings could not be listed.");
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    });
-    expect(within(await orderingsCard()).getByRole("alert")).toHaveTextContent(
-      "Orderings could not be listed.",
+    const card = await orderingsCard();
+    expect(await within(card).findByRole("alert")).toHaveTextContent(
+      "Cannot reach Goldilocks Core: Failed to fetch",
+    );
+    await pause(1000);
+    expect(within(card).getByRole("alert")).toHaveTextContent(
+      "Cannot reach Goldilocks Core: Failed to fetch",
     );
     expect(core.magneticOrderingsCalls).toHaveLength(1);
+
+    await user.click(
+      within(card).getByRole("button", { name: "Retry listing" }),
+    );
+
+    expect(
+      await within(card).findByRole("checkbox", {
+        name: "Select afm-1 for download",
+      }),
+    ).toBeInTheDocument();
+    expect(within(card).queryByRole("alert")).not.toBeInTheDocument();
+    expect(core.magneticOrderingsCalls).toHaveLength(2);
   });
 
   it("uses light mode by default and persists an explicit dark mode", async () => {
@@ -577,7 +591,6 @@ describe("Goldilocks Workbench", () => {
       new CoreFailure(
         "http_error",
         "The Goldilocks Core server rejected the request (503).",
-        true,
         { status: 503 },
         503,
       ),
@@ -607,6 +620,171 @@ describe("Goldilocks Workbench", () => {
     expect(saveArchive).toHaveBeenCalledOnce();
     expect(saveArchive.mock.calls[0]?.[0]).toBe(archive);
     expect(core.archiveCalls).toHaveLength(2);
+  });
+
+  it("keeps a refused /run as the draft's outcome: Retry offered, Dismiss re-sends nothing, Download disabled", async () => {
+    // #150: after a 422 from the automatic /run, Retry was not offered,
+    // Dismiss re-sent the /run about 175 ms later, Download stayed enabled
+    // and the card still promised the files.
+    const user = userEvent.setup();
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const archive = buildArchive("Si-scf_single_point.zip");
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.archiveResults = [
+      failing(
+        new CoreFailure(
+          "generation_error",
+          "Rutile TiO2 cannot be generated.",
+          {},
+          422,
+        ),
+      ),
+      Promise.resolve(archive),
+    ];
+    const { container } = renderApp(core, saveArchive);
+    await openStructure(user, container);
+
+    const alert = await screen.findByRole("alert", {}, { timeout: 5000 });
+    expect(alert).toHaveTextContent("Rutile TiO2 cannot be generated.");
+    expect(within(alert).getByRole("button", { name: "Retry" })).toBeEnabled();
+    const download = screen.getByRole("button", { name: "Download (.zip)" });
+    expect(download).toBeDisabled();
+    expect(download).toHaveAccessibleDescription(
+      "Input generation failed for the current settings: Rutile TiO2 cannot be generated.",
+    );
+    expect(
+      screen.getByRole("status", { name: "Input generation failed" }),
+    ).toHaveTextContent("Rutile TiO2 cannot be generated.");
+    expect(screen.queryByText(/will appear here/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "No input files were generated: generation failed for the current settings.",
+      ),
+    ).toBeInTheDocument();
+
+    await user.click(
+      within(alert).getByRole("button", { name: "Dismiss error" }),
+    );
+    await pause(1000);
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(core.archiveCalls).toHaveLength(1);
+    expect(download).toBeDisabled();
+    expect(saveArchive).not.toHaveBeenCalled();
+
+    // The card still offers Retry once the banner is dismissed.
+    await user.click(screen.getByRole("button", { name: "Retry generation" }));
+    expect(
+      await screen.findByRole("status", { name: "Archive status" }),
+    ).toHaveTextContent("Si-scf_single_point.zip is ready");
+    expect(download).toBeEnabled();
+    expect(core.archiveCalls).toHaveLength(2);
+    expect(saveArchive).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed /explain as the draft's outcome: no recomputing notice, Dismiss re-sends nothing, Retry sends one", async () => {
+    // #150: after an /explain failure the card said "recomputing" although
+    // nothing was sent, Retry was not offered for a 4xx, and Dismiss
+    // re-sent the failing /explain.
+    const user = userEvent.setup();
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [
+      Promise.resolve(explainResult),
+      failing(
+        new CoreFailure(
+          "invalid_setting",
+          "spin_polarized cannot be set for this structure.",
+          {},
+          422,
+        ),
+      ),
+      Promise.resolve(explainResult),
+    ];
+    const { container } = renderApp(core);
+    await openStructure(user, container);
+    const download = await screen.findByRole("button", {
+      name: "Download (.zip)",
+    });
+    await waitFor(
+      () => {
+        expect(download).toBeEnabled();
+      },
+      { timeout: 5000 },
+    );
+    await user.click(within(advisorsPanel()).getByText("Magnetic"));
+    await user.selectOptions(screen.getByLabelText("spin polarized"), "true");
+
+    const alert = await screen.findByRole("alert", {}, { timeout: 5000 });
+    expect(alert).toHaveTextContent(
+      "spin_polarized cannot be set for this structure.",
+    );
+    expect(within(alert).getByRole("button", { name: "Retry" })).toBeEnabled();
+    expect(
+      screen.queryByRole("status", { name: "Recommendation notice" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("status", { name: "Recommendation failed" }),
+    ).toHaveTextContent("spin_polarized cannot be set for this structure.");
+    expect(download).toBeDisabled();
+    expect(download).toHaveAccessibleDescription(
+      "The recommendation for the current settings failed: spin_polarized cannot be set for this structure.",
+    );
+
+    await user.click(
+      within(alert).getByRole("button", { name: "Dismiss error" }),
+    );
+    await pause(1000);
+    expect(core.explainCalls).toHaveLength(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Retry recommendation" }),
+    );
+    await waitFor(
+      () => {
+        expect(download).toBeEnabled();
+      },
+      { timeout: 5000 },
+    );
+    await pause(1000);
+    expect(core.explainCalls).toHaveLength(3);
+    expect(core.explainCalls.at(-1)?.overrides).toMatchObject({
+      spin_polarized: true,
+    });
+  });
+
+  it("sends no /run for an /explain verdict that blocks, and says why Download is disabled", async () => {
+    // #165: /explain returns the reasons /run would refuse for. A refused
+    // draft still got the automatic /run, and Download stayed enabled until
+    // its 422 arrived.
+    const reason =
+      "occupations='fixed' with a spin-polarized system requires an explicit integer tot_magnetization, but none was set; set tot_magnetization, or use occupations='smearing'.";
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [
+      Promise.resolve({ ...explainResult, blocking: [reason] }),
+    ];
+    const { container } = renderApp(core);
+    await openStructure(userEvent.setup(), container);
+    const download = await screen.findByRole(
+      "button",
+      { name: "Download (.zip)" },
+      { timeout: 5000 },
+    );
+    await pause(1000);
+
+    expect(core.archiveCalls).toHaveLength(0);
+    expect(
+      screen.getByRole("status", { name: "Cannot generate input files" }),
+    ).toHaveTextContent(reason);
+    expect(download).toBeDisabled();
+    expect(download).toHaveAccessibleDescription(
+      `Input files cannot be generated for the current settings: ${reason}`,
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(/will appear here/)).not.toBeInTheDocument();
   });
 
   it("submits smearing treatment and width as overrides in the occupations group", async () => {
@@ -1103,7 +1281,6 @@ describe("Goldilocks Workbench", () => {
     const failure = new CoreFailure(
       "assets_unavailable",
       "Runtime assets are unavailable.",
-      false,
     );
     renderApp(new CoreStub(Promise.reject(failure)));
 
@@ -1244,6 +1421,23 @@ function orderingsListing(
 
 function orderingsCard(): Promise<HTMLElement> {
   return screen.findByRole("region", { name: "Magnetic orderings" });
+}
+
+/** A queued request that fails with `failure` when the stub hands it out.
+ * Marked handled up front: it waits in the queue past the debounce timers,
+ * and an unhandled rejection that long would be reported as an error. */
+function failing<T>(failure: CoreFailure): Promise<T> {
+  const request = Promise.reject(failure);
+  void request.catch(() => undefined);
+  return request;
+}
+
+/** Lets `milliseconds` of real time pass, long enough for any debounced
+ * automatic request (400 ms /explain, 150 ms preview) to go out. */
+async function pause(milliseconds: number): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, milliseconds));
+  });
 }
 
 /** A settings group's humanized name (e.g. "Magnetic") can collide with

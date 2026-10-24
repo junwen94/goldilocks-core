@@ -395,16 +395,25 @@ ranking runs in a fresh process, one ranking at a time
 an absolute path once, when the app is created.
 
 Workbench keeps the editable draft and reviewed response in its browser store.
-Once the recommendation for the current draft has arrived, Workbench fetches
-that draft's archive from `/run` automatically as the generated-inputs preview.
-Editing a draft marks the existing result and its archive out of date.
-Download saves the previewed archive of the current draft and sends no request
-of its own: it stays disabled until that archive has arrived, and retrying a
-failed preview refreshes the preview without saving a file.
+Opening a structure or editing the draft starts a new revision, and each
+`/explain` and preview `/run` outcome, result or failure, is stored with the
+structure and revision it was sent for; only the current revision's outcomes
+decide what is shown, sent or saved. Workbench sends the current draft's
+`/explain` automatically. Once its recommendation has arrived with an empty
+`blocking` verdict, Workbench fetches that draft's archive from `/run` as the
+generated-inputs preview; a draft whose verdict blocks gets no `/run`, and the
+Bundle card lists the reasons. A failure is the outcome of its draft: nothing
+is sent again until the draft or the structure changes or the user presses
+Retry, which every failure offers. Dismiss only hides the banner; the Bundle
+card still shows the failure. Download saves the previewed archive of the
+current draft and sends no request of its own: it stays disabled, and says why,
+until that archive has arrived, and retrying a failed preview refreshes the
+preview without saving a file.
 A magnetic-ordering listing is stored with the structure it was requested for
 and shown only while that structure is open. Opening another structure aborts
 a listing still in flight, and Download selected builds and names each
-candidate bundle from the listing's own structure.
+candidate bundle from the listing's own structure. A failed listing keeps its
+error on the card and is sent again only by its Retry listing button.
 
 After changing the wire contract, run these from the repository root with the
 HTTP extra installed:

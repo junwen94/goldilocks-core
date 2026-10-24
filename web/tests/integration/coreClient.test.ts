@@ -50,7 +50,6 @@ describe("HttpCoreClient", () => {
 
       await expect(client.capabilities()).rejects.toMatchObject({
         kind: "incompatible_vocabulary",
-        retryable: false,
       });
     });
 
@@ -65,11 +64,10 @@ describe("HttpCoreClient", () => {
       await expect(client.capabilities()).rejects.toMatchObject({
         kind: "invalid_response",
         message: "Goldilocks Core returned an invalid JSON response.",
-        retryable: false,
       });
     });
 
-    it("reports a retryable network failure", async () => {
+    it("reports a network failure", async () => {
       const fetcher = vi
         .fn<typeof fetch>()
         .mockRejectedValue(new TypeError("connection refused"));
@@ -79,12 +77,11 @@ describe("HttpCoreClient", () => {
         name: "CoreFailure",
         kind: "network_error",
         message: "Cannot reach Goldilocks Core: connection refused",
-        retryable: true,
         status: null,
       });
     });
 
-    it("converts a Core error envelope into one typed failure, deriving retryable from status", async () => {
+    it("converts a Core error envelope into one typed failure", async () => {
       const payload = {
         error: {
           kind: "advice_incomplete",
@@ -106,7 +103,6 @@ describe("HttpCoreClient", () => {
       expect(failure).toMatchObject({
         kind: "advice_incomplete",
         message: payload.error.message,
-        retryable: false,
         details: { attempt: 2 },
         status: 424,
         rawResponse: payload,

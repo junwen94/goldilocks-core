@@ -13,9 +13,15 @@ import type {
   StructureInspection,
 } from "../api/coreClient";
 import { CoreFailure } from "../api/coreClient";
+import {
+  currentArchive,
+  explainDue,
+  previewDue,
+  recordedFailure,
+} from "./pipelineStatus";
 
 /** The Core request in flight. `preview` is the automatic `/run` that fetches
- * the archive behind `lastDownload`; saving a file is not an operation, since
+ * the current draft's archive; saving a file is not an operation, since
  * `review.download` only saves an archive already fetched. */
 export type WorkspaceOperation =
   "capabilities" | "inspect" | "explain" | "preview";
@@ -42,7 +48,8 @@ export interface MagneticOrderingsListing {
   /** Shown inline in the Magnetic Orderings card, not the global
    * `FailureBanner` -- this is a side-quest failure, not a reason to
    * block the main pipeline the banner exists for. Not re-sent on its
-   * own: the card lists a structure only when it has no listing. */
+   * own: the card lists a structure only when it has no listing, or when
+   * the user presses its Retry listing. */
   readonly error: string | null;
 }
 
@@ -60,26 +67,63 @@ export interface CalculationDraft {
   readonly fetchMissing: boolean;
 }
 
+/** The open structure and draft revision an `/explain` or preview `/run`
+ * was sent for. A revision never repeats within a workspace, so neither
+ * does a key. */
+export interface PipelineKey {
+  readonly input: StructureInput;
+  readonly revision: number;
+}
+
+/** How the request sent for `key` settled. A failure stays the outcome of
+ * its key: nothing sends that request again until the key changes or
+ * `failure.retry` clears it, and `dismissed` only hides it from the banner
+ * (#150). Read the current draft's outcomes through `pipelineStatus.ts`. */
+export type PipelineOutcome<T> =
+  | { readonly key: PipelineKey; readonly status: "result"; readonly value: T }
+  | {
+      readonly key: PipelineKey;
+      readonly status: "failure";
+      readonly failure: CoreFailure;
+      readonly dismissed: boolean;
+    };
+
+/** A structure that could not be opened, and why. The open structure, if
+ * any, stays open. */
+export interface InspectFailure {
+  readonly input: StructureInput;
+  readonly failure: CoreFailure;
+}
+
 export interface WorkspaceSnapshot {
   readonly capabilities: Capabilities | null;
+  /** Why loading capabilities failed; cleared when they are requested
+   * again. */
+  readonly startupFailure: CoreFailure | null;
   readonly structureInput: StructureInput | null;
-  readonly attemptedStructureInput: StructureInput | null;
   readonly inspection: StructureInspection | null;
+  /** The last structure that failed to open; cleared by the next open,
+   * Dismiss or Retry. */
+  readonly inspectFailure: InspectFailure | null;
   readonly draft: CalculationDraft | null;
-  /** The last `/explain` preview -- records, warnings and the `blocking`
-   * verdict, no files. Never carries an archive: `/explain` never calls
-   * `generate()`, so it succeeds even when a `/run` would refuse with
-   * `advice_incomplete` (the tri-state "diagnosis is always available"
-   * promise), and `blocking` then lists the reasons. The files come from
-   * the separate `preview` operation against `/run` (`lastDownload`). */
+  /** Counts every opened structure and every draft change for the
+   * workspace's lifetime and is never reset, so every `PipelineKey` is
+   * new, even when an embedder opens the same `StructureInput` again. */
+  readonly revision: number;
+  /** The last `/explain` result for the open structure -- records, warnings
+   * and the `blocking` verdict, no files. It stays on screen while a later
+   * revision is recomputed or after that revision's `/explain` failed, and
+   * is the current draft's only while `currentExplain` holds it.
+   * `/explain` never calls `generate()`, so it succeeds even when a `/run`
+   * would refuse with `advice_incomplete`, and `blocking` then lists the
+   * reasons; no preview `/run` is sent for such a draft. */
   readonly reviewed: ExplainResult | null;
-  readonly outOfDate: boolean;
-  /** The archive the last `preview` fetched; it belongs to the current
-   * draft only while `outOfDate` is false (see `currentArchive`). */
-  readonly lastDownload: ArchiveDownload | null;
+  /** How the last `/explain` settled; see `currentExplain`. */
+  readonly explain: PipelineOutcome<ExplainResult> | null;
+  /** How the last preview `/run` settled; see `currentPreview` and
+   * `currentArchive`. */
+  readonly preview: PipelineOutcome<ArchiveDownload> | null;
   readonly operation: WorkspaceOperation | null;
-  readonly failure: CoreFailure | null;
-  readonly failureOperation: WorkspaceOperation | null;
   /** Read through `currentOrderings`. */
   readonly magneticOrderings: MagneticOrderingsListing | null;
 }
@@ -97,9 +141,14 @@ export type WorkspaceAction =
        * setting it to `undefined` on the wire. */
       readonly overrides?: Readonly<Record<string, unknown>>;
     }
+  /** Sends the current draft's `/explain` when it is due (`explainDue`):
+   * not while a request is in flight, and not once the draft has an
+   * outcome, a failure included. */
   | { readonly type: "review.compute" }
-  /** Fetches a fresh archive for live preview without saving it anywhere
-   * -- the auto-preview effect calls this, not a user action. */
+  /** Fetches the current draft's archive for the live preview without
+   * saving it, once its recommendation arrived with no blocking reason and
+   * while no preview has settled for it (`previewDue`) -- the auto-preview
+   * effect calls this, not a user action. */
   | { readonly type: "review.refreshArchive" }
   /** Saves the current draft's archive (`currentArchive`) through the
    * archive sink. Sends no request: with no current archive it does
@@ -111,8 +160,16 @@ export type WorkspaceAction =
       readonly type: "magneticOrderings.downloadSelected";
       readonly labels: readonly string[];
     }
-  | { readonly type: "failure.retry" }
-  | { readonly type: "failure.dismiss" }
+  /** Clears the failure recorded for `operation` and sends that request
+   * again, once. */
+  | { readonly type: "failure.retry"; readonly operation: WorkspaceOperation }
+  /** Hides the failure recorded for `operation` from the banner without
+   * sending anything; an `/explain` or preview failure stays its draft's
+   * outcome. A capabilities failure cannot be dismissed. */
+  | {
+      readonly type: "failure.dismiss";
+      readonly operation: WorkspaceOperation;
+    }
   | { readonly type: "workspace.reset" };
 
 export interface Workspace {
@@ -129,16 +186,16 @@ interface OperationOwner {
 
 const EMPTY_SNAPSHOT: WorkspaceSnapshot = {
   capabilities: null,
+  startupFailure: null,
   structureInput: null,
-  attemptedStructureInput: null,
   inspection: null,
+  inspectFailure: null,
   draft: null,
+  revision: 0,
   reviewed: null,
-  outOfDate: false,
-  lastDownload: null,
+  explain: null,
+  preview: null,
   operation: null,
-  failure: null,
-  failureOperation: null,
   magneticOrderings: null,
 };
 
@@ -208,13 +265,13 @@ function mergeOverrides(
   );
 }
 
-/** The archive fetched for the current draft of the current structure, or
- * null when none has arrived yet (or the draft changed since). The generated
- * inputs preview shows it, and `review.download` saves it and nothing else. */
-export function currentArchive(
-  snapshot: WorkspaceSnapshot,
-): ArchiveDownload | null {
-  return snapshot.outOfDate ? null : snapshot.lastDownload;
+/** `outcome` with its failure hidden from the banner. */
+function dismissed<T>(
+  outcome: PipelineOutcome<T> | null,
+): PipelineOutcome<T> | null {
+  return outcome?.status === "failure"
+    ? { ...outcome, dismissed: true }
+    : outcome;
 }
 
 /** The magnetic-ordering listing of the open structure, or null when it
@@ -237,19 +294,17 @@ export function createWorkspace(
     readonly owner: OperationOwner;
     readonly promise: Promise<void>;
   } | null = null;
-  let draftRevision = 0;
   // Aborts the listing request in flight; only the open structure's
   // listing can be in flight, since opening another structure aborts it.
   let orderingsRequest: AbortController | null = null;
 
-  function beginOperation(operation: WorkspaceOperation): OperationOwner {
+  function beginOperation(
+    operation: WorkspaceOperation,
+    update: Partial<WorkspaceSnapshot> = {},
+  ): OperationOwner {
     const owner = { operation };
     activeOperation = owner;
-    store.setState({
-      operation,
-      failure: null,
-      failureOperation: null,
-    });
+    store.setState({ ...update, operation });
     return owner;
   }
 
@@ -262,22 +317,25 @@ export function createWorkspace(
     store.setState({ ...update, operation: null });
   }
 
-  function failOperation(owner: OperationOwner, error: unknown): void {
+  /** Settles `owner` with the fields `record` makes of a `CoreFailure`;
+   * any other error propagates once `owner` is no longer busy. */
+  function failOperation(
+    owner: OperationOwner,
+    error: unknown,
+    record: (failure: CoreFailure) => Partial<WorkspaceSnapshot>,
+  ): void {
     if (activeOperation !== owner) return;
     if (!(error instanceof CoreFailure)) {
       completeOperation(owner);
       throw error;
     }
-    completeOperation(owner, {
-      failure: error,
-      failureOperation: owner.operation,
-    });
+    completeOperation(owner, record(error));
   }
 
   function start(): Promise<void> {
     if (store.getState().capabilities !== null) return Promise.resolve();
     if (startup !== null) return startup.promise;
-    const owner = beginOperation("capabilities");
+    const owner = beginOperation("capabilities", { startupFailure: null });
     const promise = core.capabilities().then(
       (capabilities) => {
         if (startup?.owner === owner) startup = null;
@@ -288,7 +346,7 @@ export function createWorkspace(
       },
       (error: unknown) => {
         if (startup?.owner === owner) startup = null;
-        failOperation(owner, error);
+        failOperation(owner, error, (failure) => ({ startupFailure: failure }));
       },
     );
     startup = { owner, promise };
@@ -298,27 +356,29 @@ export function createWorkspace(
   async function openSource(input: StructureInput): Promise<void> {
     const capabilities = store.getState().capabilities;
     if (capabilities === null) return;
-    const owner = beginOperation("inspect");
-    store.setState({ attemptedStructureInput: input });
+    // A new attempt replaces the last structure that failed to open.
+    const owner = beginOperation("inspect", { inspectFailure: null });
     try {
       const inspection = await core.inspectStructure(input);
       if (activeOperation !== owner) return;
-      draftRevision = 0;
       // Only now is the open structure replaced: an inspection that fails
-      // leaves it, and the listing request in flight for it, in place.
+      // leaves it, its outcomes and the listing request in flight for it in
+      // place.
       abortOrderingsRequest();
       completeOperation(owner, {
         structureInput: input,
-        attemptedStructureInput: null,
         inspection,
         draft: defaultDraft(capabilities),
+        revision: store.getState().revision + 1,
         reviewed: null,
-        outOfDate: false,
-        lastDownload: null,
+        explain: null,
+        preview: null,
         magneticOrderings: null,
       });
     } catch (error) {
-      failOperation(owner, error);
+      failOperation(owner, error, (failure) => ({
+        inspectFailure: { input, failure },
+      }));
     }
   }
 
@@ -328,7 +388,6 @@ export function createWorkspace(
     const snapshot = store.getState();
     const currentDraft = snapshot.draft;
     if (currentDraft === null || snapshot.operation === "inspect") return;
-    draftRevision += 1;
     const draft: CalculationDraft = {
       ...currentDraft,
       ...("code" in action ? { code: action.code } : {}),
@@ -339,75 +398,68 @@ export function createWorkspace(
           ? currentDraft.overrides
           : mergeOverrides(currentDraft.overrides, action.overrides),
     };
-    store.setState({
-      draft,
-      outOfDate: snapshot.reviewed !== null,
-      failure: null,
-      failureOperation: null,
-    });
+    store.setState({ draft, revision: snapshot.revision + 1 });
   }
 
-  async function computeReview(): Promise<void> {
+  /** Sends `operation`'s request for the current draft when `due` says it
+   * is due, and records how it settled against the key it was sent for --
+   * a result or a `CoreFailure` alike, so the same request is not sent
+   * again for that key. */
+  async function settleForCurrentDraft<T>(
+    operation: "explain" | "preview",
+    due: (snapshot: WorkspaceSnapshot) => boolean,
+    send: (request: ComputeRequest) => Promise<T>,
+    record: (outcome: PipelineOutcome<T>) => Partial<WorkspaceSnapshot>,
+  ): Promise<void> {
     const snapshot = store.getState();
+    const { capabilities, structureInput, draft, revision } = snapshot;
     if (
-      snapshot.capabilities === null ||
-      snapshot.structureInput === null ||
-      snapshot.draft === null ||
-      snapshot.operation !== null
+      capabilities === null ||
+      structureInput === null ||
+      draft === null ||
+      !due(snapshot)
     ) {
       return;
     }
-    const revision = draftRevision;
-    const request = toComputeRequest(
-      snapshot.capabilities,
-      snapshot.structureInput,
-      snapshot.draft,
-    );
-    const owner = beginOperation("explain");
+    const key: PipelineKey = { input: structureInput, revision };
+    const request = toComputeRequest(capabilities, structureInput, draft);
+    const owner = beginOperation(operation);
     try {
-      const reviewed = await core.explain(request);
-      completeOperation(owner, {
-        reviewed,
-        outOfDate: revision !== draftRevision,
-        lastDownload: null,
-      });
+      const value = await send(request);
+      completeOperation(owner, record({ key, status: "result", value }));
     } catch (error) {
-      failOperation(owner, error);
+      failOperation(owner, error, (failure) =>
+        record({ key, status: "failure", failure, dismissed: false }),
+      );
     }
   }
 
-  /** The `preview` operation: fetches the current draft's archive into
-   * `lastDownload`, so `GeneratedInputReview` shows a live preview with no
-   * separate "generate" step. Never saves it. The auto-preview effect and
-   * Retry after a failed preview call this. */
-  async function refreshArchive(): Promise<void> {
-    const snapshot = store.getState();
-    if (
-      snapshot.capabilities === null ||
-      snapshot.structureInput === null ||
-      snapshot.draft === null ||
-      snapshot.reviewed === null ||
-      snapshot.outOfDate ||
-      snapshot.operation !== null
-    ) {
-      return;
-    }
-    const revision = draftRevision;
-    const request = toComputeRequest(
-      snapshot.capabilities,
-      snapshot.structureInput,
-      snapshot.draft,
+  /** The `explain` operation. A result that arrives after the draft changed
+   * still replaces `reviewed`: it is the latest recommendation, shown as
+   * out of date until the current draft's arrives. */
+  function computeReview(): Promise<void> {
+    return settleForCurrentDraft(
+      "explain",
+      explainDue,
+      (request) => core.explain(request),
+      (explain) =>
+        explain.status === "result"
+          ? { explain, reviewed: explain.value }
+          : { explain },
     );
-    const owner = beginOperation("preview");
-    try {
-      const archive = await core.runArchive(request);
-      completeOperation(owner, {
-        lastDownload: archive,
-        outOfDate: revision !== draftRevision,
-      });
-    } catch (error) {
-      failOperation(owner, error);
-    }
+  }
+
+  /** The `preview` operation: fetches the current draft's archive, so
+   * `GeneratedInputReview` shows a live preview with no separate "generate"
+   * step. Never saves it. The auto-preview effect and Retry after a failed
+   * preview call this. */
+  function refreshArchive(): Promise<void> {
+    return settleForCurrentDraft(
+      "preview",
+      previewDue,
+      (request) => core.runArchive(request),
+      (preview) => ({ preview }),
+    );
   }
 
   /** Saves the current archive, the one the preview shows. Fetches nothing:
@@ -541,30 +593,59 @@ export function createWorkspace(
     for (const archive of archives) saveArchive(archive);
   }
 
-  async function retryFailure(): Promise<void> {
-    const { failureOperation, attemptedStructureInput } = store.getState();
-    switch (failureOperation) {
+  /** Clears the failure recorded for `operation` and sends that request
+   * again, once: an outcome cleared while another request is in flight is
+   * sent by the auto effect once that request settles. Does nothing when
+   * `operation` has no recorded failure. */
+  async function retryFailure(operation: WorkspaceOperation): Promise<void> {
+    const snapshot = store.getState();
+    if (recordedFailure(snapshot, operation) === null) return;
+    switch (operation) {
       case "capabilities":
-        return start();
+        await start();
+        return;
       case "inspect":
-        if (attemptedStructureInput !== null) {
-          await openSource(attemptedStructureInput);
+        if (snapshot.inspectFailure !== null) {
+          await openSource(snapshot.inspectFailure.input);
         }
         return;
       case "explain":
-        return computeReview();
+        store.setState({ explain: null });
+        await computeReview();
+        return;
       case "preview":
-        return refreshArchive();
-      case null:
+        store.setState({ preview: null });
+        await refreshArchive();
+        return;
+    }
+  }
+
+  /** Hides the failure recorded for `operation` from the banner. An
+   * `/explain` or preview failure stays its draft's outcome, so nothing is
+   * sent again; a structure that failed to open shows nowhere else, so its
+   * failure is dropped. A capabilities failure stays, since the Workbench
+   * cannot be used without capabilities. */
+  function dismissFailure(operation: WorkspaceOperation): void {
+    const snapshot = store.getState();
+    switch (operation) {
+      case "capabilities":
+        return;
+      case "inspect":
+        store.setState({ inspectFailure: null });
+        return;
+      case "explain":
+        store.setState({ explain: dismissed(snapshot.explain) });
+        return;
+      case "preview":
+        store.setState({ preview: dismissed(snapshot.preview) });
         return;
     }
   }
 
   async function reset(): Promise<void> {
-    const capabilities = store.getState().capabilities;
+    const { capabilities, revision } = store.getState();
     const pendingStartup =
       startup !== null && activeOperation === startup.owner ? startup : null;
-    draftRevision = 0;
     abortOrderingsRequest();
     if (pendingStartup === null) {
       activeOperation = null;
@@ -574,6 +655,7 @@ export function createWorkspace(
       {
         ...EMPTY_SNAPSHOT,
         capabilities,
+        revision,
         operation: pendingStartup?.owner.operation ?? null,
       },
       true,
@@ -611,14 +693,9 @@ export function createWorkspace(
         await downloadSelectedOrderings(action.labels);
         return;
       case "failure.retry":
-        return retryFailure();
+        return retryFailure(action.operation);
       case "failure.dismiss":
-        if (store.getState().capabilities === null) return;
-        store.setState({
-          attemptedStructureInput: null,
-          failure: null,
-          failureOperation: null,
-        });
+        dismissFailure(action.operation);
         return;
       case "workspace.reset":
         return reset();

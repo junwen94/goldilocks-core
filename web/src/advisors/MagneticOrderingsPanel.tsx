@@ -9,7 +9,7 @@ import {
   Text,
   VisuallyHidden,
 } from "@mantine/core";
-import { Download } from "lucide-react";
+import { Download, RotateCw } from "lucide-react";
 
 import { WarningsPanel } from "../review/WarningsPanel";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
@@ -44,7 +44,8 @@ export function MagneticOrderingsPanel() {
   }
 
   // Lists the open structure while it has no listing of its own. A failed
-  // listing is its listing too, so its error stays and is not re-sent.
+  // listing is its listing too, so its error stays and only Retry listing
+  // sends it again.
   useEffect(() => {
     if (inspection !== null && listing === null) {
       void workspace.dispatch({ type: "magneticOrderings.list" });
@@ -91,9 +92,7 @@ export function MagneticOrderingsPanel() {
         </Text>
       </Stack>
       {error === null ? null : (
-        <Text c="red" size="sm" role="alert">
-          {error}
-        </Text>
+        <OrderingsError error={error} listed={magneticOrderings !== null} />
       )}
       <WarningsPanel warnings={magneticOrderings?.warnings ?? []} />
       {candidates.length === 0 ? (
@@ -180,6 +179,39 @@ export function MagneticOrderingsPanel() {
             </Button>
           </Group>
         </>
+      )}
+    </Stack>
+  );
+}
+
+/** A failed listing, ranking or download of the open structure. A failed
+ * listing stays the structure's listing and is not re-sent on its own
+ * (#150), so it offers Retry listing; after a failed ranking or download the
+ * listing is still there, and its own buttons send that request again. */
+function OrderingsError({
+  error,
+  listed,
+}: {
+  readonly error: string;
+  readonly listed: boolean;
+}) {
+  const workspace = useWorkspace();
+  return (
+    <Stack gap={4} align="flex-start">
+      <Text c="red" size="sm" role="alert">
+        {error}
+      </Text>
+      {listed ? null : (
+        <Button
+          size="xs"
+          variant="light"
+          leftSection={<RotateCw aria-hidden="true" size={14} />}
+          onClick={() =>
+            void workspace.dispatch({ type: "magneticOrderings.list" })
+          }
+        >
+          Retry listing
+        </Button>
       )}
     </Stack>
   );

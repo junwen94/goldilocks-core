@@ -27,12 +27,24 @@ export { WorkspaceProvider } from "./workspace/WorkspaceProvider";
 export { createWorkspace, currentOrderings } from "./workspace/workspace";
 export type {
   CalculationDraft,
+  InspectFailure,
   MagneticOrderingsListing,
+  PipelineKey,
+  PipelineOutcome,
   Workspace,
   WorkspaceAction,
   WorkspaceOperation,
   WorkspaceSnapshot,
 } from "./workspace/workspace";
+// The snapshot keeps the latest /explain and preview outcome with the
+// structure and revision it belongs to; these read the current draft's.
+export {
+  bannerFailure,
+  currentArchive,
+  currentExplain,
+  currentPreview,
+} from "./workspace/pipelineStatus";
+export type { WorkspaceFailure } from "./workspace/pipelineStatus";
 export { useWorkspace, useWorkspaceSnapshot } from "./workspace/useWorkspace";
 export { HttpCoreClient } from "./api/coreClient";
 export type { CoreClient, StructureInput } from "./api/coreClient";

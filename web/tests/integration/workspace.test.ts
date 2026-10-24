@@ -22,6 +22,11 @@ import {
   structureInput,
 } from "../support/workbenchFixtures";
 import {
+  bannerFailure,
+  currentArchive,
+  currentExplain,
+} from "../../src/workspace/pipelineStatus";
+import {
   createWorkspace,
   currentOrderings,
 } from "../../src/workspace/workspace";
@@ -140,11 +145,13 @@ describe("Workspace", () => {
     expect(core.inspectedInputs).toEqual([structureInput]);
     expect(workspace.getSnapshot()).toMatchObject({
       structureInput,
-      attemptedStructureInput: null,
       inspection,
+      inspectFailure: null,
       draft,
+      reviewed: null,
+      explain: null,
+      preview: null,
       operation: null,
-      failure: null,
     });
   });
 
@@ -169,21 +176,61 @@ describe("Workspace", () => {
       input: replacementInput,
     });
     obsolete.reject(
-      new CoreFailure("invalid_structure", "Obsolete source failed", false),
+      new CoreFailure("invalid_structure", "Obsolete source failed"),
     );
     await first;
 
     expect(workspace.getSnapshot()).toMatchObject({
-      attemptedStructureInput: replacementInput,
       operation: "inspect",
-      failure: null,
+      inspectFailure: null,
     });
     replacement.resolve(inspection);
     await second;
     expect(workspace.getSnapshot()).toMatchObject({
       structureInput: replacementInput,
       operation: null,
-      failure: null,
+      inspectFailure: null,
+    });
+  });
+
+  it("keeps the open structure when another fails to open, and Retry opens the one that failed", async () => {
+    const unreadable = new CoreFailure(
+      "invalid_structure",
+      "Unreadable structure.",
+      {},
+      422,
+    );
+    const core = new CoreStub();
+    core.inspectionResults = [
+      Promise.resolve(inspection),
+      Promise.reject(unreadable),
+      Promise.resolve(inspection),
+    ];
+    const workspace = createWorkspace(core);
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+
+    await workspace.dispatch({ type: "source.open", input: replacementInput });
+
+    expect(workspace.getSnapshot()).toMatchObject({
+      structureInput,
+      inspectFailure: { input: replacementInput, failure: unreadable },
+    });
+    expect(bannerFailure(workspace.getSnapshot())).toEqual({
+      operation: "inspect",
+      failure: unreadable,
+    });
+
+    await workspace.dispatch({ type: "failure.retry", operation: "inspect" });
+
+    expect(core.inspectedInputs).toEqual([
+      structureInput,
+      replacementInput,
+      replacementInput,
+    ]);
+    expect(workspace.getSnapshot()).toMatchObject({
+      structureInput: replacementInput,
+      inspectFailure: null,
     });
   });
 
@@ -197,11 +244,15 @@ describe("Workspace", () => {
     await workspace.dispatch({ type: "review.compute" });
 
     expect(core.explainCalls).toEqual([baseRequest()]);
-    expect(workspace.getSnapshot()).toMatchObject({
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot).toMatchObject({
       reviewed: explainResult,
-      outOfDate: false,
       operation: null,
-      failure: null,
+    });
+    expect(currentExplain(snapshot)).toEqual({
+      key: { input: structureInput, revision: snapshot.revision },
+      status: "result",
+      value: explainResult,
     });
   });
 
@@ -218,11 +269,13 @@ describe("Workspace", () => {
       overrides: { k_grid: [5, 5, 5] },
     });
 
-    expect(workspace.getSnapshot()).toMatchObject({
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot).toMatchObject({
       draft: { overrides: { k_grid: [5, 5, 5] } },
       reviewed: explainResult,
-      outOfDate: true,
     });
+    // The review on screen is of the draft before the edit.
+    expect(currentExplain(snapshot)).toBeNull();
   });
 
   it("sends only the overrides that apply to the draft's task", async () => {
@@ -279,7 +332,6 @@ describe("Workspace", () => {
     const failure = new CoreFailure(
       "advice_incomplete",
       "Core failed temporarily.",
-      false,
     );
     const replacementResult: ExplainResult = {
       ...explainResult,
@@ -309,21 +361,22 @@ describe("Workspace", () => {
     });
     await workspace.dispatch({ type: "review.compute" });
 
-    await workspace.dispatch({ type: "failure.retry" });
+    await workspace.dispatch({ type: "failure.retry", operation: "explain" });
 
     expect(core.explainCalls).toHaveLength(3);
-    expect(workspace.getSnapshot()).toMatchObject({
-      reviewed: replacementResult,
-      outOfDate: false,
-      failure: null,
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot.reviewed).toBe(replacementResult);
+    expect(currentExplain(snapshot)).toMatchObject({
+      status: "result",
+      value: replacementResult,
     });
+    expect(bannerFailure(snapshot)).toBeNull();
   });
 
   it("preserves the old review when recomputation fails", async () => {
     const failure = new CoreFailure(
       "advice_incomplete",
       "Core failed temporarily.",
-      false,
     );
     const core = new CoreStub();
     core.explainResults = [
@@ -341,12 +394,16 @@ describe("Workspace", () => {
 
     await workspace.dispatch({ type: "review.compute" });
 
-    expect(workspace.getSnapshot()).toMatchObject({
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot).toMatchObject({
       reviewed: explainResult,
-      outOfDate: true,
       operation: null,
+    });
+    expect(currentExplain(snapshot)).toEqual({
+      key: { input: structureInput, revision: snapshot.revision },
+      status: "failure",
       failure,
-      failureOperation: "explain",
+      dismissed: false,
     });
   });
 
@@ -369,11 +426,8 @@ describe("Workspace", () => {
     expect(core.archiveCalls).toEqual([baseRequest()]);
     expect(saveArchive).toHaveBeenCalledOnce();
     expect(saveArchive.mock.calls[0]?.[0]).toBe(archive);
-    expect(workspace.getSnapshot()).toMatchObject({
-      lastDownload: archive,
-      operation: null,
-      failure: null,
-    });
+    expect(currentArchive(workspace.getSnapshot())).toBe(archive);
+    expect(workspace.getSnapshot().operation).toBeNull();
   });
 
   it("retries a failed automatic preview without saving the archive", async () => {
@@ -382,7 +436,6 @@ describe("Workspace", () => {
     const unavailable = new CoreFailure(
       "http_error",
       "The Goldilocks Core server rejected the request (503).",
-      true,
       { status: 503 },
       503,
     );
@@ -399,21 +452,173 @@ describe("Workspace", () => {
     await workspace.dispatch({ type: "source.open", input: structureInput });
     await workspace.dispatch({ type: "review.compute" });
     await workspace.dispatch({ type: "review.refreshArchive" });
-    expect(workspace.getSnapshot()).toMatchObject({
-      lastDownload: null,
+    expect(bannerFailure(workspace.getSnapshot())).toEqual({
+      operation: "preview",
       failure: unavailable,
-      failureOperation: "preview",
     });
 
-    await workspace.dispatch({ type: "failure.retry" });
+    await workspace.dispatch({ type: "failure.retry", operation: "preview" });
 
     expect(saveArchive).not.toHaveBeenCalled();
     expect(core.archiveCalls).toEqual([baseRequest(), baseRequest()]);
+    const snapshot = workspace.getSnapshot();
+    expect(currentArchive(snapshot)).toBe(archive);
+    expect(bannerFailure(snapshot)).toBeNull();
+    expect(snapshot.operation).toBeNull();
+  });
+
+  it("keeps a refused preview as its revision's outcome, so Dismiss and Download send no /run", async () => {
+    // #150: a 422 from the automatic /run was only a dismissible banner.
+    // Dismiss cleared it, so the auto-preview sent the same /run again.
+    const refused = new CoreFailure(
+      "generation_error",
+      "Rutile TiO2 cannot be generated.",
+      {},
+      422,
+    );
+    const core = new CoreStub();
+    core.explainResults = [Promise.resolve(explainResult)];
+    core.archiveResults = [
+      Promise.reject(refused),
+      Promise.resolve(buildArchive()),
+    ];
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const workspace = createWorkspace(core, saveArchive);
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({ type: "review.compute" });
+    await workspace.dispatch({ type: "review.refreshArchive" });
+
+    await workspace.dispatch({ type: "failure.dismiss", operation: "preview" });
+    await workspace.dispatch({ type: "review.download" });
+    // What the automatic preview dispatches once nothing is in flight.
+    await workspace.dispatch({ type: "review.refreshArchive" });
+
+    expect(core.archiveCalls).toEqual([baseRequest()]);
+    expect(saveArchive).not.toHaveBeenCalled();
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot.preview).toEqual({
+      key: { input: structureInput, revision: snapshot.revision },
+      status: "failure",
+      failure: refused,
+      dismissed: true,
+    });
+  });
+
+  it("keeps a failed /explain for its revision until Retry sends it once", async () => {
+    // #150: Dismiss cleared the failure, so the same /explain went out again.
+    const rejected = new CoreFailure(
+      "invalid_setting",
+      "is_metal must be metal or non_metal.",
+      {},
+      422,
+    );
+    const core = new CoreStub();
+    core.explainResults = [
+      Promise.reject(rejected),
+      Promise.resolve(explainResult),
+    ];
+    const workspace = createWorkspace(core, vi.fn());
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({ type: "review.compute" });
+
+    await workspace.dispatch({ type: "failure.dismiss", operation: "explain" });
+    // What the automatic recompute dispatches once nothing is in flight.
+    await workspace.dispatch({ type: "review.compute" });
+    expect(core.explainCalls).toHaveLength(1);
+
+    await workspace.dispatch({ type: "failure.retry", operation: "explain" });
+    // The retried /explain succeeded: nothing is left to retry.
+    await workspace.dispatch({ type: "failure.retry", operation: "explain" });
+
+    expect(core.explainCalls).toEqual([baseRequest(), baseRequest()]);
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot).toMatchObject({
+      reviewed: explainResult,
+      explain: {
+        key: { input: structureInput, revision: snapshot.revision },
+        status: "result",
+        value: explainResult,
+      },
+    });
+  });
+
+  it("sends a new /explain when the same structure input is opened again after a failure", async () => {
+    // #150: a failed /explain is its draft's outcome and is not sent again.
+    // An embedder can open the very same StructureInput object again; the
+    // revision never repeats, so the old failure is not the new draft's.
+    const core = new CoreStub();
+    core.inspectionResults = [
+      Promise.resolve(inspection),
+      Promise.resolve(inspection),
+    ];
+    core.explainResults = [
+      Promise.reject(
+        new CoreFailure("advice_incomplete", "Core failed.", {}, 422),
+      ),
+      Promise.resolve(explainResult),
+      Promise.resolve(explainResult),
+    ];
+    const workspace = createWorkspace(core, vi.fn());
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({ type: "review.compute" });
+    await workspace.dispatch({ type: "review.compute" });
+    expect(core.explainCalls).toHaveLength(1);
+    const failedRevision = workspace.getSnapshot().revision;
+
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({ type: "review.compute" });
+
+    expect(core.explainCalls).toHaveLength(2);
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot.revision).toBeGreaterThan(failedRevision);
+    expect(snapshot).toMatchObject({ structureInput, reviewed: explainResult });
+  });
+
+  it("keeps counting revisions across reset, so no key repeats", async () => {
+    const core = new CoreStub();
+    core.inspectionResults = [
+      Promise.resolve(inspection),
+      Promise.resolve(inspection),
+    ];
+    const workspace = createWorkspace(core, vi.fn());
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    const opened = workspace.getSnapshot().revision;
+
+    await workspace.dispatch({ type: "workspace.reset" });
+    expect(workspace.getSnapshot().revision).toBe(opened);
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+
+    expect(workspace.getSnapshot().revision).toBeGreaterThan(opened);
+  });
+
+  it("sends no /run for a draft whose /explain verdict blocks", async () => {
+    // #165: /explain returns the reasons /run would refuse for, so the
+    // preview /run of that draft could only fail.
+    const blocked: ExplainResult = {
+      ...explainResult,
+      blocking: ["npool=7 does not divide the 8 MPI tasks."],
+    };
+    const core = new CoreStub();
+    core.explainResults = [Promise.resolve(blocked)];
+    core.archiveResults = [Promise.resolve(buildArchive())];
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const workspace = createWorkspace(core, saveArchive);
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({ type: "review.compute" });
+
+    await workspace.dispatch({ type: "review.refreshArchive" });
+    await workspace.dispatch({ type: "review.download" });
+
+    expect(core.archiveCalls).toEqual([]);
+    expect(saveArchive).not.toHaveBeenCalled();
     expect(workspace.getSnapshot()).toMatchObject({
-      lastDownload: archive,
-      operation: null,
-      failure: null,
-      failureOperation: null,
+      reviewed: blocked,
+      preview: null,
     });
   });
 
@@ -432,9 +637,8 @@ describe("Workspace", () => {
     expect(core.archiveCalls).toEqual([]);
     expect(saveArchive).not.toHaveBeenCalled();
     expect(workspace.getSnapshot()).toMatchObject({
-      lastDownload: null,
+      preview: null,
       operation: null,
-      failure: null,
     });
   });
 
@@ -561,7 +765,7 @@ describe("Workspace", () => {
       input: replacementInput,
     });
     unreadable.reject(
-      new CoreFailure("invalid_structure", "Unreadable structure.", false),
+      new CoreFailure("invalid_structure", "Unreadable structure."),
     );
     await failedOpen;
     expect(signal?.aborted).toBe(false);
@@ -598,7 +802,7 @@ describe("Workspace", () => {
       outcome: "fails",
       settle: (archive: Deferred<ArchiveDownload>) => {
         archive.reject(
-          new CoreFailure("advice_incomplete", "afm-1 is incomplete.", false),
+          new CoreFailure("advice_incomplete", "afm-1 is incomplete."),
         );
       },
       saved: 0,
@@ -723,10 +927,12 @@ describe("Workspace", () => {
     await workspace.dispatch({ type: "review.download" });
 
     // The archive in hand belongs to the draft before the edit.
-    expect(workspace.getSnapshot()).toMatchObject({
-      lastDownload: archive,
-      outOfDate: true,
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot.preview).toMatchObject({
+      key: { input: structureInput, revision: snapshot.revision - 1 },
+      value: archive,
     });
+    expect(currentArchive(snapshot)).toBeNull();
     expect(saveArchive).not.toHaveBeenCalled();
     expect(core.archiveCalls).toHaveLength(1);
   });
@@ -755,6 +961,10 @@ describe("Workspace", () => {
     await workspace.dispatch({ type: "workspace.start" });
     await workspace.dispatch({ type: "source.open", input: structureInput });
     await workspace.dispatch({ type: "review.compute" });
+    await workspace.dispatch({
+      type: "draft.patch",
+      overrides: { k_grid: [5, 5, 5] },
+    });
 
     const computing = workspace.dispatch({ type: "review.compute" });
     const replacing = workspace.dispatch({
@@ -769,6 +979,7 @@ describe("Workspace", () => {
     expect(workspace.getSnapshot()).toMatchObject({
       structureInput: replacementInput,
       reviewed: null,
+      explain: null,
       operation: null,
     });
   });
@@ -795,12 +1006,13 @@ describe("Workspace", () => {
     expect(workspace.getSnapshot()).toMatchObject({
       capabilities,
       structureInput: null,
-      attemptedStructureInput: null,
       inspection: null,
+      inspectFailure: null,
       draft: null,
       reviewed: null,
+      explain: null,
+      preview: null,
       operation: null,
-      failure: null,
     });
   });
 
@@ -808,20 +1020,25 @@ describe("Workspace", () => {
     const failure = new CoreFailure(
       "assets_unavailable",
       "Runtime assets are unavailable.",
-      true,
     );
     const core = new CoreStub();
     core.capabilitiesResult = Promise.reject(failure);
     const workspace = createWorkspace(core);
     await workspace.dispatch({ type: "workspace.start" });
 
-    await workspace.dispatch({ type: "failure.dismiss" });
+    await workspace.dispatch({
+      type: "failure.dismiss",
+      operation: "capabilities",
+    });
 
     expect(workspace.getSnapshot()).toMatchObject({
       capabilities: null,
-      failure,
-      failureOperation: "capabilities",
+      startupFailure: failure,
       operation: null,
+    });
+    expect(bannerFailure(workspace.getSnapshot())).toEqual({
+      operation: "capabilities",
+      failure,
     });
   });
 
@@ -830,7 +1047,6 @@ describe("Workspace", () => {
     const failure = new CoreFailure(
       "assets_unavailable",
       "Runtime assets are unavailable.",
-      true,
     );
     core.capabilitiesResult = Promise.reject(failure);
     const workspace = createWorkspace(core);
@@ -840,16 +1056,17 @@ describe("Workspace", () => {
     expect(workspace.getSnapshot()).toMatchObject({
       capabilities: null,
       operation: null,
-      failure,
-      failureOperation: "capabilities",
+      startupFailure: failure,
     });
 
     core.capabilitiesResult = Promise.resolve(capabilities);
-    await workspace.dispatch({ type: "failure.retry" });
+    await workspace.dispatch({
+      type: "failure.retry",
+      operation: "capabilities",
+    });
     expect(workspace.getSnapshot()).toMatchObject({
       capabilities,
-      failure: null,
-      failureOperation: null,
+      startupFailure: null,
     });
   });
 
@@ -865,7 +1082,7 @@ describe("Workspace", () => {
     expect(workspace.getSnapshot()).toMatchObject({
       capabilities: null,
       operation: "capabilities",
-      failure: null,
+      startupFailure: null,
     });
     pendingCapabilities.resolve(capabilities);
     await starting;
@@ -874,7 +1091,7 @@ describe("Workspace", () => {
     expect(workspace.getSnapshot()).toMatchObject({
       capabilities,
       operation: null,
-      failure: null,
+      startupFailure: null,
     });
   });
 
@@ -889,7 +1106,7 @@ describe("Workspace", () => {
     expect(workspace.getSnapshot()).toMatchObject({
       capabilities,
       operation: null,
-      failure: null,
+      startupFailure: null,
     });
   });
 });

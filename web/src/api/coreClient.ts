@@ -273,7 +273,6 @@ export class CoreFailure extends Error {
   constructor(
     readonly kind: string,
     message: string,
-    readonly retryable: boolean,
     readonly details: Readonly<Record<string, unknown>> = {},
     readonly status: number | null = null,
     readonly rawResponse?: unknown,
@@ -335,7 +334,6 @@ export class HttpCoreClient implements CoreClient {
           `but this Workbench build expects ${SUPPORTED_VOCABULARY_VERSION}. ` +
           "The frontend and backend were built against different contracts -- " +
           "regenerate the Workbench's API types against this server.",
-        false,
         { serverVocabularyVersion: capabilities.vocabulary_version },
       );
     }
@@ -419,7 +417,6 @@ export class HttpCoreClient implements CoreClient {
         error instanceof Error
           ? `Cannot reach Goldilocks Core: ${error.message}`
           : "Cannot reach Goldilocks Core.",
-        true,
       );
     }
     await ensureSuccess(response);
@@ -473,7 +470,6 @@ async function ensureSuccess(response: Response): Promise<void> {
     throw new CoreFailure(
       error.kind,
       error.message,
-      response.status >= 500,
       error.details ?? {},
       response.status,
       rawResponse,
@@ -482,7 +478,6 @@ async function ensureSuccess(response: Response): Promise<void> {
   throw new CoreFailure(
     "http_error",
     `The Goldilocks Core server rejected the request (${String(response.status)}).`,
-    response.status >= 500,
     { status: response.status },
     response.status,
     rawResponse,
@@ -502,9 +497,7 @@ async function decodeResponse(response: Response): Promise<unknown> {
 // no longer carries `retryable` -- v1's error taxonomy did, v2's
 // `ExpectedFailure.public_error()` deliberately only returns
 // `{kind, message}` (`details` is additive, added ad hoc by validation/
-// readiness handlers). `CoreFailure.retryable` above is now always
-// derived from the HTTP status/network condition, never read off the
-// wire.
+// readiness handlers).
 function isErrorEnvelope(value: unknown): value is {
   readonly error: {
     readonly kind: string;
@@ -563,7 +556,6 @@ function invalidResponse(
   return new CoreFailure(
     "invalid_response",
     `Goldilocks Core ${reason}.`,
-    false,
     {},
     status,
     rawResponse,

@@ -5,13 +5,11 @@ import type { CoreFailure } from "../api/coreClient";
 
 export function FailureBanner({
   failure,
-  retryAvailable,
   dismissAvailable,
   onRetry,
   onDismiss,
 }: {
   readonly failure: CoreFailure;
-  readonly retryAvailable: boolean;
   readonly dismissAvailable: boolean;
   readonly onRetry: () => void;
   readonly onDismiss: () => void;
@@ -28,16 +26,14 @@ export function FailureBanner({
     >
       <Group justify="space-between">
         <Text flex={1}>{failure.message}</Text>
-        {retryAvailable ? (
-          <Button
-            color="red"
-            variant="light"
-            onClick={onRetry}
-            leftSection={<RotateCw aria-hidden="true" size={15} />}
-          >
-            Retry
-          </Button>
-        ) : null}
+        <Button
+          color="red"
+          variant="light"
+          onClick={onRetry}
+          leftSection={<RotateCw aria-hidden="true" size={15} />}
+        >
+          Retry
+        </Button>
       </Group>
     </Alert>
   );

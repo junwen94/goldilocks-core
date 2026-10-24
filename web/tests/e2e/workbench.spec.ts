@@ -410,6 +410,158 @@ test("retries a failed preview without downloading its archive", async ({
   expect(runs).toBe(2);
 });
 
+test("keeps a refused /run as the draft's outcome without re-sending it", async ({
+  page,
+}) => {
+  // #150: after a 422 from the automatic /run, Dismiss re-sent it within about
+  // 200 ms, Download stayed enabled and re-sent it on every click, and the
+  // Bundle card still promised the files.
+  let runs = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/run") runs += 1;
+  });
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.route("**/run", async (route) => {
+    await route.fulfill({
+      status: 422,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          kind: "generation_error",
+          message: "Core cannot generate these inputs.",
+        },
+      }),
+    });
+  });
+  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText("Core cannot generate these inputs.", {
+    timeout: 20_000,
+  });
+  await expect(alert.getByRole("button", { name: "Retry" })).toBeEnabled();
+  const download = page.getByRole("button", { name: "Download (.zip)" });
+  await expect(download).toBeDisabled();
+  await expect(download).toHaveAccessibleDescription(
+    "Input generation failed for the current settings: Core cannot generate these inputs.",
+  );
+  await expect(
+    page.getByRole("status", { name: "Input generation failed" }),
+  ).toContainText("Core cannot generate these inputs.");
+  await expect(
+    page.getByText(
+      "No input files were generated: generation failed for the current settings.",
+    ),
+  ).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  await alert.getByRole("button", { name: "Dismiss error" }).click();
+  await page.waitForTimeout(2_000);
+
+  await expect(alert).toHaveCount(0);
+  await expect(download).toBeDisabled();
+  expect(runs).toBe(1);
+
+  // Retry, here from the card, sends that /run once more and no more.
+  await page.getByRole("button", { name: "Retry generation" }).click();
+  await expect(alert).toContainText("Core cannot generate these inputs.", {
+    timeout: 20_000,
+  });
+  await page.waitForTimeout(1_000);
+  expect(runs).toBe(2);
+});
+
+test("sends no /run for a draft the /explain verdict refuses", async ({
+  page,
+}) => {
+  // #165: /explain returns the reasons /run would refuse for. A refused draft
+  // still got the automatic /run, and Download stayed enabled until its 422.
+  let runs = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/run") runs += 1;
+  });
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
+  await waitForBundleReady(page);
+  await expandAdvisorGroup(page, "Occupations");
+  await pinOverride(
+    page,
+    page.getByRole("combobox", { name: "occupations", exact: true }),
+    "fixed",
+    { occupations: "fixed" },
+  );
+
+  // Fixed occupations for a collinear spin-polarized run need an explicit
+  // tot_magnetization, so check() refuses this draft.
+  await expandAdvisorGroup(page, "Magnetic");
+  const refused = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/explain" &&
+      requestOverrides(response.request()).spin_polarized === true,
+  );
+  await page.getByLabel("spin polarized").selectOption("true");
+  const verdict = (await (await refused).json()) as {
+    readonly blocking: readonly string[];
+  };
+  expect(verdict.blocking).toEqual([
+    expect.stringContaining("tot_magnetization"),
+  ]);
+  const runsBeforeVerdict = runs;
+  await page.waitForTimeout(2_000);
+
+  expect(runs).toBe(runsBeforeVerdict);
+  const download = page.getByRole("button", { name: "Download (.zip)" });
+  await expect(download).toBeDisabled();
+  await expect(download).toHaveAccessibleDescription(
+    `Input files cannot be generated for the current settings: ${verdict.blocking.join(" ")}`,
+  );
+  await expect(
+    page.getByRole("status", { name: "Cannot generate input files" }),
+  ).toContainText(verdict.blocking[0] ?? "");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expectNoAxeViolations(page);
+});
+
+test("keeps a failed listing's error visible and lists again only on Retry", async ({
+  page,
+}) => {
+  // #150: a failed /magnetic-orderings listing was re-sent about 80 times a
+  // second (665 requests in 8.2 s) and its error was never on screen.
+  let listings = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/magnetic-orderings") {
+      listings += 1;
+    }
+  });
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.route(
+    "**/magnetic-orderings",
+    async (route) => {
+      await route.abort();
+    },
+    { times: 1 },
+  );
+  await page.locator('input[type="file"]').setInputFiles(IRON_BCC_CIF);
+  const orderings = page.getByRole("region", { name: "Magnetic orderings" });
+  const error = orderings.getByRole("alert");
+  await expect(error).toContainText("Cannot reach Goldilocks Core", {
+    timeout: 20_000,
+  });
+  await page.waitForTimeout(2_000);
+  await expect(error).toBeVisible();
+  expect(listings).toBe(1);
+
+  await orderings.getByRole("button", { name: "Retry listing" }).click();
+
+  await expect(
+    orderings.getByRole("checkbox", { name: "Select fm for download" }),
+  ).toBeVisible({ timeout: 20_000 });
+  await expect(error).toHaveCount(0);
+  expect(listings).toBe(2);
+});
+
 test("has no Axe violations in empty, failure, and viewer fallback states", async ({
   page,
 }) => {

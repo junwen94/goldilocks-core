@@ -52,10 +52,14 @@ function orderedFiles(
   });
 }
 
+/** The files of `archive`, or `placeholder` (why there are none yet) while
+ * it is null. */
 export function GeneratedInputReview({
   archive,
+  placeholder,
 }: {
   readonly archive: ArchiveDownload | null;
+  readonly placeholder: string;
 }) {
   const contents = useUnzippedArchive(archive);
 
@@ -63,10 +67,7 @@ export function GeneratedInputReview({
     return (
       <div>
         <Title order={3}>Generated inputs</Title>
-        <Text c="dimmed">
-          The generated files will appear here automatically once a
-          recommendation is ready.
-        </Text>
+        <Text c="dimmed">{placeholder}</Text>
       </div>
     );
   }
