@@ -5,8 +5,14 @@ FastAPI or the mcp package installed at all.
 
 from __future__ import annotations
 
-import pytest
+import hashlib
+from importlib.metadata import version
 
+import pytest
+from pymatgen.core import Lattice, Structure
+from support import strict_json
+
+from goldilocks_core.bundle import bundle_files
 from goldilocks_core.server import _handlers
 from goldilocks_core.server.documents import (
     ComputeRequestDocument,
@@ -25,6 +31,37 @@ class TestInspect:
         inspection = _handlers.inspect(document)
 
         assert inspection["structure"]["reduced_formula"] == "Si"
+
+    def test_site_labels_are_the_keys_starting_magnetization_takes(self) -> None:
+        """#185: the labels /inspect reports are the keys a
+        starting_magnetization on the same structure takes, and
+        records.magnetic lists them (no pseudopotential table needed: the
+        seeds fall back to the flat fraction)."""
+        nio = Structure(
+            Lattice.from_parameters(2.95, 2.95, 2.95, 60, 60, 60),
+            ["Ni", "O"],
+            [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+            labels=["Ni1", "O1"],
+        )
+        content = nio.to(fmt="cif")
+
+        inspection = _handlers.inspect(
+            InlineStructureDocument(structure_content=content)
+        )
+        labels = [site["label"] for site in inspection["structure"]["sites"]]
+        result = _handlers.explain(
+            ComputeRequestDocument(
+                structure_content=content,
+                hpc="scarf",
+                overrides={"starting_magnetization": {labels[0]: 0.5}},
+            )
+        )
+
+        assert labels == ["Ni1", "O1"]
+        magnetic = result["records"]["magnetic"]
+        assert magnetic["value"]["site_labels"] == labels
+        assert magnetic["value"]["human_seeded_labels"] == ["Ni"]
+        assert magnetic["value"]["starting_magnetization"] == {"Ni": 0.5, "O": 0.1}
 
 
 class TestMagneticOrderings:
@@ -73,7 +110,7 @@ class TestExplain:
         assert result["records"]["functional"]["status"] == "resolved"
         assert isinstance(result["warnings"], list)
         assert all(
-            warning.keys() == {"code", "level", "category", "message"}
+            warning.keys() == {"code", "level", "category", "message", "record"}
             for warning in result["warnings"]
         )
 
@@ -206,6 +243,53 @@ class TestRun:
 
         assert summary["records"]["functional"]["value"] == "PBE"
         assert summary["records"]["functional"]["source"] == "human"
+
+    @pytest.mark.parametrize(
+        ("task", "overrides"),
+        [
+            ("scf_single_point", {"k_distance": 0.2}),
+            ("dos", {"k_distance": 0.2, "steps.dos.delta_e": 0.05}),
+            ("relax", {"nstep": 123}),
+            ("vc-relax", {"press": 10.0, "steps.vc-relax.nstep": 50}),
+        ],
+    )
+    def test_the_manifest_records_the_request_as_submitted(
+        self, silicon_fixture_table, silicon_cif, task, overrides
+    ) -> None:
+        """#176: goldilocks.json named no code, task, engine version,
+        overrides or input structure. Each task's bundle now records the
+        request it answers: the overrides exactly as the body sent them and
+        the sha256 of the submitted structure_content."""
+        document = ComputeRequestDocument(
+            structure_content=silicon_cif,
+            structure_name="Si.cif",
+            hpc="scarf",
+            task=task,
+            overrides=overrides,
+        )
+
+        _summary, bundle_input = _handlers.run(document)
+
+        (manifest,) = (
+            strict_json(file["content"])
+            for file in bundle_files(bundle_input)
+            if file["path"] == "goldilocks.json"
+        )
+        content = silicon_cif.encode("utf-8")
+        assert manifest["schema_version"] == 2
+        assert manifest["request"] == {
+            "code": "quantum_espresso",
+            "task": task,
+            "hpc": "scarf",
+            "core_version": version("goldilocks-core"),
+            "overrides": overrides,
+            "structure": {
+                "name": "Si.cif",
+                "format": "cif",
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size_bytes": len(content),
+            },
+        }
 
 
 class TestBuildReadiness:

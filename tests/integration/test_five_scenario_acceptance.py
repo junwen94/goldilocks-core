@@ -154,7 +154,9 @@ class TestWrittenFrame:
         advice = advise(
             mc3d_42058_silicon(),
             hpc=_hpc(),
-            overrides=build_overrides({"k_grid": [10, 10, 10]}),
+            overrides=build_overrides(
+                {"k_grid": [10, 10, 10]}, task="scf_single_point"
+            ),
             store=store,
         )
         report = check(advice)
@@ -198,7 +200,7 @@ class TestWrittenFrame:
         positions = [_card(deck, "ATOMIC_POSITIONS crystal", 2) for deck in decks]
         assert cells[0] == cells[1]
         assert positions[0] == positions[1]
-        assert advice.records()["magnetic"].value["frame"]["rotated"] is True
+        assert advice.records()["magnetic"].value.frame.rotated is True
 
 
 class TestScenario2ExplicitFieldOverride:

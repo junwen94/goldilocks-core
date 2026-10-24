@@ -13,7 +13,7 @@ from goldilocks_core.advisors.hubbard_u import (
 )
 from goldilocks_core.analysis.composition import composition
 from goldilocks_core.analysis.needs_correlation import needs_correlation
-from goldilocks_core.resolution import Blocked
+from goldilocks_core.resolution import Blocked, Provenance, Resolved
 
 _MP = ("Sci. Rep. 11, 15496", "10.1038/s41598-021-94550-5")
 _MP_RELAX_SET = ("MPRelaxSet", "10.1103/PhysRevB.84.045115")
@@ -434,3 +434,75 @@ def test_user_u_keeps_present_elements_and_reports_absent_ones() -> None:
     assert "Fe" in message
     assert "Ni" not in message
     assert "No +U is applied" not in message
+
+
+def test_no_correlation_from_the_fact_stays_heuristic_and_names_it() -> None:
+    """#173: CeO2 with needs_correlation=false gave the fact 'human' and the
+    hubbard record 'heuristic' with no link to it. The record follows the
+    fact, keeps 'heuristic' and names it."""
+    ceria = Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(5.41), ["Ce", "O"], [[0, 0, 0], [0.25, 0.25, 0.25]]
+    )
+    fact_off = Resolved(False, Provenance(source="human"))
+
+    state = hubbard_u(ceria, fact_off, "PBEsol")
+
+    assert state.value.u_values == ()
+    assert state.source == "heuristic"
+    assert state.provenance.field_sources == {"needs_correlation": "heuristic"}
+    assert state.provenance.derived_from == ("needs_correlation",)
+
+
+def test_the_table_from_the_fact_names_it() -> None:
+    state = _hubbard(_rock_salt("Ni"))
+
+    assert state.source == "heuristic"
+    assert state.provenance.derived_from == ("needs_correlation",)
+
+
+def test_a_hybrid_functional_names_the_functional_over_any_request() -> None:
+    state = _hubbard(
+        _rock_salt("Ni"),
+        HYBRID_FUNCTIONAL,
+        human=HubbardUHumanInput(needs_correlation=True),
+    )
+
+    assert state.value.u_values == ()
+    assert state.source == "heuristic"
+    assert state.provenance.field_sources == {"needs_correlation": "heuristic"}
+    assert state.provenance.derived_from == ("functional",)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "field_sources"),
+    [
+        (
+            {"human": HubbardUHumanInput(needs_correlation=False)},
+            {"needs_correlation": "human"},
+        ),
+        (
+            {"human": HubbardUHumanInput(u_by_element={"Ni": 5.0})},
+            {"u_by_element": "human"},
+        ),
+        (
+            {
+                "human": HubbardUHumanInput(needs_correlation=True),
+                "llm": HubbardULlmInput(needs_correlation=False),
+            },
+            {"needs_correlation": "human"},
+        ),
+        (
+            {"llm": HubbardULlmInput(needs_correlation=False)},
+            {"needs_correlation": "llm"},
+        ),
+    ],
+    ids=["human-off", "u_by_element", "human-over-llm", "llm-off"],
+)
+def test_a_requested_hubbard_choice_reads_its_tier(
+    overrides: dict, field_sources: dict[str, str]
+) -> None:
+    state = _hubbard(_rock_salt("Ni"), **overrides)
+
+    assert state.provenance.field_sources == field_sources
+    assert state.source == next(iter(field_sources.values()))
+    assert state.provenance.derived_from == ()

@@ -32,9 +32,12 @@ module into one file. Split by pipeline phase instead, matching
 - ``_system.py`` -- system-level advisors (epic 5), mirrors
   ``system_settings.SystemSettings``'s own field list one layer up
 - ``_step.py`` -- per-step advisors (epics 6-7), mirrors
-  ``step_settings.PwSettings``'s own field list one layer up
+  ``step_settings.PwSettings``'s own field list one layer up, and one
+  step's request overrides (``StepOverrides``, routed per step, #154)
+- ``_step_protocol.py`` -- ``StepProtocol``, a task's own defaults for one
+  of its steps, a tier below the request (the dos nscf protocol, #174)
 - ``_advice.py`` -- ``Advice``/``RunOverrides``, composing the three
-  phases above
+  phases above; ``RunOverrides`` holds one task's overrides, per step
 - ``_pipeline.py`` -- ``advise()``/``check()``, and ``advise_steps``,
   which advises every ``pw.x`` step of one task with one shared job
 - ``_generate.py`` -- ``generate()``, the hard-fail boundary
@@ -86,21 +89,32 @@ from goldilocks_core.service._relax import (
     render_submission_relax,
     to_bundle_input_relax,
 )
-from goldilocks_core.service._step import RelaxOverrides, StepAdvice, StepOverrides
+from goldilocks_core.service._step import (
+    OVERRIDES_WARNING_CATALOGUE,
+    DosOverrides,
+    RelaxOverrides,
+    StepAdvice,
+    StepOverrides,
+    applies_to_multiple_steps,
+)
 from goldilocks_core.service._step_kpoints import ElectronicStepAdvice, KpointsOverrides
 from goldilocks_core.service._step_resources import (
+    JobOverrides,
     ResourceOverrides,
     ResourceStepAdvice,
 )
 from goldilocks_core.service._system import SystemAdvice, SystemOverrides
 
 __all__ = [
+    "OVERRIDES_WARNING_CATALOGUE",
     "Advice",
     "AdviceIncomplete",
     "AnalysisFacts",
     "AnalysisOverrides",
     "DosAdvice",
+    "DosOverrides",
     "ElectronicStepAdvice",
+    "JobOverrides",
     "KpointsOverrides",
     "MagneticOrderingCandidate",
     "MagneticOrderingsReport",
@@ -117,6 +131,7 @@ __all__ = [
     "advise",
     "advise_dos",
     "advise_relax",
+    "applies_to_multiple_steps",
     "check",
     "check_dos",
     "check_relax",

@@ -446,10 +446,11 @@ transfer_bytes = 59513522
 installed_bytes = 166288427
 note = """
 PBE is the functional SSSP actually tested: the cutoffs here were measured with the SSSP
-protocol rather than inherited. Fetched from the Materials Cloud Archive, never redistributed
-by us -- the files carry a mix of licences including GPL-3.0, so a user is entitled to know
-what is landing on their disk. No fully relativistic SSSP set exists, so no SSSP table can
-satisfy spin-orbit coupling."""
+protocol rather than inherited. Fetched from the Materials Cloud Archive. The files carry a
+mix of licences including GPL-3.0, so a user is entitled to know what is landing on their
+disk, and a bundle that ships them ships the record's LICENSE.txt beside them, as
+licences/<table-id>.txt. No fully relativistic SSSP set exists, so no SSSP table can satisfy
+spin-orbit coupling."""
 elements = [
   "Ac", "Ag", "Al", "Am", "Ar", "As", "At", "Au", "B", "Ba", "Be", "Bi",
   "Bk", "Br", "C", "Ca", "Cd", "Ce", "Cf", "Cl", "Cm", "Co", "Cr", "Cs",
@@ -498,10 +499,11 @@ transfer_bytes = 62963841
 installed_bytes = 176410606
 note = """
 PBE is the functional SSSP actually tested: the cutoffs here were measured with the SSSP
-protocol rather than inherited. Fetched from the Materials Cloud Archive, never redistributed
-by us -- the files carry a mix of licences including GPL-3.0, so a user is entitled to know
-what is landing on their disk. No fully relativistic SSSP set exists, so no SSSP table can
-satisfy spin-orbit coupling."""
+protocol rather than inherited. Fetched from the Materials Cloud Archive. The files carry a
+mix of licences including GPL-3.0, so a user is entitled to know what is landing on their
+disk, and a bundle that ships them ships the record's LICENSE.txt beside them, as
+licences/<table-id>.txt. No fully relativistic SSSP set exists, so no SSSP table can satisfy
+spin-orbit coupling."""
 elements = [
   "Ac", "Ag", "Al", "Am", "Ar", "As", "At", "Au", "B", "Ba", "Be", "Bi",
   "Bk", "Br", "C", "Ca", "Cd", "Ce", "Cf", "Cl", "Cm", "Co", "Cr", "Cs",
@@ -551,11 +553,12 @@ installed_bytes = 169202220
 note = """
 SSSP does not guarantee its own PBEsol library: these pseudopotentials reuse the PBE ones'
 input parameters and cutoffs and were not tested with the SSSP protocol. Fetched from the
-Materials Cloud Archive, never redistributed by us -- the files carry a mix of licences
-including GPL-3.0, so a user is entitled to know what is landing on their disk. No fully
-relativistic SSSP set exists, so no SSSP table can satisfy spin-orbit coupling. 1.3.0, not
-the current 2.0, which publishes no per-file checksums, is not on the Archive, and drops
-eight actinides -- see docs/pseudopotentials.md."""
+Materials Cloud Archive. The files carry a mix of licences including GPL-3.0, so a user is
+entitled to know what is landing on their disk, and a bundle that ships them ships the
+record's LICENSE.txt beside them, as licences/<table-id>.txt. No fully relativistic SSSP set
+exists, so no SSSP table can satisfy spin-orbit coupling. 1.3.0, not the current 2.0, which
+publishes no per-file checksums, is not on the Archive, and drops eight actinides -- see
+docs/pseudopotentials.md."""
 elements = [
   "Ac", "Ag", "Al", "Am", "Ar", "As", "At", "Au", "B", "Ba", "Be", "Bi",
   "Bk", "Br", "C", "Ca", "Cd", "Ce", "Cf", "Cl", "Cm", "Co", "Cr", "Cs",
@@ -605,9 +608,10 @@ installed_bytes = 179311462
 note = """
 SSSP does not guarantee its own PBEsol library: these pseudopotentials reuse the PBE ones'
 input parameters and cutoffs and were not tested with the SSSP protocol. Fetched from the
-Materials Cloud Archive, never redistributed by us -- the files carry a mix of licences
-including GPL-3.0, so a user is entitled to know what is landing on their disk. No fully
-relativistic SSSP set exists, so no SSSP table can satisfy spin-orbit coupling."""
+Materials Cloud Archive. The files carry a mix of licences including GPL-3.0, so a user is
+entitled to know what is landing on their disk, and a bundle that ships them ships the
+record's LICENSE.txt beside them, as licences/<table-id>.txt. No fully relativistic SSSP set
+exists, so no SSSP table can satisfy spin-orbit coupling."""
 elements = [
   "Ac", "Ag", "Al", "Am", "Ar", "As", "At", "Au", "B", "Ba", "Be", "Bi",
   "Bk", "Br", "C", "Ca", "Cd", "Ce", "Cf", "Cl", "Cm", "Co", "Cr", "Cs",

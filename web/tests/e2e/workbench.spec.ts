@@ -130,6 +130,8 @@ test("prepares and downloads a real Core calculation", async ({ page }) => {
   verifyArchive(entries, {
     tableId: "pseudodojo-pbesol-efficiency-sr",
     tableVersion: "0.4",
+    structureName: "Si.cif",
+    structureBytes: new Uint8Array(await readFile(SILICON_CIF)),
   });
   expect(runRequests.length).toBeGreaterThanOrEqual(1);
   const lastRun = runRequests[runRequests.length - 1];
@@ -178,6 +180,37 @@ test("applies a paired smearing treatment and width override", async ({
   const input = page.getByLabel("Generated input scf.in");
   await expect(input).toContainText("smearing = 'cold'");
   await expect(input).toContainText("degauss = 0.02");
+});
+
+test("corrects the metallicity classification from the Analysis card", async ({
+  page,
+}) => {
+  // #139: every value the is_metal select offers was a 422 that disabled
+  // Download.
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
+  await waitForBundleReady(page);
+
+  const corrected = page.waitForResponse((response) => {
+    if (new URL(response.url()).pathname !== "/explain") return false;
+    const body = response.request().postDataJSON() as {
+      overrides?: Record<string, unknown>;
+    } | null;
+    return body?.overrides?.is_metal === "non_metal";
+  });
+  await page
+    .getByRole("region", { name: "Goldilocks analysis" })
+    .getByRole("combobox", { name: "is metal" })
+    .selectOption("non_metal");
+  expect((await corrected).status()).toBe(200);
+
+  await waitForBundleReady(page);
+  await expect(page.getByText("Check your overrides")).toHaveCount(0);
+  await page.getByRole("button", { name: /^scf\.in/ }).click();
+  await expect(page.getByLabel("Generated input scf.in")).toContainText(
+    "occupations = 'fixed'",
+  );
 });
 
 test("keeps an old Result visible until the recommendation auto-recomputes", async ({
@@ -514,6 +547,8 @@ test("prepares a real Core recommendation from POSCAR", async ({ page }) => {
   verifyArchive(entries, {
     tableId: "sssp-pbesol-efficiency-sr",
     tableVersion: "1.3.0",
+    structureName: "POSCAR",
+    structureBytes: new Uint8Array(Buffer.from(SILICON_POSCAR)),
   });
 });
 
@@ -666,20 +701,24 @@ function verifyArchive(
   expected: {
     readonly tableId: string;
     readonly tableVersion: string;
+    readonly structureName: string;
+    readonly structureBytes: Uint8Array;
   },
 ): void {
-  // Confirmed against a real /run call (respond_with: archive, 2026-09-14):
-  // bundle_files() only ever emits the generation artifacts themselves
-  // (here scf.in + pseudo/<file>), submit.sh, and the three fixed meta
+  // bundle_files() emits the generation artifacts themselves (here
+  // scf.in + pseudo/<file>), the selected table's licence beside the UPFs
+  // (licences/<table-id>.txt, #157), submit.sh, and the three fixed meta
   // files -- v2 never copies the original/canonical structure into the
-  // archive the way v1 did (no source/, structure/, or licences/ paths).
+  // archive the way v1 did (no source/ or structure/ paths).
   const names = new Set(Object.keys(entries));
+  const licence = `licences/${expected.tableId}.txt`;
   for (const required of [
     "README.md",
     "CITATIONS.md",
     "goldilocks.json",
     "scf.in",
     "submit.sh",
+    licence,
   ]) {
     expect(names).toContain(required);
   }
@@ -696,6 +735,15 @@ function verifyArchive(
       };
     };
   };
+  // The request the bundle answers (#176): the uploaded file by name and
+  // the sha256 of its bytes.
+  expect(manifest.schema_version).toBe(2);
+  expect(manifest.request.code).toBe("quantum_espresso");
+  expect(manifest.request.structure).toMatchObject({
+    name: expected.structureName,
+    sha256: sha256(expected.structureBytes),
+    size_bytes: expected.structureBytes.byteLength,
+  });
   expect(manifest.records.pseudo_table?.value?.id).toBe(expected.tableId);
   expect(manifest.records.pseudo_table?.value?.version).toBe(
     expected.tableVersion,
@@ -710,6 +758,12 @@ function verifyArchive(
     expect(names).toContain(path);
     expect(manifest.files[path]?.role).toBe("pseudopotential");
   }
+  expect(
+    Object.entries(manifest.files)
+      .filter(([, facts]) => facts.role === "licence")
+      .map(([name]) => name),
+  ).toEqual([licence]);
+  expect(textEntry(entries, "CITATIONS.md")).toContain(`- \`${licence}\``);
   expect(new Set(Object.keys(manifest.files))).toEqual(
     new Set([...names].filter((name) => name !== "goldilocks.json")),
   );

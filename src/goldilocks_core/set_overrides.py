@@ -23,55 +23,59 @@ values reach `build_overrides` pre-typed and skip coercion entirely --
 `build_overrides` itself is the one transport-agnostic core, matching
 P1/P5: validate identically, fail the same way, regardless of caller.
 
-**`steps.<name>.<key>=value` is accepted but not yet load-bearing, for
-either name in `_STEP_NAMES`** (#33, v2 epic 9, #9): `service`'s own
-per-step advisors get one flat `StepOverrides` for every step of a task
-(`advise_dos` gives its scf and nscf steps the same one, plus the nscf
-protocol defaults), so nothing routes a per-step override to one step. The
-`steps.` prefix here is validated against `_STEP_NAMES` and then
-stripped -- functionally identical to the flat key, because there is
-nowhere else for a per-step override to land, for *either* `scf` or
-`nscf` even though `nscf` is now a real second step (`service/_dos.py`'s
-`dos` task, v2 epic 9, #9): `--set steps.nscf.k_grid=...` no longer
-rejects `nscf` as an unknown step name (it correctly stopped doing
-that once a real `nscf` step existed), but it still applies to *both*
-of a `dos` task's steps, same as the equivalent flat key or a
-`steps.scf.` one -- there is no way yet to scope an override to just
-one step of a multi-step task. Building real per-step routing (giving
-`RunOverrides` a per-step-name override, not one shared `StepOverrides`)
-is real, separate work with only one real multi-step task
-(`dos`) to design it against so far -- the same "don't build a lookup
-table for one entry" reasoning `inputs/task.py` and `steps.py` already
-document for this exact codebase. Design point 2's hard rule ("a flat
-`--set` landing on >1 step must warn") now has a real trigger case
-(`dos`'s scf+nscf) but is not implemented here either -- tracked as a
-known follow-up, not silently dropped.
+**Routed per task** (#154). ``build_overrides(assignments, task=...)`` is
+the only interpreter of ``steps.<step>.<key>``; the steps of a task are
+``plan.expand_task``'s purposes (``scf``; ``relax``; ``vc-relax``; ``scf``,
+``nscf``, ``dos``), and each setting declares the steps it applies to
+(``capabilities.SettingBinding.steps``):
+
+- analysis and system settings describe the system, and job settings the
+  task's one allocation: they are set once per task, flat.
+- a step setting given flat lands on every step of the task it applies to,
+  with an ``overrides.applies_to_multiple_steps`` notice when that is more
+  than one (a dos task's ``k_grid`` reaches its scf and nscf steps);
+  ``steps.<step>.<key>`` lands on that step only and beats the flat value
+  there.
+- a setting that applies to no step of the task (``press`` on an scf), a
+  task-level setting given per step, a step the task does not have, a
+  setting given without a step that the request also sets by step for every
+  step it applies to, and a task that does not exist are refused with
+  ``InvalidSetting``: nothing a request sets is dropped.
 """
 
 from __future__ import annotations
 
 import difflib
 import json
+from collections.abc import Mapping
+from typing import get_args
 
 from pydantic import ValidationError
 
 from goldilocks_core.capabilities import SettingBinding, bindings
 from goldilocks_core.failures import ExpectedFailure
+from goldilocks_core.plan import expand_task
 from goldilocks_core.service import (
     AnalysisOverrides,
+    DosOverrides,
+    JobOverrides,
     KpointsOverrides,
     RelaxOverrides,
     ResourceOverrides,
     RunOverrides,
     StepOverrides,
     SystemOverrides,
+    applies_to_multiple_steps,
 )
+from goldilocks_core.types import CalcTask
 
-_STEP_NAMES = ("scf", "nscf")
-"""Every step name a generation writer exists for (`nscf` added #33, v2
-epic 9, #9, once `dos` made it a real step) -- see this module's own
-docstring on why `steps.<name>.` is validated against this but does not
-yet route anywhere different from a flat key, for either name."""
+_STEP_CLASSES = {
+    "kpoints": KpointsOverrides,
+    "resources": ResourceOverrides,
+    "relax": RelaxOverrides,
+    "dos": DosOverrides,
+}
+"""``StepOverrides``' fields, by the binding branch whose settings fill them."""
 
 _TRUE_STRINGS = {"true", "1", "yes", "on"}
 _FALSE_STRINGS = {"false", "0", "no", "off"}
@@ -92,21 +96,40 @@ def _did_you_mean(key: str, candidates: list[str]) -> str:
     return f"unknown setting {key!r}; run 'goldilocks settings' to see valid keys"
 
 
+def _setting(catalogue: Mapping[str, SettingBinding], key: str) -> SettingBinding:
+    binding = catalogue.get(key)
+    if binding is None:
+        raise InvalidSetting(_did_you_mean(key, list(catalogue)))
+    return binding
+
+
+def split_step_key(key: str) -> tuple[str | None, str]:
+    """``steps.<step>.<key>`` -> ``(step, key)``; any other key ->
+    ``(None, key)``. Raises ``InvalidSetting`` for a ``steps.`` key without
+    both parts; whether the step and the key exist for a task is
+    ``build_overrides``' decision."""
+    if not key.startswith("steps."):
+        return None, key
+    parts = key.split(".", 2)
+    if len(parts) != 3 or not all(parts):
+        raise InvalidSetting(f"malformed steps.<name>.<key> setting: {key!r}")
+    return parts[1], parts[2]
+
+
 def parse_set_flags(raw: list[str]) -> dict[str, str]:
-    """CLI-only: splits repeated `--set KEY=VALUE` flags into a flat
-    dict, handling `steps.<name>.<key>=value` by validating the step
-    name and stripping the prefix -- see this module's own docstring on
-    why that prefix is a no-op today. Raises `InvalidSetting` for
-    malformed flags (no `=`, empty key, or the same key given twice
-    with two different values) -- P5's "validate immediately after
-    parsing" applied to `--set` itself, not just backend options.
+    """CLI-only: splits repeated `--set KEY=VALUE` flags into a dict, each
+    key as given (a ``steps.<step>.<key>`` key included, which
+    ``build_overrides`` routes). Raises `InvalidSetting` for malformed
+    flags (no `=`, empty key, or the same key given twice with two
+    different values) -- P5's "validate immediately after parsing" applied
+    to `--set` itself, not just backend options.
     """
     assignments: dict[str, str] = {}
     for item in raw:
         if "=" not in item:
             raise InvalidSetting(f"--set value {item!r} is not KEY=VALUE")
         raw_key, _, value = item.partition("=")
-        key = _resolve_step_prefix(raw_key.strip())
+        key = raw_key.strip()
         if not key:
             raise InvalidSetting(f"--set value {item!r} has an empty key")
         if key in assignments and assignments[key] != value:
@@ -118,19 +141,22 @@ def parse_set_flags(raw: list[str]) -> dict[str, str]:
     return assignments
 
 
-def _resolve_step_prefix(key: str) -> str:
-    if not key.startswith("steps."):
-        return key
-    parts = key.split(".", 2)
-    if len(parts) != 3:
-        raise InvalidSetting(f"malformed steps.<name>.<key> setting: {key!r}")
-    _steps, step_name, inner_key = parts
-    if step_name not in _STEP_NAMES:
-        available = ", ".join(_STEP_NAMES)
+def config_assignments(document: Mapping[str, object]) -> dict[str, object]:
+    """CLI-only: a ``--config`` TOML document as assignments, its
+    ``[steps.<step>]`` tables as ``steps.<step>.<key>`` keys. Raises
+    ``InvalidSetting`` when ``steps`` is not a table of such tables."""
+    assignments = {key: value for key, value in document.items() if key != "steps"}
+    steps = document.get("steps", {})
+    if not isinstance(steps, dict) or not all(
+        isinstance(table, dict) for table in steps.values()
+    ):
         raise InvalidSetting(
-            f"unknown step {step_name!r} in {key!r}; available steps: {available}"
+            "--config 'steps' must hold [steps.<step>] tables of KEY = VALUE"
         )
-    return inner_key
+    for step, table in steps.items():
+        for key, value in table.items():
+            assignments[f"steps.{step}.{key}"] = value
+    return assignments
 
 
 def coerce_cli_value(binding: SettingBinding, key: str, raw: str) -> object:
@@ -167,68 +193,178 @@ def coerce_cli_value(binding: SettingBinding, key: str, raw: str) -> object:
 
 def coerce_cli_assignments(raw_assignments: dict[str, str]) -> dict[str, object]:
     """`parse_set_flags`'s output, typed -- looks up each key's binding
-    (raising `InvalidSetting` with a did-you-mean suggestion for an
-    unknown one, P3's spirit) and coerces its string value."""
+    (the key after any ``steps.<step>.`` prefix; raising `InvalidSetting`
+    with a did-you-mean suggestion for an unknown one, P3's spirit) and
+    coerces its string value. Keys are kept as given."""
     catalogue = bindings()
     typed: dict[str, object] = {}
     for key, raw in raw_assignments.items():
-        binding = catalogue.get(key)
-        if binding is None:
-            raise InvalidSetting(_did_you_mean(key, list(catalogue)))
-        typed[key] = coerce_cli_value(binding, key, raw)
+        _step, name = split_step_key(key)
+        typed[key] = coerce_cli_value(_setting(catalogue, name), key, raw)
     return typed
 
 
-def build_overrides(assignments: dict[str, object]) -> RunOverrides:
+def build_overrides(
+    assignments: Mapping[str, object], *, task: CalcTask
+) -> RunOverrides:
     """The transport-agnostic core: `assignments` values must already
     be Python-typed (bool/int/float/str/list/dict) -- an HTTP/MCP JSON
     body already is; a CLI caller must run `coerce_cli_assignments`
-    first. Unknown keys raise `InvalidSetting` with a did-you-mean
-    suggestion; a value that doesn't fit its setting's real pydantic
-    contract (wrong enum member, wrong shape) raises `InvalidSetting`
-    with that contract's own validation message."""
-    catalogue = bindings()
-    grouped: dict[tuple[str, str], dict[str, object]] = {}
-    outer_cls: dict[tuple[str, str], type | None] = {}
-    for key, value in assignments.items():
-        binding = catalogue.get(key)
-        if binding is None:
-            raise InvalidSetting(_did_you_mean(key, list(catalogue)))
-        slot = (binding.branch, binding.outer_field)
-        outer_cls[slot] = binding.human_input_cls
-        field_name = binding.inner_field or binding.outer_field
-        grouped.setdefault(slot, {})[field_name] = value
+    first. Each key is routed to the steps of ``task`` it applies to
+    (module docstring), with a notice per flat key landing on several.
 
-    branch_fields: dict[str, dict[str, object]] = {
-        "analysis": {},
-        "system": {},
-        "kpoints": {},
-        "resources": {},
-        "relax": {},
+    Raises `InvalidSetting` for a ``task`` that is not a ``types.CalcTask``,
+    an unknown key (with a did-you-mean suggestion), a key that applies to
+    no step of ``task``, a task-level key given per step, a step ``task``
+    does not have, a key given without a step that the request also sets
+    for every step it applies to, and a value that doesn't fit its
+    setting's real pydantic contract (wrong enum member, wrong shape), with
+    that contract's own validation message."""
+    if task not in get_args(CalcTask):
+        raise InvalidSetting(
+            f"unknown task {task!r}; tasks: {', '.join(get_args(CalcTask))}"
+        )
+    purposes = tuple(step.purpose for step in expand_task(task))
+    catalogue = bindings()
+    task_level: dict[str, object] = {}
+    flat: dict[str, object] = {}
+    by_step: dict[str, dict[str, object]] = {purpose: {} for purpose in purposes}
+    for key, value in assignments.items():
+        step, name = split_step_key(key)
+        binding = _setting(catalogue, name)
+        if step is not None:
+            _check_step(binding, key, step, purposes, task)
+            by_step[step][name] = value
+        elif binding.steps is None:
+            task_level[name] = value
+        else:
+            flat[name] = value
+    landing = {
+        name: _flat_landing(catalogue[name], purposes, task, by_step) for name in flat
     }
-    for (branch, outer_field), field_values in grouped.items():
-        cls = outer_cls[(branch, outer_field)]
-        if cls is None:
-            branch_fields[branch][outer_field] = field_values[outer_field]
-            continue
-        try:
-            branch_fields[branch][outer_field] = cls(**field_values)
-        except ValidationError as error:
-            raise InvalidSetting(
-                f"invalid value(s) for {outer_field!r}: {error}"
-            ) from error
+    for name, steps in landing.items():
+        for step in steps:
+            by_step[step][name] = flat[name]
 
     return RunOverrides(
-        analysis=AnalysisOverrides(**branch_fields["analysis"]),
-        system=SystemOverrides(**branch_fields["system"]),
-        step=StepOverrides(
-            kpoints=KpointsOverrides(**branch_fields["kpoints"]),
-            resources=ResourceOverrides(**branch_fields["resources"]),
-            relax=RelaxOverrides(**branch_fields["relax"]),
+        analysis=AnalysisOverrides(**_fields(catalogue, task_level, "analysis")),
+        system=SystemOverrides(**_fields(catalogue, task_level, "system")),
+        job=JobOverrides(**_fields(catalogue, task_level, "job")),
+        steps={
+            step: _step_overrides(catalogue, values)
+            for step, values in by_step.items()
+            if values
+        },
+        warnings=tuple(
+            applies_to_multiple_steps(name, steps)
+            for name, steps in landing.items()
+            if len(steps) > 1
         ),
     )
 
 
-def build_overrides_from_cli(raw: list[str]) -> RunOverrides:
-    """The full CLI path: `--set` strings in, a ready `RunOverrides` out."""
-    return build_overrides(coerce_cli_assignments(parse_set_flags(raw)))
+def _listing(noun: str, values: tuple[str, ...]) -> str:
+    return f"{noun}{'s' if len(values) > 1 else ''} {', '.join(values)}"
+
+
+def _check_step(
+    binding: SettingBinding,
+    key: str,
+    step: str,
+    purposes: tuple[str, ...],
+    task: CalcTask,
+) -> None:
+    """Raises ``InvalidSetting`` unless ``key`` (``steps.<step>.<setting>``)
+    names a step of ``task`` its setting applies to."""
+    if step not in purposes:
+        raise InvalidSetting(
+            f"unknown step {step!r} in {key!r}; "
+            f"task {task!r} has steps: {', '.join(purposes)}"
+        )
+    if binding.steps is None:
+        raise InvalidSetting(
+            f"{binding.key!r} is set once per task, not per step: "
+            f"drop the 'steps.{step}.' prefix"
+        )
+    if step not in binding.steps:
+        raise InvalidSetting(
+            f"{binding.key!r} does not apply to step {step!r} (in {key!r}); "
+            f"it applies to {_listing('step', binding.steps)}"
+        )
+
+
+def _flat_landing(
+    binding: SettingBinding,
+    purposes: tuple[str, ...],
+    task: CalcTask,
+    by_step: Mapping[str, Mapping[str, object]],
+) -> tuple[str, ...]:
+    """The steps of ``task`` a flat step setting lands on: those it applies
+    to, less those the request set it for by step. Raises
+    ``InvalidSetting`` when it applies to no step of ``task``, or when the
+    request sets it by step for every step it applies to, which leaves the
+    flat value no step to land on."""
+    applicable = tuple(step for step in purposes if step in binding.steps)
+    if not applicable:
+        raise InvalidSetting(
+            f"{binding.key!r} does not apply to task {task!r}; "
+            f"it applies to {_listing('task', binding.tasks)}"
+        )
+    landing = tuple(step for step in applicable if binding.key not in by_step[step])
+    if not landing:
+        raise InvalidSetting(
+            f"{binding.key!r} given without a step reaches no step: the request "
+            f"also sets it for {_listing('step', applicable)} "
+            f"(steps.<step>.{binding.key}); drop one of the two"
+        )
+    return landing
+
+
+def _fields(
+    catalogue: Mapping[str, SettingBinding],
+    values: Mapping[str, object],
+    branch: str,
+) -> dict[str, object]:
+    """The keyword arguments of ``branch``'s composing class for the
+    settings among ``values`` (setting key -> value) in that branch: a plain
+    setting as it is, a ``HumanInput``'s settings validated into one."""
+    grouped: dict[str, dict[str, object]] = {}
+    classes: dict[str, type | None] = {}
+    for key, value in values.items():
+        binding = catalogue[key]
+        if binding.branch != branch:
+            continue
+        classes[binding.outer_field] = binding.human_input_cls
+        field_name = binding.inner_field or binding.outer_field
+        grouped.setdefault(binding.outer_field, {})[field_name] = value
+
+    fields: dict[str, object] = {}
+    for outer_field, field_values in grouped.items():
+        cls = classes[outer_field]
+        if cls is None:
+            fields[outer_field] = field_values[outer_field]
+            continue
+        try:
+            fields[outer_field] = cls(**field_values)
+        except ValidationError as error:
+            raise InvalidSetting(
+                f"invalid value(s) for {outer_field!r}: {error}"
+            ) from error
+    return fields
+
+
+def _step_overrides(
+    catalogue: Mapping[str, SettingBinding], values: Mapping[str, object]
+) -> StepOverrides:
+    return StepOverrides(
+        **{
+            branch: cls(**_fields(catalogue, values, branch))
+            for branch, cls in _STEP_CLASSES.items()
+        }
+    )
+
+
+def build_overrides_from_cli(raw: list[str], *, task: CalcTask) -> RunOverrides:
+    """The full CLI path: `--set` strings in, a ready `RunOverrides` for
+    ``task`` out."""
+    return build_overrides(coerce_cli_assignments(parse_set_flags(raw)), task=task)

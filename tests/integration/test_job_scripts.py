@@ -21,7 +21,7 @@ import json
 
 import pytest
 from pymatgen.core import Lattice, Structure
-from support import sssp_fixture_table_spec
+from support import in_memory_source, sssp_fixture_table_spec
 
 from goldilocks_core.advisors.size import Species, memory_estimate, resource_estimate
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
@@ -68,7 +68,7 @@ def _diamond_silicon() -> Structure:
 @pytest.mark.parametrize("k_grid", [[1, 1, 1], [3, 3, 3]])
 def test_default_scf_leaves_ndiag_to_pw_x(k_grid, tmp_path, monkeypatch) -> None:
     store = _installed_store(tmp_path, monkeypatch)
-    overrides = build_overrides({"k_grid": k_grid})
+    overrides = build_overrides({"k_grid": k_grid}, task="scf_single_point")
 
     advice = advise(
         _silicon(), hpc=load_hpc_profile("scarf"), overrides=overrides, store=store
@@ -84,7 +84,9 @@ def test_default_scf_leaves_ndiag_to_pw_x(k_grid, tmp_path, monkeypatch) -> None
 
 def _gamma_only_advice(ndiag: int, tmp_path, monkeypatch):
     store = _installed_store(tmp_path, monkeypatch)
-    overrides = build_overrides({"k_grid": [1, 1, 1], "ndiag": ndiag})
+    overrides = build_overrides(
+        {"k_grid": [1, 1, 1], "ndiag": ndiag}, task="scf_single_point"
+    )
     return advise(
         _silicon(), hpc=load_hpc_profile("scarf"), overrides=overrides, store=store
     )
@@ -198,7 +200,7 @@ def test_dos_task_splits_one_walltime_across_its_pw_x_steps(
     is assumed to be the larger one."""
     store = _installed_store(tmp_path, monkeypatch)
     hpc = load_hpc_profile("scarf")
-    overrides = build_overrides({"walltime_h": 4})
+    overrides = build_overrides({"walltime_h": 4}, task="dos")
     advice = advise_dos(_diamond_silicon(), hpc=hpc, overrides=overrides, store=store)
     report = check_dos(advice)
     assert report.ok, report.blocking
@@ -228,14 +230,14 @@ def test_dos_task_splits_one_walltime_across_its_pw_x_steps(
     records = advice.records()
     assert "nscf_job" not in records
     job = records["job"].value
-    assert job["max_seconds_by_step"] == seconds
+    assert job.max_seconds_by_step == seconds
     script = render_submission_dos(advice, hpc, "quantum_espresso", steps)
     lines = script.splitlines()
-    assert f"#SBATCH --partition={job['partition']}" in lines
-    assert f"#SBATCH --nodes={job['nodes']}" in lines
-    assert f"#SBATCH --ntasks={job['ntasks']}" in lines
-    assert f"#SBATCH --ntasks-per-node={job['ntasks_per_node']}" in lines
-    assert job["walltime_h"] == 4
+    assert f"#SBATCH --partition={job.partition}" in lines
+    assert f"#SBATCH --nodes={job.nodes}" in lines
+    assert f"#SBATCH --ntasks={job.ntasks}" in lines
+    assert f"#SBATCH --ntasks-per-node={job.ntasks_per_node}" in lines
+    assert job.walltime_h == 4
     assert "#SBATCH --time=4:00:00" in lines
 
 
@@ -250,14 +252,23 @@ def test_goldilocks_json_publishes_the_memory_the_job_was_sized_on(
     store = _installed_store(tmp_path, monkeypatch)
     hpc = load_hpc_profile("scarf")
     ctx = default_shared_context()
-    advice = advise(_silicon(), hpc=hpc, store=store)
+    silicon = _silicon()
+    advice = advise(silicon, hpc=hpc, store=store)
     report = check(advice)
     assert report.ok, report.blocking
     steps = generate(advice, report, ctx=ctx)
     script = render_submission(advice, hpc, "quantum_espresso", steps)
-    publish(
-        to_bundle_input(advice, steps, script, ctx), DirectoryOutput(tmp_path / "out")
+    bundle_input = to_bundle_input(
+        advice,
+        steps,
+        script,
+        ctx,
+        code="quantum_espresso",
+        hpc=hpc,
+        assignments={},
+        source=in_memory_source(silicon),
     )
+    publish(bundle_input, DirectoryOutput(tmp_path / "out"))
 
     records = json.loads((tmp_path / "out" / "goldilocks.json").read_text())["records"]
     job = records["job"]["value"]
@@ -308,7 +319,8 @@ def test_the_memory_estimate_counts_the_species_the_writer_renders(
             "spin_polarized": True,
             "starting_magnetization": {"Si0": 0.5, "Si1": -0.5},
             "occupations": "smearing",
-        }
+        },
+        task="scf_single_point",
     )
     advice = advise(structure, hpc=hpc, overrides=overrides, store=store)
     report = check(advice)

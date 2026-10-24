@@ -118,14 +118,18 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
         description=(
             "Run analysis, advisors and run's checks, without generating any "
             "files. Returns every decision (with its source), a warnings "
-            "array the caller must relay verbatim, and a blocking array "
+            "array the caller must relay verbatim (each warning names the "
+            "decision it came from in 'record'), and a blocking array "
             "listing the reasons run would refuse to generate an input "
             "(empty when those checks pass). task='dos' explains all three "
             "of the density-of-states task's steps (scf, nscf, dos.x); "
             "its nscf-step decisions are returned under nscf_-prefixed keys. "
             "task='relax'/'vc-relax' explains one pw.x step with ionic (and, "
             "for vc-relax, cell) relaxation parameters resolved under the "
-            "'relax' key."
+            "'relax' key. An overrides key reaches every step of the task it "
+            "applies to; 'steps.<step>.<key>' (steps: scf; relax; vc-relax; "
+            "scf, nscf, dos) sets one step only, and a key no step of the task "
+            "reads is an error."
         )
     )
     async def explain(document: ComputeRequestDocument) -> dict[str, Any]:
@@ -139,7 +143,8 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
             "blocked. task='dos' generates all three steps (scf, nscf, "
             "dos.x) sharing one submission script, not just a single scf. "
             "task='relax'/'vc-relax' generates one pw.x input with "
-            "calculation='relax'/'vc-relax' set accordingly."
+            "calculation='relax'/'vc-relax' set accordingly. Overrides are "
+            "routed to the task's steps as in explain."
         )
     )
     async def run(document: ComputeRequestDocument) -> dict[str, Any]:

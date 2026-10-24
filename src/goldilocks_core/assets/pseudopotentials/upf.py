@@ -18,7 +18,7 @@ from typing import Annotated, Any, TypedDict
 from pymatgen.core import Element
 
 from goldilocks_core.functionals import normalize_functional_label
-from goldilocks_core.serialization import Portable, portable_record, to_portable
+from goldilocks_core.serialization import Portable
 from goldilocks_core.types import (
     JsonDict,
     PseudoAccuracy,
@@ -33,12 +33,34 @@ from goldilocks_core.validation import (
 
 
 class PseudoCutoffs(TypedDict):
+    """The cutoffs the provider publishes for one file, in Ry: ``None``
+    where it publishes none (PseudoDojo has no density cutoff, #180)."""
+
     ecutwfc_ry: float | None
     ecutrho_ry: float | None
 
 
+class PseudoCutoffHints(TypedDict):
+    """PseudoDojo's published wavefunction cutoff hints, in Ry; ``high``
+    is the file's ``ecutwfc_ry``."""
+
+    low: float
+    normal: float
+    high: float
+
+
+_HINT_LEVELS = ("low", "normal", "high")
+
+
 @dataclass(frozen=True, slots=True)
 class PseudoMetadata:
+    """One UPF file's facts. ``filepath`` (where this machine reads the
+    file) and ``pseudo_info`` are ``Portable()``, so no published record
+    carries them. An installed table's file is published as ``table_id``,
+    ``asset_path`` (its path inside that table's installation, so
+    ``filepath`` is ``<asset-store>/<table_id>/<version>/<asset_path>``)
+    and ``content_sha256``/``content_size_bytes`` (#177)."""
+
     filepath: Annotated[str, Portable()]
     filename: str
     header_format: str
@@ -50,7 +72,9 @@ class PseudoMetadata:
     relativistic: RelativisticTreatment | None = None
     z_valence: float | None = None
     table_id: str | None = None
+    asset_path: str | None = None
     cutoffs: PseudoCutoffs | None = None
+    cutoff_hints: PseudoCutoffHints | None = None
     source_identifier: str | None = None
     content_sha256: str | None = None
     content_size_bytes: int | None = None
@@ -72,19 +96,26 @@ class PseudoMetadata:
             or "\\" in self.filename
         ):
             raise ValueError("PseudoMetadata.filename must be one filename")
-        for field_name in ("provider", "element", "source_identifier", "table_id"):
+        for field_name in (
+            "provider",
+            "element",
+            "source_identifier",
+            "table_id",
+            "asset_path",
+        ):
             validate_optional_nonempty_str(
                 getattr(self, field_name), f"PseudoMetadata.{field_name}"
             )
-        if self.source_identifier is not None and (
-            PurePosixPath(self.source_identifier).is_absolute()
-            or PureWindowsPath(self.source_identifier).is_absolute()
-            or self.source_identifier.startswith("~")
-        ):
-            raise ValueError(
-                "PseudoMetadata.source_identifier must be a portable source identity, "
-                "not a host path"
-            )
+        for field_name in ("source_identifier", "asset_path"):
+            value = getattr(self, field_name)
+            if value is not None and (
+                PurePosixPath(value).is_absolute()
+                or PureWindowsPath(value).is_absolute()
+                or value.startswith("~")
+            ):
+                raise ValueError(
+                    f"PseudoMetadata.{field_name} must be portable, not a host path"
+                )
         if (self.content_sha256 is None) != (self.content_size_bytes is None):
             raise ValueError(
                 "PseudoMetadata content_sha256 and content_size_bytes must both be "
@@ -161,11 +192,21 @@ class PseudoMetadata:
                     value = float(value)
                 normalized[field_name] = value
             object.__setattr__(self, "cutoffs", normalized)
+        if self.cutoff_hints is not None:
+            self._normalize_cutoff_hints()
 
-
-@to_portable.register(PseudoMetadata)
-def _pseudo_metadata_portable(metadata: PseudoMetadata) -> JsonDict:
-    return portable_record(metadata, PseudoMetadata)
+    def _normalize_cutoff_hints(self) -> None:
+        hints = self.cutoff_hints
+        if not isinstance(hints, Mapping) or set(hints) != set(_HINT_LEVELS):
+            raise ValueError(
+                "PseudoMetadata.cutoff_hints must map exactly low, normal and high"
+            )
+        for level in _HINT_LEVELS:
+            validate_finite_positive(
+                hints[level], f"PseudoMetadata.cutoff_hints.{level}"
+            )
+        normalized = {level: float(hints[level]) for level in _HINT_LEVELS}
+        object.__setattr__(self, "cutoff_hints", normalized)
 
 
 def _clean_string(value: object) -> str | None:

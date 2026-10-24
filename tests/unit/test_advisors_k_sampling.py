@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -16,13 +15,21 @@ from support import (
 from goldilocks_core.advisors.k_sampling import (
     KSamplingHumanInput,
     KSamplingLlmInput,
+    KSamplingProtocol,
     k_sampling,
 )
 from goldilocks_core.advisors.species_split import split_species
 from goldilocks_core.analysis.is_metal import is_metal
 from goldilocks_core.kmesh import build_gamma_kmesh_entries, k_distance_to_mesh
 from goldilocks_core.ml import predict as predict_module
-from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
+from goldilocks_core.ml.predict import MlPrediction
+from goldilocks_core.resolution import (
+    Blocked,
+    ModelEvidence,
+    Provenance,
+    Resolved,
+    Unavailable,
+)
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
 _SILICON = Structure(Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]])
@@ -154,7 +161,7 @@ def test_ml_k_distance_respects_a_human_shift(real_assets) -> None:
         is_metal(_IRON), _IRON, human=KSamplingHumanInput(shift=(1, 1, 1))
     )
 
-    assert state.source == "ml"
+    assert state.provenance.field_sources == {"k_distance": "ml", "shift": "human"}
     assert state.value.shift == (1, 1, 1)
 
 
@@ -190,17 +197,34 @@ def test_the_ml_tier_reads_a_spin_split_cell_as_plain_elements(
     trained on. The model gets the same lattice and sites as plain
     elements."""
     read: list[Structure] = []
+    prediction = MlPrediction(
+        value=0.25,
+        provenance=Provenance(
+            source="ml",
+            model=ModelEvidence(
+                model_id="k_points.k_distance.qrf@comp_struct_soap_lattice_metal.v1",
+                asset="models/qrf-kpoints@QRF95",
+                target_contract="goldilocks.k_distance.mesh_lower_bound.2pi.v1",
+                value=0.25,
+                details={"interval": [0.18, 0.45]},
+            ),
+        ),
+    )
 
-    def predict(structure: Structure) -> SimpleNamespace:
+    def predict(structure: Structure) -> MlPrediction:
         read.append(structure)
-        return SimpleNamespace(value=0.25)
+        return prediction
 
     monkeypatch.setattr(predict_module, "predict_k_distance", predict)
     cell = _afm_nickel_oxide()
 
     state = k_sampling(_NON_METAL, cell)
 
-    assert state.source == "ml"
+    assert state.provenance == Provenance(
+        source="ml",
+        field_sources={"k_distance": "ml", "shift": "heuristic"},
+        model=prediction.provenance.model,
+    )
     [model_input] = read
     assert all(isinstance(site.specie, Element) for site in model_input)
     assert [site.specie.symbol for site in model_input] == [
@@ -473,3 +497,184 @@ def test_a_second_rung_on_a_cell_with_vacuum_along_every_axis_is_blocked() -> No
 
     assert state.status == "blocked"
     assert "exceeds this structure's own ladder length" in state.root_cause()
+
+
+def _stub_qrf95(monkeypatch: pytest.MonkeyPatch, k_distance: float) -> MlPrediction:
+    prediction = MlPrediction(
+        value=k_distance,
+        provenance=Provenance(
+            source="ml",
+            model=ModelEvidence(
+                model_id="k_points.k_distance.qrf@comp_struct_soap_lattice_metal.v1",
+                asset="models/qrf-kpoints@QRF95",
+                target_contract="goldilocks.k_distance.mesh_lower_bound.2pi.v1",
+                value=k_distance,
+                details={"interval": [0.18, 0.45]},
+            ),
+            citations=("QRF95 citation.",),
+        ),
+    )
+    monkeypatch.setattr(
+        predict_module, "predict_k_distance", lambda _structure: prediction
+    )
+    return prediction
+
+
+def test_the_heuristic_k_distance_names_is_metal() -> None:
+    """#173: the heuristic k_distance follows is_metal (0.15 or 0.30), so the
+    record names it and keeps 'heuristic'."""
+    state = k_sampling(_NON_METAL, _BCC_IRON)
+
+    assert state.value.k_distance == 0.30
+    assert state.source == "heuristic"
+    assert state.provenance.field_sources == {
+        "k_distance": "heuristic",
+        "shift": "heuristic",
+    }
+    assert state.provenance.derived_from == ("is_metal",)
+
+
+def test_a_human_shift_on_a_model_k_distance_reads_human_beside_ml(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#173: QRF95 decided the distance and the request the shift; the
+    record keeps the model's evidence and names neither fact."""
+    prediction = _stub_qrf95(monkeypatch, 0.25)
+
+    state = k_sampling(
+        _NON_METAL, _BCC_IRON, human=KSamplingHumanInput(shift=(1, 1, 1))
+    )
+
+    assert (state.value.k_distance, state.value.shift) == (0.25, (1, 1, 1))
+    assert state.source == "human"
+    assert state.provenance.field_sources == {"k_distance": "ml", "shift": "human"}
+    assert state.provenance.model == prediction.provenance.model
+    assert state.provenance.citations == ("QRF95 citation.",)
+    assert state.provenance.derived_from == ()
+
+
+@pytest.mark.parametrize(
+    ("human", "llm", "field_sources"),
+    [
+        (
+            KSamplingHumanInput(k_grid=(4, 4, 4), shift=(1, 1, 1)),
+            None,
+            {"k_grid": "human", "shift": "human"},
+        ),
+        (
+            KSamplingHumanInput(k_index=3),
+            None,
+            {"k_index": "human", "shift": "heuristic"},
+        ),
+        (
+            KSamplingHumanInput(k_distance=0.2),
+            None,
+            {"k_distance": "human", "shift": "heuristic"},
+        ),
+        (
+            None,
+            KSamplingLlmInput(k_distance=0.2),
+            {"k_distance": "llm", "shift": "heuristic"},
+        ),
+    ],
+    ids=["k_grid", "k_index", "k_distance", "llm"],
+)
+def test_the_setting_the_mesh_came_from_reads_its_tier(
+    human: KSamplingHumanInput | None,
+    llm: KSamplingLlmInput | None,
+    field_sources: dict[str, str],
+) -> None:
+    state = k_sampling(_NON_METAL, _BCC_IRON, human=human, llm=llm)
+
+    assert state.provenance.field_sources == field_sources
+    assert state.source == ("llm" if llm else "human")
+    assert state.provenance.derived_from == ()
+
+
+_PROTOCOL = KSamplingProtocol(k_distance=0.1, note="A task protocol's nscf spacing.")
+"""A step's protocol k-point spacing, as the dos task's nscf step gets one."""
+
+
+def test_a_protocol_k_distance_outranks_qrf95_and_the_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#174: a step's protocol spacing ranks above QRF95, which is never
+    asked (it is trained on scf meshes), and above an llm spacing. The
+    record reads 'heuristic' with the protocol as its note, not 'human'."""
+
+    def predict(_structure: Structure) -> MlPrediction:
+        raise AssertionError("QRF95 is not asked when the step has a protocol")
+
+    monkeypatch.setattr(predict_module, "predict_k_distance", predict)
+
+    state = k_sampling(
+        _NON_METAL,
+        _BCC_IRON,
+        llm=KSamplingLlmInput(k_distance=0.4),
+        protocol=_PROTOCOL,
+    )
+
+    assert state.value.k_distance == 0.1
+    assert state.value.mesh == k_distance_to_mesh(_BCC_IRON, 0.1)
+    assert state.value.shift == (0, 0, 0)
+    assert state.provenance == Provenance(
+        source="heuristic",
+        source_note="A task protocol's nscf spacing.",
+        field_sources={"k_distance": "heuristic", "shift": "heuristic"},
+    )
+
+
+def test_without_a_protocol_qrf95_decides_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prediction = _stub_qrf95(monkeypatch, 0.25)
+
+    state = k_sampling(_NON_METAL, _BCC_IRON, protocol=None)
+
+    assert state.value.k_distance == 0.25
+    assert state.provenance.model == prediction.provenance.model
+    assert state.provenance.source_note is None
+
+
+@pytest.mark.parametrize(
+    ("human", "mesh_from"),
+    [
+        (KSamplingHumanInput(k_distance=0.2), "k_distance"),
+        (KSamplingHumanInput(k_grid=(5, 5, 5)), "k_grid"),
+        (KSamplingHumanInput(k_index=2), "k_index"),
+    ],
+    ids=["k_distance", "k_grid", "k_index"],
+)
+def test_a_human_mesh_outranks_the_protocol(
+    human: KSamplingHumanInput, mesh_from: str
+) -> None:
+    """#174: the request's own mesh setting wins over the step's protocol
+    and reads 'human', without the protocol's note."""
+    state = k_sampling(_NON_METAL, _BCC_IRON, human=human, protocol=_PROTOCOL)
+
+    assert state.value == k_sampling(_NON_METAL, _BCC_IRON, human=human).value
+    assert state.value.k_distance != 0.1
+    assert state.provenance == Provenance(
+        source="human",
+        field_sources={mesh_from: "human", "shift": "heuristic"},
+    )
+
+
+def test_a_human_shift_applies_on_the_protocol_k_distance() -> None:
+    """#174: the request's shift and the protocol's spacing merge field by
+    field: a shift alone keeps the protocol mesh."""
+    state = k_sampling(
+        _NON_METAL,
+        _BCC_IRON,
+        human=KSamplingHumanInput(shift=(1, 1, 1)),
+        protocol=_PROTOCOL,
+    )
+
+    assert state.value.k_distance == 0.1
+    assert state.value.mesh == k_distance_to_mesh(_BCC_IRON, 0.1)
+    assert state.value.shift == (1, 1, 1)
+    assert state.provenance == Provenance(
+        source="human",
+        source_note="A task protocol's nscf spacing.",
+        field_sources={"k_distance": "heuristic", "shift": "human"},
+    )

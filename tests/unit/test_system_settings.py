@@ -22,10 +22,11 @@ def _system_settings(structure, pseudo_metadata_factory) -> SystemSettings:
         pseudopotentials=(pseudo_metadata_factory("Si"),),
         magnetic=MagneticConfigFacts(
             cell=structure,
-            ordering=OrderingRecord(requested="fm", applied="fm", compensated=False),
+            ordering=OrderingRecord(requested="fm", applied="fm"),
             spin_polarized=False,
             magnetic_elements=(),
             starting_magnetization=None,
+            compensated=False,
             tot_magnetization=None,
             spin_orbit_enabled=False,
             angle1=None,

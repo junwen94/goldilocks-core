@@ -1,6 +1,6 @@
 import { Alert, Stack, Text } from "@mantine/core";
 
-import type { AdvisorWarning } from "../api/coreClient";
+import type { AdvisorWarning, RecordWarning } from "../api/coreClient";
 import { WARNING_LEVEL_COLORS } from "./warnings";
 
 const WARNING_LEVEL_TITLES: Readonly<Record<AdvisorWarning["level"], string>> =
@@ -10,10 +10,19 @@ const WARNING_LEVEL_TITLES: Readonly<Record<AdvisorWarning["level"], string>> =
     info: "Notices",
   };
 
+/** Neither the code nor the record and code identify a warning: two
+ * records raise the same code (a dos task's `parallelisation` and
+ * `nscf_parallelisation`), and one record raises a code once per element
+ * (`hubbard.u_value_missing`). The message tells those apart. */
+function warningKey(warning: AdvisorWarning | RecordWarning): string {
+  const record = "record" in warning ? warning.record : null;
+  return JSON.stringify([record, warning.code, warning.message]);
+}
+
 export function WarningsPanel({
   warnings,
 }: {
-  readonly warnings: readonly AdvisorWarning[];
+  readonly warnings: readonly (AdvisorWarning | RecordWarning)[];
 }) {
   if (warnings.length === 0) return null;
   // Mantine's Alert already pairs its own background/text colors
@@ -40,7 +49,7 @@ export function WarningsPanel({
           >
             <Stack component="ul" gap="xs" m={0} pl="md">
               {atLevel.map((warning) => (
-                <Text component="li" key={warning.code} size="sm">
+                <Text component="li" key={warningKey(warning)} size="sm">
                   {warning.message}
                 </Text>
               ))}

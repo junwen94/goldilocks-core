@@ -50,10 +50,16 @@ exempt, for the reason above: they have no single owning domain.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, get_args
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, JsonValue
+
+from goldilocks_core.serialization import to_portable
+
+if TYPE_CHECKING:
+    from goldilocks_core.inputs.overrides import HumanInput
 
 Status = Literal["resolved", "unavailable", "blocked"]
 
@@ -61,6 +67,8 @@ Source = Literal["human", "ml", "llm", "heuristic"]
 """Order is priority, highest first: a human-set value always wins
 over one an ml model, llm, or heuristic would have chosen; likewise ml
 over llm over heuristic."""
+
+_TIERS: tuple[Source, ...] = get_args(Source)
 
 WarningLevel = Literal["info", "warning", "error"]
 
@@ -89,32 +97,125 @@ class Warning(BaseModel):
     message: str
 
 
+class ModelEvidence(BaseModel):
+    """What a registered ML model returned for the record it decided, as
+    ``ml.predict`` received it from goldilocks-ml (whose ``ModelPrediction``
+    says ``details`` and ``warnings`` are opaque provenance, to be recorded
+    verbatim, #156). ``details`` and ``value`` have passed a strict JSON round
+    trip, so they publish unchanged."""
+
+    model_id: str
+    """goldilocks-ml's id for the model and its feature contract, e.g.
+    ``metallicity.is_metal.cgcnn@crystal_graph.v1``."""
+    asset: str
+    """The registered asset the model was loaded from, ``<id>@<version>``
+    (``models/is-metal-classifier@1``), as ``ml/registry.toml`` pins it."""
+    target_contract: str
+    """The contract the model's value answers, e.g.
+    ``goldilocks.is_metal.dft_band_gap_zero.v1``."""
+    value: JsonValue
+    """The model's own value, before the record maps it (``False``, not
+    ``non_metal``; QRF95's median k-distance in 1/angstrom)."""
+    details: dict[str, JsonValue]
+    """The model's details as returned: a classifier's ``score`` and
+    ``threshold``, QRF95's own ``interval`` (not ``k_sampling``'s
+    ``k_distance_interval``, the rung's, #116)."""
+    warnings: tuple[Warning, ...] = ()
+    """Each of the model's warnings, its text the ``message`` of the
+    catalogued ``<record>.model_warning`` (``ml.predict.WARNING_CATALOGUE``).
+    ``collect_warnings`` lists them with the record's own."""
+
+
 class Provenance(BaseModel):
+    """Where a resolved value came from. ``ResolvedField`` publishes every
+    field: one added here needs a twin of the same name there, or every
+    projection fails instead of dropping it (#156). Unknown keywords are
+    refused, so a misspelt field cannot be dropped at construction either.
+
+    An advisor whose decision applies several settings builds its
+    provenance with ``from_field_sources`` over ``field_sources_from``, from
+    the inputs it consumed, so a setting the request set reads ``human``
+    exactly when the decision applied it (#173)."""
+
+    model_config = ConfigDict(extra="forbid")
+
     source: Source
-    data_source: str | None = None
-    """Which upstream record/dataset backed the value, when ``source``
-    is ``"ml"`` -- e.g. a contract version or artifact id. ``None`` for
-    tiers with nothing to cite."""
-    model_id: str | None = None
-    """Which model produced the value, when ``source`` is ``"ml"``.
-    ``None`` otherwise."""
     source_note: str | None = None
     """Free-text detail v1's split ``ProvenanceSource`` values used to
     carry structurally (e.g. "derived from structure analysis" vs
     "package default, nothing else applied") -- now just prose here
     instead of a family of source literals."""
     field_sources: dict[str, Source] | None = None
-    """Opt-in, per-scalar override of ``source`` for compound decisions
-    whose own dataclass bundles several independently-overridable
-    fields (e.g. ``ConvergenceDecision``'s ``conv_thr``/``mixing_beta``/
-    ``mixing_mode``) -- added for v2 epic 9 (#9)'s scenario 2
-    ("explicit single-field override is field-level, not whole-group
-    skip"). ``source`` above still answers "was *anything* in this
-    decision human/ml/llm-touched", which is what every advisor
-    computed before this field existed and what most callers still only
-    need; this is additive, only populated by advisors precise enough
-    to know which of their own scalars came from which tier, and
-    ``None`` (the default) for every other advisor's ``Provenance``."""
+    """One source per setting a compound decision applied, keyed by its
+    override field name (``ConvergenceDecision``'s ``conv_thr``/
+    ``mixing_beta``/...; ``magnetic``'s ``spin_orbit_coupling``): ``human``
+    or ``llm`` for a value that tier set, otherwise the tier that decided
+    it. A setting the decision did not apply (a smearing width under fixed
+    occupations, a smearing function under tetrahedra) has no entry.
+    ``source`` is then the highest tier among them (``from_field_sources``).
+    ``None`` for a decision that applies no setting of its own (an analysis
+    fact, the selected pseudopotentials), and for those still labelled as a
+    whole (``cutoffs``, ``job``, ``nbnd``, ``parallelisation``, ``vdw``)."""
+    derived_from: tuple[str, ...] = ()
+    """The records whose answers this record's own rule followed, by
+    record name: ``("is_metal",)`` for occupations chosen from the
+    metallicity fact, ``("magnetic",)`` for the relativistic treatment
+    spin-orbit coupling asks for. ``source`` stays the tier that applied
+    the rule (``heuristic``), never the upstream record's, so the link is
+    how a reader finds what decided it (#173)."""
+    model: ModelEvidence | None = None
+    """The model that decided the value, or its ``ml`` field
+    (``field_sources``), and what it returned
+    (``ml.predict.MlPrediction.provenance``)."""
+    citations: tuple[str, ...] = ()
+    """What to cite for the value: the registry citation of the model that
+    decided it, or of the pseudopotential table selected. A bundle's
+    ``CITATIONS.md`` lists every record's (``collect_citations``)."""
+
+    @classmethod
+    def from_field_sources(
+        cls, field_sources: Mapping[str, Source], **provenance: Any
+    ) -> Provenance:
+        """The provenance of a decision whose applied settings came from
+        ``field_sources`` (at least one): ``source`` is the highest tier
+        among them, in ``Source``'s order, so a decision with one
+        request-set setting reads ``human``. ``provenance`` sets the other
+        fields (``derived_from``, ``model``, ``citations``)."""
+        return cls(
+            source=min(field_sources.values(), key=_TIERS.index),
+            field_sources=dict(field_sources),
+            **provenance,
+        )
+
+
+def field_sources_from(
+    human: HumanInput | None,
+    llm: HumanInput | None = None,
+    *,
+    fields: Iterable[str],
+    decided: Mapping[str, Source] | None = None,
+) -> dict[str, Source]:
+    """One source per setting in ``fields``, the settings a decision
+    applied: ``"human"`` when ``human`` set it, else ``"llm"`` when ``llm``
+    set it, else its tier in ``decided`` (the tier that chose it, such as
+    QRF95's ``"ml"`` k_distance), else ``"heuristic"``. A field is set when
+    the input has it and its value is not ``None``.
+
+    The caller passes only the fields its decision applied and only the
+    inputs it read -- ``None`` for an input a higher tier overrode -- so a
+    request-set setting reads ``human`` exactly when its value is in the
+    decision (#173)."""
+    decided = decided or {}
+    return {
+        name: (
+            "human"
+            if getattr(human, name, None) is not None
+            else "llm"
+            if getattr(llm, name, None) is not None
+            else decided.get(name, "heuristic")
+        )
+        for name in fields
+    }
 
 
 class BlockedValueError(Exception):
@@ -223,15 +324,28 @@ class ResolvedField[T](BaseModel):
     object. Build one with ``ResolvedField.from_state``, not the
     constructor directly, so the fields below can't be filled in an
     inconsistent combination (e.g. a ``status`` of ``"blocked"`` next
-    to a non-``None`` ``value``)."""
+    to a non-``None`` ``value``). ``from_state`` keeps the value as
+    resolved, a ``T``; ``records_document`` publishes the field as
+    ``serialization.to_portable`` projects it: plain JSON, without
+    host-local fields.
+
+    A resolved field carries every ``Provenance`` field under its own name
+    (``source``, ``source_note``, ``field_sources``, ``derived_from``,
+    ``model``, ``citations``). Extra keys are forbidden and ``from_state`` passes the
+    whole provenance, so a ``Provenance`` field without a twin here fails
+    projection rather than being dropped from every published record
+    (#156)."""
+
+    model_config = ConfigDict(extra="forbid")
 
     status: Status
     value: T | None = None
-    source: str | None = None
+    source: Source | None = None
+    source_note: str | None = None
     field_sources: dict[str, Source] | None = None
-    """Mirrors ``Provenance.field_sources`` -- ``None`` unless the
-    advisor that produced this field opted in to per-scalar sourcing
-    (see ``Provenance.field_sources``'s own docstring)."""
+    derived_from: tuple[str, ...] = ()
+    model: ModelEvidence | None = None
+    citations: tuple[str, ...] = ()
     reason: str | None = None
     blocked_by: str | None = None
 
@@ -241,9 +355,70 @@ class ResolvedField[T](BaseModel):
             return cls(
                 status=state.status,
                 value=state.value,
-                source=state.source,
-                field_sources=state.provenance.field_sources,
+                **dict(state.provenance),
             )
         if isinstance(state, Unavailable):
             return cls(status=state.status, reason=state.reason)
         return cls(status=state.status, blocked_by=state.root_cause())
+
+
+def records_document(
+    records: Mapping[str, FieldState[object]],
+) -> dict[str, dict[str, Any]]:
+    """The published form of a records mapping (``Advice.records()``), in
+    record-name order: each record's ``ResolvedField`` as
+    ``serialization.to_portable`` projects it, a plain dict. The one
+    projection the HTTP/MCP responses, CLI ``--json`` and ``goldilocks.json``
+    share (#152).
+
+    Plain dicts, because HTTP returns these documents as ``JSONResponse``,
+    which encodes with ``json.dumps`` and knows nothing of pydantic
+    models. Floats stay as they are: the document is strict JSON only
+    because no record holds a non-finite float, and ``JSONResponse``, CLI
+    ``--json`` and ``goldilocks.json`` all raise on one (#137). Sequences
+    are lists, as JSON reads them back."""
+    return {
+        name: to_portable(ResolvedField.from_state(state))
+        for name, state in sorted(records.items())
+    }
+
+
+def collect_warnings(
+    records: Mapping[str, FieldState[object]],
+) -> list[dict[str, object]]:
+    """Every ``Warning`` the resolved records carry, in record-name order,
+    each as ``{"code", "level", "category", "message", "record"}``:
+    ``record`` names the record it came from, which tells apart the same
+    code raised by two records (a ``dos`` task's ``parallelisation`` and
+    ``nscf_parallelisation``).
+
+    Reads the ``warnings`` tuple of each resolved value, before any
+    projection, so every record shape is collected alike (#152), then the
+    warnings of the model that decided it (``Provenance.model``, #156).
+    Values without one (composition, symmetry, the pseudopotentials tuple,
+    plain strings) and unresolved records contribute nothing."""
+    return [
+        {**warning.model_dump(), "record": name}
+        for name, state in sorted(records.items())
+        if isinstance(state, Resolved)
+        for warning in _record_warnings(state)
+    ]
+
+
+def _record_warnings(state: Resolved[object]) -> tuple[Warning, ...]:
+    model = state.provenance.model
+    return (*getattr(state.value, "warnings", ()), *(model.warnings if model else ()))
+
+
+def collect_citations(records: Mapping[str, FieldState[object]]) -> list[str]:
+    """Every distinct citation the resolved records' provenance carries
+    (``Provenance.citations``), sorted: what a bundle's ``CITATIONS.md`` and
+    its manifest's ``citations`` list (#156)."""
+    return sorted(
+        {
+            citation
+            for state in records.values()
+            if isinstance(state, Resolved)
+            for citation in state.provenance.citations
+        }
+    )

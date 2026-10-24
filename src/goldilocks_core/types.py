@@ -14,7 +14,11 @@ CalcTask = Literal["scf_single_point", "dos", "relax", "vc-relax"]
 #10 -- both single-step (one ``pw.x`` run with ``calculation`` set
 accordingly), unlike ``dos``'s three-step scf/nscf/dos.x sequence."""
 
-SmearingType = Literal["fixed", "gaussian", "mp", "cold"]
+SmearingType = Literal["gaussian", "mp", "cold", "fd"]
+"""QE's short names for its four smearing functions: Gaussian,
+Methfessel-Paxton, Marzari-Vanderbilt and Fermi-Dirac (QE 7.3
+``PW/src/set_occupations.f90:48-59``); pw.x stops on any other name.
+Fixed occupations are an ``occupations`` value, not a smearing kind."""
 
 ModelType = Literal["random_forest", "cgcnn", "xgboost", "mlp"]
 

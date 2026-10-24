@@ -11,21 +11,23 @@ only their failure shape changes.
 **Scope note**: this ports the *selection* decision only, not
 `PseudoResolution`'s full `materialize()` orchestration (reading actual UPF
 bytes off an `AssetStore`, building `InputArtifact`s, licence-file handling).
-That is file-assembly, not a settings decision -- it belongs with
-`generation/`/`bundle.py` (v2 epic 7's "QE generation rewrite"), the same
-line every other advisor in this epic draws. v1's `pseudo/source.py`
-stayed untouched until it was deleted along with the rest of the v1
-tree at cutover (v2 epic 9); this is a fresh, standalone port, tested
-on its own, same as every prior epic's deliverable.
+That is file-assembly, not a settings decision, the line every other
+advisor in this epic draws: `service/_pseudo.py`'s `pseudo_artifacts`
+reads the UPFs and the table's licence for the bundle (#157). v1's
+`pseudo/source.py` stayed untouched until it was deleted along with the
+rest of the v1 tree at cutover (v2 epic 9); this is a fresh, standalone
+port, tested on its own, same as every prior epic's deliverable.
 
 Two v1 bugs fixed here, per this epic's Section (c):
 
 - **`PseudoTableMismatch` raise-on-failure**
   (`pseudo/source.py:159-161,172-175,200-203`) -- an unknown table id, a
   table that doesn't cover the requested elements, or no compatible table
-  at all now returns `Unavailable` with the same diagnostic text v1's
-  exception message carried, not a raised exception on the happy-adjacent
-  path.
+  at all now returns `Unavailable`, not a raised exception on the
+  happy-adjacent path. `_refusal` builds both the pinned and the automatic
+  refusal from `_table_problems`, so it names the constraint that rejected
+  each table;
+  v1's automatic-path text named only the request and the elements (#182).
 - **`materialize()`'s `StopIteration`-prone round-trip**
   (`pseudo/source.py:114-129`) -- matching each selected pseudopotential
   back to its metadata used a bare `next(... for ... if ...)` with no
@@ -118,21 +120,9 @@ def _select_explicit_table(
         return Unavailable(
             reason=f"unknown pseudopotential table {table_id!r}; available: {choices}"
         )
-    problems = _table_problems(table, elements, requirements)
-    if not problems:
-        return Resolved(table, Provenance(source="heuristic"))
-    matches = [
-        candidate.id
-        for candidate in tables.values()
-        if not _table_problems(candidate, elements, requirements)
-    ]
-    alternatives = ", ".join(sorted(matches)) or "none"
-    return Unavailable(
-        reason=(
-            f"pseudopotential table {table.id!r} does not satisfy the request: "
-            f"{'; '.join(problems)}; matching tables: {alternatives}"
-        )
-    )
+    if not _table_problems(table, elements, requirements):
+        return _selected(table, pinned=True)
+    return _refusal(tables, elements, requirements, pinned=table)
 
 
 def _select_automatic_table(
@@ -146,21 +136,82 @@ def _select_automatic_table(
         if not _table_problems(table, elements, requirements)
     ]
     if not matches:
-        requested = (
-            f"{requirements.functional} {requirements.accuracy} "
-            f"{requirements.relativistic}"
-        )
-        return Unavailable(
-            reason=(
-                f"no pseudopotential table satisfies {requested} for "
-                + ", ".join(sorted(elements))
-            )
-        )
+        return _refusal(tables, elements, requirements, pinned=None)
     provider = "sssp" if requires_sssp(elements) else "pseudodojo"
     table = min(
         matches, key=lambda candidate: (candidate.provider != provider, candidate.id)
     )
-    return Resolved(table, Provenance(source="heuristic"))
+    return _selected(table, pinned=False)
+
+
+def _selected(table: PseudoTable, *, pinned: bool) -> Resolved[PseudoTable]:
+    """``table`` as the selection, citing it: a bundle cites what its records
+    cite (#156). A pinned ``pseudo_table_id`` is the request's choice
+    (``human``); an automatic one is the heuristic's, from requirements set
+    by the ``functional`` and ``magnetic`` records (``pseudo_requirements``:
+    the spin-orbit switch picks the relativistic treatment), which it names
+    (#173)."""
+    citations = (table.citation,)
+    if pinned:
+        return Resolved(
+            table,
+            Provenance.from_field_sources(
+                {"pseudo_table_id": "human"}, citations=citations
+            ),
+        )
+    provenance = Provenance(
+        source="heuristic", derived_from=("functional", "magnetic"), citations=citations
+    )
+    return Resolved(table, provenance)
+
+
+def _refusal(
+    tables: dict[str, PseudoTable],
+    elements: set[str],
+    requirements: PseudoRequirements,
+    *,
+    pinned: PseudoTable | None,
+) -> Unavailable:
+    """Return the refusal for a request no registered table satisfies, built
+    from `_table_problems` in table-id order.
+
+    A pinned table reports its own problems and the tables that would satisfy
+    the request. Otherwise each near-miss table (functional and accuracy match
+    the request) reports its problems, or the reason says no table has that
+    functional and accuracy (#182).
+    """
+    ordered = sorted(tables.values(), key=lambda table: table.id)
+    problems = {
+        table.id: _table_problems(table, elements, requirements) for table in ordered
+    }
+    if pinned is not None:
+        matching = ", ".join(key for key, found in problems.items() if not found)
+        return Unavailable(
+            reason=(
+                f"pseudopotential table {pinned.id!r} does not satisfy the request: "
+                f"{'; '.join(problems[pinned.id])}; matching tables: "
+                f"{matching or 'none'}"
+            )
+        )
+    near_misses = "; ".join(
+        f"{table.id}: {' and '.join(problems[table.id])}"
+        for table in ordered
+        if table.functional == requirements.functional
+        and table.accuracy == requirements.accuracy
+    )
+    rejections = near_misses or (
+        f"no registered table has functional {requirements.functional} "
+        f"and accuracy {requirements.accuracy}"
+    )
+    requested = (
+        f"{requirements.functional} {requirements.accuracy} {requirements.relativistic}"
+    )
+    return Unavailable(
+        reason=(
+            f"no pseudopotential table satisfies {requested} for "
+            f"{', '.join(sorted(elements))}: {rejections}"
+        )
+    )
 
 
 def is_table_eligible(table: PseudoTable, elements: set[str]) -> bool:
@@ -215,7 +266,8 @@ def select_metadata_for_elements(
     `assets.pseudopotentials.importers.load_installed_table`) therefore
     already satisfies the request -- there is nothing left to rank, only to
     look up by element and confirm the table gives exactly one file per
-    element (not zero, not several)."""
+    element (not zero, not several). The selection follows the table, so it
+    names the ``pseudo_table`` record (#173)."""
     by_element: dict[str, list[PseudoMetadata]] = {}
     for item in metadata:
         if item.element is not None:
@@ -235,4 +287,6 @@ def select_metadata_for_elements(
                 )
             )
         selected.append(candidates[0])
-    return Resolved(tuple(selected), Provenance(source="heuristic"))
+    return Resolved(
+        tuple(selected), Provenance(source="heuristic", derived_from=("pseudo_table",))
+    )

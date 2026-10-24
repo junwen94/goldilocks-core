@@ -18,6 +18,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from support import dojo_fixture_table_spec
 
 from goldilocks_core.assets.pseudopotentials.importers import (
     PseudoImportError,
@@ -60,28 +61,21 @@ def archive(path: Path, members: dict[str, bytes]) -> None:
             tar.addfile(info, io.BytesIO(payload))
 
 
-def table(
-    provider: str,
-    spec: AssetSpec,
-    *,
-    functional: str = "PBEsol",
-    frozen_4f_core: bool = False,
-) -> PseudoTable:
+def sssp_table(spec: AssetSpec) -> PseudoTable:
+    """The registry declaration of ``install_sssp_fixture``'s table: SSSP
+    publishes both cutoffs, so it declares no ``charge_density_dual``."""
     return PseudoTable(
-        id=f"{provider}-fixture",
-        provider=provider,
+        id="sssp-fixture",
+        provider="sssp",
         upstream_table="fixture",
         version="1",
-        functional=functional,
+        functional="PBEsol",
         relativistic="scalar",
         accuracy="efficiency",
         licence="fixture licence",
         citation="fixture citation",
-        charge_density_dual=4.0,
         elements=("Si",),
         asset=spec,
-        default=False,
-        frozen_4f_core=frozen_4f_core,
     )
 
 
@@ -93,30 +87,13 @@ def install_dojo_fixture(
     table_functional: str = "PBEsol",
     frozen_4f_core: bool = False,
 ) -> tuple[InstalledAsset, PseudoTable]:
-    """Install one synthetic PseudoDojo table."""
-    upfs = tmp_path / "upfs.tgz"
-    reports = tmp_path / "reports.tgz"
-    archive(upfs, {"nested/Si.upf": upf})
-    report = {
-        "xc": report_functional,
-        "md5_upf": hashlib.md5(upf).hexdigest(),
-        "hints": {
-            "low": {"ecut": 10.0},
-            "normal": {"ecut": 15.0},
-            "high": {"ecut": 20.0},
-        },
-    }
-    archive(reports, {"nested/Si.djrepo": json.dumps(report).encode()})
-    spec = AssetSpec(
-        "pseudopotentials/pseudodojo-fixture",
-        "1",
-        (
-            AssetFile("pseudopotentials", "source/upfs.tgz", upfs.as_uri()),
-            AssetFile("metadata", "source/reports.tgz", reports.as_uri()),
-        ),
-    )
-    registry_table = table(
-        "pseudodojo", spec, functional=table_functional, frozen_4f_core=frozen_4f_core
+    """Install one synthetic PseudoDojo table (``dojo_fixture_table_spec``)."""
+    spec, registry_table = dojo_fixture_table_spec(
+        tmp_path,
+        upf=upf,
+        report_functional=report_functional,
+        table_functional=table_functional,
+        frozen_4f_core=frozen_4f_core,
     )
     installed = AssetStore(tmp_path / "store").install(
         spec,
@@ -156,7 +133,7 @@ def install_sssp_fixture(
             AssetFile("licence", "source/LICENSE.txt", licence.as_uri()),
         ),
     )
-    registry_table = table("sssp", spec)
+    registry_table = sssp_table(spec)
     installed = AssetStore(tmp_path / "store").install(
         spec, sssp_preparer(registry_table)
     )
@@ -171,12 +148,41 @@ def test_pseudodojo_normalizes_reports_and_verified_upfs(tmp_path: Path) -> None
     assert metadata[0].functional == "PBEsol"
     assert metadata[0].relativistic == "scalar"
     assert metadata[0].accuracy == "efficiency"
-    assert metadata[0].cutoffs is not None
-    assert metadata[0].cutoffs["ecutwfc_ry"] == 40.0
-    assert metadata[0].cutoffs["ecutrho_ry"] == 160.0
+    assert metadata[0].cutoffs == {"ecutwfc_ry": 40.0, "ecutrho_ry": None}
+    assert metadata[0].cutoff_hints == {"low": 20.0, "normal": 30.0, "high": 40.0}
     assert metadata[0].table_id == "pseudopotentials/pseudodojo-fixture"
     assert not list(installed.root.rglob("*.tgz"))
     assert "CC BY 4.0" in installed.path("LICENSE.txt").read_text()
+
+
+def test_pseudodojo_stored_density_cutoff_is_not_read_as_published(
+    tmp_path: Path,
+) -> None:
+    """#180: PseudoDojo publishes only wavefunction cutoff hints. The
+    manifest still stores the importer's charge_density_dual x high (160 Ry
+    here), so tables installed before the fix stay valid without
+    re-preparation, but the reader does not hand it on as a published
+    value: the cutoffs advisor derives the density cutoff."""
+    installed, _ = install_dojo_fixture(tmp_path)
+    (entry,) = json.loads(installed.path("pseudo-table.json").read_text())["entries"]
+
+    (metadata,) = load_installed_table(installed)
+
+    assert (entry["ecutwfc_ry"], entry["ecutrho_ry"]) == (40.0, 160.0)
+    assert metadata.cutoffs == {"ecutwfc_ry": 40.0, "ecutrho_ry": None}
+
+
+def test_installed_pseudo_manifest_rejects_invalid_cutoff_hints(
+    tmp_path: Path,
+) -> None:
+    installed, _ = install_dojo_fixture(tmp_path)
+    manifest = installed.path("pseudo-table.json")
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    document["entries"][0]["cutoff_hints"]["high"] = -40.0
+    manifest.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(AssetCorrupt, match=r"cutoff_hints\.high"):
+        load_installed_table(installed)
 
 
 def test_pseudodojo_frozen_4f_core_comes_from_the_registry_field(
@@ -211,12 +217,27 @@ def test_sssp_normalizes_sidecar_and_verified_upfs(tmp_path: Path) -> None:
 
     assert metadata[0].provider == "sssp"
     assert metadata[0].source_identifier == "Si fixture"
-    assert metadata[0].cutoffs is not None
-    assert metadata[0].cutoffs["ecutwfc_ry"] == 30.0
-    assert metadata[0].cutoffs["ecutrho_ry"] == 120.0
+    assert metadata[0].cutoffs == {"ecutwfc_ry": 30.0, "ecutrho_ry": 120.0}
+    assert metadata[0].cutoff_hints is None
     assert metadata[0].table_id == "pseudopotentials/sssp-fixture"
     assert not list(installed.root.rglob("*.tar.gz"))
     assert installed.path("LICENSE.txt").read_text() == "SSSP fixture licence\n"
+
+
+@pytest.mark.parametrize("install", [install_sssp_fixture, install_dojo_fixture])
+def test_installed_metadata_names_its_upf_by_table_path_and_content(
+    tmp_path: Path, install
+) -> None:
+    """#177: each UPF is referenced by its path inside the installed table
+    and the hash and size of its bytes, not only by the host path it was
+    read from."""
+    installed, _ = install(tmp_path)
+
+    (metadata,) = load_installed_table(installed)
+
+    assert metadata.content_sha256 == hashlib.sha256(UPF).hexdigest()
+    assert metadata.content_size_bytes == len(UPF)
+    assert metadata.asset_path == "pseudos/Si.upf"
 
 
 def test_sssp_preserves_nonrelativistic_upf_provenance(tmp_path: Path) -> None:
@@ -255,8 +276,7 @@ def test_pseudodojo_accepts_nonrelativistic_header_in_scalar_table(
     assert metadata[0].relativistic == "non-relativistic"
     assert metadata[0].pseudo_info["upf_relativistic"] == "non-relativistic"
     assert metadata[0].filepath == str(installed.path("pseudos/Si.upf"))
-    assert metadata[0].cutoffs["ecutwfc_ry"] == 40.0
-    assert metadata[0].cutoffs["ecutrho_ry"] == 160.0
+    assert metadata[0].cutoffs == {"ecutwfc_ry": 40.0, "ecutrho_ry": None}
 
 
 def test_sssp_rejects_sidecar_registry_disagreement(tmp_path: Path) -> None:

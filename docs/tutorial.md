@@ -18,13 +18,16 @@ from goldilocks_core.inputs.structure import PathStructureSource, normalize_stru
 from goldilocks_core.service import advise
 
 source = PathStructureSource(structure("Si.cif"))
-silicon = normalize_structure(source).structure
+normalized = normalize_structure(source)
+silicon = normalized.structure
 hpc = load_hpc_profile("scarf")
 
 advice = advise(silicon, hpc=hpc)
 ```
 
 Replace `structure("Si.cif")` with a path to your own CIF or POSCAR.
+`normalized.source` identifies the file you read (its name, format, sha256
+and size), which a published bundle records.
 `load_hpc_profile` loads a named profile from `inputs/profiles/`, the same
 profiles `--hpc` names on the CLI (see the [CLI reference](cli.md)).
 `advise()` runs every analysis/advisor stage (structure facts, functional
@@ -50,22 +53,30 @@ if isinstance(k_sampling, Resolved):
 
 This prints the selected functional, the source tier that picked it
 (`human`/`ml`/`llm`/`heuristic`), and the k-point mesh. Model-dependent
-values can change with the installed model; review warnings and check
-convergence rather than treating the recommendation as a verified result.
+values can change with the installed model, which a model-decided field
+names in `provenance.model` (with what it returned); review warnings and
+check convergence rather than treating the recommendation as a verified
+result.
 `advice.records()` returns every decision as a plain `{name: FieldState}`
-dict, and `advice.warnings()` flattens every advisor's warnings into one
-list, if you want to inspect everything at once instead of field by field.
+dict of the advisors' typed values (`resolution.records_document` turns it
+into the JSON the CLI, HTTP and `goldilocks.json` publish), and
+`advice.warnings()` flattens every record's warnings into one list, each
+naming the record it came from in `record`, if you want to inspect
+everything at once instead of field by field.
 
 ## Choose settings yourself
 
 Pass overrides built by `build_overrides` for the settings you want to
 control — the same validation path `--set`/HTTP/MCP use, so an unknown key
-or a badly-shaped value fails the same way here as anywhere else:
+or a badly-shaped value fails the same way here as anywhere else. Name the
+task: each setting reaches the steps of that task it applies to, and a
+setting no step of the task reads (`press` on an scf) is refused:
 
 ```python
 from goldilocks_core.set_overrides import build_overrides
 
-overrides = build_overrides({"k_grid": (4, 4, 4)})
+assignments = {"k_grid": (4, 4, 4)}
+overrides = build_overrides(assignments, task="scf_single_point")
 advice = advise(silicon, hpc=hpc, overrides=overrides)
 
 k_sampling = advice.step.kpoints.k_sampling
@@ -113,8 +124,25 @@ from goldilocks_core.bundle import ArchiveOutput, DirectoryOutput, bundle_files,
 from goldilocks_core.service import render_submission, to_bundle_input
 
 script = render_submission(advice, hpc, "quantum_espresso", steps)
-bundle_input = to_bundle_input(advice, steps, script, ctx)
+bundle_input = to_bundle_input(
+    advice,
+    steps,
+    script,
+    ctx,
+    code="quantum_espresso",
+    hpc=hpc,
+    assignments=assignments,
+    source=normalized.source,
+)
 ```
+
+The keywords name the request the bundle answers, which `goldilocks.json`
+records under `request` with the task (`to_bundle_input` is the
+`scf_single_point` task's) and the goldilocks-core version: the code, the HPC
+profile, the overrides as submitted (the assignments you passed to
+`build_overrides`, `steps.<step>.` prefixes kept) and the input structure's
+name, format, sha256 and size. A structure you built in memory
+(`InMemoryStructureSource`) has no sha256 or size.
 
 | Output                            | Result                             |
 | ---------------------------------- | ----------------------------------- |
@@ -152,23 +180,47 @@ from goldilocks_core.service import (
     to_bundle_input_dos,
 )
 
-dos_advice = advise_dos(silicon, hpc=hpc)
+dos_assignments = {"steps.nscf.k_grid": (12, 12, 12), "delta_e": 0.05}
+dos_overrides = build_overrides(dos_assignments, task="dos")
+dos_advice = advise_dos(silicon, hpc=hpc, overrides=dos_overrides)
 dos_report = check_dos(dos_advice)
 if dos_report.ok:
     dos_steps = generate_dos(dos_advice, dos_report, ctx=ctx)
     dos_script = render_submission_dos(dos_advice, hpc, "quantum_espresso", dos_steps)
-    dos_bundle = to_bundle_input_dos(dos_advice, dos_steps, dos_script, ctx)
+    dos_bundle = to_bundle_input_dos(
+        dos_advice,
+        dos_steps,
+        dos_script,
+        ctx,
+        code="quantum_espresso",
+        hpc=hpc,
+        assignments=dos_assignments,
+        source=normalized.source,
+    )
     print([step.name for step in dos_steps])
 ```
 
+The task's steps are `scf`, `nscf` and `dos`. `steps.nscf.k_grid` sets the
+nscf mesh only, and `delta_e`, a `dos.x` setting, reaches the `dos` step. A
+setting given without a step reaches every step it applies to: a flat
+`k_grid` sets both `pw.x` steps, and `dos_advice.warnings()` then carries an
+`overrides.applies_to_multiple_steps` notice naming them.
+
 `dos_advice.records()` keys the shared system-level fields and the task's
 one `job` unprefixed, the nscf step's own fields under an `nscf_`-prefixed
-name, and the DOS decision itself under `"dos"`. The three steps run in one
-allocation, so there is one job, sized over both `pw.x` steps. `pw.x`
-counts `max_seconds` from its own start, so the job splits 95% of the
-walltime between the scf and the nscf by estimated workload
-(`job.max_seconds_by_step`), and each input gets its own share; `dos.x`
-runs in what is left. Both `pw.x` steps run on the whole allocation;
+name, and the DOS decision itself under `"dos"`. Unless the request sets
+them, the nscf step takes its k-point spacing (0.10 Å⁻¹) and occupations
+(`tetrahedra_opt`) from the dos protocol, aiida-quantumespresso's `pdos.yaml`
+(balanced), ahead of the ML tier: `nscf_k_sampling` and `nscf_occupations`
+read `heuristic` and name the protocol in `source_note`. A value you set
+replaces the protocol's field by field and reads `human`; a `shift` alone
+keeps the protocol's mesh, and a `degauss` alone keeps `tetrahedra_opt`.
+
+The three steps run in one allocation, so there is one job, sized over both
+`pw.x` steps. `pw.x` counts `max_seconds` from its own start, so the job
+splits 95% of the walltime between the scf and the nscf by estimated
+workload (`job.max_seconds_by_step`), and each input gets its own share;
+`dos.x` runs in what is left. Both `pw.x` steps run on the whole allocation;
 `dos.x` runs on one task of it (`srun --nodes=1 --ntasks=1`), because every
 extra task would repeat the whole DOS and `dos.x` aborts when a task owns no
 FFT plane.

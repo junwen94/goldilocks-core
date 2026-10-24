@@ -37,9 +37,10 @@ The main files in `si-run/` are:
 | ---------------------------- | ------------------------------------------------------------------------------------------------ |
 | `scf.in`                     | Quantum ESPRESSO input, named after the task (`relax.in`, `vc-relax.in`, or `scf.in`+`nscf.in`+`dos.in` for `--task dos`) |
 | `pseudo/`                    | The selected UPF pseudopotential file(s)                                                         |
+| `licences/`                  | The pseudopotential table's licence file, shipped with its UPFs                                 |
 | `submit.sh`                  | Generated SLURM submission script for the chosen `--hpc` profile                                 |
-| `goldilocks.json`            | Settings, provenance, and file hashes for every record and file                                  |
-| `README.md`, `CITATIONS.md`  | Bundle contents summary and citation information                                                 |
+| `goldilocks.json`            | The request (code, task, HPC profile, overrides as given, structure sha256, goldilocks-core version), every setting with its provenance (including the model behind each ML-chosen record), and file hashes |
+| `README.md`, `CITATIONS.md`  | What `goldilocks.json` holds and the bundle contents; what to cite: the pseudopotential table, every model used, and the licence files |
 
 ## 3. Check the settings
 

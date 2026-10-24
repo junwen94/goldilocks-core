@@ -16,11 +16,15 @@ for v1, which spin-polarized any transition-metal presence): elemental Ni
 read as Ni0 d10, FePt and FeCo had no guess, metallic TiN and WC read as
 Ti3+ d1 and W4+ d2, any lanthanide or actinide counted as magnetic (f0
 ThO2), and no p-block radical ever did (solid O2).
+
+The human and LLM overrides take the record's own values, ``magnetic`` or
+``non_magnetic``, the values ``/capabilities`` advertises; a boolean is
+refused (#139).
 """
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pymatgen.core import Structure
 
@@ -28,15 +32,18 @@ from goldilocks_core.analysis.local_moments import local_moments
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import FieldState, Provenance, Resolved
 
+if TYPE_CHECKING:
+    from goldilocks_core.ml.predict import MlPrediction
+
 Magnetism = Literal["magnetic", "non_magnetic"]
 
 
 class IsMagneticHumanInput(HumanInput):
-    is_magnetic: bool | None = None
+    is_magnetic: Magnetism | None = None
 
 
 class IsMagneticLlmInput(LlmInput):
-    is_magnetic: bool | None = None
+    is_magnetic: Magnetism | None = None
 
 
 def is_magnetic(
@@ -47,25 +54,20 @@ def is_magnetic(
     human = human or IsMagneticHumanInput()
     llm = llm or IsMagneticLlmInput()
     if human.is_magnetic is not None:
+        return Resolved(human.is_magnetic, Provenance(source="human"))
+    prediction = _ml_is_magnetic(structure)
+    if prediction is not None:
         return Resolved(
-            "magnetic" if human.is_magnetic else "non_magnetic",
-            Provenance(source="human"),
-        )
-    ml_value = _ml_is_magnetic(structure)
-    if ml_value is not None:
-        return Resolved(
-            "magnetic" if ml_value else "non_magnetic", Provenance(source="ml")
+            "magnetic" if prediction.value else "non_magnetic", prediction.provenance
         )
     if llm.is_magnetic is not None:
-        return Resolved(
-            "magnetic" if llm.is_magnetic else "non_magnetic",
-            Provenance(source="llm"),
-        )
+        return Resolved(llm.is_magnetic, Provenance(source="llm"))
     return _heuristic(structure)
 
 
-def _ml_is_magnetic(structure: Structure) -> bool | None:
-    """The published mMACE-embedding MLP classifier (v2 epic 11, #11), or
+def _ml_is_magnetic(structure: Structure) -> MlPrediction | None:
+    """The published mMACE-embedding MLP classifier's prediction (v2 epic 11,
+    #11), whose ``provenance`` the record carries (#156), or
     ``None`` if it is not set up: its model asset is not installed or fails
     verification, ``mace``/``e3nn``/``sphericart`` are not installed (manual
     installs -- goldilocks-ml has no extra for these; see its own README's
@@ -90,10 +92,9 @@ def _ml_is_magnetic(structure: Structure) -> bool | None:
     from goldilocks_core.ml.predict import MlModelUnavailable, predict
 
     try:
-        prediction = predict("is_magnetic", structure)
+        return predict("is_magnetic", structure)
     except MlModelUnavailable:
         return None
-    return bool(prediction.value)
 
 
 def _heuristic(structure: Structure) -> FieldState[Magnetism]:

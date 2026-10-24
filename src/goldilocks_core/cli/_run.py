@@ -20,9 +20,7 @@ from goldilocks_core.cli._common import (
     add_fetch_missing_argument,
     add_run_arguments,
     records_to_json,
-    resolve_hpc,
-    resolve_overrides,
-    resolve_structure,
+    resolve_request,
 )
 from goldilocks_core.cli._output import write_json
 from goldilocks_core.service import (
@@ -68,69 +66,94 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     )
 
 
-def _run_dos(structure, args, hpc, overrides, ctx):
+def _run_dos(request, args, ctx):
     dos_advice = advise_dos(
-        structure,
+        request.structure,
         code=args.code,
-        hpc=hpc,
-        overrides=overrides,
+        hpc=request.hpc,
+        overrides=request.overrides,
         fetch_missing=args.fetch_missing,
     )
     dos_report = check_dos(dos_advice)
     if not dos_report.ok:
         _print_blocked_and_exit(dos_report.blocking)
     steps = generate_dos(dos_advice, dos_report, ctx=ctx)
-    script = render_submission_dos(dos_advice, hpc, args.code, steps)
-    bundle_input = to_bundle_input_dos(dos_advice, steps, script, ctx)
+    script = render_submission_dos(dos_advice, request.hpc, args.code, steps)
+    bundle_input = to_bundle_input_dos(
+        dos_advice,
+        steps,
+        script,
+        ctx,
+        code=args.code,
+        hpc=request.hpc,
+        assignments=request.assignments,
+        source=request.source,
+    )
     return bundle_input, dos_advice.warnings()
 
 
-def _run_relax(structure, args, hpc, overrides, ctx):
+def _run_relax(request, args, ctx):
     relax_advice = advise_relax(
-        structure,
+        request.structure,
         calculation=args.task,
         code=args.code,
-        hpc=hpc,
-        overrides=overrides,
+        hpc=request.hpc,
+        overrides=request.overrides,
         fetch_missing=args.fetch_missing,
     )
     relax_report = check_relax(relax_advice)
     if not relax_report.ok:
         _print_blocked_and_exit(relax_report.blocking)
     steps = generate_relax(relax_advice, relax_report, ctx=ctx)
-    script = render_submission_relax(relax_advice, hpc, args.code, steps)
-    bundle_input = to_bundle_input_relax(relax_advice, steps, script, ctx)
+    script = render_submission_relax(relax_advice, request.hpc, args.code, steps)
+    bundle_input = to_bundle_input_relax(
+        relax_advice,
+        steps,
+        script,
+        ctx,
+        code=args.code,
+        hpc=request.hpc,
+        assignments=request.assignments,
+        source=request.source,
+    )
     return bundle_input, relax_advice.warnings()
 
 
-def _run_scf(structure, args, hpc, overrides, ctx):
+def _run_scf(request, args, ctx):
     advice = advise(
-        structure,
+        request.structure,
         code=args.code,
-        hpc=hpc,
-        overrides=overrides,
+        hpc=request.hpc,
+        overrides=request.overrides,
         fetch_missing=args.fetch_missing,
     )
     report = check(advice)
     if not report.ok:
         _print_blocked_and_exit(report.blocking)
     steps = generate(advice, report)
-    script = render_submission(advice, hpc, args.code, steps)
-    bundle_input = to_bundle_input(advice, steps, script, ctx)
+    script = render_submission(advice, request.hpc, args.code, steps)
+    bundle_input = to_bundle_input(
+        advice,
+        steps,
+        script,
+        ctx,
+        code=args.code,
+        hpc=request.hpc,
+        assignments=request.assignments,
+        source=request.source,
+    )
     return bundle_input, advice.warnings()
 
 
 def run(args: argparse.Namespace, out: TextIO) -> None:
-    structure = resolve_structure(args.structure)
-    hpc = resolve_hpc(args.hpc)
-    overrides = resolve_overrides(args)
+    request = resolve_request(args)
     ctx = default_shared_context()
     if args.task == "dos":
-        bundle_input, advice_warnings = _run_dos(structure, args, hpc, overrides, ctx)
+        bundle_input, advice_warnings = _run_dos(request, args, ctx)
     elif args.task in ("relax", "vc-relax"):
-        bundle_input, advice_warnings = _run_relax(structure, args, hpc, overrides, ctx)
+        bundle_input, advice_warnings = _run_relax(request, args, ctx)
     else:
-        bundle_input, advice_warnings = _run_scf(structure, args, hpc, overrides, ctx)
+        bundle_input, advice_warnings = _run_scf(request, args, ctx)
 
     if args.out is not None:
         output = (

@@ -52,7 +52,6 @@ def _cell(
             ordering=OrderingRecord(
                 requested=applied,
                 applied=applied,
-                compensated=applied != "fm",
                 criterion="identity" if applied == "fm" else "requested",
             ),
             cell_in_input_basis=cell_in_input_basis,

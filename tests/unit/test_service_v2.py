@@ -5,12 +5,16 @@ from __future__ import annotations
 import dataclasses
 import functools
 import json
+from pathlib import Path
 
 import pytest
 import spglib
 from pymatgen.core import Lattice, Species as SpinSpecies, Structure
 from support import (
     SSSP_FIXTURE_UPF as _UPF,
+    fcc_lead,
+    hcp_gadolinium,
+    in_memory_source,
     mc3d_42058_silicon,
     sssp_fixture_table_spec as _sssp_table_spec,
 )
@@ -19,21 +23,18 @@ from goldilocks_core.advisors import magnetic_config as magnetic_config_module
 from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
 from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
 from goldilocks_core.advisors.parallelisation import (
-    ParallelisationHumanInput,
     diag_grid_side,
 )
 from goldilocks_core.advisors.size import Species, memory_estimate, resource_estimate
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.pseudopotentials.upf import parse_upf_metadata
-from goldilocks_core.assets.store import AssetStore
+from goldilocks_core.assets.store import AssetCorrupt, AssetStore
 from goldilocks_core.bundle import DirectoryOutput, is_complete, publish
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
-from goldilocks_core.resolution import Blocked, Unavailable
+from goldilocks_core.resolution import Blocked, Unavailable, records_document
 from goldilocks_core.service import (
     AdviceIncomplete,
-    ResourceOverrides,
     RunOverrides,
-    StepOverrides,
     SystemOverrides,
     advise,
     advise_dos,
@@ -103,10 +104,20 @@ class TestAdviseEndToEnd:
         assert "#SBATCH" in script
         assert "pw.x" in script
 
-        bundle_input = to_bundle_input(advice, steps, script, ctx)
-        assert any(a["path"] == "submit.sh" for a in bundle_input.artifacts)
-        assert any(a["path"] == "pseudo/Si.upf" for a in bundle_input.artifacts)
-        assert bundle_input.citations == ("Synthetic SSSP fixture, cite me.",)
+        bundle_input = to_bundle_input(
+            advice,
+            steps,
+            script,
+            ctx,
+            code="quantum_espresso",
+            hpc=hpc,
+            assignments={},
+            source=in_memory_source(silicon),
+        )
+        roles = {a["path"]: a["role"] for a in bundle_input.artifacts}
+        assert roles["submit.sh"] == "submission_script"
+        assert roles["pseudo/Si.upf"] == "pseudopotential"
+        assert roles["licences/sssp-fixture.txt"] == "licence"
 
         destination = tmp_path / "out"
         publish(bundle_input, DirectoryOutput(destination))
@@ -116,9 +127,90 @@ class TestAdviseEndToEnd:
         assert manifest["records"]["functional"]["status"] == "resolved"
         assert manifest["records"]["functional"]["value"] == "PBEsol"
         assert manifest["records"]["pseudopotentials"]["status"] == "resolved"
+        assert manifest["citations"] == ["Synthetic SSSP fixture, cite me."]
+        # #176: a structure built in memory has no submitted text to hash.
+        assert manifest["request"]["structure"] == {
+            "name": "generated-structure",
+            "format": "pymatgen",
+            "sha256": None,
+            "size_bytes": None,
+        }
+        assert (manifest["request"]["task"], manifest["request"]["hpc"]) == (
+            "scf_single_point",
+            "test-cluster",
+        )
+        assert (
+            "results.\n\n- Synthetic SSSP fixture, cite me.\n\n## Licences\n"
+            in (destination / "CITATIONS.md").read_text()
+        )
         assert (destination / "pseudo" / "Si.upf").read_bytes() == _UPF
+        assert (
+            destination / "licences" / "sssp-fixture.txt"
+        ).read_bytes() == b"SSSP fixture licence\n"
         assert (destination / "scf.in").exists()
         assert (destination / "submit.sh").exists()
+
+    def test_bundle_refuses_a_pseudopotential_changed_since_it_was_verified(
+        self, silicon, hpc, installed_table
+    ) -> None:
+        """#177: the bundle ships the bytes its pseudopotentials record
+        names. A UPF rewritten in the store after the advice read it would
+        put a file in ``goldilocks.json`` whose hash disagrees with its
+        record, so assembly refuses it."""
+        store, _table = installed_table
+        advice = advise(silicon, hpc=hpc, store=store)
+        steps = generate(advice, check(advice))
+        script = render_submission(advice, hpc, "quantum_espresso", steps)
+        (metadata,) = advice.system.pseudo.metadata.value
+        Path(metadata.filepath).write_bytes(
+            _UPF.replace(b'z_valence="4.0"', b'z_valence="4.5"')
+        )
+
+        with pytest.raises(
+            AssetCorrupt,
+            match=r"^pseudos/Si\.upf of pseudopotentials/sssp-fixture@1 "
+            r"changed after its table was verified$",
+        ):
+            to_bundle_input(
+                advice,
+                steps,
+                script,
+                default_shared_context(),
+                code="quantum_espresso",
+                hpc=hpc,
+                assignments={},
+                source=in_memory_source(silicon),
+            )
+
+    def test_bundle_refuses_a_licence_changed_since_it_was_verified(
+        self, silicon, hpc, installed_table
+    ) -> None:
+        """#157: the licence the bundle ships beside the UPFs is read
+        through the table's verified inventory, like the UPFs: a LICENSE.txt
+        rewritten after the advice resolved the table is refused."""
+        store, _table = installed_table
+        advice = advise(silicon, hpc=hpc, store=store)
+        steps = generate(advice, check(advice))
+        script = render_submission(advice, hpc, "quantum_espresso", steps)
+        (metadata,) = advice.system.pseudo.metadata.value
+        installation = Path(metadata.filepath).parents[1]
+        (installation / "LICENSE.txt").write_text("Some other licence\n")
+
+        with pytest.raises(
+            AssetCorrupt,
+            match=r"^LICENSE\.txt of pseudopotentials/sssp-fixture@1 "
+            r"changed after its table was verified$",
+        ):
+            to_bundle_input(
+                advice,
+                steps,
+                script,
+                default_shared_context(),
+                code="quantum_espresso",
+                hpc=hpc,
+                assignments={},
+                source=in_memory_source(silicon),
+            )
 
     def test_generate_renders_the_advised_steps_own_max_seconds_share(
         self, silicon, hpc, installed_table
@@ -146,10 +238,13 @@ class TestAdviseEndToEnd:
         warnings = advice.warnings()
         assert warnings  # scarf's own missing-walltime warning always fires
         assert all(
-            warning.keys() == {"code", "level", "category", "message"}
+            warning.keys() == {"code", "level", "category", "message", "record"}
             for warning in warnings
         )
-        assert any(warning["code"] == "job.walltime_defaulted" for warning in warnings)
+        assert any(
+            (warning["code"], warning["record"]) == ("job.walltime_defaulted", "job")
+            for warning in warnings
+        )
 
     def test_npool_not_dividing_ntasks_blocks_end_to_end(
         self, silicon, hpc, installed_table
@@ -158,13 +253,7 @@ class TestAdviseEndToEnd:
         check() pipeline (test_checks.py already covers checks.check_all
         directly) -- npool=7 never divides scarf's 64 ntasks."""
         store, _table = installed_table
-        overrides = RunOverrides(
-            step=StepOverrides(
-                resources=ResourceOverrides(
-                    parallelisation=ParallelisationHumanInput(npool=7)
-                )
-            )
-        )
+        overrides = build_overrides({"npool": 7}, task="scf_single_point")
 
         advice = advise(silicon, hpc=hpc, overrides=overrides, store=store)
         assert advice.step.resources.job.value.ntasks == 64
@@ -184,7 +273,7 @@ class TestAdviseEndToEnd:
         with 'too few bands'; check() refuses it before generation
         instead."""
         store, _ = installed_table
-        overrides = build_overrides(setting)
+        overrides = build_overrides(setting, task="scf_single_point")
 
         advice = advise(silicon, hpc=hpc, overrides=overrides, store=store)
         assert advice.step.kpoints.nbnd.value.nbnd == 2
@@ -226,7 +315,7 @@ class TestAdviseEndToEnd:
 
         store, _ = installed_table
         overrides = RunOverrides(
-            analysis=AnalysisOverrides(is_metal=IsMetalHumanInput(is_metal=True))
+            analysis=AnalysisOverrides(is_metal=IsMetalHumanInput(is_metal="metal"))
         )
 
         advice = advise(silicon, hpc=hpc, store=store, overrides=overrides)
@@ -336,7 +425,9 @@ class TestJobMemory:
             'number_of_proj="4" l_max="1"'
         )
         store = _store_with(upf, tmp_path, monkeypatch)
-        overrides = build_overrides({"u_by_element": {"Si": 4.0}})
+        overrides = build_overrides(
+            {"u_by_element": {"Si": 4.0}}, task="scf_single_point"
+        )
 
         advice = advise(diamond_silicon, hpc=hpc, overrides=overrides, store=store)
 
@@ -356,7 +447,9 @@ class TestJobMemory:
             'number_of_proj="4" l_max="1"'
         )
         store = _store_with(upf, tmp_path, monkeypatch, relativistic="full")
-        overrides = build_overrides({"spin_orbit_coupling": True, "ntasks": 1})
+        overrides = build_overrides(
+            {"spin_orbit_coupling": True, "ntasks": 1}, task="scf_single_point"
+        )
 
         advice = advise(diamond_silicon, hpc=hpc, overrides=overrides, store=store)
 
@@ -409,7 +502,7 @@ class TestJobMemory:
         vacancy = Structure(
             Lattice.cubic(5.43), [{"Si": 0.5}, "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]]
         )
-        overrides = build_overrides({"spin_polarized": False})
+        overrides = build_overrides({"spin_polarized": False}, task="scf_single_point")
 
         advice = advise(vacancy, hpc=hpc, overrides=overrides, store=store)
 
@@ -426,7 +519,9 @@ class TestPoolsShareKpointSpinPairs:
 
     @staticmethod
     def _parallelisation(silicon, hpc, store, **settings):
-        overrides = build_overrides({"k_grid": [3, 3, 3], **settings})
+        overrides = build_overrides(
+            {"k_grid": [3, 3, 3], **settings}, task="scf_single_point"
+        )
         advice = advise(silicon, hpc=hpc, overrides=overrides, store=store)
         assert advice.step.kpoints.n_irr_k.value == 6
         assert advice.step.resources.job.value.ntasks == 64
@@ -489,7 +584,7 @@ class TestUnresolvedStepInputBlocksTheJob:
         self, diamond_silicon, hpc, installed_table, settings, cause
     ) -> None:
         store, _table = installed_table
-        overrides = build_overrides(settings)
+        overrides = build_overrides(settings, task="scf_single_point")
 
         advice = advise(diamond_silicon, hpc=hpc, overrides=overrides, store=store)
 
@@ -551,7 +646,15 @@ class TestAdviseDegradation:
         advice = advise(cerium, hpc=hpc, overrides=overrides)
 
         assert isinstance(advice.system.pseudo.table, Unavailable)
-        assert "Ce" in advice.system.pseudo.table.reason
+        reason = advice.system.pseudo.table.reason
+        assert (
+            "pseudodojo-pbesol-efficiency-fr: lanthanide and actinide elements "
+            "require an SSSP table and missing elements Ce; "
+        ) in reason
+        assert reason.endswith(
+            "sssp-pbesol-efficiency-sr: relativistic treatment is scalar, "
+            "requested full"
+        )
         assert isinstance(advice.system.pseudo.metadata, Blocked)
         assert isinstance(advice.system.pseudo.relativistic, Blocked)
         assert isinstance(advice.system.magnetic, Blocked)
@@ -562,6 +665,49 @@ class TestAdviseDegradation:
         assert advice.step.kpoints.k_sampling.ok
         assert advice.step.kpoints.occupations.ok
         assert advice.system.boundary.ok
+
+    @pytest.mark.parametrize(
+        ("structure", "functional", "notice"),
+        [
+            (hcp_gadolinium(), "PBEsol", "magnetic.soc_unavailable"),
+            (fcc_lead(), "PBEsol", "magnetic.soc_suggested"),
+            (fcc_lead(), "LDA", "magnetic.soc_unavailable"),
+        ],
+        ids=["Gd-PBEsol", "Pb-PBEsol", "Pb-LDA"],
+    )
+    def test_the_soc_notice_follows_the_selection_soc_would_make(
+        self, hpc, structure, functional, notice
+    ) -> None:
+        """#181: the spin-orbit notice of a run without SOC comes from the
+        table selection the same request makes with spin_orbit_coupling:
+        soc_suggested names the table it selects, soc_unavailable carries
+        the reason it refuses. hcp Gd used to be told to enable SOC, which
+        then left pseudo_table unavailable."""
+        settings = {"functional": functional}
+        without = advise(
+            structure,
+            hpc=hpc,
+            overrides=build_overrides(settings, task="scf_single_point"),
+        )
+        with_soc = advise(
+            structure,
+            hpc=hpc,
+            overrides=build_overrides(
+                {**settings, "spin_orbit_coupling": True}, task="scf_single_point"
+            ),
+        )
+
+        notices = {
+            warning.code: warning.message
+            for warning in without.system.magnetic.value.warnings
+            if warning.code in {"magnetic.soc_suggested", "magnetic.soc_unavailable"}
+        }
+        assert notices.keys() == {notice}
+        table = with_soc.system.pseudo.table
+        if notice == "magnetic.soc_suggested":
+            assert notices[notice].endswith(f" table {table.value.id}.")
+        else:
+            assert notices[notice].endswith(f"pseudopotential tables: {table.reason}")
 
     @pytest.mark.parametrize(
         "settings", [{}, {"spin_polarized": True}], ids=["default", "spin_polarized"]
@@ -581,7 +727,11 @@ class TestAdviseDegradation:
             [[0, 0, 0], [0.5, 0.5, 0.5]],
         )
 
-        advice = advise(disordered, hpc=hpc, overrides=build_overrides(settings))
+        advice = advise(
+            disordered,
+            hpc=hpc,
+            overrides=build_overrides(settings, task="scf_single_point"),
+        )
 
         magnetic = advice.records()["magnetic"]
         assert isinstance(magnetic, Blocked)
@@ -814,10 +964,10 @@ def test_hubbard_record_lists_each_applied_u_with_its_source(
     from, instead of a plan name and a bare element-to-U map."""
     advice = advise(_rock_salt_nio(), hpc=hpc, store=correlated_store)
 
-    record = advice.records()["hubbard"]
-    assert record.status == "resolved"
-    (entry,) = record.value["u_values"]
-    assert set(record.value) == {"u_values", "warnings"}
+    record = records_document(advice.records())["hubbard"]
+    assert record["status"] == "resolved"
+    (entry,) = record["value"]["u_values"]
+    assert set(record["value"]) == {"u_values", "warnings"}
     assert {key: entry[key] for key in ("element", "manifold", "u_ev")} == {
         "element": "Ni",
         "manifold": "3d",
@@ -831,7 +981,7 @@ def test_hubbard_record_lists_each_applied_u_with_its_source(
 
 
 def test_user_u_by_element_reaches_the_generated_card(hpc, correlated_store) -> None:
-    overrides = build_overrides({"u_by_element": {"Ni": 5.0}})
+    overrides = build_overrides({"u_by_element": {"Ni": 5.0}}, task="scf_single_point")
 
     advice = advise(
         _rock_salt_nio(), hpc=hpc, overrides=overrides, store=correlated_store
@@ -839,8 +989,8 @@ def test_user_u_by_element_reaches_the_generated_card(hpc, correlated_store) -> 
     report = check(advice)
 
     assert report.ok, report.blocking
-    (entry,) = advice.records()["hubbard"].value["u_values"]
-    assert (entry["value_source"], entry["citation"], entry["doi"]) == (
+    (entry,) = advice.records()["hubbard"].value.u_values
+    assert (entry.value_source, entry.citation, entry.doi) == (
         "human",
         None,
         None,
@@ -873,7 +1023,7 @@ def test_hubbard_warnings_reach_the_top_level_list_for_table_and_user_u(
     advice = advise(
         _rock_salt_nio(),
         hpc=hpc,
-        overrides=build_overrides(overrides),
+        overrides=build_overrides(overrides, task="scf_single_point"),
         store=correlated_store,
     )
 
@@ -909,7 +1059,9 @@ def test_frozen_ns_warning_follows_the_hubbard_decision_not_needs_correlation(
     advice = advise(
         structure(),
         hpc=hpc,
-        overrides=build_overrides({**overrides, "mixing_fixed_ns": 50}),
+        overrides=build_overrides(
+            {**overrides, "mixing_fixed_ns": 50}, task="scf_single_point"
+        ),
         store=correlated_store,
     )
 
@@ -933,7 +1085,9 @@ def test_a_blocked_cell_blocks_every_count_made_on_it(
     advice = advise(
         silicon,
         hpc=hpc,
-        overrides=build_overrides({"starting_magnetization": {"Si9": 0.5}}),
+        overrides=build_overrides(
+            {"starting_magnetization": {"Si9": 0.5}}, task="scf_single_point"
+        ),
         store=store,
     )
 
@@ -968,7 +1122,9 @@ def test_table_selection_reads_the_simulated_cell_s_spin_orbit_switch(
     spin_orbit = advise(
         silicon,
         hpc=hpc,
-        overrides=build_overrides({"spin_orbit_coupling": True}),
+        overrides=build_overrides(
+            {"spin_orbit_coupling": True}, task="scf_single_point"
+        ),
         store=store,
     )
 
@@ -1016,15 +1172,17 @@ def counted_enumerations(monkeypatch) -> list[Structure]:
 
 
 @pytest.mark.parametrize(
-    "advise_task",
+    ("advise_task", "task"),
     [
-        pytest.param(advise, id="advise"),
-        pytest.param(advise_dos, id="advise_dos"),
-        pytest.param(functools.partial(advise_relax, calculation="relax"), id="relax"),
+        pytest.param(advise, "scf_single_point", id="advise"),
+        pytest.param(advise_dos, "dos", id="advise_dos"),
+        pytest.param(
+            functools.partial(advise_relax, calculation="relax"), "relax", id="relax"
+        ),
     ],
 )
 def test_an_afm_task_enumerates_its_orderings_once(
-    hpc, correlated_store, counted_enumerations, advise_task
+    hpc, correlated_store, counted_enumerations, advise_task, task
 ) -> None:
     """#184 (part A), #128: the simulated cell is resolved once per task.
     The two-pass magnetic decision used to enumerate before pseudopotential
@@ -1032,7 +1190,7 @@ def test_an_afm_task_enumerates_its_orderings_once(
     advise_task(
         _rock_salt_nio(),
         hpc=hpc,
-        overrides=build_overrides({"magnetic_ordering": "afm"}),
+        overrides=build_overrides({"magnetic_ordering": "afm"}, task=task),
         store=correlated_store,
     )
 
@@ -1047,7 +1205,7 @@ def test_the_written_cell_is_seeded_once_from_the_selected_table(
     z_valence of 18, opposite on the two Ni sublattices, with O off the
     sublattice at 0 (#170). A table that is not installed yet leaves
     aiida's flat 0.1."""
-    overrides = build_overrides({"magnetic_ordering": "afm"})
+    overrides = build_overrides({"magnetic_ordering": "afm"}, task="scf_single_point")
 
     installed = advise(
         _rock_salt_nio(), hpc=hpc, overrides=overrides, store=correlated_store
@@ -1070,7 +1228,7 @@ def test_the_written_cell_is_seeded_once_from_the_selected_table(
 
 
 @pytest.mark.parametrize(
-    ("settings", "cell", "ordering"),
+    ("settings", "cell", "ordering", "compensated"),
     [
         pytest.param(
             {},
@@ -1078,10 +1236,10 @@ def test_the_written_cell_is_seeded_once_from_the_selected_table(
             {
                 "requested": None,
                 "applied": "fm",
-                "compensated": False,
                 "criterion": "identity",
                 "alternatives": [],
             },
+            False,
             id="unset",
         ),
         pytest.param(
@@ -1090,10 +1248,10 @@ def test_the_written_cell_is_seeded_once_from_the_selected_table(
             {
                 "requested": "fm",
                 "applied": "fm",
-                "compensated": False,
                 "criterion": "identity",
                 "alternatives": [],
             },
+            False,
             id="fm",
         ),
         pytest.param(
@@ -1102,33 +1260,34 @@ def test_the_written_cell_is_seeded_once_from_the_selected_table(
             {
                 "requested": "afm",
                 "applied": "afm-1",
-                "compensated": True,
                 "criterion": "smallest_cell",
                 "alternatives": [],
             },
+            True,
             id="afm",
         ),
     ],
 )
 def test_the_magnetic_record_shows_the_written_cell_and_its_ordering(
-    hpc, correlated_store, counted_enumerations, settings, cell, ordering
+    hpc, correlated_store, counted_enumerations, settings, cell, ordering, compensated
 ) -> None:
     """#128: goldilocks.json records the cell the input is written for, as
     its formula and atom count (any Structure in a record projects to
     those, never to host-specific or bulky data), next to the ordering
     asked for (none when unset, unlike an explicit fm, which is a spin
-    request), the one applied, whether it is compensated (#138), why it
-    was applied and the other candidates of its size (#144)."""
+    request), the one applied, why it was applied and the other candidates
+    of its size (#144), and whether its seeds are compensated (#138, #185)."""
     advice = advise(
         _rock_salt_nio(),
         hpc=hpc,
-        overrides=build_overrides(settings),
+        overrides=build_overrides(settings, task="scf_single_point"),
         store=correlated_store,
     )
 
-    record = advice.records()["magnetic"].value
+    record = records_document(advice.records())["magnetic"]["value"]
     assert record["cell"] == cell
     assert record["ordering"] == ordering
+    assert record["compensated"] is compensated
     assert json.loads(json.dumps(record))["cell"] == cell
 
 
@@ -1139,7 +1298,7 @@ def test_the_magnetic_record_shows_the_frame_the_cell_is_written_in(hpc) -> None
     reads the turned cell."""
     advice = advise(mc3d_42058_silicon(), hpc=hpc)
 
-    record = advice.records()["magnetic"].value
+    record = records_document(advice.records())["magnetic"]["value"]
     frame = json.loads(json.dumps(record))["frame"]
     (notice,) = [
         warning["message"]
@@ -1178,9 +1337,9 @@ def test_a_cell_already_in_pw_x_s_frame_is_written_unturned_without_a_notice(
 
     advice = advise(cubic, hpc=hpc)
 
-    frame = advice.records()["magnetic"].value["frame"]
-    assert frame["rotated"] is False
-    assert frame["operations"] == 24
+    frame = advice.records()["magnetic"].value.frame
+    assert frame.rotated is False
+    assert frame.operations == 24
     assert "magnetic.cell_framed" not in {
         warning["code"] for warning in advice.warnings()
     }

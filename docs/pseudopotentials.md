@@ -36,9 +36,19 @@ does not choose a different table merely because that table is installed. The
 table, plus the default `qrf-kpoints`, `metallicity-cgcnn`,
 `is-metal-classifier`, and `is-magnetic-classifier` models.
 
+If no registered table satisfies the request, the `pseudo_table` record is
+unavailable. Its reason lists every table with the requested functional and
+accuracy, in table-ID order, with the constraints that rejected it. For
+example, La2O3 under PBEsol with `spin_orbit_coupling=true` gives `no
+pseudopotential table satisfies PBEsol efficiency full for La, O:
+pseudodojo-pbesol-efficiency-fr: lanthanide and actinide elements require an
+SSSP table; pseudodojo-pbesol-efficiency-sr: ...; sssp-pbesol-efficiency-sr:
+relativistic treatment is scalar, requested full`. This tells a routing rule
+apart from missing coverage.
+
 To choose a table explicitly, pin `pseudo_table_id`: `--set
 pseudo_table_id=<table-id>` on the CLI, `build_overrides({"pseudo_table_id":
-"<table-id>"})` in Python (see the [Python tutorial](tutorial.md)), or
+"<table-id>"}, task=...)` in Python (see the [Python tutorial](tutorial.md)), or
 `{"overrides": {"pseudo_table_id": "<table-id>"}}` over HTTP/MCP. The pinned
 table's functional, accuracy tier, relativistic treatment, and element
 coverage must still match the request. In particular:
@@ -58,7 +68,10 @@ coverage must still match the request. In particular:
   freezes 4f electrons in the core assuming trivalent ions, which is not
   suitable for all oxidation states; its tables do not cover actinides. No
   registered SSSP table is fully relativistic, so automatic or explicit
-  registered-table selection cannot supply SOC for these elements.
+  registered-table selection cannot supply SOC for these elements. Their runs
+  carry the notice `magnetic.soc_unavailable`, with the selector's reason, in
+  place of a suggestion to enable SOC (see
+  [spin-orbit coupling](science.md#check-magnetism-and-spin-orbit-coupling)).
 - SSSP 1.3.0 PBEsol tables reuse PBE input parameters and cutoffs and were not
   tested with the SSSP convergence protocol. Do not treat these as
   PBEsol-validated cutoffs.
@@ -66,15 +79,29 @@ coverage must still match the request. In particular:
   treatment. Goldilocks permits this exception for scalar requests and
   preserves the per-file treatment; no warning is currently emitted for it.
 
+`spin_orbit_coupling` decides the relativistic treatment the table must have:
+`full` when it is true, `scalar` otherwise (see
+[relativistic modes](conventions.md#relativistic-modes)). With no pinned
+table, enabling it makes automatic selection take the matching fully
+relativistic table, with the same functional and accuracy: fcc Pb under
+PBEsol goes from `pseudodojo-pbesol-efficiency-sr` to
+`pseudodojo-pbesol-efficiency-fr`. This is the same in Python, on the CLI and
+over HTTP/MCP; nothing besides `spin_orbit_coupling` needs to be set. Where no
+registered table is fully relativistic for the structure's elements and
+functional (every lanthanide and actinide, and LDA), the `pseudo_table` record
+is unavailable. A pinned table is never changed: if its relativistic treatment
+does not match, `pseudo_table` is unavailable, for example `relativistic
+treatment is scalar, requested full; matching tables:
+pseudodojo-pbesol-efficiency-fr`. Selecting an `fr` table does **not** enable
+SOC; pinned without SOC, it is unavailable the same way.
+
 In the Workbench, the table dropdown shows choices that support every element
 in your structure at the selected functional; there is no accuracy or
 relativistic-treatment filter or hint in the UI today (accuracy and
 relativistic treatment appear only as descriptive text in each option's
-label). Changing the functional clears any pinned table override. Selecting an
-`fr` table does **not** enable SOC, and enabling `spin_orbit_coupling` does not
-change the table selection — it is an independent setting, checked against
-whichever table ends up selected. Direct Python, CLI, and HTTP requests must
-still supply compatible requirements explicitly.
+label). Changing the functional clears any pinned table override. With no pin,
+the dropdown shows the table automatic selection chose, so it follows the
+`spin_orbit_coupling` switch.
 
 The [scientific guide](science.md#check-pseudopotentials-and-cutoffs) explains
 what to check before using selected cutoffs.
@@ -82,13 +109,17 @@ what to check before using selected cutoffs.
 ## Install and select it
 
 The commands below assume Goldilocks is installed. Replace `structure.cif` with
-your ordered structure file. This example installs and selects fully
-relativistic PBEsol files for an SOC recommendation:
+your ordered structure file. This example installs the fully relativistic
+PBEsol files and asks for an SOC recommendation, which selects them
+automatically:
 
 ```bash
 uv run goldilocks assets install pseudodojo-pbesol-efficiency-fr
-uv run goldilocks explain structure.cif --set spin_orbit_coupling=true --set pseudo_table_id=pseudodojo-pbesol-efficiency-fr
+uv run goldilocks explain structure.cif --set spin_orbit_coupling=true
 ```
+
+Pinning the table with `--set pseudo_table_id=pseudodojo-pbesol-efficiency-fr`
+is optional; it selects the same table.
 
 Use the [asset commands](cli.md#install-and-check-assets) if a required model or
 table is missing.
@@ -122,10 +153,16 @@ for pseudo in metadata:
     print(pseudo.element, pseudo.filename, pseudo.cutoffs)
 ```
 
-Managed PseudoDojo tables convert the provider's high cutoff hint from Hartree
-to Ry and derive the charge-density cutoff using the registered multiplier
-(currently 4). SSSP tables supply separate wavefunction and charge-density
-cutoffs. Neither path optimizes cutoffs for your structure.
+PseudoDojo publishes only wavefunction cutoff hints (low, normal and high, in
+Hartree). A managed PseudoDojo table converts them to Ry and keeps all three as
+`cutoff_hints`; `cutoffs` holds the high hint as `ecutwfc_ry` and `None` as
+`ecutrho_ry`, because PseudoDojo publishes no charge-density cutoff. SSSP tables
+publish both cutoffs, so `cutoff_hints` is `None`. The `cutoffs` advisor is the
+one place a charge-density cutoff is derived: for a table that publishes none it
+writes the table's `charge_density_dual` (4 for every PseudoDojo table) times
+the resolved `ecutwfc_ry`, a `--set ecutwfc_ry` value included, and the
+`cutoffs` record says so with the info notice `cutoffs.ecutrho_derived_from_dual`.
+Neither path optimizes cutoffs for your structure.
 
 ## Use your own UPF files
 
@@ -154,6 +191,14 @@ The default store is `$XDG_DATA_HOME/goldilocks/assets`, or
 
 Treat managed files as read-only; use `assets install`, `status`, and `verify`.
 
+Published records never contain this path. The `pseudopotentials` record of
+`explain`, `run` and `goldilocks.json` names each UPF by `table_id`
+(`pseudopotentials/<table-id>`), `asset_path` (its path inside the table's
+installation, such as `pseudos/Si.upf`), `filename` (its copy under `pseudo/`
+in a bundle) and `content_sha256`/`content_size_bytes`, which equal that
+copy's entry in the manifest's `files`. Two machines with the same tables
+installed publish the same records.
+
 ## Licences and citations
 
 UPFs retain their upstream licences; the Goldilocks BSD licence does not apply
@@ -169,5 +214,9 @@ to them. UPFs are downloaded separately, not bundled in the package.
   before redistribution.
 
 Installations store licence material in `LICENSE.txt`: the CC BY 4.0 notice for
-PseudoDojo, or the upstream mixed-family licence file for SSSP. Published
-calculation outputs include that material with the selected UPFs.
+PseudoDojo, or the upstream mixed-family licence file for SSSP, which gives
+each family's licence and references (GBRV under GPL-3.0, for example, and
+Topsakal & Wentzcovitch 2014 for the rare-earth PAWs). Every bundle that
+ships UPFs (CLI `run --out`, HTTP `/run` archives, Workbench downloads) also
+ships that file byte for byte as `licences/<table-id>.txt`, listed in
+`goldilocks.json`'s `files` with role `licence` and named in `CITATIONS.md`.

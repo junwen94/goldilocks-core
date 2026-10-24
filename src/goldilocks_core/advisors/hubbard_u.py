@@ -77,6 +77,7 @@ from goldilocks_core.resolution import (
     Resolved,
     Warning,
     blocked_by,
+    field_sources_from,
 )
 
 
@@ -331,31 +332,52 @@ def hubbard_u(
     """Resolves in priority order: a hybrid functional (no +U), the human
     overrides (``needs_correlation=False``, then ``u_by_element``, then
     ``needs_correlation=True``), the LLM override, then the
-    ``needs_correlation`` fact, which this propagates when it is blocked."""
+    ``needs_correlation`` fact, which this propagates when it is blocked.
+    The provenance names the setting that decided and who set it, and the
+    record the rule followed (``_provenance``, #173)."""
     human = human or HubbardUHumanInput()
     llm = llm or HubbardULlmInput()
 
     if functional == HYBRID_FUNCTIONAL:
-        return Resolved(_decision(), Provenance(source="heuristic"))
+        return Resolved(_decision(), _provenance(None, None, ("functional",)))
     if human.needs_correlation is False:
-        return Resolved(_decision(), Provenance(source="human"))
+        return Resolved(_decision(), _provenance(human, llm))
     if human.u_by_element is not None:
         return Resolved(
             _from_u_by_element(structure, human.u_by_element),
-            Provenance(source="human"),
+            _provenance(human, llm, setting="u_by_element"),
         )
     if human.needs_correlation is True:
-        return Resolved(_from_table(structure), Provenance(source="human"))
+        return Resolved(_from_table(structure), _provenance(human, llm))
     if llm.needs_correlation is False:
-        return Resolved(_decision(), Provenance(source="llm"))
+        return Resolved(_decision(), _provenance(human, llm))
     if llm.needs_correlation is True:
-        return Resolved(_from_table(structure), Provenance(source="llm"))
+        return Resolved(_from_table(structure), _provenance(human, llm))
 
     if not needs_correlation.ok:
         return Blocked(by=blocked_by(needs_correlation))
+    from_fact = _provenance(human, llm, ("needs_correlation",))
     if not needs_correlation.value:
-        return Resolved(_decision(), Provenance(source="heuristic"))
-    return Resolved(_from_table(structure), Provenance(source="heuristic"))
+        return Resolved(_decision(), from_fact)
+    return Resolved(_from_table(structure), from_fact)
+
+
+def _provenance(
+    human: HubbardUHumanInput | None,
+    llm: HubbardULlmInput | None,
+    derived_from: tuple[str, ...] = (),
+    *,
+    setting: str = "needs_correlation",
+) -> Provenance:
+    """The provenance of a decision ``setting`` decided: ``human`` or
+    ``llm`` where that input set it, else ``heuristic``, with
+    ``derived_from`` naming the record a heuristic rule followed (the
+    ``needs_correlation`` fact, or ``functional`` for a hybrid, which reads
+    neither input). Keyed by the attribute name ``needs_correlation``;
+    ``/capabilities`` exposes it as ``hubbard_needs_correlation``."""
+    return Provenance.from_field_sources(
+        field_sources_from(human, llm, fields=(setting,)), derived_from=derived_from
+    )
 
 
 def _from_table(structure: Structure) -> HubbardUDecision:

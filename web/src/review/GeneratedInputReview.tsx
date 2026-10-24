@@ -15,16 +15,18 @@ import { readableName } from "./readableName";
 /** Mirrors the roles `bundle.py`/`_bundle.py` actually assign in
  * `goldilocks.json` (verified against source, not guessed) -- this is
  * the display order the user asked for: rendered code input, then the
- * submission script, then pseudopotentials, then the machine-readable
- * manifest, then the human-readable docs. */
+ * submission script, then pseudopotentials and their table's licence,
+ * then the machine-readable manifest, then the human-readable docs. */
 const ROLE_RANK: Readonly<Record<string, number>> = {
   input: 0,
   submission_script: 1,
   pseudopotential: 2,
-  manifest: 3,
-  readme: 4,
-  citations: 4,
+  licence: 3,
+  manifest: 4,
+  readme: 5,
+  citations: 5,
 };
+const UNRANKED = 6;
 
 function roleOf(
   manifest: InputManifest | null,
@@ -44,8 +46,8 @@ function orderedFiles(
   manifest: InputManifest | null,
 ): ArchiveFile[] {
   return [...files].sort((a, b) => {
-    const rankA = ROLE_RANK[roleOf(manifest, a.path) ?? ""] ?? 5;
-    const rankB = ROLE_RANK[roleOf(manifest, b.path) ?? ""] ?? 5;
+    const rankA = ROLE_RANK[roleOf(manifest, a.path) ?? ""] ?? UNRANKED;
+    const rankB = ROLE_RANK[roleOf(manifest, b.path) ?? ""] ?? UNRANKED;
     return rankA !== rankB ? rankA - rankB : a.path.localeCompare(b.path);
   });
 }

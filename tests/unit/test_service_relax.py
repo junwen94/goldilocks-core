@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 from pymatgen.core import Lattice, Structure
 from support import sssp_fixture_table_spec
 
-from goldilocks_core.advisors.relax import RelaxHumanInput, VcRelaxOptions
+from goldilocks_core.advisors.relax import VcRelaxOptions
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
-from goldilocks_core.resolution import Blocked
+from goldilocks_core.resolution import Blocked, Provenance, Resolved, Warning
 from goldilocks_core.service import (
-    RelaxOverrides,
     RunOverrides,
-    StepOverrides,
     SystemOverrides,
     advise_relax,
     check_relax,
@@ -69,7 +69,9 @@ class TestAdviseRelaxDegradation:
         """Unlike DosHumanInput/DosLlmInput (v2 epic 9, #9, never wired
         to any transport), relax's own settings are real ``--set``/HTTP
         overrides -- capabilities.bindings() knows about them."""
-        overrides = build_overrides({"nstep": 200, "ion_dynamics": "fire"})
+        overrides = build_overrides(
+            {"nstep": 200, "ion_dynamics": "fire"}, task="relax"
+        )
 
         advice = advise_relax(
             _silicon(), calculation="relax", hpc=_hpc(), overrides=overrides
@@ -80,11 +82,7 @@ class TestAdviseRelaxDegradation:
         assert advice.relax.source == "human"
 
     def test_structural_override_reaches_relax_settings_too(self) -> None:
-        overrides = RunOverrides(
-            step=StepOverrides(
-                relax=RelaxOverrides(relax=RelaxHumanInput(remove_rigid_rot=True))
-            )
-        )
+        overrides = build_overrides({"remove_rigid_rot": True}, task="relax")
 
         advice = advise_relax(
             _silicon(), calculation="relax", hpc=_hpc(), overrides=overrides
@@ -107,7 +105,7 @@ class TestAdviseRelaxDegradation:
         assert any("does-not-exist" in reason for reason in report.blocking)
 
     def test_vc_relax_with_non_bfgs_ion_dynamics_is_blocked_end_to_end(self) -> None:
-        overrides = build_overrides({"ion_dynamics": "damp"})
+        overrides = build_overrides({"ion_dynamics": "damp"}, task="vc-relax")
 
         advice = advise_relax(
             _silicon(), calculation="vc-relax", hpc=_hpc(), overrides=overrides
@@ -120,7 +118,7 @@ class TestAdviseRelaxDegradation:
     def test_set_style_override_reaches_fix_bottom_layers(self) -> None:
         """No registry entry was added for this: capabilities.py reflects
         ``RelaxHumanInput.fix_bottom_layers`` automatically (#44)."""
-        overrides = build_overrides({"fix_bottom_layers": 2})
+        overrides = build_overrides({"fix_bottom_layers": 2}, task="relax")
 
         advice = advise_relax(
             _silicon(), calculation="relax", hpc=_hpc(), overrides=overrides
@@ -130,7 +128,7 @@ class TestAdviseRelaxDegradation:
         assert advice.relax.source == "human"
 
     def test_fix_bottom_layers_on_bulk_silicon_is_blocked_end_to_end(self) -> None:
-        overrides = build_overrides({"fix_bottom_layers": 1})
+        overrides = build_overrides({"fix_bottom_layers": 1}, task="relax")
 
         advice = advise_relax(
             _silicon(), calculation="relax", hpc=_hpc(), overrides=overrides
@@ -150,7 +148,7 @@ class TestAdviseRelaxDegradation:
         """D16 (#160): the Si(001) slab has 8 atomic layers on the cell
         the writer renders, so check_relax refuses 9 instead of leaving
         generate_relax to raise."""
-        overrides = build_overrides({"fix_bottom_layers": 9})
+        overrides = build_overrides({"fix_bottom_layers": 9}, task="relax")
 
         advice = advise_relax(
             _silicon_slab(), calculation="relax", hpc=_hpc(), overrides=overrides
@@ -161,6 +159,33 @@ class TestAdviseRelaxDegradation:
             "relax.fix_bottom_layers=9 exceeds the 8 atomic layers of the slab to "
             "be written. Set fix_bottom_layers to at most 8, or unset it."
         ) in report.blocking
+
+
+class TestRelaxWarnings:
+    def test_warnings_list_the_relax_record_s_own(self) -> None:
+        """#152: ``relax`` reached ``records()`` as a raw decision next to
+        the shared records' dict projections, and the dict-only collector
+        skipped it, so the vc-relax notice 1T-PtSe2 (MC2D mc2d-fe145b4f)
+        carried never reached ``warnings``. Every warning a relax decision
+        carries now does, naming the record it came from."""
+        advice = advise_relax(_silicon(), calculation="vc-relax", hpc=_hpc())
+        notice = Warning(
+            code="relax.notice",
+            level="warning",
+            category="relax",
+            message="a notice the relax decision carries.",
+        )
+        advice = dataclasses.replace(
+            advice,
+            relax=Resolved(
+                VcRelaxOptions(warnings=(notice,)), Provenance(source="heuristic")
+            ),
+        )
+
+        warnings = advice.warnings()
+
+        assert notice.message in [warning["message"] for warning in warnings]
+        assert {**notice.model_dump(), "record": "relax"} in warnings
 
 
 class TestGenerateRelaxEndToEnd:
@@ -200,7 +225,7 @@ class TestGenerateRelaxEndToEnd:
         (generation) -- not just each layer's own unit tests in
         isolation."""
         store = self._store(tmp_path, monkeypatch)
-        overrides = build_overrides({"fix_bottom_layers": 2})
+        overrides = build_overrides({"fix_bottom_layers": 2}, task="relax")
 
         advice = advise_relax(
             _silicon_slab(),

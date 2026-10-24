@@ -1,19 +1,30 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Annotated
+
 import pytest
 from pydantic import BaseModel
+from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.inputs.overrides import HumanInput
+from goldilocks_core.inputs.overrides import HumanInput, LlmInput
 from goldilocks_core.resolution import (
     Blocked,
     BlockedValueError,
     FieldState,
+    ModelEvidence,
     Provenance,
     Resolved,
     ResolvedField,
     Unavailable,
+    Warning,
     blocked_by,
+    collect_citations,
+    collect_warnings,
+    field_sources_from,
+    records_document,
 )
+from goldilocks_core.serialization import Portable
 
 
 def test_resolved_carries_value_and_source() -> None:
@@ -137,6 +148,10 @@ class TestResolvedFieldBoundaryProjection:
             "value": 0.4,
             "source": "heuristic",
             "field_sources": None,
+            "derived_from": (),
+            "source_note": None,
+            "model": None,
+            "citations": (),
             "reason": None,
             "blocked_by": None,
         }
@@ -165,6 +180,352 @@ class TestResolvedFieldBoundaryProjection:
         )
 
         assert projection.model_dump_json()
+
+    def test_a_typed_field_keeps_the_value_it_declares(self) -> None:
+        """The value is the ``T`` the field declares; only publication
+        (``records_document``) projects it, dropping host-local fields."""
+        window = _Window(low=-5.0, host_path="/home/someone/run")
+        state = Resolved(window, Provenance(source="heuristic"))
+
+        projection = ResolvedField[_Window].from_state(state)
+
+        assert projection.value == window
+        assert records_document({"window": state})["window"]["value"] == {"low": -5.0}
+
+
+@dataclass(frozen=True, slots=True)
+class _Window:
+    low: float
+    host_path: Annotated[str | None, Portable()] = None
+
+
+_UNVALIDATED = (
+    "magnetism.is_magnetic.mace_mlp@mace_probe_embedding.v1 has not been "
+    "externally validated (MP-ALOE external validation has not been run.)"
+)
+_IS_MAGNETIC_EVIDENCE = ModelEvidence(
+    model_id="magnetism.is_magnetic.mace_mlp@mace_probe_embedding.v1",
+    asset="models/is-magnetic-classifier@1",
+    target_contract="goldilocks.is_magnetic.dft_max_site_magmom_0p5ub.v1",
+    value=True,
+    details={"score": 0.3598, "threshold": 0.3239, "label": "magnetic"},
+    warnings=(
+        Warning(
+            code="is_magnetic.model_warning",
+            level="warning",
+            category="is_magnetic",
+            message=_UNVALIDATED,
+        ),
+    ),
+)
+"""TiNi (MC3D mc3d-31340) as the is_magnetic model classified it (#156)."""
+
+
+class TestResolvedFieldPublishesTheWholeProvenance:
+    """#156: ``ResolvedField`` copied only ``source`` and ``field_sources``,
+    so the model behind an ``ml`` record and every advisor's rationale never
+    reached ``/explain``, ``/run`` or ``goldilocks.json``."""
+
+    def test_every_provenance_field_has_a_resolved_field_of_its_name(self) -> None:
+        assert set(Provenance.model_fields) <= set(ResolvedField.model_fields)
+
+    def test_from_state_round_trips_every_provenance_field(self) -> None:
+        provenance = Provenance(
+            source="ml",
+            source_note="classified by the published mMACE + MLP classifier",
+            field_sources={"is_magnetic": "ml"},
+            derived_from=("composition",),
+            model=_IS_MAGNETIC_EVIDENCE,
+            citations=("Goldilocks mMACE + MLP magnetism classifier.",),
+        )
+        unset = [
+            name
+            for name, field in Provenance.model_fields.items()
+            if getattr(provenance, name) == field.get_default(call_default_factory=True)
+        ]
+        assert unset == [], "the round trip must set every Provenance field"
+
+        projection = ResolvedField.from_state(Resolved("magnetic", provenance))
+
+        published = projection.model_dump(include=set(Provenance.model_fields))
+        assert Provenance.model_validate(published) == provenance
+
+
+class _MixingHumanInput(HumanInput):
+    conv_thr: float | None = None
+    mixing_beta: float | None = None
+    mixing_mode: str | None = None
+
+
+class _MixingLlmInput(LlmInput):
+    mixing_beta: float | None = None
+    mixing_mode: str | None = None
+
+
+class TestFieldSources:
+    """#173: a record's provenance follows what its advisor consumed, so a
+    field the request set reads ``human`` exactly when the decision applied
+    it, and ``source`` is the highest tier among the fields."""
+
+    def test_each_applied_field_reads_the_tier_that_set_it(self) -> None:
+        sources = field_sources_from(
+            _MixingHumanInput(mixing_beta=0.3),
+            _MixingLlmInput(mixing_beta=0.2, mixing_mode="local-TF"),
+            fields=("conv_thr", "mixing_beta", "mixing_mode"),
+        )
+
+        assert sources == {
+            "conv_thr": "heuristic",
+            "mixing_beta": "human",
+            "mixing_mode": "llm",
+        }
+
+    def test_a_field_the_decision_did_not_apply_gets_no_entry(self) -> None:
+        sources = field_sources_from(
+            _MixingHumanInput(conv_thr=1e-9, mixing_mode="plain"),
+            None,
+            fields=("mixing_beta",),
+        )
+
+        assert sources == {"mixing_beta": "heuristic"}
+
+    def test_a_decided_tier_names_who_chose_a_field_the_request_left_unset(
+        self,
+    ) -> None:
+        """An advisor passes the tier that decided a field (QRF95's
+        k_distance, the spin decision); a request-set field stays human."""
+        sources = field_sources_from(
+            _MixingHumanInput(mixing_mode="plain"),
+            _MixingLlmInput(mixing_beta=0.2),
+            fields=("conv_thr", "mixing_beta", "mixing_mode"),
+            decided={"conv_thr": "ml", "mixing_mode": "ml"},
+        )
+
+        assert sources == {
+            "conv_thr": "ml",
+            "mixing_beta": "llm",
+            "mixing_mode": "human",
+        }
+
+    @pytest.mark.parametrize(
+        ("field_sources", "source"),
+        [
+            ({"a": "heuristic"}, "heuristic"),
+            ({"a": "heuristic", "b": "llm"}, "llm"),
+            ({"a": "llm", "b": "ml", "c": "heuristic"}, "ml"),
+            ({"a": "ml", "b": "human", "c": "llm"}, "human"),
+        ],
+    )
+    def test_the_record_source_is_the_highest_tier_among_its_fields(
+        self, field_sources: dict, source: str
+    ) -> None:
+        provenance = Provenance.from_field_sources(
+            field_sources, derived_from=("is_metal",), citations=("A paper.",)
+        )
+
+        assert provenance == Provenance(
+            source=source,
+            field_sources=field_sources,
+            derived_from=("is_metal",),
+            citations=("A paper.",),
+        )
+
+    def test_derived_from_is_published_with_the_record(self) -> None:
+        records = {
+            "occupations": Resolved(
+                "smearing",
+                Provenance.from_field_sources(
+                    {"occupations": "heuristic"}, derived_from=("is_metal",)
+                ),
+            )
+        }
+
+        document = records_document(records)
+
+        assert document["occupations"]["source"] == "heuristic"
+        assert document["occupations"]["field_sources"] == {"occupations": "heuristic"}
+        assert document["occupations"]["derived_from"] == ["is_metal"]
+
+
+@dataclass(frozen=True, slots=True)
+class _Decision:
+    """A record value shaped like every advisor decision: a frozen
+    dataclass carrying its own ``warnings`` tuple."""
+
+    value: float
+    cell: Structure | None = None
+    host_path: Annotated[str | None, Portable()] = None
+    warnings: tuple[Warning, ...] = ()
+
+
+def _notice(code: str, message: str) -> Warning:
+    return Warning(
+        code=code, level="info", category=code.split(".")[0], message=message
+    )
+
+
+class TestRecordsDocument:
+    """#152: the one projection of a records mapping, shared by the
+    responses, the CLI and goldilocks.json."""
+
+    def test_publishes_the_model_rationale_and_citations_of_a_record(self) -> None:
+        """#156: an ``ml`` record names its model and keeps what it returned,
+        and any record keeps its rationale and citations."""
+        records = {
+            "is_magnetic": Resolved(
+                "magnetic",
+                Provenance(
+                    source="ml",
+                    model=_IS_MAGNETIC_EVIDENCE,
+                    citations=("Goldilocks mMACE + MLP magnetism classifier.",),
+                ),
+            ),
+            "boundary": Resolved(
+                "molecule",
+                Provenance(
+                    source="heuristic",
+                    source_note="molecule structure in a periodic cell",
+                ),
+            ),
+        }
+
+        document = records_document(records)
+
+        assert document["is_magnetic"]["model"] == {
+            "model_id": "magnetism.is_magnetic.mace_mlp@mace_probe_embedding.v1",
+            "asset": "models/is-magnetic-classifier@1",
+            "target_contract": "goldilocks.is_magnetic.dft_max_site_magmom_0p5ub.v1",
+            "value": True,
+            "details": {"score": 0.3598, "threshold": 0.3239, "label": "magnetic"},
+            "warnings": [
+                {
+                    "code": "is_magnetic.model_warning",
+                    "level": "warning",
+                    "category": "is_magnetic",
+                    "message": _UNVALIDATED,
+                }
+            ],
+        }
+        assert document["is_magnetic"]["citations"] == [
+            "Goldilocks mMACE + MLP magnetism classifier."
+        ]
+        assert document["boundary"]["source_note"] == (
+            "molecule structure in a periodic cell"
+        )
+        assert document["boundary"]["model"] is None
+
+    def test_projects_each_record_value_for_publication_in_name_order(self) -> None:
+        cell = Structure(
+            Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]]
+        )
+        records = {
+            "vdw": Blocked(by="geometry blocked upstream"),
+            "decision": Resolved(
+                _Decision(0.5, cell=cell, host_path="/home/someone/run"),
+                Provenance(source="heuristic"),
+            ),
+            "hubbard": Unavailable(reason="no correlated elements"),
+        }
+
+        document = records_document(records)
+
+        assert list(document) == ["decision", "hubbard", "vdw"]
+        assert document["decision"] == {
+            "status": "resolved",
+            "value": {
+                "value": 0.5,
+                "cell": {"formula": "Si2", "nat": 2},
+                "warnings": [],
+            },
+            "source": "heuristic",
+            "field_sources": None,
+            "derived_from": [],
+            "source_note": None,
+            "model": None,
+            "citations": [],
+            "reason": None,
+            "blocked_by": None,
+        }
+        assert document["hubbard"]["reason"] == "no correlated elements"
+        assert document["vdw"]["blocked_by"] == "geometry blocked upstream"
+
+
+class TestCollectWarnings:
+    """#152: one collector over the typed records, so no record shape can
+    slip past it."""
+
+    def test_includes_the_warnings_a_model_returned_with_its_record(self) -> None:
+        """#156: the caveats a model returns with a prediction reach the
+        top-level list, tagged with the record the model decided."""
+        records = {
+            "is_magnetic": Resolved(
+                "magnetic",
+                Provenance(source="ml", model=_IS_MAGNETIC_EVIDENCE),
+            ),
+        }
+
+        assert collect_warnings(records) == [
+            {
+                "code": "is_magnetic.model_warning",
+                "level": "warning",
+                "category": "is_magnetic",
+                "message": _UNVALIDATED,
+                "record": "is_magnetic",
+            }
+        ]
+
+    def test_tags_every_warning_with_its_record_in_record_name_order(self) -> None:
+        scf = _notice("parallelisation.npool_load_imbalance", "npool=32 ...")
+        nscf = _notice("parallelisation.npool_load_imbalance", "npool=64 ...")
+        job = _notice("job.walltime_defaulted", "walltime not specified.")
+        records = {
+            "parallelisation": Resolved(
+                _Decision(1.0, warnings=(scf,)), Provenance(source="heuristic")
+            ),
+            "nscf_parallelisation": Resolved(
+                _Decision(2.0, warnings=(nscf,)), Provenance(source="heuristic")
+            ),
+            "job": Resolved(
+                _Decision(3.0, warnings=(job,)), Provenance(source="human")
+            ),
+        }
+
+        assert collect_warnings(records) == [
+            {**job.model_dump(), "record": "job"},
+            {**nscf.model_dump(), "record": "nscf_parallelisation"},
+            {**scf.model_dump(), "record": "parallelisation"},
+        ]
+
+    def test_skips_values_without_warnings_and_unresolved_records(self) -> None:
+        records = {
+            "is_metal": Resolved("metal", Provenance(source="heuristic")),
+            "pseudopotentials": Resolved((), Provenance(source="heuristic")),
+            "vdw": Blocked(by="geometry blocked upstream"),
+            "hubbard": Unavailable(reason="no correlated elements"),
+        }
+
+        assert collect_warnings(records) == []
+
+
+class TestCollectCitations:
+    """#156: a bundle cites what its records cite, so every model and table
+    that shaped the input is listed, each once."""
+
+    def test_lists_every_resolved_record_s_citations_once_in_sorted_order(
+        self,
+    ) -> None:
+        paper = "Patyukova et al., Digital Discovery (2026)."
+        records = {
+            "pseudo_table": Resolved(
+                "pseudodojo", Provenance(source="heuristic", citations=("van Setten",))
+            ),
+            "is_metal": Resolved("metal", Provenance(source="ml", citations=(paper,))),
+            "k_sampling": Resolved(0.2, Provenance(source="ml", citations=(paper,))),
+            "functional": Resolved("PBEsol", Provenance(source="heuristic")),
+            "hubbard": Unavailable(reason="no correlated elements"),
+        }
+
+        assert collect_citations(records) == [paper, "van Setten"]
 
 
 # --- Worked example: contract declaration -> resolution -> pydantic serialization ---

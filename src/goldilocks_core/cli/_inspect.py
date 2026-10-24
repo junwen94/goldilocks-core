@@ -35,4 +35,6 @@ def run(args: argparse.Namespace, out: TextIO) -> None:
     print(f"formula: {structure_doc['reduced_formula']}", file=out)
     print(f"elements: {', '.join(elements)}", file=out)
     print(f"sites: {structure_doc['site_count']}", file=out)
+    labels = dict.fromkeys(site["label"] for site in structure_doc["sites"])
+    print(f"site labels: {', '.join(labels)}", file=out)
     print(f"volume (A^3): {structure_doc['lattice']['volume_angstrom3']:.4f}", file=out)

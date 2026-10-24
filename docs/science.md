@@ -36,8 +36,8 @@ MgO look the same to it as metallic RuO2 and TiN. Unavailable -- like an
 actual `metal` result -- still defaults to smearing, not fixed occupations,
 because assuming "fixed" on an undetected metal risks silent
 non-convergence. A confident `non_metal` result is reachable via a human
-override, the ML classifier, or an LLM override. Neither the heuristic nor
-the ML model determines a band structure.
+override (`--set is_metal=non_metal`), the ML classifier, or an LLM override.
+Neither the heuristic nor the ML model determines a band structure.
 
 Fixed occupations fill whole bands in each spin channel: pw.x puts
 (nelec + `tot_magnetization`)/2 electrons in the spin-up channel and
@@ -61,13 +61,20 @@ refused before generation: set `tot_magnetization` too, or use smearing.
 
 Check the `is_metal` record's `status`, `source`, and `reason` (via
 `goldilocks explain --json` or the published `goldilocks.json`'s
-`records.is_metal`), and the `occupations` record's own `warnings` array. A
+`records.is_metal`), and the `occupations` record's own `warnings` array.
+When the classifier decided (`source` `ml`), `model.details` holds its
+`score` and the `threshold` it was compared with; a score close to the
+threshold is a call the model nearly made the other way. A
 composition-only `metal` result can still be wrong -- intermetallic
 semiconductors such as CsAu or Mg2Sn contain only metals -- and give the
-wrong occupation choice for your system. Override the scheme itself with
+wrong occupation choice for your system. Correct the classification with
+`is_metal` (`metal` or `non_metal`, the record's own values; `true`/`false`
+are refused), or override the scheme itself with
 `occupations` (`fixed`, `smearing`, or `tetrahedra_opt`); when using
-smearing, refine it with `smearing_type` (default `cold`) and `degauss` (Ry,
-default 0.01). Test the width together with the k-point mesh.
+smearing, refine it with `smearing_type` (`gaussian`, `mp` for
+Methfessel-Paxton, `cold` for Marzari-Vanderbilt, or `fd` for Fermi-Dirac;
+default `cold`) and `degauss` (Ry, default 0.01). Test the width together
+with the k-point mesh.
 
 ## Check k-point sampling
 
@@ -83,8 +90,12 @@ heuristically: 0.15 Å⁻¹ if `is_metal`
 resolves to `metal` or is unavailable, 0.30 Å⁻¹ for a `non_metal` (a mesh
 that is too coarse on an undetected metal risks silent under-convergence,
 while a mesh that is too fine on an actual insulator only costs more
-compute). There is no "confidence" or prediction-interval field
-in `explain`/`run` output today.
+compute). When the model picked the distance, the `k_sampling` record's
+`model` keeps QRF95's own prediction interval in `details.interval`. The
+published model records no conformal calibration, so a
+`k_sampling.model_warning` says that interval carries no coverage guarantee.
+`k_distance_interval` is not that interval: it is the range of k-distances
+that give the chosen ladder rung.
 
 Each lattice vector in the `geometry` record's `vacuum_axes` (see
 [boundary conditions and vacuum](#check-boundary-conditions-and-vacuum)) gets
@@ -183,6 +194,11 @@ A supercell, such as the 8-atom conventional cell of diamond, gets no
 fractional translations in pw.x, so it keeps only the operations that need
 none (24 of diamond's 48), and is counted that way.
 
+The cards write lattice components and fractional coordinates to 10
+significant digits, and any smaller than 1e-10 in magnitude as `0`: the
+1e-16 Å left where a lattice built from its angles, or turned into its
+standard orientation, has a zero, and the 1e-36 coordinates some CIFs list.
+
 ## Check pseudopotentials and cutoffs
 
 A pseudopotential replaces the core-electron potential with an effective
@@ -191,10 +207,14 @@ configuration, and relativistic treatment suit your system.
 
 Goldilocks selects files and cutoff metadata, not system-specific convergence
 limits. Quantum ESPRESSO receives the largest wavefunction cutoff and largest
-charge-density cutoff among the selected elements. An `efficiency` or
-`precision` table is a library choice, not proof that your target property is
-converged. Test both cutoffs. See [Pseudopotential tables](pseudopotentials.md)
-for selection rules, installation, and custom files.
+charge-density cutoff among the selected elements. PseudoDojo publishes no
+charge-density cutoff, so for its tables `ecutrho` is 4 times `ecutwfc` (the
+table's `charge_density_dual`: Quantum ESPRESSO's default, which its
+documentation advises keeping for norm-conserving files), flagged by the
+`cutoffs.ecutrho_derived_from_dual` notice. An `efficiency` or `precision`
+table is a library choice, not proof that your target property is converged.
+Test both cutoffs. See [Pseudopotential tables](pseudopotentials.md) for
+selection rules, installation, and custom files.
 
 ## Check magnetism and spin-orbit coupling
 
@@ -237,10 +257,25 @@ reads CrTe3 as d0 Cr6+): set `spin_polarized` when you know better. A
 structure with fractional site occupancies is undecidable too, and since a
 spin-polarized run needs one species per site to seed, its magnetic setup is
 blocked until you set `spin_polarized` to false or upload an ordered cell.
+
+A [Hubbard U](#check-hubbard-u) on an element whose d or f count (from the
+ionic oxidation-state guess above) is odd also makes the run spin-polarized,
+with the warning `magnetic.spin_polarized_for_hubbard_open_shell`, even when
+`is_magnetic` says `non_magnetic`, whichever tier said so, your own override
+included. Quantum ESPRESSO applies the Dudarev potential per spin, and
+without spin polarization each spin holds half of the shell's electrons: 4.5
+for Cu2+ (d9), which fills no whole orbital, so +U can neither form the
+moment nor open the gap, and pw.x converges to the wrong state without
+complaint. The classifier calls tenorite CuO non-magnetic, yet spin-polarized
+it forms 0.66 Bohr magnetons per Cu and lies 25.6 meV/atom lower. The rule
+reads the shell count, so low-spin Co3+ (d6) in LiCoO2 keeps a non-magnetic
+answer. Only an explicit `spin_polarized=false` overrides it.
+
 Spin-polarized inputs get a `starting_magnetization` for every species;
 review it for your calculation. Neither tier predicts magnetic *order* (see
 `magnetic_ordering` below for that). Override either tier with
-`spin_polarized`.
+`spin_polarized`, or correct the classification with `is_magnetic`
+(`magnetic` or `non_magnetic`).
 
 Bands are counted per spin channel, and the default follows pw.x's own rule
 (QE setup.f90), sized so the majority channel holds (nelec + |M|)/2 electrons.
@@ -257,15 +292,33 @@ bands. An `nbnd` or `extra_bands` that leaves fewer bands than pw.x accepts
 spin-orbit coupling -- is refused before generation, and one that holds the
 moment below its seed gets the warning `nbnd.moment_capped`.
 
-A `starting_magnetization` you set is keyed by site label and replaces the
-heuristic seeds; labels you leave out start at 0. The input has one species
-per element and starting value, whatever labels your file gave its sites
-(`Si1`..`Si40` are one `Si`), and sites of one element with different values
-become separate species (`Fe0` at 0.5 and `Fe1` at -0.5 are written as `Fe1`
-and `Fe2`). Symmetry and the irreducible k-points are counted on those
-species, the way pw.x counts them: that bcc Fe pair is simple cubic (Pm-3m),
-not body-centred. `records.magnetic.starting_magnetization` is keyed by the
-written species, not by your file's site labels.
+A `starting_magnetization` you set is a fraction of each species' valence
+electrons, strictly between -1 and 1: from Quantum ESPRESSO 7.3, a value of
+1 or more turns every species' value into a moment in Bohr magnetons, so it
+is refused. It is keyed by site label: your file's labels (`goldilocks
+inspect` and `/inspect` list them; a POSCAR's are its element symbols), or
+the `Ni1`/`Ni2`/`O` labels of an applied `magnetic_ordering`.
+`records.magnetic.site_labels` lists the labels in force, even for a run that
+is not spin-polarized. An element symbol sets all of that element's sites
+(`{"Ni": 0.5}` on a CIF labelled `Ni1`/`O1`), except where an applied
+ordering seeds them differently: `Ni` on the `Ni1`/`Ni2` sublattices is
+refused, naming the labels to set instead. A label beats its element, so on
+a file labelled `Fe1`..`Fe4`, `{"Fe": 0.5, "Fe1": -0.5}` starts `Fe1` at
+-0.5 and the other three at 0.5.
+Each value replaces the heuristic seed of its sites only; sites you leave out
+keep theirs, so `{"Ni1": 0.5}` on NiO's AFM cell keeps `Ni2` at its negative
+seed and `O` at 0. `records.magnetic.human_seeded_labels` names the species
+you set. The input has one species per element and starting value, whatever
+labels your file gave its sites (`Si1`..`Si40` are one `Si`), and sites of
+one element with different values become separate species (`Fe0` at 0.5 and
+`Fe1` at -0.5 are written as `Fe1` and `Fe2`). A value you set that equals
+another site's computed seed still makes its own species, since the computed
+seed is known only once the pseudopotentials are chosen. Symmetry and the
+irreducible k-points are counted on those species, the way pw.x counts them:
+that bcc Fe pair is simple cubic (Pm-3m), not body-centred.
+`records.magnetic.starting_magnetization` is keyed by the written species,
+not by your file's site labels; an element name there (`Ni`) is also a key
+you can set.
 
 Spin-orbit coupling (SOC) couples electron spin to orbital motion. Goldilocks
 flags elements at or above Rb (Z=37) whose valence character is p, d, or f for
@@ -274,7 +327,15 @@ elements (Rb, Sr, Cs, Ba) are excluded because s orbitals carry no
 first-order spin-orbit splitting. Whether SOC matters depends on the property,
 not only the elements. Enabling it changes the required pseudopotentials and
 the QE spin settings. See [relativistic modes](conventions.md#relativistic-modes)
-and the [table restrictions](pseudopotentials.md#choose-a-table).
+and the [table restrictions](pseudopotentials.md#choose-a-table). The info
+notice follows the table selection SOC would make. `magnetic.soc_suggested`
+names the fully relativistic table automatic selection would use, for
+example `pseudodojo-pbesol-efficiency-fr` for fcc Pb under PBEsol. Where no
+registered table can serve SOC, the notice is `magnetic.soc_unavailable`
+instead and carries the selector's reason. That covers every lanthanide and
+actinide, which must use SSSP, and any element under LDA, which has no fully
+relativistic table: enabling `spin_orbit_coupling` there would leave
+`pseudo_table` unavailable.
 
 A spin-polarized run with SOC is noncollinear: every moment starts along one
 direction, and that direction is a physical choice, since magnetic
@@ -319,16 +380,23 @@ Pt, whose moment Fe induces. Those sites are seeded up and down with the
 calibrated value (5 Bohr magnetons over the pseudopotential's valence for
 Ni, 5/18 with an 18-electron pseudopotential); every other species starts
 at 0, as in QE's own antiferromagnetic examples, so the start carries no
-net moment. `records.magnetic` records the label applied, and whether the
-ordering is compensated: whether some symmetry operation of its cell maps
-every spin onto an opposite one, so its net moment is zero by construction.
+net moment. `records.magnetic` records the label applied (`ordering`), and
+whether the ordering is compensated (`compensated`): whether some symmetry
+operation of its cell maps every spin onto an opposite one, so its net
+moment is zero by construction. `compensated` is false without an applied
+antiferromagnetic ordering, even where starting magnetizations you set on
+the uploaded cell cancel by symmetry.
 NiO's AFM-II cell is compensated. Spinel Fe3O4's R-3m candidate is not: it
 has 3 Fe up and 3 down, but both tetrahedral Fe point down, so it is a
 ferrimagnet. Nor is B2 FeCo's `afm-1`, Fe up and Co down in the uploaded
 cell: its starting moments sum to zero, but no symmetry makes the two
 elements' moments cancel. A compensated non-metal gets fixed occupations with
-`tot_magnetization = 0`. Starting magnetizations you set on the applied
-cell decide this in place of the heuristic signs.
+`tot_magnetization = 0`. This is decided on the starting magnetizations as
+written, to rounding: yours where you set them on the applied cell, the
+computed ones elsewhere. Setting one NiO sublattice to its computed seed as
+`records.magnetic` or `scf.in` gives it (any copy to six significant digits
+or more) keeps the cell compensated; setting it to 0.28 or 0.5 does not,
+since that start carries a net moment.
 A structure with no such site (closed-shell Si, or solid O2, whose moment
 belongs to the O2 molecule) keeps the ferromagnetic default with the warning
 `magnetic.afm_no_open_shell_sites`; to try an antiferromagnetic pattern
@@ -617,6 +685,12 @@ unless a and b lie in the xy plane and any vacuum lies along c. Otherwise
 pw.x would distort the cell, or move a vacuum vector while holding a vector
 of the sheet fixed.
 
+`cell_dofree` accepts only the values pw.x honours under the `ibrav = 0` every
+written input has. `'volume'` is refused, because pw.x stops on it unless
+`ibrav = 1`. `'ibrav'` and the `'ibrav+...'` forms are refused too: under
+`ibrav = 0` pw.x ignores the `ibrav` part and only warns that it has no
+effect.
+
 ## Read the reasons and warnings
 
 Every analysis fact and every advisor decision -- occupations, k-point
@@ -629,13 +703,67 @@ blocked record carries `blocked_by`, naming the upstream fact that could not
 be resolved. There is no separate "provenance block" distinct from structure
 analysis -- both use this same shape.
 
-This describes a decision as a whole, not necessarily each field inside it
-separately: overriding one convergence setting (e.g. `mixing_beta`) does not
-by itself mark the whole convergence decision `human`-sourced. Advisors precise
-enough to track that instead populate an opt-in `field_sources` map naming
-which individual scalar was overridden, alongside the decision's own overall
-`source`. Per-decision warnings live inside that decision's own value (e.g.
-`job.warnings`, `cutoffs.warnings`), and every run also carries one aggregated
-top-level `warnings` list. There is no `confidence`, `details`, or "asset
-identity" field in this shape today. Read analysis and selection warnings as
-well as advice; do not treat a `resolved` status as scientific validation.
+A decision that applies several settings (the magnetic decision,
+occupations, k-point sampling, Hubbard +U, convergence, relaxation, the
+`dos.x` settings) also carries `field_sources`, one source per setting it
+applied, keyed by the setting's override name: `human` (or `llm`) for a value
+that tier set, otherwise the tier that chose it. The record's `source` is the
+highest of them, so `mixing_beta=0.3` alone makes `convergence` `human` while
+`field_sources` keeps `conv_thr` `heuristic`, and `spin_orbit_coupling=true`
+makes `magnetic` `human` while spin polarization still reads `heuristic`. A
+setting the decision did not apply has no entry and cannot make the record
+`human`: a `degauss` under fixed occupations, a `smearing_type` on a `dos`
+task's `tetrahedra_opt` nscf step, or a `magnetic_ordering` that an explicit
+`spin_polarized=false` ignores. Hubbard's switch is keyed `needs_correlation`,
+its override field, though `--set` calls it `hubbard_needs_correlation`. A
+pinned `pseudo_table_id` makes `pseudo_table` `human`. The other records that
+apply several settings (`cutoffs`, `job`, `nbnd`, `parallelisation`, `vdw`)
+carry one `source` and no `field_sources`: their `human` means the request set
+at least one of their settings.
+
+A record whose own rule followed another record's answer keeps the tier that
+applied the rule, `heuristic`, and names that record in `derived_from`:
+`magnetic` names `is_magnetic` when that fact decided spin polarization (or
+`hubbard` when a U on an odd d or f count did),
+`occupations` and a heuristic `k_sampling` name `is_metal`, `hubbard` names
+`needs_correlation` (or `functional` for a hybrid functional), an
+automatically selected `pseudo_table` names `functional` and `magnetic`,
+`relativistic` names `magnetic`, and `pseudopotentials` names
+`pseudo_table`. A non-metal's `occupations` also names the records that
+decided whether fixed occupations can run: `magnetic`, and `electron_count`
+where its parity was tested. An `occupations` that pins a `tot_magnetization`
+names `magnetic` too, whichever tier chose the occupations (a requested
+`occupations` reads `human` and still names it): the moment is the request
+that record admitted, or the 0 of its compensated ordering, which also names
+`electron_count`, since that 0 needs an even count. The upstream record's
+`source` is not copied: `occupations`
+reads `heuristic` even when the classifier decided `is_metal` (`ml`), and you
+follow `derived_from` to find that. `human` only ever means a value set in the
+request: a `dos` task's nscf protocol values (`nscf_k_sampling`'s k_distance,
+`nscf_occupations`) read `heuristic`, with `source_note` naming the protocol.
+Per-decision warnings live inside that decision's own value (e.g.
+`job.warnings`, `cutoffs.warnings`), and every run, whatever its task, also
+carries one aggregated top-level `warnings` list: every record's warnings, in
+record-name order, each naming the record it came from in `record`, then the
+request's routing notices (a setting given without a step that reached several
+steps), under the `record` `overrides`. A `dos` task's nscf step keeps its
+own, under `nscf_`-prefixed records: a notice on `nscf_parallelisation` is
+about the nscf step's npool, not the scf step's.
+
+A resolved record also carries the rest of its provenance: `source_note`,
+the advisor's rationale where it gives one (such as why a molecule gets a
+Coulomb cutoff), and `citations`, what to cite for it. A record that a
+machine-learning model decided, whole or in one setting (`source` or
+`field_sources` `ml`: `is_metal`, `is_magnetic`, `k_sampling`'s
+`k_distance`), names the model in `model`: `model_id` (goldilocks-ml's id and
+feature contract, such as `metallicity.is_metal.cgcnn@crystal_graph.v1`),
+`asset` (the installed release, such as `models/is-metal-classifier@1`),
+`target_contract`, the model's own `value`, its `details` as returned (a
+classifier's `score` and `threshold`, QRF95's `interval`) and its `warnings`.
+Each model warning, such as the is_magnetic classifier's "has not been
+externally validated", is also in the top-level `warnings` list as
+`<record>.model_warning`. A bundle's `CITATIONS.md` and the manifest's
+`citations` list every record's citations: the selected pseudopotential table
+and every model that decided a record. `CITATIONS.md` also names the table's
+licence file under `licences/`, which lists SSSP's per-family references. Read analysis and selection warnings
+as well as advice; do not treat a `resolved` status as scientific validation.

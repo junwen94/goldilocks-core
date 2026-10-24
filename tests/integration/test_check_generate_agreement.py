@@ -144,8 +144,8 @@ _SCENARIOS = {
     "LaCuO3": _Scenario(lambda: _perovskite("La", "Cu", 3.82), ("U  Cu-3d  4",)),
     # A spin-polarized non-metal without a known moment runs on smearing
     # (#138).
-    "NiO is_metal false": _Scenario(
-        lambda: _rock_salt("Ni", 4.17), ("U  Ni-3d  6.2",), {"is_metal": False}
+    "NiO is_metal non_metal": _Scenario(
+        lambda: _rock_salt("Ni", 4.17), ("U  Ni-3d  6.2",), {"is_metal": "non_metal"}
     ),
     # Overrides.
     "TiO2 u_by_element": _Scenario(
@@ -213,7 +213,7 @@ _REFUSALS = {
     ),
 }
 
-_MULTI_TASK_SCENARIOS = ("NiO", "LaCuO3", "TiO2", "NiO is_metal false")
+_MULTI_TASK_SCENARIOS = ("NiO", "LaCuO3", "TiO2", "NiO is_metal non_metal")
 
 _FROZEN_NS = "convergence.mixing_fixed_ns_freezes_hubbard_occupations"
 
@@ -251,7 +251,9 @@ def store(tmp_path, monkeypatch) -> AssetStore:
 
 def _generate(task: str, scenario: _Scenario, store: AssetStore):
     structure = scenario.structure()
-    overrides = build_overrides(scenario.overrides)
+    overrides = build_overrides(
+        scenario.overrides, task="scf_single_point" if task == "scf" else task
+    )
     if task == "scf":
         advice = advise(structure, hpc=_hpc(), overrides=overrides, store=store)
         report, render = check(advice), generate
@@ -319,7 +321,7 @@ def test_check_refuses_a_request_no_input_can_express(
     advice = advise(
         refusal.structure(),
         hpc=_hpc(),
-        overrides=build_overrides(refusal.overrides),
+        overrides=build_overrides(refusal.overrides, task="scf_single_point"),
         store=store,
     )
 

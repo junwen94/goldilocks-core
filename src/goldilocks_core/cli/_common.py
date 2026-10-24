@@ -13,18 +13,25 @@ from __future__ import annotations
 
 import argparse
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import get_args
 
 from pymatgen.core import Structure
 
 from goldilocks_core.inputs.hpc import HpcProfile, resolve_hpc_profile
-from goldilocks_core.inputs.structure import PathStructureSource, normalize_structure
-from goldilocks_core.resolution import Blocked, FieldState, Resolved, ResolvedField
+from goldilocks_core.inputs.structure import (
+    PathStructureSource,
+    StructureSourceDocument,
+    normalize_structure,
+)
+from goldilocks_core.resolution import Blocked, FieldState, Resolved, records_document
+from goldilocks_core.serialization import to_portable
 from goldilocks_core.service import RunOverrides
 from goldilocks_core.set_overrides import (
     build_overrides,
     coerce_cli_assignments,
+    config_assignments,
     parse_set_flags,
 )
 from goldilocks_core.types import CalcTask
@@ -53,10 +60,18 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="Override one setting (repeatable). See 'goldilocks settings'.",
+        help=(
+            "Override one setting (repeatable); steps.<step>.KEY=VALUE sets "
+            "one step of the task only. See 'goldilocks settings'."
+        ),
     )
     parser.add_argument(
-        "--config", type=Path, help="TOML file of KEY=VALUE overrides, same as --set."
+        "--config",
+        type=Path,
+        help=(
+            "TOML file of KEY=VALUE overrides, same as --set; a [steps.<step>] "
+            "table sets one step of the task."
+        ),
     )
     parser.add_argument("--json", action="store_true", help="Print JSON output.")
 
@@ -70,37 +85,77 @@ def add_fetch_missing_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class Request:
+    """One ``run``/``explain`` invocation, resolved: the structure read
+    from its path and that file's identity (``NormalizedStructure.source``),
+    the HPC profile, the overrides as submitted (``assignments``: ``--config``
+    then ``--set``, typed) and those overrides routed for ``--task``."""
+
+    structure: Structure
+    source: StructureSourceDocument
+    hpc: HpcProfile
+    assignments: dict[str, object]
+    overrides: RunOverrides
+
+
 def resolve_structure(path: str) -> Structure:
     return normalize_structure(PathStructureSource(path=path)).structure
 
 
-def resolve_hpc(name: str | None) -> HpcProfile:
-    return resolve_hpc_profile(name, field="--hpc")
+def resolve_request(args: argparse.Namespace) -> Request:
+    """The structure, then ``--hpc``, then the overrides: each raises its
+    own operator error, in that order."""
+    normalized = normalize_structure(PathStructureSource(path=args.structure))
+    hpc = resolve_hpc_profile(args.hpc, field="--hpc")
+    assignments = _assignments(args)
+    return Request(
+        structure=normalized.structure,
+        source=normalized.source,
+        hpc=hpc,
+        assignments=assignments,
+        overrides=build_overrides(assignments, task=args.task),
+    )
 
 
-def resolve_overrides(args: argparse.Namespace) -> RunOverrides:
+def _assignments(args: argparse.Namespace) -> dict[str, object]:
+    """``--config`` then ``--set`` (which wins), typed."""
     assignments: dict[str, object] = {}
     if args.config is not None:
         with args.config.open("rb") as source:
-            assignments.update(tomllib.load(source))
+            assignments.update(config_assignments(tomllib.load(source)))
     assignments.update(coerce_cli_assignments(parse_set_flags(args.set)))
-    return build_overrides(assignments)
+    return assignments
 
 
 def format_field_state(state: FieldState[object]) -> str:
     """Tri-state-aware rendering -- directly fixes this epic's evidence
     #2 (v1's print layer collapsed "not computed", "not applicable",
     and "genuinely off" into one falsy-string fallback like
-    ``'unresolved'``/``'none'``/``'any'``)."""
+    ``'unresolved'``/``'none'``/``'any'``). A resolved value prints as
+    published (``serialization.to_portable``)."""
     if isinstance(state, Resolved):
-        return f"{state.value!r} (source={state.source})"
+        return f"{to_portable(state.value)!r} (source={state.source})"
     if isinstance(state, Blocked):
         return f"blocked by: {state.root_cause()}"
     return f"unavailable: {state.reason}"
 
 
+def notice_lines(warnings: list[dict[str, object]]) -> list[str]:
+    """The ``notice:`` lines of ``explain``'s text report: the warnings no
+    record carries, which the records it prints cannot show. Those are the
+    request's routing notices (``record`` ``overrides``, #154): a setting
+    given without a step that reached several steps."""
+    return [
+        f"notice: {warning['message']}"
+        for warning in warnings
+        if warning["record"] == "overrides"
+    ]
+
+
 def records_to_json(records: dict[str, FieldState[object]]) -> dict[str, object]:
-    return {
-        name: ResolvedField.from_state(state).model_dump()
-        for name, state in sorted(records.items())
-    }
+    """The ``records`` object of ``explain``/``run --json``:
+    ``resolution.records_document``, the projection HTTP, MCP and
+    ``goldilocks.json`` use, reached through this module so ``cli._run``
+    stays within its import ceiling (``scripts/check_complexity.py``)."""
+    return records_document(records)

@@ -73,10 +73,11 @@ def _magnetic(
     angles = {"Fe": 0.0} if spin_polarized and spin_orbit_enabled else None
     facts = MagneticConfigFacts(
         cell=structure,
-        ordering=OrderingRecord(requested="fm", applied="fm", compensated=False),
+        ordering=OrderingRecord(requested="fm", applied="fm"),
         spin_polarized=spin_polarized,
         magnetic_elements=("Fe",) if spin_polarized else (),
         starting_magnetization={"Fe": 0.1} if spin_polarized else None,
+        compensated=False,
         tot_magnetization=None,
         spin_orbit_enabled=spin_orbit_enabled,
         angle1=angles,
@@ -595,9 +596,7 @@ def test_vc_relax_under_the_2d_truncation_needs_a_2d_cell_constraint(
     assert "isolation='periodic'" in report.blocking[0]
 
 
-@pytest.mark.parametrize(
-    "cell_dofree", ["2Dxy", "2Dshape", "ibrav+2Dxy", "ibrav+2Dshape"]
-)
+@pytest.mark.parametrize("cell_dofree", ["2Dxy", "2Dshape"])
 def test_vc_relax_under_the_2d_truncation_with_a_2d_cell_constraint_passes(
     cell_dofree: str,
 ) -> None:
@@ -675,9 +674,7 @@ def test_the_frame_reason_names_what_is_out_of_place(build, found: str) -> None:
     assert f"the cell to be written has {found}." in report.blocking[0]
 
 
-@pytest.mark.parametrize(
-    "cell_dofree", ["2Dxy", "2Dshape", "ibrav+2Dxy", "ibrav+2Dshape"]
-)
+@pytest.mark.parametrize("cell_dofree", ["2Dxy", "2Dshape"])
 def test_every_2d_cell_constraint_is_checked_against_the_frame(
     cell_dofree: str,
 ) -> None:
@@ -736,7 +733,7 @@ def _framed(structure: Structure):
 
 @pytest.mark.parametrize(
     "cell_dofree",
-    ["a", "b", "c", "x", "y", "z", "xy", "xz", "yz", "xyz", "ibrav+z"],
+    ["a", "b", "c", "x", "y", "z", "xy", "xz", "yz", "xyz"],
 )
 def test_a_cartesian_cell_constraint_on_a_turned_cell_blocks(cell_dofree: str) -> None:
     """#140: QE masks Cartesian components of the lattice vectors (QE 7.3

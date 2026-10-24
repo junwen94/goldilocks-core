@@ -29,15 +29,6 @@ import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
 import { OverrideControl } from "./OverrideControl";
 import { describeSource } from "./overrideFieldMeta";
 
-/** Groups whose overrides only make sense for a subset of tasks.
- * `capabilities.py`'s own `Setting.tasks` field is always `null` today
- * (not wired -- see its docstring), so this is a small, honestly-scoped
- * frontend-only allowlist rather than something derived from the API;
- * a setting outside this map is shown regardless of task. */
-const GROUP_TASK_RELEVANCE: Readonly<Record<string, readonly CalcTask[]>> = {
-  relax: ["relax", "vc-relax"],
-};
-
 const STATUS_COLORS: Readonly<Record<ResolvedField["status"], string>> = {
   resolved: "green",
   unavailable: "yellow",
@@ -520,10 +511,9 @@ function SettingsGroupItems({
 }) {
   const groups = new Map<string, GroupedSetting[]>();
   for (const setting of settings) {
-    const relevantTasks = GROUP_TASK_RELEVANCE[setting.group];
-    if (relevantTasks !== undefined && !relevantTasks.includes(task)) {
-      continue;
-    }
+    // The core refuses a setting no step of the task reads (#154), so a
+    // setting is offered only for the tasks it declares.
+    if (!setting.tasks.includes(task)) continue;
     const displayGroup = GROUP_MERGE_INTO[setting.group] ?? setting.group;
     const entry: GroupedSetting = { originalGroup: setting.group, setting };
     const bucket = groups.get(displayGroup);

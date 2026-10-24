@@ -13,11 +13,14 @@ uv run goldilocks explain structure.cif --json
 uv run goldilocks run structure.cif --out silicon-run
 ```
 
-`inspect` reports structure metadata. `explain` runs analysis and every
+`inspect` reports structure metadata, including the site labels a
+`starting_magnetization` takes. `explain` runs analysis and every
 advisor, printing each decision and its source (`human`, `ml`, `llm`, or
-`heuristic`), then the checks `run` applies, printing one `blocked: <reason>`
-line for each reason `run` would refuse to generate an input. It never writes
-anything, even without `--json`, and exits 0 whether or not it is blocked.
+`heuristic`), then a `notice: <message>` line for each setting given without a
+step that reached several steps, then the checks `run` applies, printing one
+`blocked: <reason>` line for each reason `run` would refuse to generate an
+input. It never writes anything, even without `--json`, and exits 0 whether or
+not it is blocked.
 `run` generates a complete runnable input (Quantum ESPRESSO by default) and
 publishes it to `silicon-run` because `-o/--out` was given; omit `-o/--out`
 for a memory-only preview instead. Use `uv run goldilocks --help` or a
@@ -39,9 +42,10 @@ instead of failing.
 Narrower slices are also available directly:
 
 - `uv run goldilocks settings --json` — every `--set`-able key, its type,
-  default, and sources (the same objects as `capabilities`'s `settings[]`;
-  run this command for the current key count rather than trusting a number
-  in these docs).
+  default, and sources: `{"settings": [...], "facts": [...]}`, the same
+  objects as `capabilities`'s `settings[]` and its overridable `facts[]`
+  (`is_metal`, `is_magnetic`, ...); run this command for the current key
+  count rather than trusting a number in these docs.
 - `uv run goldilocks models --json` — every model `ml/registry.toml`
   registers, whether or not it is actually installed (see [Scientific
   controls](#scientific-controls)).
@@ -69,13 +73,23 @@ memory and prints a preview listing each file's path and byte size — there is
 no auto-picked output directory (v1's `goldilocks_out`, `goldilocks_out_1`, …
 naming no longer exists in any form).
 
+A bundle's `goldilocks.json` records the request it answers under `request`:
+`--code`, `--task`, the HPC profile used, the goldilocks-core version, the
+overrides as submitted (`--config` then `--set`, typed, with any
+`steps.<step>.` prefix) and the structure file's name, format, sha256 and size.
+HTTP and MCP `run` record the same block for the same structure and overrides.
+
 `--json` changes the shape of `run`'s output rather than being combined with
 an output flag: without `-o/--out` it prints `{"files": [...], "records":
 {...}, "warnings": [...]}`; with `-o/--out` it prints `{"files": [...],
 "kind": "directory"|"archive", "path": "..."}`. `explain --json` prints
 `{"records": {...}, "warnings": [...], "blocking": [...]}`, where `blocking`
 lists the distinct reasons `run` would refuse to generate an input and is empty
-when its checks pass.
+when its checks pass. `warnings` holds every record's warnings, for every task,
+each as `{"code", "level", "category", "message", "record"}`, where `record`
+names the record it came from (`nscf_parallelisation` for a `dos` task's nscf
+step), then the request's routing notices under the `record` `overrides`
+(below); `goldilocks.json` carries the same list.
 
 `--json` output and the published `goldilocks.json` are strict JSON: a value
 with no finite number is `null`, never `Infinity` or `NaN`. For example, the
@@ -105,9 +119,10 @@ its type, default, and description; a selection of commonly used keys:
 | ------------------------------------ | --------------------------------------------------------------------- |
 | `functional`                        | Exchange-correlation functional (default `PBEsol`)                    |
 | `pseudo_table_id`                   | Pin a registered pseudopotential table id instead of automatic selection |
+| `is_metal`, `is_magnetic`           | Correct a classification: `metal`/`non_metal`, `magnetic`/`non_magnetic` (the record's own values, not `true`/`false`) |
 | `k_grid`                            | Explicit Monkhorst-Pack mesh, e.g. `--set 'k_grid=[8,8,8]'`            |
 | `k_distance`                        | Target k-point spacing along each periodic axis; axes the point group mixes share the larger count, and a vacuum axis always gets one k-point (heuristic default 0.15 for metals or when metallicity is unknown, 0.30 for a confirmed non-metal) |
-| `smearing_type`                     | Smearing function when `occupations=smearing` (default `cold`)        |
+| `smearing_type`                     | Smearing function when `occupations=smearing`: `gaussian`, `mp` (Methfessel-Paxton), `cold` (Marzari-Vanderbilt) or `fd` (Fermi-Dirac); default `cold` |
 | `degauss`                           | Smearing width in Ry (default 0.01)                                   |
 | `spin_polarized`, `spin_orbit_coupling` | Force spin polarization / spin-orbit coupling                     |
 | `moment_direction`                  | Lattice direction of the uploaded cell the moments of a magnetic spin-orbit run start along, e.g. `--set 'moment_direction=[1,1,0]'` (default `[0,0,1]`) |
@@ -116,6 +131,36 @@ its type, default, and description; a selection of commonly used keys:
 | `conv_thr`, `mixing_beta`, `electron_maxstep` | SCF energy-convergence threshold, density-mixing factor, max SCF iterations |
 | `u_by_element`                      | Hubbard U_eff per element in eV, replacing the built-in table, e.g. `--set 'u_by_element={"Ti": 4.0}'` |
 | `hubbard_needs_correlation`         | `false` runs without Hubbard +U; `true` applies the built-in U table  |
+| `delta_e`, `emin`, `emax`, `broadening`, `ngauss` | `dos.x` settings of the `dos` task: energy step and window in eV, broadening in Ry, broadening function (`-99`, `-1`, `0`..`10`; `dos.x` reads it only with a broadening width, so it needs `broadening` unless the nscf step uses smearing) |
+
+Each setting applies to the steps that read it, and `goldilocks settings
+--json` lists them (`tasks`, `steps`, `scope`). A task's steps are named by
+purpose: `scf` (`scf_single_point`), `relax`, `vc-relax`, and `scf`, `nscf`,
+`dos` for `--task dos`.
+
+- A step setting given as `KEY=VALUE` reaches every step of the task it
+  applies to. On a `dos` task, `k_grid` sets both the scf and the nscf step,
+  with an `overrides.applies_to_multiple_steps` notice naming them: a
+  `notice:` line in `explain`'s text output, and a `warnings` entry with
+  `record` `overrides` in `--json` output and `goldilocks.json`. The SCF-loop
+  settings (`mixing_beta`, `mixing_mode`, `mixing_fixed_ns`,
+  `electron_maxstep`) set the scf step only: the nscf step runs no SCF loop,
+  so pw.x does not use them there.
+- `steps.<step>.KEY=VALUE` sets one step only and wins over the plain key for
+  that step: `--task dos --set 'k_grid=[10,10,10]' --set
+  'steps.nscf.k_grid=[30,30,30]'` gives the scf 10×10×10 and the nscf
+  30×30×30. In `--config`, a `[steps.nscf]` table does the same. A plain key
+  that every step it applies to also sets this way would reach no step, and
+  is refused.
+- System settings (functional, cutoffs, magnetism, ...) describe the system
+  every step runs on, and the job settings (`partition`, `nodes`, `ntasks`,
+  `walltime_h`, `account`) the one allocation all of a task's steps run in:
+  both are set once per task, and `steps.<step>.` is refused for them.
+- A setting no step of the task reads is refused (exit 2, HTTP 422): `press`
+  and `cell_dofree` apply to `vc-relax` only, `nstep` and `etot_conv_thr` to
+  `relax` and `vc-relax`, and the `dos.x` settings to `dos`. So is
+  `steps.<step>.KEY` for a step that does not read it, such as
+  `steps.nscf.mixing_beta`.
 
 Quote `--set` values that contain brackets or braces (e.g. `--set
 'k_grid=[8,8,8]'`) so the shell does not glob-expand them; array and object
@@ -126,7 +171,14 @@ checked for compatibility.
 
 `is_metal`, `is_magnetic`, and `k_distance` (v2 epic 11) each resolve through
 a `human > ml > llm > heuristic` priority: `explain --json`'s
-`records[...].source` says which tier actually produced a value.
+`records[...].source` says which tier actually produced a value, and
+`records[...].field_sources` which tier produced each setting of a compound
+record (a `--set shift=...` reads `human` beside QRF95's `ml` `k_distance`).
+When a model decided the value or one of its settings, `records[...].model`
+names the model (`model_id`, and `asset`, the
+installed release as `<id>@<version>`) and keeps what it returned
+(`details`, such as a classifier's `score` and `threshold` or QRF95's
+`interval`, and `warnings`), and `records[...].citations` says what to cite.
 `is_metal`/`k_distance` become ML-backed once their PSDI-hosted asset is
 installed (`uv run goldilocks assets install <id>` — see [Install and check
 assets](#install-and-check-assets)); `is_magnetic` additionally needs `mace`,

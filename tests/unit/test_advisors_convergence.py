@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 from support import geometry_facts
 
@@ -22,12 +24,18 @@ _NICKEL_U = _hubbard(HubbardU("Ni", "3d", 6.2, "human"))
 _NO_U = _hubbard()
 
 
-def test_conv_thr_scales_with_system_size() -> None:
-    state = convergence(nat=10)
+def test_thresholds_scale_with_nat_as_the_decimal_the_formula_names() -> None:
+    """conv_thr = nat * 0.2e-9 and etot_conv_thr = nat * 1e-5, recorded as
+    exactly that decimal: the float product recorded and wrote
+    2.8000000000000003e-09 for nat 14 (#178)."""
+    for nat in range(1, 201):
+        state = convergence(nat=nat)
 
-    assert state.ok
-    assert state.value.conv_thr == 10 * 0.2e-9
-    assert state.value.etot_conv_thr == 10 * 1e-5
+        assert state.ok
+        assert Decimal(repr(state.value.conv_thr)) == nat * Decimal("0.2e-9"), nat
+        assert Decimal(repr(state.value.etot_conv_thr)) == nat * Decimal("1e-5"), nat
+    assert repr(convergence(nat=14).value.conv_thr) == "2.8e-09"
+    assert repr(convergence(nat=12).value.etot_conv_thr) == "0.00012"
 
 
 def test_defaults_match_v1s_flat_constants() -> None:
@@ -197,7 +205,7 @@ def test_human_can_override_a_single_field_others_keep_their_default() -> None:
     state = convergence(nat=10, human=ConvergenceHumanInput(mixing_beta=0.2))
 
     assert state.value.mixing_beta == 0.2
-    assert state.value.conv_thr == 10 * 0.2e-9
+    assert state.value.conv_thr == 2e-9
     assert state.source == "human"
 
 
@@ -208,7 +216,7 @@ def test_llm_can_adjust_mixing_knobs_but_not_conv_thr() -> None:
 
     assert state.value.mixing_fixed_ns == 80
     assert state.value.electron_maxstep == 120
-    assert state.value.conv_thr == 10 * 0.2e-9
+    assert state.value.conv_thr == 2e-9
     assert state.source == "llm"
 
 
@@ -216,3 +224,24 @@ def test_no_overrides_gives_heuristic_source() -> None:
     state = convergence(nat=10)
 
     assert state.source == "heuristic"
+
+
+def test_every_convergence_field_reads_the_tier_that_set_it() -> None:
+    """#173: one entry per applied field; the record's source is the
+    highest of them."""
+    state = convergence(
+        nat=10,
+        human=ConvergenceHumanInput(mixing_beta=0.3),
+        llm=ConvergenceLlmInput(mixing_beta=0.2, electron_maxstep=120),
+    )
+
+    assert state.source == "human"
+    assert state.provenance.field_sources == {
+        "conv_thr": "heuristic",
+        "etot_conv_thr": "heuristic",
+        "mixing_beta": "human",
+        "electron_maxstep": "llm",
+        "mixing_mode": "heuristic",
+        "mixing_fixed_ns": "heuristic",
+    }
+    assert state.provenance.derived_from == ()

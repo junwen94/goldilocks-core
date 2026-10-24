@@ -57,11 +57,24 @@ A `run` (or `explain`) request follows this path:
    SLURM script via `submission/slurm.py`. Each step is followed by the
    completion check its writer declared (`Step.completion`), and the script
    stops with a `goldilocks:` message when one fails.
-6. `service.to_bundle_input(advice, steps, submission_script, ctx)` assembles
-   a `bundle.BundleInput`: the rendered input file(s), the pseudopotential
-   bytes read straight off disk for each selected element, the submission
-   script, every advisor decision as a tri-state record (`advice.records()`),
-   and citations pulled from the pseudopotentials' own registry metadata.
+6. `service.to_bundle_input(advice, steps, submission_script, ctx, *, code,
+   hpc, assignments, source)` assembles a `bundle.BundleInput`: the rendered
+   input file(s), each selected element's UPF and the table's licence
+   (`licences/<table-id>.txt`), read through the installation's verified
+   inventory (`service._pseudo.pseudo_artifacts`), the submission script,
+   every advisor decision as a tri-state record (`advice.records()`), the
+   advice's warnings
+   (`advice.warnings()`), and the request it answers (`bundle.RequestIdentity`,
+   the manifest's `request`): the code, the task (each `to_bundle_input*`
+   names its own), the HPC profile, the goldilocks-core version, the
+   overrides as submitted (the `assignments` `build_overrides` received) and
+   the input structure's name, format, sha256 and size (`source`, a
+   `NormalizedStructure.source`). `BundleInput.request` has no default, so no
+   bundle is built without it. Records stay typed until
+   they are published: `resolution.records_document` projects them once, for
+   the HTTP/MCP responses, CLI `--json` and `goldilocks.json` alike, each with
+   its whole `Provenance`, and `resolution.collect_citations` reads what the
+   bundle cites off the same records.
 7. `bundle.publish(bundle_input, output)` / `bundle.bundle_files(bundle_input)`
    / `bundle.archive_bytes(bundle_input)` write a directory (`DirectoryOutput`)
    or ZIP (`ArchiveOutput`), or return an in-memory preview.
@@ -83,7 +96,10 @@ summary (`server/http.py`).
 `service.advise_dos`/`check_dos`/`generate_dos` (`service/_dos.py`), rather
 than any generic graph: nothing about resolving one step's own settings
 changes between an scf task and dos's scf/nscf steps, so both steps get the
-same per-step advisors, the nscf with nscf-specific overrides. Analysis and
+same per-step advisors and the same request overrides. The nscf step also gets
+the dos task's protocol (`StepProtocol`, `service/_step_protocol.py`): a tier
+of its own, below the request and above the ML tier for that step only, whose
+values read `heuristic` with the protocol in `source_note`. Analysis and
 system advice run once, and the steps share one job, because they run one
 after another in one allocation: it is sized over both steps, and each
 `pw.x` step gets its own `max_seconds` share of the walltime, since `pw.x`
@@ -162,10 +178,17 @@ Paths below are relative to `src/goldilocks_core/` unless stated otherwise.
 ### Add a task
 
 There is no generic task-registration API or graph to define. To add a new
-task, add a `service/_<task>.py` module that calls `_pipeline.advise_steps`
-with one entry per `pw.x` step (purpose -> that step's `StepOverrides`, in
-run order) — one entry for a single-step task, like `service/_relax.py`,
-or several, like `service/_dos.py`'s `scf` and `nscf` — and then
+task, add it to `types.CalcTask`, the one task list (the CLI's `--task`
+choices, the request documents, `capabilities.py` and
+`set_overrides.build_overrides` read it), and its steps to `plan.py`'s
+`expand_task` (their purposes are also the step names
+`set_overrides.build_overrides` routes settings to, and `capabilities.py`
+derives each setting's `tasks` from them), and add a
+`service/_<task>.py` module that calls `_pipeline.advise_steps` with one
+entry per `pw.x` step (purpose -> that step's `StepOverrides`, from
+`RunOverrides.for_steps`, in run order) — one entry for a single-step task,
+like `service/_relax.py`, or several, like `service/_dos.py`'s `scf` and
+`nscf` — and then
 `_generate.generate` once per step with that step's purpose. `advise_steps`
 returns one `Advice` per step, all sharing the same analysis, system advice
 and job, so the submission script is rendered from that one job, which
@@ -174,9 +197,10 @@ holds every step's `max_seconds` share. Multi-step ordering is described by
 
 Export the new `advise_<task>`/`check_<task>`/`generate_<task>`/
 `render_submission_<task>`/`to_bundle_input_<task>` functions from
-`service/__init__.py`'s `__all__`, and wire the CLI's `--task` choices
-(`cli/_run.py`) and `capabilities()`'s `tasks` list (`capabilities.py`) to
-match.
+`service/__init__.py`'s `__all__`, dispatch to them where `run` and
+`explain` pick a task's functions (`cli/_run.py`, `cli/_explain.py`,
+`server/_handlers.py`), and describe the task in `capabilities.py`'s
+`_tasks()`.
 
 ### Add an input writer
 
@@ -255,29 +279,60 @@ requirements.
   shared request-validation/dispatch implementation both `http.py` and
   `mcp.py` call; `server/readiness.py`'s `AssetReadiness` caches
   asset-availability checks (used by `GET /ready`) across requests.
-- **Publish through one implementation.** `bundle.py`'s `assemble_bundle_input`
-  reads each selected pseudopotential's bytes straight off disk
-  (`Path(metadata.filepath).read_bytes()`) once, hashes every artifact while
+- **Publish through one implementation.** `service/_bundle.py`'s
+  `assemble_bundle_input` takes the pseudopotential files from
+  `service/_pseudo.py`'s `pseudo_artifacts`, the only producer of
+  `pseudopotential` artifacts: each selected UPF and, beside them, the table's
+  `LICENSE.txt` as `licences/<table-id>.txt` (role `licence`), so no bundle
+  ships a UPF without its licence. It reads each file once through the
+  installation's verified inventory (`InstalledAsset.read_bytes`) and raises
+  `AssetCorrupt` for one that no longer matches it, so a UPF's bytes are those
+  its `pseudopotentials` record hashes. `bundle.py` hashes every artifact while
   assembling the `goldilocks.json` manifest, and writes the same in-memory
-  bytes it hashed — never rereading a source after hashing. Publication uses
-  a completion-marker protocol, not v1's staging-directory-plus-atomic-rename:
-  `target.mkdir()` (directories) or an exclusive `open(path, "xb")`
-  (archives) claims the destination, raising `FileExistsError` if it already
-  exists; every byte is written; a `.complete` marker file is written
-  strictly last. Any consumer must call `bundle.is_complete(target)` before
-  trusting a directory/archive — a killed process (SIGKILL/OOM) can leave a
+  bytes it hashed — never rereading a source after hashing. `README.md` and
+  `CITATIONS.md` describe the manifest key by key from the keys it is written
+  with (`bundle._MANIFEST_KEYS`), so neither claims one it lacks; a new
+  manifest key needs a description there and a `schema_version` bump. Publication uses a
+  completion-marker protocol, not v1's staging-directory-plus-atomic-rename:
+  `target.mkdir()` (directories) or an exclusive `open(path, "xb")` (archives)
+  claims the destination, raising `FileExistsError` if it already exists;
+  every byte is written; a `.complete` marker file is written strictly last.
+  Any consumer must call `bundle.is_complete(target)` before trusting a
+  directory/archive — a killed process (SIGKILL/OOM) can leave a
   real-but-incomplete directory behind with no exception ever raised, an
   explicitly accepted trade-off versus v1's staging approach, which made that
   physically impossible.
-- **Citations come from pseudopotentials, not models.** A published bundle's
-  `citations` are pulled exclusively from the selected pseudopotential
-  table's registry metadata (`metadata.pseudo_info.get("citation")`); there
-  is currently no ML-model citation/licence path in the bundle, even though
-  the `default` profile installs and uses ML models by default.
+- **Cite what the records cite.** Every `Provenance` field is published
+  (`ResolvedField` forbids keys it does not declare, so a new one cannot be
+  dropped silently). A record an ML model decided carries the model's
+  evidence (`ml.predict.MlPrediction`: goldilocks-ml id, registry asset,
+  details and warnings as returned) and its `ml/registry.toml` citation; the
+  `pseudo_table` record carries the selected table's. A bundle's
+  `CITATIONS.md` and manifest `citations` are every record's citations;
+  `CITATIONS.md` also names each `licence` file, which carries per-family
+  references the records do not. ML model licence material is not shipped:
+  bundles do not contain the models.
+- **Label each record from what its advisor consumed.** The `magnetic`,
+  `occupations`, `k_sampling`, `hubbard`, `convergence`, `relax` and `dos`
+  decisions build their `Provenance` with `resolution.field_sources_from` and
+  `Provenance.from_field_sources`, from the settings they applied and the
+  inputs they read, so a setting reads `human` exactly when the request set
+  it and the decision kept it, and `source` is the highest tier among them.
+  The other decisions that apply several settings (`cutoffs`, `job`, `nbnd`,
+  `parallelisation`, `vdw`) still stamp one record-level `source` and
+  publish no `field_sources`, so their `human` means only that the request
+  set at least one of their settings. A rule that follows another record
+  keeps `heuristic` and names that record in `derived_from` rather than
+  copying its tier.
 - **Keep remote callers away from local paths.** HTTP and MCP accept inline
   structures and registered table IDs, not filesystem sources, model
-  locations, or publication paths. Keep authentication and deployment
-  controls explicit; see [CLI transport security](cli.md#http-security).
+  locations, or publication paths. Published records name no local path
+  either: a field annotated `Portable()` (`PseudoMetadata.filepath`,
+  `ModelSpec.location`) never reaches them, and a `pseudopotentials` record
+  names each UPF by `table_id`, `asset_path` and `content_sha256`, so two
+  machines with the same assets publish the same records. Keep authentication
+  and deployment controls explicit; see
+  [CLI transport security](cli.md#http-security).
 - **Keep imports direct.** Package code imports from the module defining a
   name. The top-level `goldilocks_core` package deliberately exports
   nothing; library users import directly from `goldilocks_core.service`

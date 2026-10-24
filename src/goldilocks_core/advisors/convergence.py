@@ -17,9 +17,13 @@ formula supplied. This adopts aiida-quantumespresso's actual
 ``etot_conv_thr = nat * etot_conv_thr_per_atom``, using its
 production-validated balanced-tier constants
 (``conv_thr_per_atom=0.2e-9``, ``etot_conv_thr_per_atom=1e-5``) rather
-than invented ones. ``mixing_beta``/``electron_maxstep`` keep v1's own
-flat defaults (``0.4``, ``80`` -- ``advice/parameters.py:17-18``); no
-source in this codebase scales those with system size.
+than invented ones. The products are taken in decimal, so the recorded
+value is exactly the decimal the formula names (``2.8e-09`` for nat 14):
+the float product ``14 * 0.2e-9`` is ``2.8000000000000003e-09``, which
+``goldilocks.json`` recorded and the input printed (#178).
+``mixing_beta``/``electron_maxstep`` keep v1's own flat defaults
+(``0.4``, ``80`` -- ``advice/parameters.py:17-18``); no source in this
+codebase scales those with system size.
 
 **`mixing_mode='local-TF'` for a cell with a vacuum region**
 (goldilocks-core-design.md:2907, "F26"): QE's default ``'plain'``
@@ -74,18 +78,18 @@ respectively -- ``conv_thr``/``etot_conv_thr``/``mixing_beta``/
 ``electron_maxstep`` depend on neither, so this module never blocks on
 them.
 
-**``Provenance.field_sources``, populated here first.** The one
-``Provenance`` on this whole ``ConvergenceDecision`` answers "did a
-human/llm touch *anything* in here" (``source`` above); v2 epic 9
-(#9)'s scenario 2 needs the finer "did a human touch *this specific*
-field" (overriding ``mixing_beta`` alone must not make ``conv_thr``/
-``mixing_mode`` look human-sourced too) -- ``field_sources`` carries
-that, one entry per field, using the same priority order as ``_pick``.
+**``Provenance.field_sources``, populated here first.** v2 epic 9
+(#9)'s scenario 2 needs "did a human touch *this specific* field"
+(overriding ``mixing_beta`` alone must not make ``conv_thr``/
+``mixing_mode`` look human-sourced too): ``field_sources`` has one entry
+per field, from ``resolution.field_sources_from`` in ``_pick``'s priority
+order, and the record's ``source`` is the highest of them (#173).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import Field
@@ -93,12 +97,18 @@ from pydantic import Field
 from goldilocks_core.advisors.hubbard_u import HubbardUDecision
 from goldilocks_core.analysis.geometry import GeometryFacts
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
-from goldilocks_core.resolution import FieldState, Provenance, Resolved, Warning
+from goldilocks_core.resolution import (
+    FieldState,
+    Provenance,
+    Resolved,
+    Warning,
+    field_sources_from,
+)
 
 MixingMode = Literal["plain", "local-TF"]
 
-_CONV_THR_PER_ATOM = 0.2e-9
-_ETOT_CONV_THR_PER_ATOM = 1e-5
+_CONV_THR_PER_ATOM = Decimal("0.2e-9")
+_ETOT_CONV_THR_PER_ATOM = Decimal("1e-5")
 _DEFAULT_MIXING_BETA = 0.4
 """Matches v1's DEFAULT_MIXING_BETA (advice/parameters.py:17)."""
 _DEFAULT_ELECTRON_MAXSTEP = 80
@@ -169,7 +179,9 @@ def convergence(
     local_tf = bool(geometry is not None and geometry.ok and geometry.value.vacuum_axes)
 
     conv_thr = (
-        human.conv_thr if human.conv_thr is not None else nat * _CONV_THR_PER_ATOM
+        human.conv_thr
+        if human.conv_thr is not None
+        else float(nat * _CONV_THR_PER_ATOM)
     )
     mixing_fixed_ns = _pick(human.mixing_fixed_ns, llm.mixing_fixed_ns, None)
     decision = ConvergenceDecision(
@@ -177,7 +189,7 @@ def convergence(
         etot_conv_thr=(
             human.etot_conv_thr
             if human.etot_conv_thr is not None
-            else nat * _ETOT_CONV_THR_PER_ATOM
+            else float(nat * _ETOT_CONV_THR_PER_ATOM)
         ),
         mixing_beta=_pick(human.mixing_beta, llm.mixing_beta, _DEFAULT_MIXING_BETA),
         electron_maxstep=_pick(
@@ -189,16 +201,10 @@ def convergence(
         mixing_fixed_ns=mixing_fixed_ns,
         warnings=_frozen_ns_warnings(mixing_fixed_ns, hubbard),
     )
-    field_sources = {
-        "conv_thr": _field_source(human.conv_thr),
-        "etot_conv_thr": _field_source(human.etot_conv_thr),
-        "mixing_beta": _field_source(human.mixing_beta, llm.mixing_beta),
-        "electron_maxstep": _field_source(human.electron_maxstep, llm.electron_maxstep),
-        "mixing_mode": _field_source(human.mixing_mode, llm.mixing_mode),
-        "mixing_fixed_ns": _field_source(human.mixing_fixed_ns, llm.mixing_fixed_ns),
-    }
-    source = "human" if _any_set(human) else "llm" if _any_set(llm) else "heuristic"
-    return Resolved(decision, Provenance(source=source, field_sources=field_sources))
+    field_sources = field_sources_from(
+        human, llm, fields=ConvergenceHumanInput.model_fields
+    )
+    return Resolved(decision, Provenance.from_field_sources(field_sources))
 
 
 def _frozen_ns_warnings(
@@ -220,18 +226,3 @@ def _pick[T](human_value: T | None, llm_value: T | None, default: T) -> T:
     if llm_value is not None:
         return llm_value
     return default
-
-
-def _field_source(human_value: object | None, llm_value: object | None = None) -> str:
-    """Per-scalar counterpart to ``_pick``'s priority order -- used to
-    populate ``Provenance.field_sources`` (v2 epic 9, #9, scenario 2)
-    without changing what value each field itself resolves to."""
-    if human_value is not None:
-        return "human"
-    if llm_value is not None:
-        return "llm"
-    return "heuristic"
-
-
-def _any_set(overrides: HumanInput) -> bool:
-    return bool(overrides.model_dump(exclude_defaults=True))

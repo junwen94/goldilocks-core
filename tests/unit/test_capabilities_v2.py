@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import typing
 from importlib.machinery import ModuleSpec
 from importlib.metadata import version as package_version
@@ -12,17 +13,26 @@ from goldilocks_core.advisors import magnetic_ordering_ml
 from goldilocks_core.capabilities import (
     SOURCES,
     VOCABULARY_VERSION,
+    SettingBinding,
     _json_type,
     _unwrap_optional,
+    bindings,
     capabilities,
 )
 from goldilocks_core.ml import predict as predict_module
 from goldilocks_core.service import (
+    AnalysisFacts,
+    DosOverrides,
+    JobOverrides,
     KpointsOverrides,
     RelaxOverrides,
     ResourceOverrides,
+    RunOverrides,
     SystemOverrides,
 )
+from goldilocks_core.set_overrides import build_overrides
+
+_ALL_TASKS = ["scf_single_point", "dos", "relax", "vc-relax"]
 
 
 def _install_every_model(monkeypatch, root) -> None:
@@ -35,6 +45,38 @@ def _install_every_model(monkeypatch, root) -> None:
     )
 
 
+def _record_value_type(key: str) -> object:
+    """``T`` of the ``FieldState[T]`` ``AnalysisFacts`` declares for ``key``."""
+    (value_type,) = typing.get_args(typing.get_type_hints(AnalysisFacts)[key])
+    return value_type
+
+
+def _advertised_values(entry: dict[str, object]) -> list[object]:
+    """Every value a settings[] or facts[] entry tells a client it may send:
+    each enum member, or true/false for a boolean."""
+    if entry["type"] == "boolean":
+        return [True, False]
+    return list(entry.get("enum") or entry.get("values") or [])
+
+
+def _accepted(binding: SettingBinding, value: object) -> object:
+    """``value`` for ``binding``'s key through ``build_overrides``, for the
+    first task the key applies to, read back from where it landed: the
+    task-level overrides, or the first step of that task it applies to."""
+    task = binding.tasks[0]
+    overrides = build_overrides({binding.key: value}, task=task)
+    branch = _branch(overrides, binding)
+    outer = getattr(branch, binding.outer_field)
+    return outer if binding.inner_field is None else getattr(outer, binding.inner_field)
+
+
+def _branch(overrides: RunOverrides, binding: SettingBinding) -> object:
+    if binding.steps is None:
+        return getattr(overrides, binding.branch)
+    step = next(purpose for purpose in overrides.steps if purpose in binding.steps)
+    return getattr(overrides.steps[step], binding.branch)
+
+
 def _expected_setting_field_count() -> int:
     """Independently recomputes how many settings should exist, by
     walking the same composing classes capabilities.py reflects
@@ -42,7 +84,14 @@ def _expected_setting_field_count() -> int:
     silently drops a field, without hardcoding a magic number that
     would need editing by hand every time an advisor gains a field."""
     total = 0
-    for cls in (SystemOverrides, KpointsOverrides, ResourceOverrides, RelaxOverrides):
+    for cls in (
+        SystemOverrides,
+        JobOverrides,
+        KpointsOverrides,
+        ResourceOverrides,
+        RelaxOverrides,
+        DosOverrides,
+    ):
         hints = typing.get_type_hints(cls)
         for name, annotation in hints.items():
             if name.endswith("_llm"):
@@ -130,6 +179,39 @@ class TestTopLevelShape:
                 "hubbard",
             )
 
+    def test_warnings_catalogue_lists_both_spin_orbit_notices(self) -> None:
+        """#181: the notice that spin-orbit coupling cannot be served is
+        published next to the suggestion, so a frontend can filter on it
+        before any run has emitted it."""
+        by_code = {entry["code"]: entry for entry in capabilities()["warnings"]}
+
+        for code in ("magnetic.soc_suggested", "magnetic.soc_unavailable"):
+            assert (by_code[code]["level"], by_code[code]["category"]) == (
+                "info",
+                "magnetic",
+            )
+
+    def test_warnings_catalogue_lists_the_hubbard_spin_polarization_warning(
+        self,
+    ) -> None:
+        """#147: the warning that a U on an odd d or f count turned spin
+        polarization on is published, so a frontend can filter on it before
+        any run has emitted it."""
+        by_code = {entry["code"]: entry for entry in capabilities()["warnings"]}
+
+        entry = by_code["magnetic.spin_polarized_for_hubbard_open_shell"]
+        assert (entry["level"], entry["category"]) == ("warning", "magnetic")
+
+    def test_warnings_catalogue_lists_a_model_warning_per_ml_record(self) -> None:
+        """#156: the caveat a model returns with a prediction is published
+        under its record's code, so a frontend can filter on it before any
+        run has emitted it."""
+        by_code = {entry["code"]: entry for entry in capabilities()["warnings"]}
+
+        for record in ("is_metal", "is_magnetic", "k_sampling"):
+            entry = by_code[f"{record}.model_warning"]
+            assert (entry["level"], entry["category"]) == ("warning", record)
+
     def test_warnings_catalogue_codes_are_unique(self) -> None:
         codes = [entry["code"] for entry in capabilities()["warnings"]]
 
@@ -206,7 +288,7 @@ class TestSettingsCompleteness:
     def test_per_step_settings_are_scoped_to_pw_x(self) -> None:
         settings = {s["key"]: s for s in capabilities()["settings"]}
 
-        for key in ("occupations", "k_grid", "nbnd", "npool"):
+        for key in ("occupations", "k_grid", "nbnd", "npool", "nstep", "press"):
             assert settings[key]["scope"] == "per_step"
             assert settings[key]["programs"] == ["pw.x"]
 
@@ -284,6 +366,100 @@ class TestSettingsCompleteness:
         assert settings["npool"]["unit"] is None
 
 
+class TestSettingApplicability:
+    """#154: every setting published codes: null, tasks: null, so nothing
+    could reject or hide a key no step of a task reads. Each setting now
+    names the code, the tasks and the steps it applies to and the program
+    that reads it; system and job settings are task-level (steps null)."""
+
+    def _settings(self) -> dict[str, dict[str, object]]:
+        return {s["key"]: s for s in capabilities()["settings"]}
+
+    def test_every_setting_declares_its_codes_tasks_steps_and_programs(
+        self,
+    ) -> None:
+        for setting in capabilities()["settings"]:
+            assert setting["codes"] == ["quantum_espresso"], setting["key"]
+            assert setting["tasks"], setting["key"]
+            if setting["scope"] == "per_step":
+                assert setting["steps"], setting["key"]
+                assert setting["programs"], setting["key"]
+            else:
+                assert setting["scope"] in ("system", "task"), setting["key"]
+                assert setting["steps"] is None, setting["key"]
+                assert setting["tasks"] == _ALL_TASKS, setting["key"]
+
+    def test_pw_x_step_settings_apply_to_every_pw_x_step(self) -> None:
+        settings = self._settings()
+
+        for key in ("k_grid", "occupations", "nbnd", "conv_thr", "npool", "ndiag"):
+            assert settings[key]["steps"] == ["scf", "nscf", "relax", "vc-relax"]
+            assert settings[key]["tasks"] == _ALL_TASKS
+            assert settings[key]["programs"] == ["pw.x"]
+
+    def test_scf_loop_settings_skip_the_nscf_step(self) -> None:
+        """An nscf step runs no SCF loop (QE 7.3 calls non_scf and sets
+        niter = 1), yet these were published, accepted and recorded human
+        for a dos task's nscf step, which ignores them."""
+        settings = self._settings()
+
+        scf_loop = ("mixing_beta", "mixing_mode", "mixing_fixed_ns", "electron_maxstep")
+        for key in scf_loop:
+            assert settings[key]["steps"] == ["scf", "relax", "vc-relax"], key
+            assert settings[key]["tasks"] == _ALL_TASKS, key
+            assert settings[key]["programs"] == ["pw.x"], key
+
+    def test_relaxation_settings_apply_to_the_relax_tasks_only(self) -> None:
+        settings = self._settings()
+
+        for key in ("nstep", "ion_dynamics", "fix_bottom_layers", "etot_conv_thr"):
+            assert settings[key]["steps"] == ["relax", "vc-relax"], key
+            assert settings[key]["tasks"] == ["relax", "vc-relax"], key
+
+    def test_cell_settings_apply_to_vc_relax_only(self) -> None:
+        settings = self._settings()
+
+        for key in ("press", "cell_dofree", "press_conv_thr", "cell_factor"):
+            assert settings[key]["steps"] == ["vc-relax"], key
+            assert settings[key]["tasks"] == ["vc-relax"], key
+            assert settings[key]["programs"] == ["pw.x"], key
+
+    def test_dos_x_settings_are_published_on_the_dos_step(self) -> None:
+        settings = self._settings()
+
+        delta_e = settings["delta_e"]
+        assert (delta_e["group"], delta_e["scope"]) == ("dos", "per_step")
+        assert (delta_e["steps"], delta_e["tasks"]) == (["dos"], ["dos"])
+        assert delta_e["programs"] == ["dos.x"]
+        assert delta_e["unit"] == "eV"
+        assert (settings["emin"]["unit"], settings["emax"]["unit"]) == ("eV", "eV")
+        assert settings["broadening"]["unit"] == "Ry"
+        assert settings["ngauss"]["type"] == "integer"
+        for key in ("delta_e", "emin", "emax", "broadening", "ngauss"):
+            assert settings[key]["description"], key
+
+    def test_job_settings_are_task_level(self) -> None:
+        settings = self._settings()
+
+        for key in ("partition", "nodes", "ntasks", "walltime_h", "account"):
+            assert settings[key]["scope"] == "task", key
+            assert settings[key]["steps"] is None, key
+
+    def test_the_routing_notice_is_in_the_warnings_catalogue(self) -> None:
+        by_code = {entry["code"]: entry for entry in capabilities()["warnings"]}
+
+        entry = by_code["overrides.applies_to_multiple_steps"]
+        assert (entry["level"], entry["category"]) == ("info", "overrides")
+
+    def test_bindings_route_with_the_published_steps(self) -> None:
+        catalogue = bindings()
+
+        for setting in capabilities()["settings"]:
+            binding = catalogue[setting["key"]]
+            steps = None if binding.steps is None else list(binding.steps)
+            assert steps == setting["steps"], setting["key"]
+
+
 class TestFacts:
     def test_exactly_the_four_scalar_overridable_facts(self) -> None:
         keys = {f["key"] for f in capabilities()["facts"]}
@@ -336,25 +512,103 @@ class TestFacts:
 
         assert facts["is_magnetic"]["approaches"] == ["human", "ml", "heuristic"]
 
-    def test_all_facts_are_overridable(self) -> None:
+    def test_a_fact_is_overridable_exactly_when_it_has_an_analysis_binding(
+        self,
+    ) -> None:
+        """`overridable` is a promise about `--set`/override support, not a
+        display flag: it once shipped True for all four facts while
+        `bindings()` had no entry for any of them, so `--set is_metal=...`
+        failed with "unknown setting"."""
+        analysis_keys = {
+            binding.key
+            for binding in bindings().values()
+            if binding.branch == "analysis"
+        }
+        facts = {f["key"]: f for f in capabilities()["facts"]}
+
+        for key, fact in facts.items():
+            assert fact["overridable"] is (key in analysis_keys), key
+        assert facts["is_metal"]["overridable"] is True
+        assert facts["is_magnetic"]["overridable"] is True
+
+    def test_no_fact_description_names_a_resolution_method(self) -> None:
+        """#175: is_metal read "..., from composition alone." while the CGCNN
+        tier produced the value, so NaCl showed non_metal under a caption
+        naming the tier that says metal. A description says what the fact
+        means; the record's source and provenance say how it was resolved."""
+        method_word = re.compile(
+            r"\b(" + "|".join(("composition", "model", *SOURCES)) + r")\b",
+            re.IGNORECASE,
+        )
+
         for fact in capabilities()["facts"]:
-            assert fact["overridable"] is True
+            assert method_word.search(fact["description"]) is None, fact
 
-    def test_every_fact_marked_overridable_actually_has_a_set_binding(self) -> None:
-        """`overridable: True` is a promise the settings-schema reflection
-        makes about `--set`/override support, not just a display flag --
-        this once shipped True for all four facts while `bindings()` (the
-        thing `--set` actually consults) had no entry for any of them, so
-        `--set is_metal=true` failed with "unknown setting". Every
-        overridable fact's key must resolve in `bindings()`."""
-        from goldilocks_core.capabilities import bindings
+    def test_is_metal_description_is_the_model_target_contract(self) -> None:
+        """The is_metal model's target contract is
+        goldilocks.is_metal.dft_band_gap_zero.v1; every tier answers that."""
+        facts = {f["key"]: f for f in capabilities()["facts"]}
 
+        assert facts["is_metal"]["description"] == (
+            "Whether the structure is metallic (zero DFT band gap)."
+        )
+
+
+class TestOverrideContract:
+    """#139: /capabilities advertised is_metal/is_magnetic as the enums
+    metal/non_metal and magnetic/non_magnetic, while their overrides took
+    only booleans, so every advertised value was a 422. Every value a
+    client is told it may send must be accepted, on every key."""
+
+    def test_each_fact_publishes_its_record_s_type_and_values(self) -> None:
+        for fact in capabilities()["facts"]:
+            value_type = _record_value_type(fact["key"])
+            if typing.get_origin(value_type) is typing.Literal:
+                expected = ("enum", sorted(typing.get_args(value_type)))
+            else:
+                assert value_type is bool, fact["key"]
+                expected = ("boolean", None)
+            assert (fact["type"], fact["values"]) == expected, fact["key"]
+
+    def test_metallicity_and_magnetism_are_the_record_labels(self) -> None:
+        facts = {f["key"]: f for f in capabilities()["facts"]}
+
+        assert (facts["is_metal"]["type"], facts["is_metal"]["values"]) == (
+            "enum",
+            ["metal", "non_metal"],
+        )
+        assert (facts["is_magnetic"]["type"], facts["is_magnetic"]["values"]) == (
+            "enum",
+            ["magnetic", "non_magnetic"],
+        )
+
+    def test_an_overridable_fact_s_binding_takes_its_record_s_type(self) -> None:
         catalogue = bindings()
+
         for fact in capabilities()["facts"]:
             if fact["overridable"]:
-                assert fact["key"] in catalogue, (
-                    f"{fact['key']!r} claims overridable=True but has no --set binding"
-                )
+                expected = _json_type(_record_value_type(fact["key"]))
+                assert catalogue[fact["key"]].json_type == expected, fact["key"]
+
+    def test_every_advertised_fact_value_is_accepted(self) -> None:
+        catalogue = bindings()
+        overridable = [f for f in capabilities()["facts"] if f["overridable"]]
+
+        assert overridable
+        for fact in overridable:
+            for value in _advertised_values(fact):
+                assert _accepted(catalogue[fact["key"]], value) == value
+
+    def test_every_advertised_setting_value_is_accepted(self) -> None:
+        """For a task the setting applies to (#154: no other accepts it)."""
+        catalogue = bindings()
+        checked = 0
+
+        for setting in capabilities()["settings"]:
+            for value in _advertised_values(setting):
+                assert _accepted(catalogue[setting["key"]], value) == value
+                checked += 1
+        assert checked > 0
 
 
 class TestPseudopotentialTablesAndHpcProfiles:

@@ -131,7 +131,9 @@ def _run(
 ) -> tuple[tuple[Advice, ...], tuple[str, ...]]:
     """Every pw.x step's ``Advice`` and every pw.x input for ``task``,
     after asserting the gate passes."""
-    overrides = build_overrides(settings)
+    overrides = build_overrides(
+        settings, task="scf_single_point" if task == "scf" else task
+    )
     if task == "scf":
         advice = advise(structure, hpc=_hpc(), overrides=overrides, store=store)
         report, steps = check(advice), (advice,)
@@ -232,7 +234,9 @@ def test_nelec_for_the_uploaded_cell_is_refused_once_the_ordering_resizes_it(
     advice = advise(
         _primitive_nio(),
         hpc=_hpc(),
-        overrides=build_overrides({"magnetic_ordering": "afm", "nelec": 24.0}),
+        overrides=build_overrides(
+            {"magnetic_ordering": "afm", "nelec": 24.0}, task="scf_single_point"
+        ),
         store=store,
     )
 
@@ -374,7 +378,9 @@ def test_spin_orbit_refuses_tot_magnetization_before_generation(
     advice = advise(
         _cri3_monolayer(),
         hpc=_hpc(),
-        overrides=build_overrides({**_SPIN_ORBIT_FIXED, "tot_magnetization": 6.0}),
+        overrides=build_overrides(
+            {**_SPIN_ORBIT_FIXED, "tot_magnetization": 6.0}, task="scf_single_point"
+        ),
         store=spin_orbit_store,
     )
 
@@ -444,8 +450,8 @@ def test_spin_orbit_moments_start_along_c_and_count_k_points_as_pw_x_does(
 
     advice = steps[0]
     assert advice.step.kpoints.n_irr_k.value == 126
-    record = advice.records()["magnetic"].value
-    assert record["moment_direction"] == {"uvw": [0.0, 0.0, 1.0], "source": "heuristic"}
+    direction = advice.records()["magnetic"].value.moment_direction
+    assert (direction.uvw, direction.source) == ((0.0, 0.0, 1.0), "heuristic")
     codes = {warning["code"] for warning in advice.warnings()}
     assert "magnetic.soc_moment_direction_defaulted" in codes
     for species in (1, 2):
@@ -467,8 +473,8 @@ def test_a_moment_direction_setting_is_written_as_qe_s_angles(
     )
 
     advice = steps[0]
-    record = advice.records()["magnetic"].value
-    assert record["moment_direction"] == {"uvw": [1.0, 1.0, 0.0], "source": "human"}
+    direction = advice.records()["magnetic"].value.moment_direction
+    assert (direction.uvw, direction.source) == ((1.0, 1.0, 0.0), "human")
     codes = {warning["code"] for warning in advice.warnings()}
     assert "magnetic.soc_moment_direction_defaulted" not in codes
     for species in (1, 2):
@@ -518,7 +524,9 @@ def test_afm_orders_the_four_fe_of_olivine_lifepo4(olivine_store: AssetStore) ->
     advice = advise(
         olivine,
         hpc=_hpc(),
-        overrides=build_overrides({"magnetic_ordering": "afm"}),
+        overrides=build_overrides(
+            {"magnetic_ordering": "afm"}, task="scf_single_point"
+        ),
         store=olivine_store,
     )
 
@@ -530,10 +538,10 @@ def test_afm_orders_the_four_fe_of_olivine_lifepo4(olivine_store: AssetStore) ->
     assert magnetic.ordering == OrderingRecord(
         requested="afm",
         applied="afm-1",
-        compensated=True,
         criterion="smallest_cell",
         alternatives=("afm-2", "afm-3"),
     )
+    assert magnetic.compensated is True
     assert len(magnetic.cell) == 28
     assert {site.label for site in magnetic.cell} == {"Li", "Fe1", "Fe2", "P", "O"}
     assert magnetic.starting_magnetization["Fe1"] == pytest.approx(5.0 / 16.0)
@@ -570,7 +578,7 @@ def test_an_afm_request_writes_an_afm_deck_for_a_non_magnetic_classification(
     steps, (content,) = _run(
         "scf",
         _bcc_chromium(),
-        {"is_magnetic": False, "magnetic_ordering": "afm"},
+        {"is_magnetic": "non_magnetic", "magnetic_ordering": "afm"},
         chromium_store,
     )
 
@@ -579,10 +587,10 @@ def test_an_afm_request_writes_an_afm_deck_for_a_non_magnetic_classification(
     assert magnetic.ordering == OrderingRecord(
         requested="afm",
         applied="afm-1",
-        compensated=True,
         criterion="smallest_cell",
         alternatives=("afm-2",),
     )
+    assert magnetic.compensated is True
     assert _keyword(content, "nspin") == "2"
     assert _keyword(content, "nat") == "2"
     assert _keyword(content, "ntyp") == "2"
@@ -612,7 +620,7 @@ def test_a_magnetic_insulator_s_default_passes_the_gate_on_smearing(
     steps, (content,) = _run(
         "scf",
         structure(),
-        {"is_metal": False},
+        {"is_metal": "non_metal"},
         request.getfixturevalue(store_fixture),
     )
 
@@ -635,7 +643,10 @@ def test_a_compensated_afm_insulator_pins_a_zero_moment_on_fixed_occupations(
     tot_magnetization = 0, both spin channels holding 24 electrons, and a
     neutral cell (#128). The request itself carries no moment."""
     steps, (content,) = _run(
-        task, _primitive_nio(), {"magnetic_ordering": "afm", "is_metal": False}, store
+        task,
+        _primitive_nio(),
+        {"magnetic_ordering": "afm", "is_metal": "non_metal"},
+        store,
     )
 
     magnetic = steps[0].system.magnetic.value
@@ -643,10 +654,10 @@ def test_a_compensated_afm_insulator_pins_a_zero_moment_on_fixed_occupations(
     assert magnetic.ordering == OrderingRecord(
         requested="afm",
         applied="afm-1",
-        compensated=True,
         criterion="smallest_cell",
         alternatives=("afm-2",),
     )
+    assert magnetic.compensated is True
     assert magnetic.tot_magnetization is None
     assert occupations.occupations == "fixed"
     assert occupations.tot_magnetization == 0.0
@@ -654,6 +665,93 @@ def test_a_compensated_afm_insulator_pins_a_zero_moment_on_fixed_occupations(
     assert float(_keyword(content, "tot_magnetization")) == 0.0
     assert _keyword(content, "nbnd") == "24"
     assert _keyword(content, "tot_charge") is None
+
+
+@_needs_enumlib
+@pytest.mark.parametrize(
+    "seeds", [{"Ni1": 5.0 / 18.0}, {"Ni2": -5.0 / 18.0}], ids=["Ni1", "Ni2"]
+)
+def test_restating_one_sublattice_s_seed_keeps_the_afm_insulator_compensated(
+    seeds: dict[str, float], store: AssetStore
+) -> None:
+    """#185: a starting_magnetization that restates one sublattice's
+    computed seed (Ni's 5/18 here) writes the seeds the ordering computes,
+    so it writes the compensated deck: fixed occupations with
+    tot_magnetization = 0, not smearing."""
+    settings: dict[str, object] = {"magnetic_ordering": "afm", "is_metal": "non_metal"}
+    _, (computed,) = _run("scf", _primitive_nio(), settings, store)
+
+    steps, (content,) = _run(
+        "scf", _primitive_nio(), {**settings, "starting_magnetization": seeds}, store
+    )
+
+    magnetic = steps[0].system.magnetic.value
+    assert magnetic.human_seeded_labels == tuple(seeds)
+    assert magnetic.compensated is True
+    assert content == computed
+    assert float(_keyword(content, "tot_magnetization")) == 0.0
+
+
+def _tenorite_cuo() -> Structure:
+    """Tenorite CuO (C2/c, Asbrink & Norrby 1970), its 4-atom primitive
+    cell: Cu2+, 3d9."""
+    return Structure.from_spacegroup(
+        "C2/c",
+        Lattice.monoclinic(4.6837, 3.4226, 5.1288, 99.54),
+        ["Cu", "O"],
+        [[0.25, 0.25, 0.0], [0.0, 0.4184, 0.25]],
+    ).get_primitive_structure()
+
+
+@pytest.fixture
+def cuo_store(tmp_path, monkeypatch) -> AssetStore:
+    spec, registry_table = sssp_fixture_table_spec(
+        tmp_path / "sources", {"Cu": 19.0, "O": 6.0}
+    )
+    monkeypatch.setattr(
+        "goldilocks_core.service._pseudo.load_tables",
+        lambda *a, **kw: {registry_table.id: registry_table},
+    )
+    installed = AssetStore(tmp_path / "store")
+    installed.install(spec, sssp_preparer(registry_table))
+    return installed
+
+
+@pytest.mark.parametrize(
+    ("spin_polarized", "nspin", "occupations"),
+    [(None, "2", "'smearing'"), (False, None, "'fixed'")],
+    ids=["default", "spin_polarized=false"],
+)
+def test_a_u_on_an_odd_d_shell_writes_a_spin_polarized_deck(
+    spin_polarized: bool | None,
+    nspin: str | None,
+    occupations: str,
+    cuo_store: AssetStore,
+) -> None:
+    """#147: with the classifier calling tenorite CuO non-magnetic, its
+    default deck carried U Cu-3d 4 and no nspin: the Hubbard decision was
+    resolved apart from the spin decision. The U on Cu2+ d9 now turns spin
+    polarization on, under a warning, and the non-metal then runs on
+    smearing, since nothing knows its moment (#138). An explicit
+    spin_polarized=false still writes the unpolarized deck."""
+    settings: dict[str, object] = {
+        "is_magnetic": "non_magnetic",
+        "is_metal": "non_metal",
+    }
+    if spin_polarized is not None:
+        settings["spin_polarized"] = spin_polarized
+
+    steps, (content,) = _run("scf", _tenorite_cuo(), settings, cuo_store)
+
+    advice = steps[0]
+    assert advice.analysis.is_magnetic.value == "non_magnetic"
+    assert content.endswith("HUBBARD (ortho-atomic)\n  U  Cu-3d  4\n")
+    assert _keyword(content, "nspin") == nspin
+    assert _keyword(content, "occupations") == occupations
+    codes = {warning["code"] for warning in advice.warnings()}
+    assert ("magnetic.spin_polarized_for_hubbard_open_shell" in codes) is (
+        spin_polarized is None
+    )
 
 
 def _corundum_fe2o3() -> Structure:
@@ -711,14 +809,14 @@ def test_a_requested_label_writes_that_ordering_and_records_its_alternatives(
     advice = steps[0]
     assert advice.system.symmetry_eff.value.space_group_symbol == "R-3"
     assert _keyword(content, "nat") == "10"
-    record = advice.records()["magnetic"].value["ordering"]
-    assert record == {
-        "requested": label,
-        "applied": label,
-        "compensated": True,
-        "criterion": "requested",
-        "alternatives": list(others),
-    }
+    magnetic = advice.records()["magnetic"].value
+    assert magnetic.ordering == OrderingRecord(
+        requested=label,
+        applied=label,
+        criterion="requested",
+        alternatives=tuple(others),
+    )
+    assert magnetic.compensated is True
     assert len(others) == 2
 
 
@@ -811,7 +909,7 @@ def test_a_smearing_magnet_s_bands_hold_its_seeded_moment(
         5.0 / 18.0
     )
     assert _keyword(content, "nbnd") == "28"
-    assert steps[0].records()["magnetic"].value["seeded_moment"] == pytest.approx(10.0)
+    assert steps[0].records()["magnetic"].value.seeded_moment == pytest.approx(10.0)
 
 
 def _janus_vsse(c: float = 20.0) -> Structure:
@@ -869,7 +967,11 @@ def test_the_dipole_notice_of_a_polar_afm_slab_describes_the_written_cell() -> N
     janus = _janus_vsse()
 
     advice = advise(
-        janus, hpc=_hpc(), overrides=build_overrides({"magnetic_ordering": "afm"})
+        janus,
+        hpc=_hpc(),
+        overrides=build_overrides(
+            {"magnetic_ordering": "afm"}, task="scf_single_point"
+        ),
     )
 
     cell = advice.system.magnetic.value.cell
@@ -908,7 +1010,11 @@ def test_the_dipole_notice_reads_the_vacuum_of_the_cell_written(monkeypatch) -> 
     )
 
     advice = advise(
-        janus, hpc=_hpc(), overrides=build_overrides({"magnetic_ordering": "afm"})
+        janus,
+        hpc=_hpc(),
+        overrides=build_overrides(
+            {"magnetic_ordering": "afm"}, task="scf_single_point"
+        ),
     )
 
     cell = advice.system.magnetic.value.cell

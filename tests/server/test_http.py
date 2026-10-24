@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import json
 import math
+import re
 import zipfile
 from pathlib import Path
 
@@ -249,6 +250,18 @@ class TestCapabilities:
         assert response.status_code == 200
         assert response.json() == capabilities()
 
+    def test_cell_dofree_advertises_only_values_valid_under_ibrav_0(
+        self, client: TestClient
+    ) -> None:
+        """#153: 'volume' and the 21 'ibrav' forms were offered, though the
+        written input always has ibrav = 0."""
+        settings = client.get("/capabilities").json()["settings"]
+
+        (cell_dofree,) = (s for s in settings if s["key"] == "cell_dofree")
+        assert len(cell_dofree["enum"]) == 20
+        assert "volume" not in cell_dofree["enum"]
+        assert not [value for value in cell_dofree["enum"] if "ibrav" in value]
+
 
 class TestInspect:
     def test_returns_200_for_real_structure_text(
@@ -364,6 +377,45 @@ class TestExplain:
         assert records["nscf_occupations"]["value"]["occupations"] == ("tetrahedra_opt")
         assert records["dos"]["value"]["delta_e"] == 0.01
 
+    def test_dos_nscf_protocol_values_read_heuristic_not_your_override(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        """#174: with no overrides the dos task's nscf protocol values read
+        'heuristic', naming the protocol in source_note; the same values set
+        in the request read 'human'. Both used to read 'human'."""
+
+        def nscf_records(overrides: dict[str, object]) -> list[dict]:
+            response = client.post(
+                "/explain",
+                json={
+                    "structure_content": silicon_cif,
+                    "hpc": "scarf",
+                    "task": "dos",
+                    "overrides": overrides,
+                },
+            )
+            assert response.status_code == 200
+            records = response.json()["records"]
+            return [records["nscf_k_sampling"], records["nscf_occupations"]]
+
+        defaults = nscf_records({})
+        requested = nscf_records({"k_distance": 0.1, "occupations": "tetrahedra_opt"})
+
+        assert [record["value"] for record in defaults] == [
+            record["value"] for record in requested
+        ]
+        assert defaults[0]["value"]["k_distance"] == 0.1
+        assert defaults[1]["value"]["occupations"] == "tetrahedra_opt"
+        for record in defaults:
+            assert record["source"] == "heuristic"
+            assert record["source_note"] == (
+                "Protocol default for the dos task's nscf step: "
+                "aiida-quantumespresso's pdos.yaml, balanced."
+            )
+        for record in requested:
+            assert record["source"] == "human"
+            assert record["source_note"] is None
+
     def test_relax_task_returns_a_relax_record(
         self, client: TestClient, real_assets, silicon_cif: str
     ) -> None:
@@ -407,6 +459,49 @@ class TestExplain:
         assert k_sampling["k_index"] == 1
         assert k_sampling["k_distance_interval"] == _SILICON_GAMMA_INTERVAL
 
+    def test_metallicity_and_magnetism_overrides_take_the_advertised_labels(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        """#139: /capabilities advertises metal/non_metal and
+        magnetic/non_magnetic; each was a 422 bool_parsing."""
+        response = client.post(
+            "/explain",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "overrides": {"is_metal": "non_metal", "is_magnetic": "magnetic"},
+            },
+        )
+
+        assert response.status_code == 200
+        records = response.json()["records"]
+        assert (records["is_metal"]["value"], records["is_metal"]["source"]) == (
+            "non_metal",
+            "human",
+        )
+        assert (
+            records["is_magnetic"]["value"],
+            records["is_magnetic"]["source"],
+        ) == ("magnetic", "human")
+
+    def test_a_boolean_metallicity_override_is_a_422(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        """#139: no boolean alias for the advertised labels."""
+        response = client.post(
+            "/explain",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "overrides": {"is_metal": False},
+            },
+        )
+
+        assert response.status_code == 422
+        error = response.json()["error"]
+        assert error["kind"] == "invalid_setting"
+        assert "'metal' or 'non_metal'" in error["message"]
+
     def test_a_non_finite_override_is_a_422(
         self, client: TestClient, silicon_cif: str
     ) -> None:
@@ -428,6 +523,175 @@ class TestExplain:
         error = response.json()["error"]
         assert error["kind"] == "invalid_setting"
         assert "finite number" in error["message"]
+
+
+class TestPerStepOverrides:
+    """#154 over HTTP: `steps.nscf.k_grid` was a 422 "unknown setting",
+    dos.x keys were unknown, and a key no step of the task reads (press on
+    an scf) answered 200 and was dropped. No real assets needed: /explain
+    reports every record either way."""
+
+    def _explain(
+        self, client: TestClient, silicon_cif: str, task: str, overrides: dict
+    ) -> object:
+        return client.post(
+            "/explain",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "task": task,
+                "overrides": overrides,
+            },
+        )
+
+    def test_steps_nscf_k_grid_changes_only_the_nscf_mesh(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        default = self._explain(client, silicon_cif, "dos", {}).json()["records"]
+        response = self._explain(
+            client, silicon_cif, "dos", {"steps.nscf.k_grid": [30, 30, 30]}
+        )
+
+        assert response.status_code == 200
+        records = response.json()["records"]
+        assert records["nscf_k_sampling"]["value"]["mesh"] == [30, 30, 30]
+        assert records["k_sampling"] == default["k_sampling"]
+
+    def test_a_shift_keeps_the_protocol_nscf_mesh(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        default = self._explain(client, silicon_cif, "dos", {}).json()["records"]
+        response = self._explain(client, silicon_cif, "dos", {"shift": [1, 1, 1]})
+
+        assert response.status_code == 200
+        nscf = response.json()["records"]["nscf_k_sampling"]["value"]
+        assert nscf["mesh"] == default["nscf_k_sampling"]["value"]["mesh"]
+        assert (nscf["k_distance"], nscf["shift"]) == (0.1, [1, 1, 1])
+
+    def test_a_dos_x_setting_reaches_the_dos_record(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        response = self._explain(client, silicon_cif, "dos", {"delta_e": 0.05})
+
+        assert response.status_code == 200
+        dos = response.json()["records"]["dos"]
+        assert dos["value"]["delta_e"] == 0.05
+        assert dos["source"] == "human"
+
+    def test_a_flat_k_grid_on_dos_answers_with_the_routing_notice(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        response = self._explain(client, silicon_cif, "dos", {"k_grid": [4, 4, 4]})
+
+        assert response.status_code == 200
+        notices = [
+            warning
+            for warning in response.json()["warnings"]
+            if warning["code"] == "overrides.applies_to_multiple_steps"
+        ]
+        assert [(n["record"], n["level"]) for n in notices] == [("overrides", "info")]
+
+    def test_a_mixing_beta_on_dos_sets_the_scf_step_only(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        """The nscf step runs no SCF loop, yet nscf_convergence read human for
+        a mixing_beta pw.x ignores there, with a notice naming both steps."""
+        response = self._explain(client, silicon_cif, "dos", {"mixing_beta": 0.3})
+
+        assert response.status_code == 200
+        body = response.json()
+        scf = body["records"]["convergence"]
+        nscf = body["records"]["nscf_convergence"]
+        assert (scf["value"]["mixing_beta"], scf["field_sources"]["mixing_beta"]) == (
+            0.3,
+            "human",
+        )
+        assert (nscf["value"]["mixing_beta"], nscf["source"]) == (0.4, "heuristic")
+        assert "overrides.applies_to_multiple_steps" not in {
+            warning["code"] for warning in body["warnings"]
+        }
+
+    @pytest.mark.parametrize(
+        ("task", "overrides", "message"),
+        [
+            (
+                "scf_single_point",
+                {"press": 10},
+                "'press' does not apply to task 'scf_single_point'; "
+                "it applies to task vc-relax",
+            ),
+            (
+                "relax",
+                {"cell_dofree": "2Dxy", "press": 5},
+                "'cell_dofree' does not apply to task 'relax'; "
+                "it applies to task vc-relax",
+            ),
+            (
+                "scf_single_point",
+                {"delta_e": 0.05},
+                "'delta_e' does not apply to task 'scf_single_point'; "
+                "it applies to task dos",
+            ),
+            (
+                "dos",
+                {"steps.nscf.mixing_beta": 0.3},
+                "'mixing_beta' does not apply to step 'nscf' "
+                "(in 'steps.nscf.mixing_beta'); it applies to steps scf, relax, "
+                "vc-relax",
+            ),
+        ],
+    )
+    def test_a_setting_no_step_of_the_task_reads_is_a_422(
+        self,
+        client: TestClient,
+        silicon_cif: str,
+        task: str,
+        overrides: dict,
+        message: str,
+    ) -> None:
+        for route in ("/explain", "/run"):
+            response = client.post(
+                route,
+                json={
+                    "structure_content": silicon_cif,
+                    "hpc": "scarf",
+                    "task": task,
+                    "overrides": overrides,
+                },
+            )
+
+            assert response.status_code == 422, route
+            error = response.json()["error"]
+            assert (error["kind"], error["message"]) == ("invalid_setting", message)
+
+    def test_delta_e_reaches_dos_in_and_steps_nscf_only_nscf_in(
+        self, client: TestClient, silicon_fixture_table, silicon_cif: str
+    ) -> None:
+        response = client.post(
+            "/run",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "task": "dos",
+                "respond_with": "archive",
+                "overrides": {"delta_e": 0.05, "steps.nscf.k_grid": [12, 12, 12]},
+            },
+        )
+
+        assert response.status_code == 200
+        archive = zipfile.ZipFile(io.BytesIO(response.content))
+        dos_in = archive.read(_archive_member(archive, "dos.in")).decode()
+        assert "deltae           = 0.05" in dos_in
+        nscf_in = archive.read(_archive_member(archive, "nscf.in")).decode()
+        scf_in = archive.read(_archive_member(archive, "scf.in")).decode()
+        assert "K_POINTS automatic\n  12  12  12  0  0  0" in nscf_in
+        assert "K_POINTS automatic\n  12  12  12" not in scf_in
+
+
+def _archive_member(archive: zipfile.ZipFile, name: str) -> str:
+    return next(
+        member for member in archive.namelist() if member.rpartition("/")[2] == name
+    )
 
 
 class TestRun:
@@ -476,6 +740,29 @@ class TestRun:
         records = strict_json(response.text)["records"]
         interval = records["k_sampling"]["value"]["k_distance_interval"]
         assert interval == _SILICON_GAMMA_INTERVAL
+
+    def test_a_metal_override_reaches_the_generated_occupations(
+        self, client: TestClient, silicon_fixture_table, silicon_cif: str
+    ) -> None:
+        """#139: the advertised label, not a boolean, now corrects the
+        classification, and the input follows it: smearing for a metal."""
+        response = client.post(
+            "/run",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "overrides": {"is_metal": "metal"},
+                "respond_with": "archive",
+            },
+        )
+
+        assert response.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            manifest = strict_json(archive.read("goldilocks.json"))
+            scf_in = archive.read("scf.in").decode()
+        assert manifest["records"]["is_metal"]["value"] == "metal"
+        assert manifest["records"]["is_metal"]["source"] == "human"
+        assert re.search(r"occupations\s*=\s*'smearing'", scf_in)
 
     def test_archive_manifest_is_strict_json_for_a_gamma_only_mesh(
         self, client: TestClient, silicon_fixture_table, silicon_cif: str
@@ -561,6 +848,27 @@ class TestRun:
         assert response.status_code == 200
         files = response.json()["files"]
         assert "vc-relax.in" in files
+
+    @pytest.mark.parametrize("cell_dofree", ["volume", "ibrav+volume", "ibrav+2Dxy"])
+    def test_a_cell_dofree_invalid_under_ibrav_0_is_a_422(
+        self, client: TestClient, silicon_cif: str, cell_dofree: str
+    ) -> None:
+        """#153: cell_dofree='volume' returned 200 and a vc-relax.in with
+        ibrav = 0, where pw.x stops while reading it."""
+        response = client.post(
+            "/run",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "task": "vc-relax",
+                "overrides": {"cell_dofree": cell_dofree},
+            },
+        )
+
+        assert response.status_code == 422
+        error = response.json()["error"]
+        assert error["kind"] == "invalid_setting"
+        assert "cell_dofree" in error["message"]
 
     def test_unknown_setting_is_a_422_with_did_you_mean(
         self, client: TestClient, real_assets, silicon_cif: str

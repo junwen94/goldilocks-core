@@ -141,6 +141,28 @@ def test_disordered_oxidized_structure_preserves_chemistry_and_geometry() -> Non
     assert inline["structure"]["sites"][0]["species"] == site["species"]
 
 
+@pytest.mark.parametrize(
+    ("format", "labels"), [("cif", ["Ni1", "O1"]), ("poscar", ["Ni", "O"])]
+)
+def test_inspection_reports_each_site_s_label(format: str, labels: list[str]) -> None:
+    """#185: a site's label is what starting_magnetization is keyed by, and
+    /inspect reported only the species string ('Ni'). A CIF keeps its
+    _atom_site_label (Ni1/O1, as the MC3D CIF of NiO has); a POSCAR's
+    labels are its element symbols."""
+    nio = Structure(
+        Lattice.from_parameters(2.95, 2.95, 2.95, 60, 60, 60),
+        ["Ni", "O"],
+        [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+        labels=["Ni1", "O1"],
+    )
+
+    inspection = _inspect(InlineStructureSource(f"NiO.{format}", nio.to(fmt=format)))
+
+    sites = inspection["structure"]["sites"]
+    assert [site["label"] for site in sites] == labels
+    assert [site["species"][0]["label"] for site in sites] == ["Ni", "O"]
+
+
 @pytest.mark.parametrize("format", ["cif", "poscar"])
 @pytest.mark.parametrize("content", ["not a crystal structure", " \n"])
 def test_inspection_rejects_invalid_content(tmp_path, format, content) -> None:

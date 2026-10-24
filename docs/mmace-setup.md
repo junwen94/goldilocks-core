@@ -150,8 +150,9 @@ Load a magnetic structure (e.g. `src/goldilocks_core/examples/structures/Fe_bcc.
 check the **Analysis** column's "is magnetic" field: once the `ml` tier is live, its caption
 switches from "Heuristic default" to **"Goldilocks-ML prediction"**. A "Magnetic Orderings"
 column also appears automatically once the run is spin-polarized, whether the classifier made
-it so or a setting such as `spin_polarized` or `magnetic_ordering` did (it stays hidden for a
-spin-unpolarized run) — this is where `--rank-with-mmace` lives in the UI.
+it so, a Hubbard U on an odd d or f count did, or a setting such as `spin_polarized` or
+`magnetic_ordering` did (it stays hidden for a spin-unpolarized run) — this is where
+`--rank-with-mmace` lives in the UI.
 
 Clicking **Run mMACE** there ranks the candidates in a separate process, so editing a setting
 while it runs is unaffected; a second ranking waits for the first to finish. Rankings take

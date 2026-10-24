@@ -14,8 +14,9 @@ step's own k-point/spin pairs (``n_irr_k`` and the magnetic decision's
 spin layout) -- ``job_resources`` evaluates that same function for each
 candidate ``ntasks`` rather than reading its output (see
 ``advisors/job_resources.py``'s own module note on false circularity).
-``job``/``job_llm`` overrides are task-level; ``npool``/``ndiag`` are
-per step.
+``JobOverrides`` (partition, nodes, ntasks, walltime, account) are
+task-level, one per request; ``ResourceOverrides`` (``npool``/``ndiag``)
+are per step (#154).
 
 **The estimate reads the cell the writer renders**: the simulated cell,
 ``MagneticConfigFacts.cell`` (an AFM candidate can be a different cell
@@ -64,9 +65,18 @@ _ANGULAR_MOMENTA = "spdf"
 
 
 @dataclass(frozen=True, slots=True)
-class ResourceOverrides:
+class JobOverrides:
+    """The task's one allocation: a request sets it once, never per step,
+    since ``render_submission*`` writes one ``#SBATCH`` header per task."""
+
     job: JobHumanInput | None = None
     job_llm: JobLlmInput | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceOverrides:
+    """One pw.x step's own layout inside the task's allocation."""
+
     parallelisation: ParallelisationHumanInput | None = None
 
 

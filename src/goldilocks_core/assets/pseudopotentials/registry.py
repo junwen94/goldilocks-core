@@ -10,9 +10,9 @@ correctness fixes made while porting (goldilocks-core-design.md S5's "改" row):
   PseudoDojo naming drift, and silent about which tables it actually affected.
 - ``note``/``record`` are now copied onto ``PseudoTable``. v1 validated them as
   allowed optional TOML fields but never assigned them to the parsed object, so
-  e.g. a table's licence caveat written in ``note`` (see the SSSP tables' "never
-  redistributed by us" text) never reached ``capabilities --json`` or anything
-  else downstream -- it was write-only.
+  e.g. a table's licence caveat written in ``note`` (see the SSSP tables' mixed
+  GPL-3.0 licence text) never reached ``capabilities --json`` or anything else
+  downstream -- it was write-only.
 """
 
 from __future__ import annotations

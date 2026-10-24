@@ -1,8 +1,9 @@
 """``goldilocks explain``: analysis, advisors and ``run``'s check, without
 generating anything (v2 epic 8, #8). Prints every decision with its source,
-then one ``blocked:`` line per distinct reason ``run`` would refuse to
-generate an input for (#165). A scientifically incomplete or blocked request
-still prints and exits 0: ``service.advise()`` marks what it cannot decide
+then one ``notice:`` line per routing notice of the request (#154), then one
+``blocked:`` line per distinct reason ``run`` would refuse to generate an
+input for (#165). A scientifically incomplete or blocked request still
+prints and exits 0: ``service.advise()`` marks what it cannot decide
 unavailable or blocked instead of raising.
 """
 
@@ -15,10 +16,9 @@ from goldilocks_core.cli._common import (
     add_fetch_missing_argument,
     add_run_arguments,
     format_field_state,
+    notice_lines,
     records_to_json,
-    resolve_hpc,
-    resolve_overrides,
-    resolve_structure,
+    resolve_request,
 )
 from goldilocks_core.cli._output import write_json
 from goldilocks_core.service import (
@@ -44,50 +44,51 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
 
 
 def run(args: argparse.Namespace, out: TextIO) -> None:
-    structure = resolve_structure(args.structure)
-    hpc = resolve_hpc(args.hpc)
-    overrides = resolve_overrides(args)
+    request = resolve_request(args)
     if args.task == "dos":
         advice = advise_dos(
-            structure,
+            request.structure,
             code=args.code,
-            hpc=hpc,
-            overrides=overrides,
+            hpc=request.hpc,
+            overrides=request.overrides,
             fetch_missing=args.fetch_missing,
         )
         report = check_dos(advice)
     elif args.task in ("relax", "vc-relax"):
         advice = advise_relax(
-            structure,
+            request.structure,
             calculation=args.task,
             code=args.code,
-            hpc=hpc,
-            overrides=overrides,
+            hpc=request.hpc,
+            overrides=request.overrides,
             fetch_missing=args.fetch_missing,
         )
         report = check_relax(advice)
     else:
         advice = advise(
-            structure,
+            request.structure,
             code=args.code,
-            hpc=hpc,
-            overrides=overrides,
+            hpc=request.hpc,
+            overrides=request.overrides,
             fetch_missing=args.fetch_missing,
         )
         report = check(advice)
     records = advice.records()
+    warnings = advice.warnings()
     blocking = list(dict.fromkeys(report.blocking))
     if args.json:
         write_json(
             out,
             {
                 "records": records_to_json(records),
-                "warnings": advice.warnings(),
+                "warnings": warnings,
                 "blocking": blocking,
             },
         )
         return
     for name, state in sorted(records.items()):
         print(f"{name}: {format_field_state(state)}", file=out)
+    for line in notice_lines(warnings):
+        print(line, file=out)
     for reason in blocking:
         print(f"blocked: {reason}", file=out)

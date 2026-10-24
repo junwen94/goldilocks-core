@@ -19,11 +19,21 @@ from pathlib import Path
 
 import pytest
 from pymatgen.core import Lattice, Structure
-from support import run_cli as _run_cli, strict_json
+from support import (
+    run_cli as _run_cli,
+    sssp_fixture_table_spec,
+    strict_json,
+    write_registry,
+)
 
 from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
+from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
+from goldilocks_core.assets.store import AssetStore
+from goldilocks_core.bundle import bundle_files
 from goldilocks_core.capabilities import capabilities
 from goldilocks_core.examples.structures import structure
+from goldilocks_core.server import _handlers
+from goldilocks_core.server.documents import ComputeRequestDocument
 
 
 def test_help_lists_the_design_docs_commands() -> None:
@@ -68,6 +78,26 @@ def test_inspect_reports_structure_in_json_and_human_forms() -> None:
     assert as_json.returncode == 0, as_json.stderr
     document = json.loads(as_json.stdout)
     assert document["structure"]["reduced_formula"] == "Si"
+
+
+def test_inspect_prints_the_site_labels_starting_magnetization_takes(
+    tmp_path: Path,
+) -> None:
+    """#185: the keys a starting_magnetization takes are discoverable
+    before a request fails: the CIF's own site labels, in site order."""
+    nio = Structure(
+        Lattice.from_parameters(2.95, 2.95, 2.95, 60, 60, 60),
+        ["Ni", "O"],
+        [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]],
+        labels=["Ni1", "O1"],
+    )
+    path = tmp_path / "NiO.cif"
+    path.write_text(nio.to(fmt="cif"), encoding="utf-8")
+
+    completed = _run_cli("inspect", str(path))
+
+    assert completed.returncode == 0, completed.stderr
+    assert "site labels: Ni1, O1\n" in completed.stdout
 
 
 def test_inspect_missing_structure_is_an_operator_error_not_a_traceback() -> None:
@@ -133,13 +163,23 @@ def test_magnetic_orderings_rank_degrades_without_a_configured_checkpoint(
 
 
 def test_settings_json_matches_the_capabilities_contract() -> None:
+    """Every --set-able key: capabilities' settings[] and its overridable
+    facts[] (#139), the same objects /capabilities publishes."""
     completed = _run_cli("settings", "--json")
 
     assert completed.returncode == 0, completed.stderr
-    settings = json.loads(completed.stdout)
-    keys = {setting["key"] for setting in settings}
+    document = json.loads(completed.stdout)
+    caps = capabilities()
+    assert document == {
+        "settings": caps["settings"],
+        "facts": [fact for fact in caps["facts"] if fact["overridable"]],
+    }
+    keys = {setting["key"] for setting in document["settings"]}
     assert "functional" in keys
     assert "ecutwfc_ry" in keys
+    facts = {fact["key"]: fact for fact in document["facts"]}
+    assert facts["is_metal"]["values"] == ["metal", "non_metal"]
+    assert facts["is_magnetic"]["values"] == ["magnetic", "non_magnetic"]
 
 
 def test_settings_human_output_lists_sources() -> None:
@@ -147,6 +187,35 @@ def test_settings_human_output_lists_sources() -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert "sources: human . heuristic" in completed.stdout
+
+
+def test_settings_human_output_names_the_steps_a_setting_applies_to() -> None:
+    """#154: a step setting lists the steps ``steps.<step>.KEY`` can name;
+    a task-level setting (the job's walltime) lists none."""
+    completed = _run_cli("settings")
+
+    assert completed.returncode == 0, completed.stderr
+    lines = completed.stdout.splitlines()
+    press = lines.index("press [relax] number (default 0.0)")
+    assert lines[press + 2] == "  steps: vc-relax"
+    delta_e = lines.index("delta_e [dos] number")
+    assert lines[delta_e + 2] == "  steps: dos"
+    walltime = lines.index("walltime_h [job] number")
+    assert not lines[walltime + 2].startswith("  steps:")
+
+
+def test_settings_human_output_lists_the_facts_and_their_values() -> None:
+    """#139: is_metal/is_magnetic are --set-able, but `goldilocks settings`,
+    which an unknown key points to, never listed them or their values."""
+    completed = _run_cli("settings")
+
+    assert completed.returncode == 0, completed.stderr
+    lines = completed.stdout.splitlines()
+    is_metal = lines.index("is_metal [analysis] enum")
+    assert lines[is_metal + 1] == "  values: metal, non_metal"
+    is_magnetic = lines.index("is_magnetic [analysis] enum")
+    assert lines[is_magnetic + 1] == "  values: magnetic, non_magnetic"
+    assert "needs_soc [analysis] boolean" in lines
 
 
 def test_capabilities_json_matches_the_real_capabilities_payload() -> None:
@@ -390,6 +459,32 @@ def test_a_non_finite_set_value_is_an_operator_error() -> None:
     assert "finite number" in completed.stderr
 
 
+def test_a_metallicity_override_takes_the_advertised_label() -> None:
+    """#139: `--set is_metal=non_metal`, a value capabilities advertises,
+    exited 2 with "is not a boolean (true/false)". explain reports the
+    record without real assets."""
+    silicon = structure("Si.cif")
+
+    completed = _run_cli(
+        "explain", str(silicon), "--hpc", "scarf", "--set", "is_metal=non_metal"
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "is_metal: 'non_metal' (source=human)" in completed.stdout
+
+
+def test_a_boolean_metallicity_override_is_an_operator_error() -> None:
+    silicon = structure("Si.cif")
+
+    completed = _run_cli(
+        "explain", str(silicon), "--hpc", "scarf", "--set", "is_metal=false"
+    )
+
+    assert completed.returncode == 2
+    assert "Traceback" not in completed.stderr
+    assert "'metal' or 'non_metal'" in completed.stderr
+
+
 def test_blocked_pipeline_reports_deduplicated_reasons_and_exits_nonzero() -> None:
     """No real assets needed: an unknown pseudo_table_id fails inside
     the bundled registry lookup, before ever touching the asset store."""
@@ -496,7 +591,7 @@ class TestRunAndExplainAgainstRealAssets:
             for warning in document["warnings"]
         )
         assert all(
-            warning.keys() == {"code", "level", "category", "message"}
+            warning.keys() == {"code", "level", "category", "message", "record"}
             for warning in document["warnings"]
         )
 
@@ -765,3 +860,214 @@ class TestRunAndExplainAgainstRealAssets:
         assert json.dumps(
             document, indent=2, sort_keys=True
         ) == completed.stdout.rstrip("\n")
+
+
+class TestPerStepOverrides:
+    """#154 on the CLI: `--set steps.nscf.k_grid=...` was stripped to a flat
+    `k_grid`, so it also moved the scf mesh (752 irreducible k-points instead
+    of 47 on diamond Si); a flat plus a per-step value of one key exited 2;
+    dos.x keys were unknown; and a key no step of the task reads was dropped.
+    No real assets needed: explain reports every record either way."""
+
+    def _explain_dos(self, *settings: str) -> dict[str, object]:
+        silicon = structure("Si.cif")
+        flags = [part for setting in settings for part in ("--set", setting)]
+        completed = _run_cli(
+            "explain", str(silicon), "--hpc", "scarf", "--task", "dos", *flags, "--json"
+        )
+        assert completed.returncode == 0, completed.stderr
+        return strict_json(completed.stdout)
+
+    def test_steps_nscf_k_grid_changes_only_the_nscf_mesh(self) -> None:
+        default = self._explain_dos()["records"]
+        records = self._explain_dos("steps.nscf.k_grid=[30,30,30]")["records"]
+
+        assert records["nscf_k_sampling"]["value"]["mesh"] == [30, 30, 30]
+        assert records["nscf_k_sampling"]["source"] == "human"
+        assert records["k_sampling"] == default["k_sampling"]
+        assert records["n_irr_k"] == default["n_irr_k"]
+
+    def test_a_flat_and_a_per_step_value_of_one_key_both_apply(self) -> None:
+        records = self._explain_dos("k_grid=[4,4,4]", "steps.nscf.k_grid=[30,30,30]")[
+            "records"
+        ]
+
+        assert records["k_sampling"]["value"]["mesh"] == [4, 4, 4]
+        assert records["nscf_k_sampling"]["value"]["mesh"] == [30, 30, 30]
+
+    def test_a_flat_k_grid_names_both_steps_it_lands_on(self) -> None:
+        document = self._explain_dos("k_grid=[4,4,4]")
+
+        notices = [
+            warning
+            for warning in document["warnings"]
+            if warning["code"] == "overrides.applies_to_multiple_steps"
+        ]
+        assert notices == [
+            {
+                "code": "overrides.applies_to_multiple_steps",
+                "level": "info",
+                "category": "overrides",
+                "message": (
+                    "k_grid was given without a step, so it applies to the "
+                    "scf and nscf steps; set steps.<step>.k_grid to set one "
+                    "step only."
+                ),
+                "record": "overrides",
+            }
+        ]
+
+    _K_GRID_NOTICE = (
+        "notice: k_grid was given without a step, so it applies to the scf and "
+        "nscf steps; set steps.<step>.k_grid to set one step only."
+    )
+
+    def test_the_text_report_prints_the_notice_before_the_blocked_lines(
+        self,
+    ) -> None:
+        """The notice belongs to no record, and the text report printed only
+        records and blocked lines, so it never showed."""
+        silicon = structure("Si.cif")
+
+        completed = _run_cli(
+            "explain",
+            str(silicon),
+            "--hpc",
+            "scarf",
+            "--task",
+            "dos",
+            "--set",
+            "k_grid=[4,4,4]",
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        lines = completed.stdout.splitlines()
+        notice = lines.index(self._K_GRID_NOTICE)
+        after = lines[notice + 1 :]
+        assert all(not line.startswith("blocked:") for line in lines[:notice])
+        assert all(line.startswith("blocked:") for line in after), after
+
+    def test_a_shift_keeps_the_protocol_nscf_mesh(self) -> None:
+        default = self._explain_dos()["records"]["nscf_k_sampling"]["value"]
+        nscf = self._explain_dos("shift=[1,1,1]")["records"]["nscf_k_sampling"]["value"]
+
+        assert (nscf["k_distance"], nscf["mesh"]) == (0.1, default["mesh"])
+        assert nscf["shift"] == [1, 1, 1]
+
+    def test_a_dos_x_setting_reaches_the_dos_record(self) -> None:
+        dos = self._explain_dos(
+            "delta_e=0.05", "steps.dos.ngauss=1", "steps.dos.broadening=0.01"
+        )["records"]["dos"]
+
+        assert (dos["value"]["delta_e"], dos["value"]["ngauss"]) == (0.05, 1)
+        assert dos["field_sources"]["delta_e"] == "human"
+        assert dos["field_sources"]["ngauss"] == "human"
+
+    def test_steps_in_a_config_file_are_per_step_settings(self, tmp_path: Path) -> None:
+        config = tmp_path / "dos.toml"
+        config.write_text("[steps.nscf]\nk_grid = [30, 30, 30]\n")
+        silicon = structure("Si.cif")
+
+        completed = _run_cli(
+            "explain",
+            str(silicon),
+            "--hpc",
+            "scarf",
+            "--task",
+            "dos",
+            "--config",
+            str(config),
+            "--json",
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        records = strict_json(completed.stdout)["records"]
+        assert records["nscf_k_sampling"]["value"]["mesh"] == [30, 30, 30]
+        assert records["k_sampling"]["value"]["mesh"] != [30, 30, 30]
+
+    @pytest.mark.parametrize(
+        ("task", "setting", "message"),
+        [
+            (
+                "scf_single_point",
+                "press=10",
+                "'press' does not apply to task 'scf_single_point'; "
+                "it applies to task vc-relax",
+            ),
+            (
+                "dos",
+                "steps.nscf.walltime_h=4",
+                "'walltime_h' is set once per task, not per step",
+            ),
+        ],
+    )
+    def test_a_setting_no_step_of_the_task_reads_is_an_operator_error(
+        self, task: str, setting: str, message: str
+    ) -> None:
+        silicon = structure("Si.cif")
+
+        completed = _run_cli(
+            "explain", str(silicon), "--hpc", "scarf", "--task", task, "--set", setting
+        )
+
+        assert completed.returncode == 2
+        assert "Traceback" not in completed.stderr
+        assert message in completed.stderr
+
+
+def test_run_out_records_the_request_the_http_path_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#176: ``goldilocks run -o`` wrote a goldilocks.json with no code, task,
+    version, overrides or structure hash. It now records the same request
+    block ``/run`` does for the same structure and overrides: the CLI's are
+    its ``--config`` then ``--set`` assignments as typed, step prefixes kept.
+    Offline: one synthetic Si table, registered for the subprocess."""
+    spec, table = sssp_fixture_table_spec(tmp_path / "sources")
+    AssetStore().install(spec, sssp_preparer(table))
+    registry = tmp_path / "registry.toml"
+    write_registry(registry, table)
+    monkeypatch.setenv("GOLDILOCKS_PSEUDO_REGISTRY", str(registry))
+    content = structure("Si.cif").read_text()
+    path = tmp_path / "Si.cif"
+    path.write_text(content)
+    config = tmp_path / "dos.toml"
+    config.write_text("k_distance = 0.3\n\n[steps.dos]\ndelta_e = 0.05\n")
+
+    completed = _run_cli(
+        "run",
+        str(path),
+        "--hpc",
+        "scarf",
+        "--task",
+        "dos",
+        "--config",
+        str(config),
+        "--set",
+        "k_distance=0.2",
+        "-o",
+        str(tmp_path / "out"),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    published = strict_json((tmp_path / "out" / "goldilocks.json").read_text())
+    _summary, bundle_input = _handlers.run(
+        ComputeRequestDocument(
+            structure_content=content,
+            structure_name="Si.cif",
+            hpc="scarf",
+            task="dos",
+            overrides={"k_distance": 0.2, "steps.dos.delta_e": 0.05},
+        )
+    )
+    (answered,) = (
+        strict_json(file["content"])
+        for file in bundle_files(bundle_input)
+        if file["path"] == "goldilocks.json"
+    )
+    assert published["request"] == answered["request"]
+    assert published["request"]["overrides"] == {
+        "k_distance": 0.2,
+        "steps.dos.delta_e": 0.05,
+    }
+    assert published["request"]["task"] == "dos"

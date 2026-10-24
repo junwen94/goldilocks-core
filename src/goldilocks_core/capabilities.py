@@ -22,17 +22,20 @@ import-surface ceiling (``scripts/check_complexity.py``) despite
 covering every advisor: reflection at runtime doesn't cost an `import`
 statement the way a hand-written list of every advisor's types would.
 
-**`group`/`scope`/`programs` are derived structurally, not annotated
+**`group`/`scope`/`steps` are derived structurally, not annotated
 per-field**: `group` is the outer composing field's own name (e.g. every
 field inside ``CutoffsHumanInput`` gets ``group="cutoffs"`` for free);
-`scope` is which of the three composing classes a field came from
-(``SystemOverrides`` -> ``"system"``, ``KpointsOverrides``/
-``ResourceOverrides`` -> ``"per_step"``); `programs` is ``None`` (all)
-for system-level settings and ``["pw.x"]`` for per-step ones, since
-today there is exactly one program in the whole codebase (v2 epics 1-7
-render only QE's ``scf`` step) -- revisit once a second program/task
-exists, per this codebase's own repeated "don't build a lookup table
-for one entry" rule (e.g. ``inputs/task.py``'s own docstring).
+`scope` is which composing class a field came from (``AnalysisOverrides``/
+``SystemOverrides`` -> ``"system"``, ``JobOverrides`` -> ``"task"``, the
+step classes -> ``"per_step"``); `steps` is the step purposes a per-step
+setting applies to, by composing class (``_BRANCH_STEPS``: every pw.x step,
+relax and vc-relax, or dos), narrowed per key where ``_SETTING_META`` says
+so (vc-relax's cell keys, relax's ``etot_conv_thr``, the SCF loop's mixing
+and iteration keys, which an nscf step does not read). `tasks` and
+`programs` follow from `steps` through ``plan.expand_task``; a system or
+task setting applies to every task, once, and has no `steps` (#154).
+``set_overrides`` routes a request with the same ``SettingBinding.steps``,
+so what is published is what is accepted.
 
 **What genuinely can't be derived** -- physical unit, a confidently-known
 fixed default (many fields have no fixed default at all: cutoffs and
@@ -58,15 +61,22 @@ they would collide, so hubbard's is renamed to
 ``hubbard_needs_correlation`` in ``_SETTING_META`` -- the Python
 attribute name is untouched, only the exposed capabilities key differs.
 
-**`facts[]` is hand-written, not reflected**: only the four analysis
-facts that are both scalar-valued *and* overridable (``is_metal``,
-``is_magnetic``, ``needs_soc``, ``needs_correlation``) are listed, per
-the design doc's own illustrative shape (``{"key", "type": "enum",
-"values", "ml_target", "overridable", "description"}``) -- ``composition``/
-``geometry``/``symmetry`` are structural, multi-field records with no
-override at all (``analysis/composition.py``'s and
-``analysis/symmetry.py``'s own docstrings say so explicitly) and don't
-fit this shape; they are not exposed here.
+**`facts[]` lists the four scalar analysis facts** (``is_metal``,
+``is_magnetic``, ``needs_soc``, ``needs_correlation``) in the design
+doc's illustrative shape (``{"key", "type": "enum", "values",
+"ml_target", "overridable", "description"}``). Only which facts exist,
+their ``ml_target`` and their description are hand-written (``_FACTS``).
+``type``/``values`` come from the fact's record type on
+``service.AnalysisFacts`` (``FieldState[Literal[...]]`` is an enum of the
+Literal's members, ``FieldState[bool]`` a boolean), and ``overridable``
+is whether the key has an analysis binding. The overrides are typed with
+the same record Literals, so every advertised value is an accepted one
+(#139: ``is_metal`` advertised ``metal``/``non_metal`` while its override
+took only booleans). ``composition``/``geometry``/``symmetry`` are
+structural, multi-field records with no override at all
+(``analysis/composition.py``'s and ``analysis/symmetry.py``'s own
+docstrings say so explicitly) and don't fit this shape; they are not
+exposed here.
 
 **`warnings[]` is aggregated, not hand-listed**, the same reflection
 -over-imports-elsewhere-in-the-codebase spirit as `settings[]`: every
@@ -106,18 +116,22 @@ from typing import Literal, TypedDict
 from goldilocks_core.advisors.warning_catalogue import (
     WARNING_CATALOGUE as _ADVISOR_WARNING_CATALOGUE,
 )
-from goldilocks_core.analysis.is_magnetic import Magnetism
-from goldilocks_core.analysis.is_metal import Metallicity
 from goldilocks_core.assets.pseudopotentials.registry import load_tables
 from goldilocks_core.inputs.hpc import list_hpc_profiles, load_hpc_profile
 from goldilocks_core.ml.predict import model_ready
+from goldilocks_core.plan import expand_task
 from goldilocks_core.service import (
+    OVERRIDES_WARNING_CATALOGUE,
+    AnalysisFacts,
     AnalysisOverrides,
+    DosOverrides,
+    JobOverrides,
     KpointsOverrides,
     RelaxOverrides,
     ResourceOverrides,
     SystemOverrides,
 )
+from goldilocks_core.types import CalcTask
 
 VOCABULARY_VERSION = "2"
 """Bump when the settings/facts vocabulary changes in a way other
@@ -138,7 +152,33 @@ _TASK = "scf_single_point"
 _DOS_TASK = "dos"
 _RELAX_TASK = "relax"
 _VC_RELAX_TASK = "vc-relax"
+_TASK_IDS: tuple[CalcTask, ...] = typing.get_args(CalcTask)
+"""Every task, in ``types.CalcTask``'s order: the code's ``tasks`` and
+what each setting's ``tasks`` is drawn from."""
 _PROGRAM = "pw.x"
+
+_Branch = Literal["analysis", "system", "job", "kpoints", "resources", "relax", "dos"]
+_Scope = Literal["system", "task", "per_step"]
+
+_PW_STEPS = ("scf", "nscf", "relax", "vc-relax")
+_RELAX_STEPS = ("relax", "vc-relax")
+_SCF_LOOP_STEPS = ("scf", "relax", "vc-relax")
+"""The pw.x steps that run an SCF loop. An nscf step diagonalizes once in
+the density the scf step wrote: QE 7.3 runs ``non_scf`` instead of
+``electrons`` (``run_pwscf.f90``) and sets ``niter = 1`` (``setup.f90``), so
+``mixing_beta``, ``mixing_mode``, ``mixing_fixed_ns`` and
+``electron_maxstep`` have no effect on it."""
+_BRANCH_STEPS: dict[_Branch, tuple[str, ...] | None] = {
+    "analysis": None,
+    "system": None,
+    "job": None,
+    "kpoints": _PW_STEPS,
+    "resources": _PW_STEPS,
+    "relax": _RELAX_STEPS,
+    "dos": ("dos",),
+}
+"""The step purposes (``plan.PlannedStep.purpose``) each composing class's
+settings apply to; ``None`` for a task-level class, set once per task."""
 
 
 def _approaches(ml_target: str | None) -> list[str]:
@@ -161,6 +201,11 @@ def _approaches(ml_target: str | None) -> list[str]:
 
 
 class Setting(TypedDict, total=False):
+    """One ``--set``-able key. ``tasks`` are the tasks it applies to;
+    ``steps``/``programs`` are the steps (purposes, the names of
+    ``steps.<purpose>.<key>``) and programs a ``per_step`` setting applies
+    to, ``None`` for a ``system`` or ``task`` setting, set once per task."""
+
     key: str
     group: str
     type: str
@@ -168,10 +213,11 @@ class Setting(TypedDict, total=False):
     unit: str | None
     default: object
     enum_from: str
-    codes: list[str] | None
-    tasks: list[str] | None
+    codes: list[str]
+    tasks: list[str]
+    steps: list[str] | None
     programs: list[str] | None
-    scope: Literal["system", "per_step"]
+    scope: _Scope
     ml_target: str | None
     approaches: list[str]
     description: str
@@ -207,6 +253,7 @@ class _SettingExtra(TypedDict, total=False):
     default: object
     enum_from: str
     ml_target: str | None
+    steps: tuple[str, ...]
     description: str
 
 
@@ -227,7 +274,12 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "ecutrho_ry": {
         "unit": "Ry",
-        "description": "Charge-density cutoff; auto-derived from ecutwfc_ry if unset.",
+        "description": (
+            "Charge-density cutoff. Unset: the largest the selected "
+            "pseudopotentials publish (SSSP), or the table's "
+            "charge_density_dual times the resolved ecutwfc_ry where it "
+            "publishes none (PseudoDojo)."
+        ),
     },
     "nelec": {
         "description": (
@@ -261,11 +313,15 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "starting_magnetization": {
         "description": (
-            "Starting spin-polarization fraction (each value in [-1, 1]) per "
-            "site label -- the uploaded structure's labels, or Ni1/Ni2/O-style "
-            "labels of an applied magnetic_ordering -- replacing the "
-            "valence-electron-based heuristic; labels left out start at 0, and "
-            "sites with different values become separate species."
+            "Starting spin-polarization fraction (each value strictly between "
+            "-1 and 1) per site label -- the uploaded structure's labels "
+            "(inspect lists them), or Ni1/Ni2/O-style labels of an applied "
+            "magnetic_ordering; records.magnetic.site_labels lists the ones "
+            "in force -- or per element symbol, for all of that element's "
+            "sites, refused where an applied magnetic_ordering seeds them "
+            "differently. A label beats its element. Sites left out keep the "
+            "valence-electron-based heuristic seed, and sites with different "
+            "values become separate species."
         ),
     },
     "magnetic_ordering": {
@@ -355,7 +411,10 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "smearing_type": {
         "description": (
-            "Smearing function used when occupations=smearing; defaults to 'cold'."
+            "Smearing function used when occupations=smearing, by Quantum "
+            "ESPRESSO's name: gaussian, mp (Methfessel-Paxton), cold "
+            "(Marzari-Vanderbilt) or fd (Fermi-Dirac); defaults to 'cold'. "
+            "Fixed occupations are occupations=fixed."
         ),
     },
     "degauss": {
@@ -425,20 +484,24 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "etot_conv_thr": {
         "unit": "Ry",
+        "steps": _RELAX_STEPS,
         "description": (
-            "Total-energy convergence threshold between steps; otherwise "
-            "scaled per atom."
+            "Total-energy convergence threshold between ionic steps of a "
+            "relax/vc-relax; otherwise scaled per atom."
         ),
     },
     "mixing_beta": {
         "default": 0.4,
+        "steps": _SCF_LOOP_STEPS,
         "description": "Charge-density mixing parameter for SCF convergence.",
     },
     "electron_maxstep": {
         "default": 80,
+        "steps": _SCF_LOOP_STEPS,
         "description": "Maximum number of SCF iterations allowed before giving up.",
     },
     "mixing_mode": {
+        "steps": _SCF_LOOP_STEPS,
         "description": (
             "SCF density-mixing algorithm; heuristic default is local-TF for a "
             "cell with vacuum along any lattice vector (a slab, wire or isolated "
@@ -446,6 +509,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
         ),
     },
     "mixing_fixed_ns": {
+        "steps": _SCF_LOOP_STEPS,
         "description": (
             "Number of initial SCF iterations during which pw.x holds the "
             "Hubbard occupation matrix at its starting value (+U runs only). "
@@ -552,8 +616,11 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "cell_dofree": {
         "default": "all",
+        "steps": ("vc-relax",),
         "description": (
-            "Which cell degrees of freedom vc-relax may move. Default 'all'; "
+            "Which cell degrees of freedom vc-relax may move, among the values "
+            "pw.x honours under the written ibrav = 0 ('volume' and the 'ibrav' "
+            "forms are not). Default 'all'; "
             "'2Dxy' for a slab with its vacuum along c, which is written with a "
             "along x and a, b in the xy plane. A wire or a slab with its vacuum "
             "along a or b has no default. '2Dxy' and '2Dshape' are refused unless "
@@ -565,59 +632,96 @@ _SETTING_META: dict[str, _SettingExtra] = {
     "press": {
         "unit": "kbar",
         "default": 0.0,
+        "steps": ("vc-relax",),
         "description": "Target external pressure for vc-relax.",
     },
     "press_conv_thr": {
         "unit": "kbar",
         "default": 0.5,
+        "steps": ("vc-relax",),
         "description": "Pressure-convergence threshold for vc-relax.",
     },
     "cell_factor": {
         "default": 2.0,
+        "steps": ("vc-relax",),
         "description": (
             "Pseudopotential-table interpolation headroom; must exceed the "
             "maximum linear cell contraction expected during vc-relax."
         ),
     },
+    "delta_e": {
+        "unit": "eV",
+        "description": (
+            "dos.x energy step of the DOS grid (DeltaE, > 0); default 0.01 eV, "
+            "aiida-quantumespresso's pdos.yaml."
+        ),
+    },
+    "emin": {
+        "unit": "eV",
+        "description": (
+            "Lower edge of the dos.x energy window (Emin); unset, dos.x's own, "
+            "from the lowest band energy. Must be below emax."
+        ),
+    },
+    "emax": {
+        "unit": "eV",
+        "description": (
+            "Upper edge of the dos.x energy window (Emax); unset, dos.x's own, "
+            "from the highest band energy."
+        ),
+    },
+    "broadening": {
+        "unit": "Ry",
+        "description": (
+            "dos.x broadening width (degauss, > 0); unset, the nscf step's "
+            "smearing width, or none after tetrahedra occupations, whose "
+            "integration dos.x then uses."
+        ),
+    },
+    "ngauss": {
+        "description": (
+            "dos.x broadening function: -99 Fermi-Dirac, -1 cold "
+            "(Marzari-Vanderbilt), 0 Gaussian (default) or 1..10 a "
+            "Methfessel-Paxton order. dos.x reads it only with a broadening "
+            "width, so it needs broadening unless the nscf step uses smearing."
+        ),
+    },
 }
 
-_FACTS: tuple[Fact, ...] = (
-    Fact(
+
+@dataclass(frozen=True, slots=True)
+class _FactMeta:
+    """What a fact's record type cannot say: its ML model target and its
+    description. The description says what the fact means, never how it
+    was resolved -- that is the record's ``source`` and provenance, and it
+    differs per tier. ``_facts()`` derives the rest."""
+
+    key: str
+    ml_target: str | None
+    description: str
+
+
+_FACTS: tuple[_FactMeta, ...] = (
+    _FactMeta(
         key="is_metal",
-        type="enum",
-        values=list(typing.get_args(Metallicity)),
         ml_target="is_metal",
-        approaches=[],  # computed fresh per call -- see _facts()
-        overridable=True,
-        description="Whether the structure is metallic, from composition alone.",
+        description="Whether the structure is metallic (zero DFT band gap).",
     ),
-    Fact(
+    _FactMeta(
         key="is_magnetic",
-        type="enum",
-        values=list(typing.get_args(Magnetism)),
         ml_target="is_magnetic",
-        approaches=[],  # computed fresh per call -- see _facts()
-        overridable=True,
         description="Whether the structure is expected to be magnetic.",
     ),
-    Fact(
+    _FactMeta(
         key="needs_soc",
-        type="boolean",
-        values=None,
         ml_target=None,
-        approaches=[],  # computed fresh per call -- see _facts()
-        overridable=True,
         description=(
             "Whether spin-orbit coupling is likely relevant for this structure."
         ),
     ),
-    Fact(
+    _FactMeta(
         key="needs_correlation",
-        type="boolean",
-        values=None,
         ml_target=None,
-        approaches=[],  # computed fresh per call -- see _facts()
-        overridable=True,
         description="Whether a Hubbard +U (or hybrid) correction is likely needed.",
     ),
 )
@@ -663,8 +767,8 @@ class SettingBinding:
     shared request-validation layer, so the two can never drift apart
     by walking the override tree two different ways.
 
-    ``branch`` says which of ``RunOverrides``' three sub-trees this key
-    belongs to; ``outer_field`` is that sub-tree's own field name
+    ``branch`` names the composing class this key belongs to;
+    ``outer_field`` is that class's own field name
     (``SystemOverrides.cutoffs``, say); ``inner_field`` is the field
     *inside* the ``HumanInput`` class for a wrapped setting, or ``None``
     for a plain-typed one (``pseudo_table_id``) where ``outer_field``
@@ -673,97 +777,91 @@ class SettingBinding:
     the shared request-validation layer's CLI string-coercion reads
     ``json_type["type"]`` directly instead of importing this module's
     own private type-mapping helper.
+
+    ``steps`` are the step purposes the key applies to, ``None`` for a
+    system or task setting (set once per task); ``tasks`` and ``programs``
+    follow from them (module docstring). ``set_overrides`` routes a request
+    by ``steps`` (#154).
     """
 
     key: str
     group: str
-    branch: Literal["analysis", "system", "kpoints", "resources", "relax"]
+    branch: _Branch
     outer_field: str
     inner_field: str | None
     human_input_cls: type | None
     annotation: object
     json_type: dict[str, object]
-    scope: Literal["system", "per_step"]
-    programs: list[str] | None
+    scope: _Scope
+    steps: tuple[str, ...] | None
+    tasks: tuple[str, ...]
+    programs: tuple[str, ...] | None
 
 
-def _leaves_from_human_input(
-    branch: Literal["analysis", "system", "kpoints", "resources", "relax"],
+def _binding(
+    branch: _Branch,
+    scope: _Scope,
     outer_field: str,
-    human_input_cls: type,
-    *,
-    scope: Literal["system", "per_step"],
-    programs: list[str] | None,
-) -> list[SettingBinding]:
-    # `include_extras=False` (the default) strips any per-element
-    # `Annotated[int, Field(gt=0)]` metadata a field's own tuple members
-    # carry (e.g. KSamplingHumanInput.k_grid) back down to the plain
-    # `tuple[int, int, int]` shape `_json_type` below expects -- reading
-    # `model_fields[name].annotation` directly would leave `Annotated`
-    # wrappers in place instead, since pydantic keeps per-element
-    # constraint metadata on the type itself, not lifted to `FieldInfo`.
-    hints = typing.get_type_hints(human_input_cls)
-    leaves = []
-    for name in human_input_cls.model_fields:
-        # Analysis leaves always keep their bare field name: they must
-        # match `_FACTS`'s own keys exactly (`_settings()` filters them
-        # out by that same key), and `_SETTING_META`'s one rename entry
-        # ("needs_correlation" -> "hubbard_needs_correlation") exists
-        # for hubbard_u's *own* field of the same inner name, not this
-        # one -- see this module's own docstring on that collision.
-        extra = _SETTING_META.get(name, {}) if branch != "analysis" else {}
-        leaves.append(
-            SettingBinding(
-                key=extra.get("key", name),
-                group=outer_field,
-                branch=branch,
-                outer_field=outer_field,
-                inner_field=name,
-                human_input_cls=human_input_cls,
-                annotation=hints[name],
-                json_type=_json_type(hints[name]),
-                scope=scope,
-                programs=programs,
-            )
-        )
-    return leaves
+    inner_field: str | None,
+    human_input_cls: type | None,
+    annotation: object,
+) -> SettingBinding:
+    name = inner_field or outer_field
+    # Analysis leaves always keep their bare field name: they must match
+    # `_FACTS`'s own keys exactly (`_settings()` filters them out and
+    # `_facts()` derives `overridable` by that same key), and
+    # `_SETTING_META`'s one rename entry ("needs_correlation" ->
+    # "hubbard_needs_correlation") exists for hubbard_u's *own* field of the
+    # same inner name, not this one -- see this module's own docstring on
+    # that collision.
+    extra = _SETTING_META.get(name, {}) if branch != "analysis" else {}
+    steps = extra.get("steps", _BRANCH_STEPS[branch])
+    tasks, programs = _TASK_IDS, None
+    if steps is not None:
+        planned = [(task, step) for task in _TASK_IDS for step in expand_task(task)]
+        applied = [(task, step) for task, step in planned if step.purpose in steps]
+        tasks = tuple(dict.fromkeys(task for task, _step in applied))
+        programs = tuple(sorted({step.program for _task, step in applied}))
+    return SettingBinding(
+        key=extra.get("key", name),
+        group=outer_field,
+        branch=branch,
+        outer_field=outer_field,
+        inner_field=inner_field,
+        human_input_cls=human_input_cls,
+        annotation=annotation,
+        json_type=_json_type(annotation),
+        scope=scope,
+        steps=steps,
+        tasks=tasks,
+        programs=programs,
+    )
 
 
 def _leaves_from_overrides(
-    overrides_cls: type,
-    *,
-    branch: Literal["analysis", "system", "kpoints", "resources", "relax"],
-    scope: Literal["system", "per_step"],
+    overrides_cls: type, *, branch: _Branch, scope: _Scope
 ) -> list[SettingBinding]:
     hints = typing.get_type_hints(overrides_cls)
-    programs = None if scope == "system" else [_PROGRAM]
     leaves: list[SettingBinding] = []
     for name, annotation in hints.items():
         if name.endswith("_llm"):
             continue
         inner = _unwrap_optional(annotation)
-        if isinstance(inner, type) and hasattr(inner, "model_fields"):
-            leaves.extend(
-                _leaves_from_human_input(
-                    branch, name, inner, scope=scope, programs=programs
-                )
-            )
-        else:
-            extra = _SETTING_META.get(name, {})
-            leaves.append(
-                SettingBinding(
-                    key=extra.get("key", name),
-                    group=name,
-                    branch=branch,
-                    outer_field=name,
-                    inner_field=None,
-                    human_input_cls=None,
-                    annotation=inner,
-                    json_type=_json_type(inner),
-                    scope=scope,
-                    programs=programs,
-                )
-            )
+        if not (isinstance(inner, type) and hasattr(inner, "model_fields")):
+            leaves.append(_binding(branch, scope, name, None, None, inner))
+            continue
+        # `include_extras=False` (the default) strips any per-element
+        # `Annotated[int, Field(gt=0)]` metadata a field's own tuple members
+        # carry (e.g. KSamplingHumanInput.k_grid) back down to the plain
+        # `tuple[int, int, int]` shape `_json_type` expects -- reading
+        # `model_fields[name].annotation` directly would leave `Annotated`
+        # wrappers in place instead, since pydantic keeps per-element
+        # constraint metadata on the type itself, not lifted to `FieldInfo`.
+        inner_hints = typing.get_type_hints(inner)
+        leaves.extend(
+            _binding(branch, scope, name, field, inner, inner_hints[field])
+            for field in inner.model_fields
+        )
     return leaves
 
 
@@ -771,11 +869,13 @@ def _leaves() -> list[SettingBinding]:
     return [
         *_leaves_from_overrides(AnalysisOverrides, branch="analysis", scope="system"),
         *_leaves_from_overrides(SystemOverrides, branch="system", scope="system"),
+        *_leaves_from_overrides(JobOverrides, branch="job", scope="task"),
         *_leaves_from_overrides(KpointsOverrides, branch="kpoints", scope="per_step"),
         *_leaves_from_overrides(
             ResourceOverrides, branch="resources", scope="per_step"
         ),
         *_leaves_from_overrides(RelaxOverrides, branch="relax", scope="per_step"),
+        *_leaves_from_overrides(DosOverrides, branch="dos", scope="per_step"),
     ]
 
 
@@ -788,6 +888,10 @@ def bindings() -> dict[str, SettingBinding]:
     return {leaf.key: leaf for leaf in _leaves()}
 
 
+def _listed(values: tuple[str, ...] | None) -> list[str] | None:
+    return None if values is None else list(values)
+
+
 def _setting_from_leaf(leaf: SettingBinding) -> Setting:
     extra = _SETTING_META.get(leaf.inner_field or leaf.outer_field, {})
     ml_target = extra.get("ml_target")
@@ -796,9 +900,10 @@ def _setting_from_leaf(leaf: SettingBinding) -> Setting:
         "group": leaf.group,
         **leaf.json_type,
         "unit": extra.get("unit"),
-        "codes": None,
-        "tasks": None,
-        "programs": leaf.programs,
+        "codes": [_CODE],
+        "tasks": list(leaf.tasks),
+        "steps": _listed(leaf.steps),
+        "programs": _listed(leaf.programs),
         "scope": leaf.scope,
         "ml_target": ml_target,
         "approaches": _approaches(ml_target),
@@ -814,24 +919,51 @@ def _setting_from_leaf(leaf: SettingBinding) -> Setting:
 def _settings() -> list[Setting]:
     """Every ``--set``-able leaf *except* the four analysis facts
     (``is_metal``/``is_magnetic``/``needs_soc``/``needs_correlation``):
-    those are already fully described in ``facts()`` (their real type is
-    the fact's own enum/boolean meaning, not the raw ``bool`` their
-    ``HumanInput`` happens to store it as) -- listing them a second time
-    here, with a different declared ``type``, would contradict ``facts()``
-    instead of complementing it. They still walk through ``_leaves()``
-    so ``bindings()`` (the `--set`/override construction path) accepts
-    them; only this JSON projection skips them."""
-    fact_keys = {fact["key"] for fact in _FACTS}
+    ``facts()`` already describes them, with the type and values of the
+    record their override is typed by. They still walk through
+    ``_leaves()`` so ``bindings()`` (the `--set`/override construction
+    path) accepts them; only this JSON projection skips them."""
+    fact_keys = {fact.key for fact in _FACTS}
     return [_setting_from_leaf(leaf) for leaf in _leaves() if leaf.key not in fact_keys]
 
 
+def _fact_schema(record: object) -> tuple[str, list[str] | None]:
+    """A fact's published ``type`` and ``values`` from its ``AnalysisFacts``
+    record type ``FieldState[T]``: ``("enum", members)`` for a ``Literal``
+    ``T``, ``("boolean", None)`` for ``bool``. Raises ``TypeError`` for any
+    other ``T``, which has no scalar fact shape."""
+    (value_type,) = typing.get_args(record)
+    json_type = _json_type(value_type)
+    if "enum" in json_type:
+        return "enum", list(json_type["enum"])
+    if json_type["type"] == "boolean":
+        return "boolean", None
+    raise TypeError(f"fact record type {value_type!r} is neither a Literal nor bool")
+
+
 def _facts() -> list[Fact]:
-    """``_FACTS``' own ``approaches`` entries are placeholders (``[]``)
-    -- recomputed fresh here, not frozen at import time, since
-    ``_approaches`` checks live installed-asset state (v2 epic 11, #11):
-    a model installed or removed after this module was first imported
-    must still be reflected on the next call."""
-    return [{**fact, "approaches": _approaches(fact["ml_target"])} for fact in _FACTS]
+    """``_FACTS`` projected to the published shape. ``approaches`` is
+    computed per call, not at import time, since ``_approaches`` checks
+    live installed-asset state (v2 epic 11, #11). A fact is overridable
+    exactly when its key has an analysis binding (a ``HumanInput`` on
+    ``AnalysisOverrides``)."""
+    records = typing.get_type_hints(AnalysisFacts)
+    overridable = {leaf.key for leaf in _leaves() if leaf.branch == "analysis"}
+    facts: list[Fact] = []
+    for meta in _FACTS:
+        fact_type, values = _fact_schema(records[meta.key])
+        facts.append(
+            Fact(
+                key=meta.key,
+                type=fact_type,
+                values=values,
+                ml_target=meta.ml_target,
+                approaches=_approaches(meta.ml_target),
+                overridable=meta.key in overridable,
+                description=meta.description,
+            )
+        )
+    return facts
 
 
 def _pseudopotential_tables() -> list[dict[str, object]]:
@@ -872,7 +1004,7 @@ def _codes() -> list[dict[str, object]]:
         {
             "id": _CODE,
             "name": "Quantum ESPRESSO",
-            "tasks": [_TASK, _DOS_TASK, _RELAX_TASK, _VC_RELAX_TASK],
+            "tasks": list(_TASK_IDS),
         }
     ]
 
@@ -892,7 +1024,9 @@ def _tasks() -> list[dict[str, object]]:
             "name": "Density of states",
             "description": (
                 "scf, then a denser nscf pass, then dos.x -- three steps "
-                "sharing one prefix/outdir (v2 epic 9, #9)."
+                "sharing one prefix/outdir (v2 epic 9, #9). Unless set, the "
+                "nscf step takes k_distance 0.10 and tetrahedra_opt "
+                "occupations from aiida-quantumespresso's pdos.yaml protocol."
             ),
             "codes": [_CODE],
             "step_count": 3,
@@ -924,7 +1058,12 @@ def _tasks() -> list[dict[str, object]]:
 
 
 def _warnings() -> list[dict[str, object]]:
-    return [warning.model_dump() for warning in _ADVISOR_WARNING_CATALOGUE]
+    """Every advisor's catalogue, then the request-routing notices
+    (``service.OVERRIDES_WARNING_CATALOGUE``, #154)."""
+    return [
+        warning.model_dump()
+        for warning in (*_ADVISOR_WARNING_CATALOGUE, *OVERRIDES_WARNING_CATALOGUE)
+    ]
 
 
 def _models() -> list[dict[str, object]]:

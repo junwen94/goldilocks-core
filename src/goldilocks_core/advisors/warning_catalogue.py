@@ -10,6 +10,8 @@ directly: this project's own import-surface ceiling
 capabilities builder that imports every advisor that emits warnings.
 This module absorbs that cost instead -- it exists for no other
 purpose -- while ``capabilities.py`` only ever imports this one name.
+``ml.predict``'s entries are the warnings a model returns with a prediction,
+one code per record a model decides (#156).
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from goldilocks_core.advisors.parallelisation import (
     WARNING_CATALOGUE as _PARALLELISATION,
 )
 from goldilocks_core.advisors.vdw_method import WARNING_CATALOGUE as _VDW
+from goldilocks_core.ml.predict import WARNING_CATALOGUE as _MODEL
 
 WARNING_CATALOGUE = (
     _BOUNDARY
@@ -36,6 +39,7 @@ WARNING_CATALOGUE = (
     + _JOB
     + _K_SAMPLING
     + _MAGNETIC
+    + _MODEL
     + _NBND
     + _OCCUPATIONS
     + _PARALLELISATION

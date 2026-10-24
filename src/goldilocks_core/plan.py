@@ -29,7 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from goldilocks_core.inputs.task import Task
+from goldilocks_core.types import CalcTask
 
 SCF_LIKE_PURPOSES = frozenset({"scf", "relax", "vc-relax"})
 """``PlannedStep.purpose``s whose ``pw.x`` run has its own SCF loop:
@@ -53,14 +53,18 @@ class PlannedStep:
     program: Literal["pw.x", "dos.x"]
 
 
-def expand_task(task: Task) -> tuple[PlannedStep, ...]:
-    """``CalcTask`` is an exhaustive ``Literal`` (``types.py``), so these
-    branches are provably complete -- no fallback/raise branch is needed
-    or added speculatively for a task that cannot exist."""
-    if task.task == "scf_single_point":
+def expand_task(task: CalcTask) -> tuple[PlannedStep, ...]:
+    """The steps ``task`` runs, in order. Their purposes are also the step
+    names a request scopes a setting to (``steps.<purpose>.<key>``,
+    ``set_overrides``, #154). ``CalcTask`` is an exhaustive ``Literal``
+    (``types.py``), so these branches cover every task; a task from a
+    request is checked against it before it gets here
+    (``set_overrides.build_overrides`` refuses any other), so no
+    fallback/raise branch is added for a task that cannot exist."""
+    if task == "scf_single_point":
         return (PlannedStep(purpose="scf", program="pw.x"),)
-    if task.task in ("relax", "vc-relax"):
-        return (PlannedStep(purpose=task.task, program="pw.x"),)
+    if task in ("relax", "vc-relax"):
+        return (PlannedStep(purpose=task, program="pw.x"),)
     return (
         PlannedStep(purpose="scf", program="pw.x"),
         PlannedStep(purpose="nscf", program="pw.x"),

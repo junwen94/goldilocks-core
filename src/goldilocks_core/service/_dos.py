@@ -8,68 +8,61 @@ this epic.
 ``expand_task`` already says how many steps a task needs and what
 program each runs; nothing about *how* a single ``pw.x`` step's own
 settings get resolved changes between an scf task and dos's scf/nscf
-steps, so ``advise_dos`` asks ``advise_steps`` for both steps at once,
-the nscf with the overrides ``_nscf_overrides`` below forces. That runs
-analysis and system advice once, and sizes one job for the task (#169):
-the three steps share one allocation, so its ``#SBATCH`` request covers
-the larger ``pw.x`` step, and the scf and nscf each get their own
+steps, so ``advise_dos`` asks ``advise_steps`` for both steps at once.
+That runs analysis and system advice once, and sizes one job for the task
+(#169): the three steps share one allocation, so its ``#SBATCH`` request
+covers the larger ``pw.x`` step, and the scf and nscf each get their own
 ``max_seconds`` share of the walltime (pw.x counts it from its own
 start). ``dos.x`` has no ``max_seconds`` and runs in the remainder.
 
-**nscf overrides, sourced from a real, citable place** (aiida-
-quantumespresso's own ``workflows/protocols/pdos.yaml``, confirmed
-against its source 2026-09-14, "balanced" protocol): a denser k-mesh
-(``kpoints_distance: 0.10``, versus this codebase's own scf heuristic
-defaults of 0.15/0.30 Å^-1) and ``tetrahedra_opt`` occupations, for a
-DOS-quality uniform-enough integration grid. aiida's own protocol also
-sets ``nosym: True`` for the nscf step; this module does not, because
-nothing in the generated Quantum ESPRESSO input would currently honor
-it -- ``generation/quantum_espresso/scf.py``'s own docstring already
-names ``nosym``/``noinv`` as "a pre-existing, documented gap in epic 6's
-output, not something this epic re-decides". Forcing an override with no
-visible effect on the rendered file would be misleading, not merely
-incomplete, so it is left out until that gap has a real fix.
+**Each step gets its own overrides** (#154). ``set_overrides`` routes a
+request for the dos task to its scf, nscf and dos steps: a setting given
+without a step lands on every step it applies to (``k_grid`` on both pw.x
+steps, with a notice ``DosAdvice.warnings()`` publishes), and
+``steps.nscf.k_grid`` on the nscf step only. The dos step's overrides are
+``dos.x``'s own settings (``advisors/dos.py``).
+
+**The nscf protocol is its own tier** (#174). The nscf step also gets
+``DOS_NSCF_PROTOCOL`` (``_step_protocol.py``: aiida-quantumespresso's
+``pdos.yaml``, a denser k-mesh and ``tetrahedra_opt``), which ranks below
+the request and above the ML tier for that step only. A request value
+replaces the protocol field by field and reads ``human``; the protocol's
+own values read ``heuristic``, naming the protocol in ``source_note``.
 """
 
 from __future__ import annotations
 
-import dataclasses
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from pymatgen.core import Structure
 
-from goldilocks_core.advisors.dos import (
-    DosDecision,
-    DosHumanInput,
-    DosLlmInput,
-    dos_settings,
-)
-from goldilocks_core.advisors.k_sampling import KSamplingHumanInput
-from goldilocks_core.advisors.occupations import OccupationsHumanInput
+from goldilocks_core.advisors.dos import DosDecision, dos_settings
 from goldilocks_core.assets.store import AssetStore
-from goldilocks_core.bundle import BundleInput
+from goldilocks_core.bundle import BundleInput, StructureIdentity
 from goldilocks_core.checks import CheckReport, collect_blocked
 from goldilocks_core.generation.quantum_espresso.dos import write_qe_dos
 from goldilocks_core.inputs.hpc import HpcProfile
-from goldilocks_core.resolution import FieldState
-from goldilocks_core.service._advice import Advice, RunOverrides, warnings_from_records
-from goldilocks_core.service._bundle import assemble_bundle_input
+from goldilocks_core.resolution import FieldState, Warning, collect_warnings
+from goldilocks_core.service._advice import Advice, RunOverrides
+from goldilocks_core.service._bundle import assemble_bundle_input, request_identity
 from goldilocks_core.service._generate import AdviceIncomplete, generate
 from goldilocks_core.service._pipeline import advise_steps, check
+from goldilocks_core.service._step_protocol import DOS_NSCF_PROTOCOL
 from goldilocks_core.step_settings import DosSettings
 from goldilocks_core.steps import SharedContext, Step, default_shared_context
 from goldilocks_core.submission.slurm import render_slurm_script
 
-_NSCF_K_DISTANCE = 0.10
-"""Å^-1. aiida-quantumespresso's own ``pdos.yaml`` "balanced" protocol
-nscf ``kpoints_distance`` -- see this module's own docstring."""
-
 
 @dataclass(frozen=True, slots=True)
 class DosAdvice:
+    """``routing`` is the request's routing notices
+    (``RunOverrides.warnings``)."""
+
     scf: Advice
     nscf: Advice
     dos: FieldState[DosDecision]
+    routing: tuple[Warning, ...]
 
     def field_states(self) -> tuple[FieldState[object], ...]:
         return self.scf.field_states() + self.nscf.field_states() + (self.dos,)
@@ -95,33 +88,11 @@ class DosAdvice:
         return merged
 
     def warnings(self) -> list[dict[str, object]]:
-        return warnings_from_records(self.records())
-
-
-def _nscf_overrides(overrides: RunOverrides) -> RunOverrides:
-    """Applies the aiida nscf protocol defaults only where the caller
-    didn't already give an explicit occupations/k-sampling override
-    (#33, v2 epic 9, #9) -- this used to replace both fields
-    unconditionally, so a flat ``--set k_grid=...``/``--set
-    occupations=...`` (there is no way to scope one to just the nscf
-    step yet, see ``set_overrides.py``'s own docstring) was silently
-    discarded for the nscf step specifically, even though the exact
-    same flat override correctly reached the scf step. A caller's own
-    explicit choice now applies to both steps, same as every other
-    flat per-step override in this codebase, rather than being
-    overwritten for one of them."""
-    kpoints = overrides.step.kpoints
-    if kpoints.occupations is None:
-        kpoints = dataclasses.replace(
-            kpoints, occupations=OccupationsHumanInput(occupations="tetrahedra_opt")
-        )
-    if kpoints.k_sampling is None:
-        kpoints = dataclasses.replace(
-            kpoints, k_sampling=KSamplingHumanInput(k_distance=_NSCF_K_DISTANCE)
-        )
-    return dataclasses.replace(
-        overrides, step=dataclasses.replace(overrides.step, kpoints=kpoints)
-    )
+        """Every record's warnings, then the routing notices, tagged with
+        the record ``overrides``."""
+        return collect_warnings(self.records()) + [
+            {**notice.model_dump(), "record": "overrides"} for notice in self.routing
+        ]
 
 
 def advise_dos(
@@ -130,26 +101,31 @@ def advise_dos(
     code: str = "quantum_espresso",
     hpc: HpcProfile,
     overrides: RunOverrides | None = None,
-    dos_human: DosHumanInput | None = None,
-    dos_llm: DosLlmInput | None = None,
     store: AssetStore | None = None,
     fetch_missing: bool = False,
 ) -> DosAdvice:
     """Diagnosis for all three of dos's steps, under the same contract as
-    ``advise()``: an undecided field degrades, a fault raises."""
+    ``advise()``: an undecided field degrades, a fault raises. Each step
+    gets its own overrides; the nscf step also gets the dos protocol
+    (module docstring)."""
     overrides = overrides or RunOverrides()
+    steps = overrides.for_steps(("scf", "nscf", "dos"))
     advice = advise_steps(
         structure,
         code=code,
         hpc=hpc,
         overrides=overrides,
-        steps={"scf": overrides.step, "nscf": _nscf_overrides(overrides).step},
+        steps={"scf": steps["scf"], "nscf": steps["nscf"]},
+        protocols={"nscf": DOS_NSCF_PROTOCOL},
         store=store,
         fetch_missing=fetch_missing,
     )
     nscf = advice["nscf"]
-    dos = dos_settings(nscf.step.kpoints.occupations, dos_human, dos_llm)
-    return DosAdvice(scf=advice["scf"], nscf=nscf, dos=dos)
+    dos_overrides = steps["dos"].dos
+    dos = dos_settings(
+        nscf.step.kpoints.occupations, dos_overrides.dos, dos_overrides.dos_llm
+    )
+    return DosAdvice(scf=advice["scf"], nscf=nscf, dos=dos, routing=overrides.warnings)
 
 
 def check_dos(advice: DosAdvice) -> CheckReport:
@@ -214,14 +190,24 @@ def to_bundle_input_dos(
     steps: tuple[Step, ...],
     submission_script: str,
     ctx: SharedContext,
+    *,
+    code: str,
+    hpc: HpcProfile,
+    assignments: Mapping[str, object],
+    source: StructureIdentity,
 ) -> BundleInput:
     """``service/_bundle.py``'s ``to_bundle_input``, for a ``dos``
-    task. Pseudopotential file bytes come from ``advice.scf`` -- the
-    same system advice ``advice.nscf`` holds (``advise_steps``)."""
+    task. The pseudopotential files and their licence come from
+    ``advice.scf`` -- the same system advice ``advice.nscf`` holds
+    (``advise_steps``)."""
     return assemble_bundle_input(
-        advice.scf.system.pseudo.metadata,
+        advice.scf.system.pseudo,
         steps,
         submission_script,
         ctx,
         advice.records(),
+        advice.warnings(),
+        request_identity(
+            "dos", code=code, hpc=hpc, assignments=assignments, source=source
+        ),
     )

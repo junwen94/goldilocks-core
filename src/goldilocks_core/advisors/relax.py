@@ -41,9 +41,8 @@ in ``checks.py`` refuses a vc-relax of an isolated system). A wire, or a
 slab with its vacuum along a or b, has no default, so the vc-relax is
 ``Blocked`` until a human or llm value sets ``cell_dofree``; ``checks.py``
 refuses '2Dxy' and '2Dshape' from any source on a written cell outside
-that frame. The plain '2Dxy' is written because the writer's
-``ibrav = 0`` makes the 'ibrav+' forms act the same way (QE 7.3
-Modules/latgen.f90:749-752).
+that frame. ``CellDofree`` holds only the values pw.x honours under the
+writer's ``ibrav = 0`` (#153).
 
 **``etot_conv_thr`` is not this module's own decision.** ``advisors/
 convergence.py`` already resolves it as ``nat * etot_conv_thr_per_atom``
@@ -76,7 +75,7 @@ deferred").
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Literal
 
 from pydantic import Field
@@ -89,9 +88,9 @@ from goldilocks_core.resolution import (
     FieldState,
     Provenance,
     Resolved,
-    Source,
     Warning,
     blocked_by,
+    field_sources_from,
 )
 
 IonDynamics = Literal["bfgs", "damp", "fire"]
@@ -103,7 +102,6 @@ every non-``'bfgs'`` value for vc-relax, ``fire`` included."""
 
 CellDofree = Literal[
     "all",
-    "ibrav",
     "a",
     "b",
     "c",
@@ -118,42 +116,24 @@ CellDofree = Literal[
     "yz",
     "xyz",
     "shape",
-    "volume",
     "2Dxy",
     "2Dshape",
     "epitaxial_ab",
     "epitaxial_ac",
     "epitaxial_bc",
-    "ibrav+a",
-    "ibrav+b",
-    "ibrav+c",
-    "ibrav+fixa",
-    "ibrav+fixb",
-    "ibrav+fixc",
-    "ibrav+x",
-    "ibrav+y",
-    "ibrav+z",
-    "ibrav+xy",
-    "ibrav+xz",
-    "ibrav+yz",
-    "ibrav+xyz",
-    "ibrav+shape",
-    "ibrav+volume",
-    "ibrav+2Dxy",
-    "ibrav+2Dshape",
-    "ibrav+epitaxial_ab",
-    "ibrav+epitaxial_ac",
-    "ibrav+epitaxial_bc",
 ]
-"""Every value QE's ``cell_dofree`` accepts (``INPUT_PW.txt``, checked
-2026-09-14): one of the 20 base options, or ``'ibrav'`` plus any base
-option other than ``'all'``/``'ibrav'`` themselves -- official text:
-"You can use this option [ibrav] in combination with any other one by
-specifying 'ibrav+option'". Encoded as an explicit ``Literal`` (matching
-this codebase's existing style, e.g. ``types.SmearingType``) rather than
-a runtime membership check, so an invalid value is rejected as a normal
-pydantic validation error at the transport boundary (#35's pattern), not
-a bespoke error path."""
+"""The ``cell_dofree`` values pw.x honours under the ``ibrav = 0`` the
+writer always emits (``generation/quantum_espresso/scf.py``
+``system_keywords``; QE 7.3 ``Modules/cell_base.f90:710-830``
+``init_dofree``). QE's other 22 are left out (#153): ``'volume'`` stops
+pw.x unless ``ibrav = 1`` ("Isotropic expansion is only allowed for
+ibrav=1", ``cell_base.f90:751-756``), and ``'ibrav'`` and every
+``'ibrav+option'`` only print "With ibrav=0, cell_dofree='ibrav' has no
+effect" (``Modules/latgen.f90:749-752``) and act as ``'all'`` or
+``option``. A ``Literal``, so pydantic refuses any other value at the
+transport boundary and ``/capabilities`` advertises exactly these. If the
+writer ever emits a real ibrav, validity becomes structure-dependent and
+belongs in a ``checks.py`` rule."""
 
 _FORC_CONV_THR_DEFAULT = 1.0e-3
 """a.u. (Ry/Bohr). QE's own official INPUT_PW default."""
@@ -275,7 +255,12 @@ def relax_settings(
     this module's own docstring on why that value is read off
     ``convergence``, not recomputed. A vc-relax is also ``Blocked`` when
     ``geometry`` gives the cell no default ``cell_dofree`` and no human or
-    llm value is set (a wire, or a slab outside the xy frame)."""
+    llm value is set (a wire, or a slab outside the xy frame).
+
+    ``field_sources`` has one entry per field of the decision, so only a
+    setting the decision applied can make the record ``human`` (#173; a
+    request cannot carry the vc-relax keys to a relax at all, #154);
+    ``etot_conv_thr`` reads its source on ``convergence``."""
     human = human or RelaxHumanInput()
     llm = llm or RelaxLlmInput()
 
@@ -304,67 +289,52 @@ def relax_settings(
         "remove_rigid_rot": _pick(human.remove_rigid_rot, llm.remove_rigid_rot, False),
         "fix_bottom_layers": _pick(human.fix_bottom_layers, None, None),
     }
-    field_sources: dict[str, Source] = {
-        "ion_dynamics": _field_source(human.ion_dynamics, llm.ion_dynamics),
-        "forc_conv_thr": _field_source(human.forc_conv_thr),
-        "etot_conv_thr": etot_conv_thr_source,
-        "nstep": _field_source(human.nstep, llm.nstep),
-        "trust_radius_max": _field_source(human.trust_radius_max),
-        "trust_radius_min": _field_source(human.trust_radius_min),
-        "trust_radius_ini": _field_source(human.trust_radius_ini),
-        "remove_rigid_rot": _field_source(human.remove_rigid_rot, llm.remove_rigid_rot),
-        "fix_bottom_layers": _field_source(human.fix_bottom_layers),
-    }
 
     if calculation == "vc-relax":
         cell_dofree = _resolve_cell_dofree(human.cell_dofree, llm.cell_dofree, geometry)
         if isinstance(cell_dofree, Blocked):
             return cell_dofree
-        cell_dofree_value, cell_dofree_source = cell_dofree
         decision: RelaxOptions | VcRelaxOptions = VcRelaxOptions(
             **base_kwargs,
-            cell_dofree=cell_dofree_value,
+            cell_dofree=cell_dofree,
             press=_pick(human.press, llm.press, _PRESS_DEFAULT),
             press_conv_thr=_pick(human.press_conv_thr, None, _PRESS_CONV_THR_DEFAULT),
             cell_factor=_pick(human.cell_factor, None, _CELL_FACTOR_DEFAULT),
         )
-        field_sources.update(
-            {
-                "cell_dofree": cell_dofree_source,
-                "press": _field_source(human.press, llm.press),
-                "press_conv_thr": _field_source(human.press_conv_thr),
-                "cell_factor": _field_source(human.cell_factor),
-            }
-        )
     else:
         decision = RelaxOptions(**base_kwargs)
 
-    source = "human" if _any_set(human) else "llm" if _any_set(llm) else "heuristic"
-    return Resolved(decision, Provenance(source=source, field_sources=field_sources))
+    field_sources = field_sources_from(
+        human,
+        llm,
+        fields=[field.name for field in fields(decision) if field.name != "warnings"],
+        decided={"etot_conv_thr": etot_conv_thr_source},
+    )
+    return Resolved(decision, Provenance.from_field_sources(field_sources))
 
 
 def _resolve_cell_dofree(
     human_value: CellDofree | None,
     llm_value: CellDofree | None,
     geometry: FieldState[GeometryFacts] | None,
-) -> tuple[CellDofree, Source] | Blocked:
+) -> CellDofree | Blocked:
     """A human or llm value wins; otherwise the vacuum decides, as this
     module's docstring describes. Without a resolved geometry the default
     is QE's own, 'all'."""
     if human_value is not None:
-        return human_value, "human"
+        return human_value
     if llm_value is not None:
-        return llm_value, "llm"
+        return llm_value
     if geometry is None or not geometry.ok:
-        return _DEFAULT_CELL_DOFREE, "heuristic"
+        return _DEFAULT_CELL_DOFREE
     slab = geometry.value.slab
     if slab is not None and slab.xy_frame:
-        return _SLAB_CELL_DOFREE, "heuristic"
+        return _SLAB_CELL_DOFREE
     if slab is not None:
         return Blocked(by=_slab_outside_xy_frame(slab))
     if len(geometry.value.vacuum_axes) == 2:
         return Blocked(by=_wire(geometry.value.vacuum_axes))
-    return _DEFAULT_CELL_DOFREE, "heuristic"
+    return _DEFAULT_CELL_DOFREE
 
 
 def _slab_outside_xy_frame(slab: SlabGeometry) -> str:
@@ -400,17 +370,3 @@ def _pick[T](human_value: T | None, llm_value: T | None, default: T) -> T:
     if llm_value is not None:
         return llm_value
     return default
-
-
-def _field_source(
-    human_value: object | None, llm_value: object | None = None
-) -> Source:
-    if human_value is not None:
-        return "human"
-    if llm_value is not None:
-        return "llm"
-    return "heuristic"
-
-
-def _any_set(overrides: HumanInput) -> bool:
-    return bool(overrides.model_dump(exclude_defaults=True))

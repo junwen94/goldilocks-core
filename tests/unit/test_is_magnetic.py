@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.analysis.is_magnetic import (
@@ -122,7 +123,7 @@ def test_undecidable_local_moments_leave_is_magnetic_unavailable() -> None:
 def test_human_override_wins_over_heuristic() -> None:
     zinc_oxide = _structure("Zn", "O")
 
-    state = is_magnetic(zinc_oxide, human=IsMagneticHumanInput(is_magnetic=True))
+    state = is_magnetic(zinc_oxide, human=IsMagneticHumanInput(is_magnetic="magnetic"))
 
     assert state.value == "magnetic"
     assert state.source == "human"
@@ -131,7 +132,18 @@ def test_human_override_wins_over_heuristic() -> None:
 def test_llm_override_is_used_when_no_human_override_is_given() -> None:
     iron_oxide = _structure("Fe", "Fe", "O", "O", "O")
 
-    state = is_magnetic(iron_oxide, llm=IsMagneticLlmInput(is_magnetic=False))
+    state = is_magnetic(iron_oxide, llm=IsMagneticLlmInput(is_magnetic="non_magnetic"))
 
     assert state.value == "non_magnetic"
     assert state.source == "llm"
+
+
+@pytest.mark.parametrize("override", [IsMagneticHumanInput, IsMagneticLlmInput])
+@pytest.mark.parametrize("value", [True, False, "false", "ferromagnetic"])
+def test_an_override_takes_only_the_record_s_own_values(
+    override: type[IsMagneticHumanInput], value: object
+) -> None:
+    """#139: the override takes the record's Literal, the values
+    /capabilities advertises; a boolean is refused, not mapped."""
+    with pytest.raises(ValidationError, match="'magnetic' or 'non_magnetic'"):
+        override(is_magnetic=value)

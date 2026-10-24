@@ -10,14 +10,15 @@ values. See ``service/__init__.py`` for the phase boundaries this split
 follows.
 
 **The simulated cell comes first (#128).** ``service/_magnetic.py``
-decides the functional, the simulated cell (``cell``: spin polarization,
-spin-orbit coupling and the applied magnetic ordering), its symmetry
+decides the functional, the Hubbard decision (spin polarization reads it,
+#147), the simulated cell (``cell``: spin polarization, spin-orbit
+coupling and the applied magnetic ordering), its symmetry
 (``symmetry_eff``), the pseudopotentials and the starting moments, once
 each and in that order. ``electron_count`` counts that cell, and
 ``boundary`` reads its vacuum (``MagneticAdvice.geometry_eff``, #144);
-``cutoffs``, ``vdw`` and ``hubbard`` read the uploaded structure's facts.
-``hubbard_u`` keeps reading the input structure: its decision is keyed by
-element, so it is the same for the cell.
+``cutoffs`` and ``vdw`` read the uploaded structure's facts. ``hubbard``
+reads the input structure too: its decision is keyed by element, so it is
+the same for the cell.
 
 **``symmetry_eff`` (v2 epic 9, #9)**: ``AnalysisFacts.symmetry`` (phase 1)
 is computed from the plain input ``structure``, before magnetism is
@@ -45,7 +46,7 @@ from goldilocks_core.advisors.electron_count import (
     ElectronCountDecision,
     electron_count,
 )
-from goldilocks_core.advisors.hubbard_u import HubbardUDecision, hubbard_u
+from goldilocks_core.advisors.hubbard_u import HubbardUDecision
 from goldilocks_core.advisors.magnetic_config import MagneticCell, MagneticConfigFacts
 from goldilocks_core.advisors.vdw_method import VdwFacts, vdw_method
 from goldilocks_core.analysis.symmetry import SymmetryFacts
@@ -137,11 +138,5 @@ def system_advice(
             overrides.boundary,
             overrides.boundary_llm,
         ),
-        hubbard=hubbard_u(
-            structure,
-            analysis.needs_correlation,
-            functional_value,
-            overrides.hubbard,
-            overrides.hubbard_llm,
-        ),
+        hubbard=selection.hubbard,
     )

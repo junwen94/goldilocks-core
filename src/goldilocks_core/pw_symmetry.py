@@ -115,10 +115,13 @@ coordinates for atoms): spglib's own arithmetic leaves 1e-11, and CIF
 rounding is 1e-6 and above."""
 
 _ZERO = 1e-12
-"""A written lattice component (A) or crystal coordinate within this of 0
-is written as 0: rotating and idealizing leave 1e-16-sized residues where
-the exact value is 0, which the input would otherwise carry as
-exponent-form noise such as -1.86627846e-17."""
+"""A framed lattice component (A) or crystal coordinate within this of 0 is
+set to 0: rotating and idealizing leave 1e-16-sized residues where the exact
+value is 0. The framed cell is the simulated cell every later reader takes:
+the symmetry and k-point counts, QRF95's k_distance (which moves with such
+residues) and the writer. The writer also writes any card value below 1e-10
+as 0 on its own (``generation.quantum_espresso.scf``), so this snap is not
+what keeps exponent-form noise out of the input."""
 
 _SIN3 = 0.866025403784438597
 _COS3 = 0.5

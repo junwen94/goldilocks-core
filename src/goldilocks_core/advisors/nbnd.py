@@ -92,13 +92,14 @@ multiplier or target-energy-window rule keyed on ``purpose`` (it is
 still accepted in the signature, signature-stable for whenever such a
 rule exists, but not yet consulted -- the same treatment
 ``advisors/k_sampling.py`` gives its own currently-unused
-``occupations`` input). In practice, ``service/_dos.py``'s nscf step
-already forces ``occupations="tetrahedra_opt"`` (aiida-quantumespresso's
-own DOS protocol default, chosen for integration-grid quality, not for
-band count) -- and ``tetrahedra_opt`` is one of this module's own
-``_METAL_LIKE_OCCUPATIONS``, so ``nbnd()`` called for that nscf step
-takes the metal-like padding (20% more per spin channel, at least 4
-more) regardless of the material's real classification, incidentally
+``occupations`` input). In practice, the dos task's nscf step already
+gets ``occupations="tetrahedra_opt"`` unless the request sets occupations
+(``service/_step_protocol.py``'s ``DOS_NSCF_PROTOCOL``,
+aiida-quantumespresso's own DOS protocol default, chosen for
+integration-grid quality, not for band count) -- and ``tetrahedra_opt`` is
+one of this module's own ``_METAL_LIKE_OCCUPATIONS``, so ``nbnd()`` called
+for that nscf step takes the metal-like padding (20% more per spin channel,
+at least 4 more) regardless of the material's real classification, incidentally
 giving the nscf step real empty bands an insulator's own scf step gets
 none of (the bundled ``Si.cif``, nelec 32: scf ``nbnd=16``, exactly
 ``nelec/2``; nscf ``nbnd=20``). This is a genuine, working mechanism,

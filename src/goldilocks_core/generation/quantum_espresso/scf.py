@@ -140,6 +140,18 @@ PW/src/input.f90:1332-1359). 'periodic' writes no keyword, QE's default
 
 _SAFE_FILENAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
 
+_CARD_ZERO = 1e-10
+"""Card values of smaller magnitude are written as ``0`` (#178): A for the
+lattice, crystal units for coordinates. It removes the ~1e-16 A left where
+a lattice vector has a zero component (cos(90 deg) in a pymatgen lattice
+built from its angles, or a cell turned into its standard orientation) and
+the ~1e-36 coordinates some CIFs list (MC3D CrO2, LiCoO2), far below pw.x's
+symmetry tolerances (1e-6 for the lattice, 1e-5 for atoms).
+``pw_symmetry.pw_frame`` already writes components within 1e-12 of 0 as 0
+in the cell it frames; this snap is the writer's own and covers every card
+value, including a cell ``pw_frame`` returns as it is and residues between
+1e-12 and 1e-10."""
+
 
 def write_qe_scf(
     system: SystemSettings,
@@ -475,4 +487,8 @@ def k_points(step: PwSettings) -> str:
 
 
 def _format_float(value: float) -> str:
+    """A card number to 10 significant digits; ``0`` below ``_CARD_ZERO``,
+    so never ``-0``."""
+    if abs(value) < _CARD_ZERO:
+        return "0"
     return f"{value:.10g}"

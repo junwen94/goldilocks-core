@@ -17,12 +17,23 @@ export type MagneticOrderingsRequest =
 export type Source = "human" | "ml" | "llm" | "heuristic";
 export type FieldStatus = "resolved" | "unavailable" | "blocked";
 
-/** Mirrors `resolution.ResolvedField`'s wire projection (`from_state`). */
+/** Mirrors a published record, `resolution.ResolvedField` as
+ * `records_document` projects it: a resolved record carries every
+ * `resolution.Provenance` field. */
 export interface ResolvedField<T = unknown> {
   readonly status: FieldStatus;
   readonly value?: T | null;
   readonly source?: Source | null;
   readonly field_sources?: Readonly<Record<string, Source>> | null;
+  /** The records whose answers this record's rule followed, by name. */
+  readonly derived_from?: readonly string[];
+  /** The advisor's rationale, where it gives one. */
+  readonly source_note?: string | null;
+  /** The model that decided the value or one of its settings (a
+   * `field_sources` entry `ml`). */
+  readonly model?: ModelEvidence | null;
+  /** What to cite for the value (a model's or the table's citation). */
+  readonly citations?: readonly string[];
   readonly reason?: string | null;
   readonly blocked_by?: string | null;
 }
@@ -35,11 +46,36 @@ export interface AdvisorWarning {
   readonly message: string;
 }
 
+/** Mirrors `resolution.ModelEvidence`: what a registered model returned,
+ * verbatim (#156). */
+export interface ModelEvidence {
+  /** goldilocks-ml's id, e.g. `metallicity.is_metal.cgcnn@crystal_graph.v1`. */
+  readonly model_id: string;
+  /** The installed release, `<id>@<version>`. */
+  readonly asset: string;
+  readonly target_contract: string;
+  readonly value: unknown;
+  /** As returned: a classifier's `score`/`threshold`, QRF95's `interval`. */
+  readonly details: Readonly<Record<string, unknown>>;
+  readonly warnings: readonly AdvisorWarning[];
+}
+
+/** One entry of a response's top-level `warnings` (`resolution
+ * .collect_warnings`): a record's warning, naming the record it came from
+ * (`nscf_parallelisation` for a dos task's nscf step). */
+export interface RecordWarning extends AdvisorWarning {
+  readonly record: string;
+}
+
 // ---------------------------------------------------------------------
 // GET /capabilities -- mirrors capabilities.py's `Capabilities` TypedDict
 // and the Setting/Fact projections `_settings()`/`_facts()` build.
 // ---------------------------------------------------------------------
 
+/** `tasks` are the tasks a setting applies to; a request for any other
+ * task is refused. `steps`/`programs` are the steps (the names
+ * `steps.<step>.<key>` takes) and programs a `per_step` setting applies to,
+ * `null` for a `system` or `task` setting, which is set once per task. */
 export interface Setting {
   readonly key: string;
   readonly group: string;
@@ -48,10 +84,11 @@ export interface Setting {
   readonly unit: string | null;
   readonly default?: unknown;
   readonly enum_from?: string;
-  readonly codes: readonly string[] | null;
-  readonly tasks: readonly string[] | null;
+  readonly codes: readonly string[];
+  readonly tasks: readonly string[];
+  readonly steps: readonly string[] | null;
   readonly programs: readonly string[] | null;
-  readonly scope: "system" | "per_step";
+  readonly scope: "system" | "task" | "per_step";
   readonly ml_target: string | null;
   readonly approaches: readonly Source[];
   readonly description: string;
@@ -137,6 +174,9 @@ export interface SpeciesOccupancy {
 export interface StructureSite {
   readonly fractional_coordinates: readonly [number, number, number];
   readonly cartesian_coordinates_angstrom: readonly [number, number, number];
+  /** The site's label (a CIF's `_atom_site_label`), which keys
+   * `starting_magnetization`. */
+  readonly label: string;
   readonly species: readonly SpeciesOccupancy[];
 }
 
@@ -186,7 +226,7 @@ export interface StructureInspection {
 
 export interface ExplainResult {
   readonly records: Readonly<Record<string, ResolvedField>>;
-  readonly warnings: readonly AdvisorWarning[];
+  readonly warnings: readonly RecordWarning[];
   /** The distinct reasons `/run` would refuse to generate input files
    * for (the task's `check()` verdict, in first-seen order); empty when
    * those checks pass. */
@@ -196,7 +236,7 @@ export interface ExplainResult {
 export interface RunResult {
   readonly files: readonly string[];
   readonly records: Readonly<Record<string, ResolvedField>>;
-  readonly warnings: readonly AdvisorWarning[];
+  readonly warnings: readonly RecordWarning[];
 }
 
 // ---------------------------------------------------------------------

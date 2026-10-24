@@ -190,6 +190,38 @@ describe("Workspace", () => {
     });
   });
 
+  it("sends only the overrides that apply to the draft's task", async () => {
+    // #154: the core refuses a setting no step of the task reads, so a
+    // relax-only override kept in the draft must not reach an scf request.
+    const core = new CoreStub();
+    core.explainResults = [
+      Promise.resolve(explainResult),
+      Promise.resolve(explainResult),
+    ];
+    const workspace = createWorkspace(core);
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({
+      type: "draft.patch",
+      task: "relax",
+      overrides: { ion_dynamics: "fire", k_grid: [5, 5, 5], is_metal: "metal" },
+    });
+    await workspace.dispatch({ type: "review.compute" });
+
+    await workspace.dispatch({ type: "draft.patch", task: "scf_single_point" });
+    await workspace.dispatch({ type: "review.compute" });
+
+    expect(core.explainCalls.map((request) => request.overrides)).toEqual([
+      { ion_dynamics: "fire", k_grid: [5, 5, 5], is_metal: "metal" },
+      { k_grid: [5, 5, 5], is_metal: "metal" },
+    ]);
+    expect(workspace.getSnapshot().draft?.overrides).toEqual({
+      ion_dynamics: "fire",
+      k_grid: [5, 5, 5],
+      is_metal: "metal",
+    });
+  });
+
   it("clears an override back to automatic when patched with undefined", async () => {
     const core = new CoreStub();
     const workspace = createWorkspace(core);
@@ -222,6 +254,7 @@ describe("Workspace", () => {
           level: "info",
           category: "job",
           message: "retried",
+          record: "job",
         },
       ],
     };

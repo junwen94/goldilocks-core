@@ -48,6 +48,11 @@ from goldilocks_core.analysis.geometry import GeometryFacts, SlabGeometry
 from goldilocks_core.assets.records import AssetFile, AssetSpec
 from goldilocks_core.assets.runtime import statuses
 from goldilocks_core.assets.store import AssetStore, asset_root
+from goldilocks_core.inputs.structure import (
+    InMemoryStructureSource,
+    StructureSourceDocument,
+    normalize_structure,
+)
 from goldilocks_core.resolution import Provenance, Resolved
 
 if TYPE_CHECKING:
@@ -85,19 +90,28 @@ def run_cli(
     )
 
 
+def in_memory_source(structure: Structure) -> StructureSourceDocument:
+    """The source identity a structure built in memory publishes in a
+    bundle's ``request`` (no submitted text, so no sha256), for tests that
+    pass a pymatgen ``Structure`` to ``advise`` and then bundle it (#176)."""
+    return normalize_structure(InMemoryStructureSource(structure)).source
+
+
 def magnetic_decision(
     structure: Structure,
     is_magnetic: FieldState[Magnetism],
     needs_soc: FieldState[bool] | None = None,
     z_valences: dict[str, float] | None = None,
     human: MagneticConfigHumanInput | None = None,
+    *,
+    soc_table: FieldState[PseudoTable] | None = None,
 ) -> FieldState[MagneticConfigFacts]:
     """``magnetic_cell`` then ``magnetic_config``, the two steps
     ``service/_magnetic.py`` runs around pseudopotential selection -- for
     advisor-level tests that need one structure's whole magnetic
     decision (#128)."""
     cell = magnetic_cell(structure, is_magnetic, human)
-    return magnetic_config(cell, needs_soc, z_valences, human)
+    return magnetic_config(cell, needs_soc, soc_table, z_valences)
 
 
 def strict_json(document: str | bytes) -> Any:
@@ -218,6 +232,86 @@ def sssp_fixture_table_spec(
         elements=tuple(sorted(upf_by_element)),
         asset=spec,
         default=True,
+    )
+    return spec, registry_table
+
+
+def write_registry(path: Path, table: PseudoTable) -> None:
+    """Write a one-table SSSP-shaped registry declaring ``table`` to ``path``,
+    for CLI subprocesses (``GOLDILOCKS_PSEUDO_REGISTRY``)."""
+    files = "".join(
+        f'\n[[tables."{table.id}".files]]\n'
+        f'role = "{file.role}"\npath = "{file.path}"\nurl = "{file.url}"\n'
+        for file in table.asset.files
+    )
+    path.write_text(
+        f'[tables."{table.id}"]\n'
+        f'provider = "{table.provider}"\n'
+        f'upstream_table = "{table.upstream_table}"\n'
+        f'version = "{table.version}"\n'
+        f'functional = "{table.functional}"\n'
+        f'relativistic = "{table.relativistic}"\n'
+        f'accuracy = "{table.accuracy}"\n'
+        f'licence = "{table.licence}"\n'
+        f'citation = "{table.citation}"\n'
+        "default = true\n"
+        f"elements = {json.dumps(list(table.elements))}\n" + files,
+        encoding="utf-8",
+    )
+
+
+def dojo_fixture_table_spec(
+    tmp_path: Path,
+    *,
+    upf: bytes = SSSP_FIXTURE_UPF,
+    report_functional: object = "PBEsol",
+    table_functional: str = "PBEsol",
+    frozen_4f_core: bool = False,
+) -> tuple[AssetSpec, PseudoTable]:
+    """Build one fully-offline PseudoDojo-shaped table covering Si (file://
+    sources, no network): ``upf`` and a dojo report whose ``low``/``normal``/
+    ``high`` hints are 10/15/20 Ha (20/30/40 Ry), under a table with
+    ``charge_density_dual`` 4. Its registry id ``pseudodojo-fixture``
+    differs from its asset id."""
+    from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    upfs = tmp_path / "upfs.tgz"
+    reports = tmp_path / "reports.tgz"
+    sssp_fixture_archive(upfs, {"nested/Si.upf": upf})
+    report = {
+        "xc": report_functional,
+        "md5_upf": hashlib.md5(upf).hexdigest(),
+        "hints": {
+            "low": {"ecut": 10.0},
+            "normal": {"ecut": 15.0},
+            "high": {"ecut": 20.0},
+        },
+    }
+    sssp_fixture_archive(reports, {"nested/Si.djrepo": json.dumps(report).encode()})
+    spec = AssetSpec(
+        "pseudopotentials/pseudodojo-fixture",
+        "1",
+        (
+            AssetFile("pseudopotentials", "source/upfs.tgz", upfs.as_uri()),
+            AssetFile("metadata", "source/reports.tgz", reports.as_uri()),
+        ),
+    )
+    registry_table = PseudoTable(
+        id="pseudodojo-fixture",
+        provider="pseudodojo",
+        upstream_table="fixture",
+        version="1",
+        functional=table_functional,
+        relativistic="scalar",
+        accuracy="efficiency",
+        licence="fixture licence",
+        citation="fixture citation",
+        elements=("Si",),
+        asset=spec,
+        charge_density_dual=4.0,
+        default=True,
+        frozen_4f_core=frozen_4f_core,
     )
     return spec, registry_table
 
@@ -640,6 +734,22 @@ def uranium_nitride() -> Structure:
     return Structure.from_str(_MP_1865_URANIUM_NITRIDE_CIF, fmt="cif")
 
 
+def hcp_gadolinium() -> Structure:
+    """hcp Gd (P6_3/mmc), Materials Project mp-155: 2 atoms, a = 3.642 A,
+    c = 5.902 A."""
+    return Structure.from_spacegroup(
+        "P6_3/mmc", Lattice.hexagonal(3.642, 5.902), ["Gd"], [[1 / 3, 2 / 3, 0.25]]
+    )
+
+
+def fcc_lead() -> Structure:
+    """fcc Pb (Fm-3m), MC3D mc3d-48868, in its 4-atom conventional cell
+    (a = 4.919 A)."""
+    return Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(4.919), ["Pb"], [[0.0, 0.0, 0.0]]
+    )
+
+
 def geometry_facts(
     dimensionality: Dimensionality,
     vacuum_axes: tuple[LatticeAxis, ...] = (),
@@ -680,10 +790,11 @@ def written_cell(structure: Structure) -> Resolved[MagneticConfigFacts]:
     of ``checks.check_all`` read."""
     facts = MagneticConfigFacts(
         cell=structure,
-        ordering=OrderingRecord(requested="fm", applied="fm", compensated=False),
+        ordering=OrderingRecord(requested="fm", applied="fm"),
         spin_polarized=False,
         magnetic_elements=(),
         starting_magnetization=None,
+        compensated=False,
         tot_magnetization=None,
         spin_orbit_enabled=False,
         angle1=None,

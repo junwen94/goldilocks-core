@@ -105,6 +105,35 @@ describe("GeneratedInputReview", () => {
     expect(screen.getByText("cccccccccc")).toBeInTheDocument();
   });
 
+  it("lists the table's licence right after the pseudopotentials and shows its text", async () => {
+    const user = userEvent.setup();
+    const archive = buildArchive();
+    render(<GeneratedInputReview archive={archive} />, {
+      wrapper: MantineProvider,
+    });
+
+    const licence = await screen.findByRole("button", {
+      name: /licences\/pseudodojo-pbesol-efficiency-sr\.txt/,
+    });
+    const paths = screen
+      .getAllByRole("button")
+      .map((button) => button.textContent)
+      .filter((text) => /\.(in|upf|txt|json)/.test(text));
+    expect(paths.map((text) => text.replace(/[0-9a-f]{10}$/, ""))).toEqual([
+      "scf.in",
+      "pseudo/Si.upf",
+      "licences/pseudodojo-pbesol-efficiency-sr.txt",
+      "goldilocks.json",
+    ]);
+    await user.click(licence);
+
+    expect(
+      screen.getByRole("region", {
+        name: "Generated input licences/pseudodojo-pbesol-efficiency-sr.txt",
+      }),
+    ).toHaveTextContent("PseudoDojo pseudopotentials are CC BY 4.0.");
+  });
+
   it("shows a pseudopotential's entries instead of its raw file content", async () => {
     const user = userEvent.setup();
     const archive = buildArchive();

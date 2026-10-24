@@ -125,6 +125,7 @@ describe("StructureViewport", () => {
               {
                 fractional_coordinates: [0.123456789, 0, 0],
                 cartesian_coordinates_angstrom: [0.493827156, 0, 0],
+                label: "FeMn1",
                 species: [
                   {
                     symbol: "Fe",
@@ -143,6 +144,7 @@ describe("StructureViewport", () => {
               {
                 fractional_coordinates: [0.5, 0.5, 0.5],
                 cartesian_coordinates_angstrom: [2, 2, 2],
+                label: "O1",
                 species: [
                   {
                     symbol: "O",

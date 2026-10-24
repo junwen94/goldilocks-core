@@ -36,6 +36,7 @@ from goldilocks_core.assets.pseudopotentials.registry import (
     load_tables,
 )
 from goldilocks_core.assets.pseudopotentials.upf import (
+    PseudoCutoffs,
     PseudoMetadata,
     parse_upf_metadata,
 )
@@ -80,6 +81,11 @@ def required_functional(value: object, label: str) -> str:
 # --- extraction + manifest (v1 pseudo/installed.py) -------------------------
 
 TABLE_MANIFEST = "pseudo-table.json"
+TABLE_LICENCE = "LICENSE.txt"
+"""The installed table's licence material, which every preparer writes: the
+provider's licence file for SSSP, the CC BY 4.0 notice for PseudoDojo. A
+bundle ships it beside the table's UPFs (``service._pseudo.pseudo_artifacts``,
+#157)."""
 _SCHEMA_VERSION = 2
 _RELATIVISTIC = frozenset({"scalar", "full", "non-relativistic"})
 _TOP_LEVEL_FIELDS = {
@@ -255,10 +261,18 @@ def load_installed_table(
     *,
     table: PseudoTable | None = None,
 ) -> tuple[PseudoMetadata, ...]:
+    """One ``PseudoMetadata`` per entry of the installed table's manifest,
+    each UPF's md5 checked against it. ``asset_path`` is the entry's path
+    inside the installation, and ``content_sha256``/``content_size_bytes``
+    come from ``installed``'s verified inventory (#177). ``cutoffs`` and
+    ``cutoff_hints`` are what the provider publishes (``_published_cutoffs``,
+    #180). Raises ``AssetCorrupt`` for a manifest or file that does not
+    check out."""
     try:
         manifest_path = installed.path(TABLE_MANIFEST)
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
         _validate_manifest(data, installed, table)
+        inventory = {file.path: file for file in installed.files}
         metadata: list[PseudoMetadata] = []
         elements: list[str] = []
         paths: list[str] = []
@@ -270,6 +284,7 @@ def load_installed_table(
             if _md5(path) != entry["md5"].lower():
                 raise ValueError(f"entry md5 does not match {relative_path}")
             entry_relativistic = entry.get("upf_relativistic", data["relativistic"])
+            verified = inventory[relative_path]
             metadata.append(
                 PseudoMetadata(
                     filepath=str(path),
@@ -285,13 +300,12 @@ def load_installed_table(
                     relativistic=entry_relativistic,
                     z_valence=entry["z_valence"],
                     table_id=data["id"],
-                    cutoffs={
-                        field: finite_positive_cutoff(
-                            entry[field], f"{element} {field}"
-                        )
-                        for field in ("ecutwfc_ry", "ecutrho_ry")
-                    },
+                    asset_path=relative_path,
+                    cutoffs=_published_cutoffs(entry, element, data["provider"]),
+                    cutoff_hints=entry.get("cutoff_hints"),
                     source_identifier=entry["source_identifier"],
+                    content_sha256=verified.sha256,
+                    content_size_bytes=verified.size,
                     frozen_4f_core=entry["frozen_4f_core"],
                     pseudo_info={
                         "table_version": data["version"],
@@ -326,6 +340,22 @@ def load_installed_table(
             f"invalid installed pseudopotential manifest for "
             f"{installed.id}@{installed.version}: {error}"
         ) from error
+
+
+def _published_cutoffs(
+    entry: dict[str, Any], element: str, provider: str
+) -> PseudoCutoffs:
+    """The entry's cutoffs as its provider publishes them. PseudoDojo
+    publishes only wavefunction cutoff hints: the ``ecutrho_ry`` its
+    manifests store is ``_extract_pseudodojo_pseudos``'s
+    charge_density_dual x high, so it is validated with the rest of the
+    manifest but read as ``None``, and the cutoffs advisor derives and
+    labels the density cutoff (#180)."""
+    ecutwfc_ry = finite_positive_cutoff(entry["ecutwfc_ry"], f"{element} ecutwfc_ry")
+    ecutrho_ry = finite_positive_cutoff(entry["ecutrho_ry"], f"{element} ecutrho_ry")
+    if provider == "pseudodojo":
+        return {"ecutwfc_ry": ecutwfc_ry, "ecutrho_ry": None}
+    return {"ecutwfc_ry": ecutwfc_ry, "ecutrho_ry": ecutrho_ry}
 
 
 def _validate_entry_shape(entry: Any) -> None:
@@ -391,7 +421,7 @@ def pseudodojo_preparer(table: PseudoTable):
                 sources["pseudopotentials"], destination, table, reports
             )
             write_table_manifest(destination, table, entries)
-            (destination / "LICENSE.txt").write_text(
+            (destination / TABLE_LICENCE).write_text(
                 _PSEUDODOJO_LICENCE_NOTICE, encoding="utf-8"
             )
         except PseudoImportError:
@@ -523,6 +553,10 @@ def _extract_pseudodojo_pseudos(
         )
         cutoff_hints = report["cutoff_hints"]
         high = cutoff_hints["high"]
+        # ecutrho_ry stays in what this preparation revision stores, so tables
+        # installed before #180 and after it are the same bytes; the reader
+        # does not hand it on as published (_published_cutoffs). Dropping it
+        # needs a revision bump, which re-prepares every installed table.
         entry.update(
             ecutwfc_ry=high,
             ecutrho_ry=finite_positive_cutoff(
@@ -559,7 +593,7 @@ def sssp_preparer(table: PseudoTable):
                 sources["pseudopotentials"], destination, metadata, table
             )
             write_table_manifest(destination, table, entries)
-            shutil.copyfile(sources["licence"], destination / "LICENSE.txt")
+            shutil.copyfile(sources["licence"], destination / TABLE_LICENCE)
         except PseudoImportError:
             raise
         except (
