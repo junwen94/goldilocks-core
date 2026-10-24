@@ -18,9 +18,13 @@ uv run goldilocks run structure.cif --out silicon-run
 advisor, printing each decision and its source (`human`, `ml`, `llm`, or
 `heuristic`), then a `notice: <message>` line for each setting given without a
 step that reached several steps, then the checks `run` applies, printing one
-`blocked: <reason>` line for each reason `run` would refuse to generate an
-input. It never writes anything, even without `--json`, and exits 0 whether or
-not it is blocked.
+`blocked: <message>` line for each finding `run` would refuse to generate an
+input for, followed by a `try:` line per remedy that resolves it: the `--set`
+flags to use, each in place of any `--set` of the same key, then
+`remove --set KEY` for each override to drop, since `--set` cannot clear a
+key. `run` prints the same `blocked:` and `try:` lines on stderr
+when it refuses. `explain` never writes anything, even without `--json`, and
+exits 0 whether or not it is blocked.
 `run` generates a complete runnable input (Quantum ESPRESSO by default) and
 publishes it to `silicon-run` because `-o/--out` was given; omit `-o/--out`
 for a memory-only preview instead. Use `uv run goldilocks --help` or a
@@ -84,8 +88,12 @@ an output flag: without `-o/--out` it prints `{"files": [...], "records":
 {...}, "warnings": [...], "layout": {...}}`; with `-o/--out` it prints
 `{"files": [...], "kind": "directory"|"archive", "path": "..."}`. `explain
 --json` prints `{"records": {...}, "warnings": [...], "blocking": [...],
-"layout": {...}}`, where `blocking` lists the distinct reasons `run` would
-refuse to generate an input and is empty when its checks pass. `layout` names
+"layout": {...}}`, where `blocking` lists the findings `run` would refuse to
+generate an input for, one per root cause, and is empty when its checks pass.
+Each finding is `{"code", "fields", "message", "remedies"}`: a stable `code`
+(`advice.blocked` for a decision that could not be made, whose `message` is the
+root cause), the settings it concerns, the text to show, and the override
+patches that each resolve it, where `null` clears that override. `layout` names
 each record's tier and step: `analysis` (what the structure alone decides),
 `system` (what every step shares), then `steps`, one `{"name", "records"}`
 per step of the task in run order -- the task's one `job` with its first step,
@@ -304,8 +312,8 @@ the address. `--static-root DIRECTORY` also serves a built Workbench; a relative
 | ------------------- | --------------------------------------------------------------------------------- |
 | `GET /capabilities` | Codes, tasks, facts, settings, pseudopotential tables, HPC profiles, models, warnings |
 | `POST /inspect`     | Structure inspection (inline `structure_content`, not a path)                     |
-| `POST /explain`     | Analysis and advisor decisions with their `layout`, plus `blocking`: the reasons `/run` would refuse; never writes anything |
-| `POST /run`         | Generate a runnable input; `respond_with: "json"` (default) returns a JSON summary, `respond_with: "archive"` returns ZIP bytes |
+| `POST /explain`     | Analysis and advisor decisions with their `layout`, plus `blocking`: the findings `/run` would refuse with; never writes anything |
+| `POST /run`         | Generate a runnable input; `respond_with: "json"` (default) returns a JSON summary, `respond_with: "archive"` returns ZIP bytes; a refusal is a 422 `advice_incomplete` with the findings in `error.details.findings` |
 | `GET /health`       | Process health                                                                     |
 | `GET /ready`        | Asset readiness; 503 for missing or corrupt assets                                |
 | `GET /openapi.json` | Request and response schemas                                                      |
@@ -334,7 +342,9 @@ uv run --extra mcp goldilocks serve mcp
 
 The stdio tools are `capabilities`, `inspect_structure`, `explain`, and `run`.
 MCP's `explain` tool returns the same `records`, `warnings`, `blocking` and
-`layout` as `POST /explain`. MCP's `run` tool never writes to the server's
+`layout` as `POST /explain`; when `run` refuses, its error lists the same
+findings, each followed by its remedies as JSON override patches. MCP's `run`
+tool never writes to the server's
 filesystem — it always returns only the published file list, every resolved
 decision (with its source) and their `layout`, and a warnings array the caller
 must relay verbatim. To obtain actual file bytes, use the CLI (`goldilocks run

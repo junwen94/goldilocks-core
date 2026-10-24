@@ -248,7 +248,7 @@ def test_nelec_for_the_uploaded_cell_is_refused_once_the_ordering_resizes_it(
     assert "nelec" in reason
     assert "2-atom" in reason
     assert "4-atom" in reason
-    assert reason in report.blocking
+    assert reason in [finding.message for finding in report.blocking]
 
 
 def _starting_magnetization_lines(content: str) -> list[str]:
@@ -386,9 +386,8 @@ def test_spin_orbit_refuses_tot_magnetization_before_generation(
 
     report = check(advice)
 
-    assert any("tot_magnetization" in reason for reason in report.blocking), (
-        report.blocking
-    )
+    messages = [finding.message for finding in report.blocking]
+    assert any("tot_magnetization" in message for message in messages), messages
     with pytest.raises(AdviceIncomplete):
         generate(advice, report)
 

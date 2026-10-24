@@ -1220,9 +1220,9 @@ def _requested_seeds(
     if unknown:
         usable = sorted(set(ordered.base.symbol_set) - _split_elements(ordered).keys())
         return (
-            f"starting_magnetization has unknown key(s) {unknown!r}; it takes this "
-            f"cell's site labels ({', '.join(labels)}) or an element symbol for "
-            f"all of that element's sites ({', '.join(usable)})"
+            f"starting_magnetization has unknown key(s) {', '.join(unknown)}; "
+            f"it takes this cell's site labels ({', '.join(labels)}) or an "
+            f"element symbol for all of that element's sites ({', '.join(usable)})"
         )
     return tuple(
         override.get(site.label, elements.get(site.specie.symbol))

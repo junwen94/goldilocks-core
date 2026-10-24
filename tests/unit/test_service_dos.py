@@ -145,7 +145,9 @@ class TestAdviseDosDegradation:
         assert isinstance(advice.nscf.system.pseudo.metadata, Blocked)
         report = check_dos(advice)
         assert not report.ok
-        assert any("does-not-exist" in reason for reason in report.blocking)
+        (finding,) = report.blocking
+        assert finding.code == "advice.blocked"
+        assert "does-not-exist" in finding.message
 
 
 class TestTheNscfProtocol:
@@ -379,8 +381,8 @@ class TestPerStepOverrides:
 
         assert isinstance(advice.dos, Blocked)
         assert any(
-            "nscf step's tetrahedra_opt occupations give none" in reason
-            for reason in check_dos(advice).blocking
+            "nscf step's tetrahedra_opt occupations give none" in finding.message
+            for finding in check_dos(advice).blocking
         )
 
     def test_the_routing_notice_reaches_the_task_s_warnings(self) -> None:
@@ -424,7 +426,9 @@ class TestPerStepOverrides:
             assert "extra_bands=-100" in resources.job.root_cause()
             assert resources.max_seconds is None
             report = check(step_advice, purpose=purpose)
-            assert any("extra_bands=-100" in reason for reason in report.blocking)
+            assert any(
+                "extra_bands=-100" in finding.message for finding in report.blocking
+            )
 
     def test_delta_e_and_a_steps_nscf_mesh_reach_the_written_inputs(
         self, tmp_path, monkeypatch

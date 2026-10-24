@@ -341,9 +341,10 @@ def test_a_pinned_moment_gets_bands_for_its_majority_channel() -> None:
     bands = nbnd(nelec, scheme, magnetic=magnetism)
 
     def gate(state: FieldState[NbndDecision]) -> tuple[str, ...]:
-        return check_all(
+        report = check_all(
             occupations=scheme, magnetic=magnetism, electron_count=count, nbnd=state
-        ).blocking
+        )
+        return tuple(finding.message for finding in report.blocking)
 
     assert scheme.value.occupations == "fixed"
     assert scheme.value.tot_magnetization == 2.0

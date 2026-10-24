@@ -134,9 +134,10 @@ def advise_dos(
 
 def check_dos(advice: DosAdvice) -> CheckReport:
     """``advise_dos()``/``generate_dos()``'s boundary -- folds all three
-    steps' own blocking reasons together. The nscf pass is checked with
-    ``purpose="nscf"`` (``checks.py``'s scf-only named rule does not
-    apply to it, per this module's own docstring)."""
+    steps' findings into one report, which keeps a root cause the steps
+    share once. The nscf pass is checked with ``purpose="nscf"``
+    (``checks.py``'s scf-only named rule does not apply to it, per this
+    module's own docstring)."""
     scf_report = check(advice.scf, purpose="scf")
     nscf_report = check(advice.nscf, purpose="nscf")
     dos_blocking = collect_blocked(advice.dos)
@@ -153,10 +154,10 @@ def generate_dos(
     exercised here for the first time. Raises ``AdviceIncomplete`` when
     ``report`` is not ``ok``, same contract as the single-step
     ``generate()`` -- checked once, directly, rather than re-derived per
-    step: ``report.blocking`` is exactly the concatenation of each
-    step's own blocking reasons (``check_dos``), so if the whole is
-    empty every part is too, and each inner ``generate()`` call below is
-    passed a trivially-``ok`` report rather than recomputing one."""
+    step: ``report.blocking`` holds every step's findings (``check_dos``),
+    so if the whole is empty every part is too, and each inner
+    ``generate()`` call below is passed a trivially-``ok`` report rather
+    than recomputing one."""
     if not report.ok:
         raise AdviceIncomplete(report)
     shared_ctx = ctx or default_shared_context()

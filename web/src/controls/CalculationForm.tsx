@@ -1,4 +1,4 @@
-import { type ReactNode, useId } from "react";
+import { Fragment, type ReactNode, useId } from "react";
 import {
   Accordion,
   Badge,
@@ -23,6 +23,8 @@ import type {
 } from "../api/coreClient";
 import { SourceLabel } from "../api/SourceLabel";
 import { isAdvisorWarning } from "../review/warnings";
+import { FindingNotes } from "../status/FindingNote";
+import { currentFindings } from "../workspace/pipelineStatus";
 import { readOnlyAdvisorRecords } from "../workspace/recordGroups";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
 import { AdvisorRecordItems, AdvisorStepRecords } from "./AdvisorRecords";
@@ -215,6 +217,12 @@ export function CalculationForm() {
           new Set(settings.map((setting) => setting.resolved_in.record)),
         );
 
+  // A finding of the current draft turns the group of every setting it
+  // concerns red (#165), and is shown under that setting's control (#151).
+  const findingFields = new Set(
+    currentFindings(snapshot).flatMap((finding) => finding.fields),
+  );
+
   function patchOverrides(patch: Readonly<Record<string, unknown>>): void {
     void workspace.dispatch({ type: "draft.patch", overrides: patch });
   }
@@ -242,6 +250,7 @@ export function CalculationForm() {
           settings={settings}
           overrides={overrides}
           records={reviewed?.records}
+          findingFields={findingFields}
           elements={elements}
           pseudopotentialTables={capabilities.pseudopotential_tables}
           disabled={disabled}
@@ -484,10 +493,32 @@ function GroupNotes({ notes }: { readonly notes: readonly AdvisorWarning[] }) {
   );
 }
 
+/** The status a group's badge shows: blocked when a finding concerns one of
+ * its settings, else the worst status of the records they resolve into;
+ * none while there is neither. */
+function groupStatus(
+  groupedSettings: readonly GroupedSetting[],
+  findingFields: ReadonlySet<string>,
+): ResolvedField["status"] | undefined {
+  if (groupedSettings.some((entry) => findingFields.has(entry.setting.key))) {
+    return "blocked";
+  }
+  return [...entryRecords(groupedSettings).values()].reduce<
+    ResolvedField["status"] | undefined
+  >((worst, record) => {
+    if (record === undefined) return worst;
+    if (worst === undefined) return record.status;
+    return STATUS_SEVERITY[record.status] > STATUS_SEVERITY[worst]
+      ? record.status
+      : worst;
+  }, undefined);
+}
+
 function SettingsGroupItems({
   settings,
   overrides,
   records,
+  findingFields,
   elements,
   pseudopotentialTables,
   disabled,
@@ -496,6 +527,7 @@ function SettingsGroupItems({
   readonly settings: readonly Setting[];
   readonly overrides: Readonly<Record<string, unknown>>;
   readonly records: Readonly<Record<string, ResolvedField>> | undefined;
+  readonly findingFields: ReadonlySet<string>;
   readonly elements: readonly string[];
   readonly pseudopotentialTables: readonly PseudopotentialTable[];
   readonly disabled: boolean;
@@ -531,15 +563,7 @@ function SettingsGroupItems({
         const groupedSettings = groups.get(group);
         if (groupedSettings === undefined) return null;
         const groupRecords = [...entryRecords(groupedSettings).values()];
-        const worstStatus = groupRecords.reduce<
-          ResolvedField["status"] | undefined
-        >((worst, record) => {
-          if (record === undefined) return worst;
-          if (worst === undefined) return record.status;
-          return STATUS_SEVERITY[record.status] > STATUS_SEVERITY[worst]
-            ? record.status
-            : worst;
-        }, undefined);
+        const worstStatus = groupStatus(groupedSettings, findingFields);
         const notes = groupRecords.flatMap(recordNotes);
 
         return (
@@ -579,11 +603,28 @@ function SettingsGroupItems({
   );
 }
 
-/** One setting's own control -- `k_grid` keeps its dedicated
- * `KGridControl` (a single scalar select can't represent a 3-tuple),
- * everything else goes through the generic `OverrideControl` -- showing
- * the value and tier `resolved_in` leads to in the setting's record. */
-function renderSetting({
+/** One setting's own control, then the findings that concern it
+ * (`FindingNotes`, #151). */
+function renderSetting(props: {
+  readonly entry: GroupedSetting;
+  readonly overrides: Readonly<Record<string, unknown>>;
+  readonly disabled: boolean;
+  readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
+}): ReactNode {
+  const { key } = props.entry.setting;
+  return (
+    <Fragment key={key}>
+      {settingControl(props)}
+      <FindingNotes field={key} />
+    </Fragment>
+  );
+}
+
+/** `k_grid` keeps its dedicated `KGridControl` (a single scalar select
+ * can't represent a 3-tuple), everything else goes through the generic
+ * `OverrideControl` -- showing the value and tier `resolved_in` leads to in
+ * the setting's record. */
+function settingControl({
   entry,
   overrides,
   disabled,
@@ -603,7 +644,6 @@ function renderSetting({
         : undefined;
     return (
       <KGridControl
-        key={setting.key}
         value={overrides.k_grid}
         resolvedMesh={resolvedMesh}
         disabled={disabled}
@@ -615,7 +655,6 @@ function renderSetting({
   }
   return (
     <OverrideControl
-      key={setting.key}
       meta={setting}
       value={overrides[setting.key]}
       resolvedValue={resolvedValue(setting, record)}
@@ -714,15 +753,18 @@ function FunctionalGroupBody({
   if (entry === undefined) return null;
   const resolved = resolvedValue(entry.setting, entry.record);
   return (
-    <FunctionalControl
-      tables={pseudopotentialTables}
-      value={functionalOverride}
-      resolvedValue={typeof resolved === "string" ? resolved : undefined}
-      source={resolvedSource(entry.setting, entry.record)}
-      description={entry.setting.description}
-      disabled={disabled}
-      onChange={onChange}
-    />
+    <>
+      <FunctionalControl
+        tables={pseudopotentialTables}
+        value={functionalOverride}
+        resolvedValue={typeof resolved === "string" ? resolved : undefined}
+        source={resolvedSource(entry.setting, entry.record)}
+        description={entry.setting.description}
+        disabled={disabled}
+        onChange={onChange}
+      />
+      <FindingNotes field={entry.setting.key} />
+    </>
   );
 }
 
@@ -753,17 +795,20 @@ function PseudoTableGroupBody({
   return (
     <>
       {table === undefined ? null : (
-        <PseudoTableControl
-          tables={pseudopotentialTables}
-          elements={elements}
-          functionalOverride={functionalOverride}
-          pinned={overrides.pseudo_table_id}
-          resolvedId={typeof resolvedId === "string" ? resolvedId : undefined}
-          source={resolvedSource(table.setting, table.record)}
-          description={table.setting.description}
-          disabled={disabled}
-          onChange={onChange}
-        />
+        <>
+          <PseudoTableControl
+            tables={pseudopotentialTables}
+            elements={elements}
+            functionalOverride={functionalOverride}
+            pinned={overrides.pseudo_table_id}
+            resolvedId={typeof resolvedId === "string" ? resolvedId : undefined}
+            source={resolvedSource(table.setting, table.record)}
+            description={table.setting.description}
+            disabled={disabled}
+            onChange={onChange}
+          />
+          <FindingNotes field={table.setting.key} />
+        </>
       )}
       {groupedSettings
         .filter((entry) => entry.originalGroup === "cutoffs")

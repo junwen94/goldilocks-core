@@ -512,22 +512,29 @@ def test_blocked_pipeline_reports_deduplicated_reasons_and_exits_nonzero() -> No
 @pytest.mark.parametrize(
     ("task_arguments", "expected"),
     [
-        pytest.param([], ["is not installed"], id="scf"),
-        pytest.param(["--task", "dos"], ["is not installed"], id="dos"),
+        pytest.param([], [("is not installed", [])], id="scf"),
+        pytest.param(["--task", "dos"], [("is not installed", [])], id="dos"),
         pytest.param(
             ["--task", "vc-relax", "--set", "ion_dynamics=damp"],
-            ["is not installed", "vc-relax requires ion_dynamics='bfgs'"],
+            [
+                ("is not installed", []),
+                (
+                    "vc-relax is generated only with ion_dynamics=bfgs",
+                    ["  try: --set ion_dynamics=bfgs"],
+                ),
+            ],
             id="vc-relax",
         ),
     ],
 )
 def test_explain_reports_the_reasons_run_refuses_with_and_still_exits_zero(
-    task_arguments: list[str], expected: list[str]
+    task_arguments: list[str], expected: list[tuple[str, list[str]]]
 ) -> None:
     """#165: no real assets, so the isolated asset root's uninstalled
     default table is a deterministic blocker (vc-relax adds its named
     check rule). explain prints run's verdict (diagnosis output, on stdout)
-    and still exits 0; run refuses with the same reasons on stderr."""
+    and still exits 0; run refuses with the same lines on stderr: each
+    finding's message, then one ``try:`` line per remedy (#151)."""
     arguments = [str(structure("Si.cif")), "--hpc", "scarf", *task_arguments]
 
     as_json = _run_cli("explain", *arguments, "--json")
@@ -537,19 +544,52 @@ def test_explain_reports_the_reasons_run_refuses_with_and_still_exits_zero(
     assert as_json.returncode == 0, as_json.stderr
     blocking = json.loads(as_json.stdout)["blocking"]
     assert len(blocking) == len(expected)
-    for reason, fragment in zip(blocking, expected, strict=True):
-        assert fragment in reason
+    lines = []
+    for finding, (fragment, remedies) in zip(blocking, expected, strict=True):
+        assert fragment in finding["message"]
+        lines += [f"blocked: {finding['message']}", *remedies]
     assert as_text.returncode == 0, as_text.stderr
     assert refused.returncode == 2
-    text_lines = [
-        line for line in as_text.stdout.splitlines() if line.startswith("blocked:")
-    ]
-    refused_lines = [
-        line for line in refused.stderr.splitlines() if line.startswith("blocked:")
-    ]
-    assert text_lines == [f"blocked: {reason}" for reason in blocking]
-    assert text_lines == refused_lines
-    assert as_text.stdout.splitlines()[-len(text_lines) :] == text_lines
+    assert as_text.stdout.splitlines()[-len(lines) :] == lines
+    assert refused.stderr.splitlines()[-len(lines) :] == lines
+
+
+@pytest.mark.parametrize(
+    ("task_arguments", "remedy"),
+    [
+        pytest.param(
+            ["--task", "relax", "--set", "fix_bottom_layers=1"],
+            "  try: remove --set fix_bottom_layers",
+            id="clear",
+        ),
+        pytest.param(
+            ["--task", "vc-relax", "--set", "cell_dofree=2Dxy"],
+            "  try: --set cell_dofree=all",
+            id="set",
+        ),
+    ],
+)
+def test_a_refused_run_names_the_override_that_resolves_it(
+    task_arguments: list[str], remedy: str, tmp_path: Path
+) -> None:
+    """#151: each finding is followed by the --set flags of its remedies,
+    and --set cannot clear a key, so a remedy that clears one says to remove
+    that --set. No real assets: these rules read the written cell, which
+    needs no pseudopotential. Diamond Si's primitive cell has no vacuum and
+    a and b out of the xy plane."""
+    path = tmp_path / "Si-primitive.cif"
+    Structure(
+        Lattice([[0, 2.7155, 2.7155], [2.7155, 0, 2.7155], [2.7155, 2.7155, 0]]),
+        ["Si", "Si"],
+        [[0, 0, 0], [0.25, 0.25, 0.25]],
+    ).to(filename=str(path))
+
+    refused = _run_cli("run", str(path), "--hpc", "scarf", *task_arguments)
+
+    assert refused.returncode == 2
+    lines = refused.stderr.splitlines()
+    assert remedy in lines
+    assert lines[lines.index(remedy) - 1].startswith("blocked: ")
 
 
 class TestRunAndExplainAgainstRealAssets:
@@ -598,6 +638,22 @@ class TestRunAndExplainAgainstRealAssets:
             warning.keys() == {"code", "level", "category", "message", "record"}
             for warning in document["warnings"]
         )
+
+    def test_run_with_an_npool_that_does_not_divide_ntasks_says_to_remove_it(
+        self, real_assets: None
+    ) -> None:
+        """#151: npool=7 never divides scarf's 64 tasks; the default does."""
+        silicon = structure("Si.cif")
+
+        completed = _run_cli("run", str(silicon), "--hpc", "scarf", "--set", "npool=7")
+
+        assert completed.returncode == 2
+        assert completed.stderr.splitlines()[-2:] == [
+            "blocked: npool=7 does not divide ntasks=64, and pw.x refuses that "
+            "layout. Unset npool for the default, or set npool to a divisor of "
+            "ntasks.",
+            "  try: remove --set npool",
+        ]
 
     def test_run_without_out_previews_without_touching_disk(
         self, real_assets: None, tmp_path: Path
@@ -951,7 +1007,8 @@ class TestPerStepOverrides:
         notice = lines.index(self._K_GRID_NOTICE)
         after = lines[notice + 1 :]
         assert all(not line.startswith("blocked:") for line in lines[:notice])
-        assert all(line.startswith("blocked:") for line in after), after
+        # Only the findings follow: each blocked: line with its try: lines.
+        assert all(line.startswith(("blocked:", "  try: ")) for line in after), after
 
     def test_a_shift_keeps_the_protocol_nscf_mesh(self) -> None:
         default = self._explain_dos()["records"]["nscf_k_sampling"]["value"]

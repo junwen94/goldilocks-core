@@ -58,7 +58,9 @@ from goldilocks_core.steps import default_shared_context
 
 report = check(advice)
 if not report.ok:
-    raise SystemExit(f"blocked: {report.blocking}")
+    raise SystemExit(
+        "blocked: " + "; ".join(finding.message for finding in report.blocking)
+    )
 
 ctx = default_shared_context()
 steps = generate(advice, report, ctx=ctx)
@@ -87,7 +89,11 @@ size).
 `check()` never raises; always inspect `report.ok`/`report.blocking` before
 calling `generate()`, which raises `AdviceIncomplete` on an incomplete
 report rather than silently degrading (delivery has preconditions that
-diagnosis does not).
+diagnosis does not). Each entry of `report.blocking` is a `Finding`: a stable
+`code`, the settings it concerns (`fields`), a `message` to relay, and
+`remedies`, override patches that each resolve it (a `None` value removes
+that override from the assignments). Apply one and call `build_overrides`
+again rather than guessing a fix from the message.
 
 The destination must not exist. Use `ArchiveOutput("run.zip")` for a ZIP, or
 skip `publish` entirely and call `bundle_files(bundle_input)` for a

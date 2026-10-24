@@ -3,7 +3,6 @@ import {
   Alert,
   Button,
   Group,
-  List,
   Loader,
   Paper,
   Stack,
@@ -13,8 +12,10 @@ import {
 } from "@mantine/core";
 import { Download, RotateCw } from "lucide-react";
 
+import { findingsOf } from "../api/coreClient";
 import { GeneratedInputReview } from "../review/GeneratedInputReview";
 import { WarningsPanel } from "../review/WarningsPanel";
+import { FindingList } from "../status/FindingNote";
 import {
   type BundleStatus,
   type DownloadState,
@@ -91,7 +92,9 @@ function NoRecommendation({ status }: { readonly status: BundleStatus }) {
 
 /** Why the current draft has no input files yet, when that needs saying: it
  * is being recomputed, its request failed (with Retry), or its `/explain`
- * verdict refuses it. A failure stays here after its banner is dismissed. */
+ * verdict refuses it. A failure stays here after its banner is dismissed.
+ * Findings, of the verdict or of a refused preview, are listed with a button
+ * per remedy (#151). */
 function BundleNotice({ status }: { readonly status: BundleStatus }) {
   const workspace = useWorkspace();
   switch (status.kind) {
@@ -109,10 +112,15 @@ function BundleNotice({ status }: { readonly status: BundleStatus }) {
     case "explainFailed":
     case "generationFailed": {
       const operation = status.kind === "explainFailed" ? "explain" : "preview";
+      const findings = findingsOf(status.failure);
       return (
         <Alert role="status" color="red" title={FAILURE_TITLES[operation]}>
           <Stack gap="xs" align="flex-start">
-            <Text size="sm">{status.failure.message}</Text>
+            {findings.length === 0 ? (
+              <Text size="sm">{status.failure.message}</Text>
+            ) : (
+              <FindingList findings={findings} />
+            )}
             <Button
               size="xs"
               color="red"
@@ -131,11 +139,7 @@ function BundleNotice({ status }: { readonly status: BundleStatus }) {
     case "blocked":
       return (
         <Alert role="status" color="red" title="Cannot generate input files">
-          <List size="sm">
-            {status.reasons.map((reason) => (
-              <List.Item key={reason}>{reason}</List.Item>
-            ))}
-          </List>
+          <FindingList findings={status.findings} />
         </Alert>
       );
     default:

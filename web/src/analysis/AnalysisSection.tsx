@@ -2,6 +2,7 @@ import { Accordion, Stack, Text } from "@mantine/core";
 
 import { OverrideControl } from "../controls/OverrideControl";
 import { RecordAccordionItem } from "../review/RecordAccordionItem";
+import { FindingNotes } from "../status/FindingNote";
 import { analysisRecordNames } from "../workspace/recordGroups";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
 import { FactSummary } from "./FactSummary";
@@ -14,8 +15,9 @@ import { FactSummary } from "./FactSummary";
  * a value for it; the others (needs_soc, advice that only a notice reads,
  * #186) are read-only `FactSummary`s. Every other record lives in the
  * Advisors card, next to the setting it belongs to or read-only after
- * them. Rendered inside `AnalysisCard`, which owns the "Analysis" heading
- * -- this component starts directly with its content. */
+ * them. A finding that concerns a fact is shown under it (#151). Rendered
+ * inside `AnalysisCard`, which owns the "Analysis" heading -- this
+ * component starts directly with its content. */
 export function AnalysisSection() {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
@@ -83,6 +85,7 @@ export function AnalysisSection() {
                       : `Unavailable — ${record.reason ?? "no reason given"}`}
                   </Text>
                 )}
+                <FindingNotes field={fact.key} />
               </div>
             );
           })}

@@ -197,8 +197,8 @@ def test_a_bulk_layered_crystal_gets_no_slab_advice(
         relax=Resolved(RelaxOptions(fix_bottom_layers=1), Provenance(source="human")),
         magnetic=written_cell(structure),
     )
-    assert len(report.blocking) == 1
-    assert "requires a slab" in report.blocking[0]
+    (finding,) = report.blocking
+    assert finding.code == "relax.fix_bottom_layers_needs_slab"
 
 
 @pytest.mark.parametrize(

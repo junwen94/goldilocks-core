@@ -6,9 +6,11 @@
 // sent or saved (#150).
 import type {
   ArchiveDownload,
+  BlockingFinding,
   CoreFailure,
   ExplainResult,
 } from "../api/coreClient";
+import { findingsOf } from "../api/coreClient";
 import type {
   PipelineOutcome,
   WorkspaceOperation,
@@ -50,6 +52,21 @@ export function currentArchive(
 ): ArchiveDownload | null {
   const preview = currentPreview(snapshot);
   return preview?.status === "result" ? preview.value : null;
+}
+
+/** The findings of the current draft (#151): its `/explain` verdict's, or,
+ * while that verdict lets it through, those its refused preview `/run`
+ * returned. The Bundle card lists them, each control their `fields` name
+ * shows them, and their remedies patch the draft. */
+export function currentFindings(
+  snapshot: WorkspaceSnapshot,
+): readonly BlockingFinding[] {
+  const explain = currentExplain(snapshot);
+  if (explain?.status === "result" && explain.value.blocking.length > 0) {
+    return explain.value.blocking;
+  }
+  const preview = currentPreview(snapshot);
+  return preview?.status === "failure" ? findingsOf(preview.failure) : [];
 }
 
 /** Whether the current draft's `/explain` is due: a structure is open,
@@ -149,7 +166,10 @@ export type BundleStatus =
   | { readonly kind: "computing" }
   | { readonly kind: "recomputing" }
   | { readonly kind: "explainFailed"; readonly failure: CoreFailure }
-  | { readonly kind: "blocked"; readonly reasons: readonly string[] }
+  | {
+      readonly kind: "blocked";
+      readonly findings: readonly BlockingFinding[];
+    }
   | { readonly kind: "generating" }
   | { readonly kind: "generationFailed"; readonly failure: CoreFailure }
   | { readonly kind: "ready"; readonly archive: ArchiveDownload };
@@ -164,7 +184,7 @@ export function bundleStatus(snapshot: WorkspaceSnapshot): BundleStatus {
     return { kind: "explainFailed", failure: explain.failure };
   }
   if (explain.value.blocking.length > 0) {
-    return { kind: "blocked", reasons: explain.value.blocking };
+    return { kind: "blocked", findings: explain.value.blocking };
   }
   const preview = currentPreview(snapshot);
   if (preview === null) return { kind: "generating" };
@@ -200,12 +220,18 @@ function disabledReason(
     case "explainFailed":
       return `The recommendation for the current settings failed: ${status.failure.message}`;
     case "blocked":
-      return `Input files cannot be generated for the current settings: ${status.reasons.join(" ")}`;
+      return `Input files cannot be generated for the current settings: ${messages(status.findings)}`;
     case "generating":
       return "Generating the input files for the current settings.";
-    case "generationFailed":
-      return `Input generation failed for the current settings: ${status.failure.message}`;
+    case "generationFailed": {
+      const findings = findingsOf(status.failure);
+      return `Input generation failed for the current settings: ${findings.length === 0 ? status.failure.message : messages(findings)}`;
+    }
   }
+}
+
+function messages(findings: readonly BlockingFinding[]): string {
+  return findings.map((finding) => finding.message).join(" ");
 }
 
 /** Whether something waits for the user: capabilities or a structure that

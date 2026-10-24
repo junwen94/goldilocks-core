@@ -1013,7 +1013,7 @@ def test_an_unknown_key_is_refused_naming_the_labels_and_element_keys() -> None:
 
     assert isinstance(state, Blocked)
     assert state.root_cause() == (
-        "starting_magnetization has unknown key(s) ['Fe2']; it takes this "
+        "starting_magnetization has unknown key(s) Fe2; it takes this "
         "cell's site labels (Fe0, Fe1) or an element symbol for all of that "
         "element's sites (Fe)"
     )

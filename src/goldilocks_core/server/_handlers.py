@@ -80,10 +80,10 @@ def magnetic_orderings(document: MagneticOrderingsRequestDocument) -> dict[str, 
 
 def explain(document: ComputeRequestDocument) -> dict[str, Any]:
     """Every decision plus the verdict ``run`` reaches before generating
-    (#165): ``blocking`` holds the distinct reasons the task's check
-    refuses generation for, in first-seen order, and is empty when ``run``
-    would go on to generate. ``layout`` names each record's tier and step
-    (#187, ``service.RecordTiers``)."""
+    (#165): ``blocking`` holds the document of each finding the task's
+    check refuses generation for (#151), one per root cause in first-seen
+    order, and is empty when ``run`` would go on to generate. ``layout``
+    names each record's tier and step (#187, ``service.RecordTiers``)."""
     structure = normalize_structure(_structure_source(document)).structure
     hpc = resolve_hpc_profile(document.hpc, field=_HPC_FIELD_NAME)
     overrides = build_overrides(document.overrides, task=document.task)
@@ -119,7 +119,7 @@ def explain(document: ComputeRequestDocument) -> dict[str, Any]:
     return {
         "records": records_document(tiers.records()),
         "warnings": advice.warnings(),
-        "blocking": list(dict.fromkeys(report.blocking)),
+        "blocking": [finding.to_document() for finding in report.blocking],
         "layout": tiers.layout(),
     }
 

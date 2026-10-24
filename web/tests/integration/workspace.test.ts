@@ -661,7 +661,14 @@ describe("Workspace", () => {
     // preview /run of that draft could only fail.
     const blocked: ExplainResult = {
       ...explainResult,
-      blocking: ["npool=7 does not divide the 8 MPI tasks."],
+      blocking: [
+        {
+          code: "parallelisation.npool_does_not_divide_ntasks",
+          fields: ["npool", "ntasks"],
+          message: "npool=7 does not divide ntasks=8.",
+          remedies: [{ npool: null }],
+        },
+      ],
     };
     const core = new CoreStub();
     core.explainResults = [Promise.resolve(blocked)];

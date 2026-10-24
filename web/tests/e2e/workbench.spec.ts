@@ -43,6 +43,14 @@ const PLATINUM_FCC_CIF = fileURLToPath(
     import.meta.url,
   ),
 );
+/** A finding of Core's `/explain` verdict and of a refused `/run` (#151). */
+interface BlockingFindingDocument {
+  readonly code: string;
+  readonly fields: readonly string[];
+  readonly message: string;
+  readonly remedies: readonly Readonly<Record<string, unknown>>[];
+}
+
 /** One-atom fcc Ni, the cell of MC3D mc3d-4988. */
 const NICKEL_FCC_POSCAR = `Nickel fcc primitive
 3.524
@@ -50,6 +58,18 @@ const NICKEL_FCC_POSCAR = `Nickel fcc primitive
 0.5 0 0.5
 0.5 0.5 0
 Ni
+1
+Direct
+0 0 0
+`;
+/** One-atom fcc Al: 3 valence electrons, an odd count that fixed occupations
+ * without spin polarization cannot fill. */
+const ALUMINIUM_FCC_POSCAR = `Aluminium fcc primitive
+4.05
+0 0.5 0.5
+0.5 0 0.5
+0.5 0.5 0
+Al
 1
 Direct
 0 0 0
@@ -655,11 +675,16 @@ test("sends no /run for a draft the /explain verdict refuses", async ({
   );
   await page.getByLabel("spin polarized").selectOption("true");
   const verdict = (await (await refused).json()) as {
-    readonly blocking: readonly string[];
+    readonly blocking: readonly BlockingFindingDocument[];
   };
   expect(verdict.blocking).toEqual([
-    expect.stringContaining("tot_magnetization"),
+    expect.objectContaining({
+      code: "occupations.fixed_needs_tot_magnetization",
+      fields: ["occupations", "tot_magnetization"],
+      remedies: [{ occupations: "smearing" }],
+    }),
   ]);
+  const message = verdict.blocking[0]?.message ?? "";
   const runsBeforeVerdict = runs;
   await page.waitForTimeout(2_000);
 
@@ -667,13 +692,145 @@ test("sends no /run for a draft the /explain verdict refuses", async ({
   const download = page.getByRole("button", { name: "Download (.zip)" });
   await expect(download).toBeDisabled();
   await expect(download).toHaveAccessibleDescription(
-    `Input files cannot be generated for the current settings: ${verdict.blocking.join(" ")}`,
+    `Input files cannot be generated for the current settings: ${message}`,
   );
+  const notice = page.getByRole("status", {
+    name: "Cannot generate input files",
+  });
+  await expect(notice).toContainText(message);
   await expect(
-    page.getByRole("status", { name: "Cannot generate input files" }),
-  ).toContainText(verdict.blocking[0] ?? "");
+    page.getByRole("note", { name: "Blocks input generation: occupations" }),
+  ).toContainText(message);
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expectNoAxeViolations(page);
+
+  // #151: the finding's remedy is a button; it patches the draft, and Core
+  // accepts the result, so the preview /run follows.
+  const overrides = await clickForNextExplain(
+    page,
+    notice.getByRole("button", { name: "Apply occupations = smearing" }),
+  );
+
+  expect(overrides).toMatchObject({
+    occupations: "smearing",
+    spin_polarized: true,
+  });
+  await waitForBundleReady(page);
+  await expect(notice).toHaveCount(0);
+});
+
+test("offers a refused /run's remedies and sends the chosen one with the next /explain", async ({
+  page,
+}) => {
+  // #151: the 422 banner showed the gate's prose and named neither the
+  // setting nor the override that fixes it.
+  const finding: BlockingFindingDocument = {
+    code: "occupations.fixed_needs_tot_magnetization",
+    fields: ["occupations", "tot_magnetization"],
+    message:
+      "occupations=fixed on a collinear spin-polarized run needs an integer tot_magnetization of the electron count's parity, and none was set or derived. Set occupations=smearing, or set tot_magnetization.",
+    remedies: [{ occupations: "smearing" }],
+  };
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.route(
+    "**/run",
+    async (route) => {
+      await route.fulfill({
+        status: 422,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            kind: "advice_incomplete",
+            message: `cannot generate a runnable input: ${finding.message} Remedy overrides: {"occupations": "smearing"}.`,
+            details: { findings: [finding] },
+          },
+        }),
+      });
+    },
+    { times: 1 },
+  );
+  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
+
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText(finding.message, { timeout: 20_000 });
+  await expect(alert).not.toContainText("Remedy overrides");
+  const remedy = alert.getByRole("button", {
+    name: "Apply occupations = smearing",
+  });
+  await expect(remedy).toBeVisible();
+  await expandAdvisorGroup(page, "Occupations");
+  await expect(
+    page.getByRole("note", { name: "Blocks input generation: occupations" }),
+  ).toContainText(finding.message);
+  await expectNoAxeViolations(page);
+
+  const overrides = await clickForNextExplain(page, remedy);
+
+  expect(overrides).toEqual({ occupations: "smearing" });
+  await waitForBundleReady(page);
+  await expect(alert).toHaveCount(0);
+});
+
+test("wraps a finding's remedy buttons within a control's note at the column floor", async ({
+  page,
+}) => {
+  // #151: remedy labels never wrapped. At 1440 px wide every narrow column
+  // sits at its 20rem floor, where this finding's widest label ran past the
+  // note under the occupations control, which cut it and the message above it
+  // off mid-word, with nothing to scroll.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "POSCAR",
+    mimeType: "text/plain",
+    buffer: Buffer.from(ALUMINIUM_FCC_POSCAR),
+  });
+  await waitForBundleReady(page);
+  await expandAdvisorGroup(page, "Occupations");
+  const refused = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/explain" &&
+      requestOverrides(response.request()).occupations === "fixed",
+  );
+  await page
+    .getByRole("combobox", { name: "occupations", exact: true })
+    .selectOption("fixed");
+  const verdict = (await (await refused).json()) as {
+    readonly blocking: readonly BlockingFindingDocument[];
+  };
+  expect(verdict.blocking.map((finding) => finding.code)).toEqual([
+    "occupations.fixed_needs_even_electron_count",
+  ]);
+  const note = page.getByRole("note", {
+    name: "Blocks input generation: occupations",
+  });
+  await expect(
+    note.getByRole("button", {
+      name: "Apply spin_polarized = true, occupations = smearing",
+    }),
+  ).toBeVisible();
+
+  const clipped = await page.evaluate<readonly string[]>(`(() => {
+    const notes = [...document.querySelectorAll('.card-advisors [role="note"]')];
+    return notes
+      .flatMap((note) => [note, ...note.querySelectorAll("button, .mantine-Button-label")])
+      .filter(
+        (element) =>
+          element.scrollWidth > element.clientWidth ||
+          element.scrollHeight > element.clientHeight,
+      )
+      .map((element) => element.textContent);
+  })()`);
+  expect(clipped).toEqual([]);
+  // Wrapping keeps each remedy button, one line or two, at least as tall as
+  // the theme's 44 px minimum for a target.
+  const remedies = note.getByRole("button");
+  await expect(remedies).toHaveCount(2);
+  for (const remedy of await remedies.all()) {
+    expect((await remedy.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  }
 });
 
 test("keeps a failed listing's error visible and lists again only on Retry", async ({

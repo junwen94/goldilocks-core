@@ -46,10 +46,17 @@ A `run` (or `explain`) request follows this path:
 3. `service.check(advice, *, purpose="scf", relax=None)` calls
    `checks.check_all(...)`, the one place that refuses a request whose
    decisions are incomplete or inconsistent. It returns a `CheckReport`
-   whose `.ok`/`.blocking` decide whether `generate()` may proceed.
+   whose `.ok`/`.blocking` decide whether `generate()` may proceed. Each
+   entry of `.blocking` is a `checks.Finding`, one per root cause: a code
+   from `checks.FINDING_CATALOGUE`, the settings it concerns (`fields`), a
+   user-facing `message`, and `remedies`, override patches that each
+   resolve it (`None` clears an override). A decision that could not be
+   made reaches it as `advice.blocked`, with its root cause and no remedy.
 4. `service.generate(advice, report, *, ctx, purpose, relax)` raises
    `AdviceIncomplete` (an `ExpectedFailure`, see `failures.py`) if
-   `report.ok` is false; otherwise it renders one or more `Step`s by calling
+   `report.ok` is false, whose message lists each finding with its remedies
+   and whose HTTP error envelope carries the findings in
+   `error.details.findings`; otherwise it renders one or more `Step`s by calling
    `generation.quantum_espresso.scf.write_qe_scf` or
    `generation.quantum_espresso.relax.write_qe_relax` directly. There is no
    dispatch table.
@@ -81,8 +88,9 @@ A `run` (or `explain`) request follows this path:
 
 `explain` (CLI, HTTP `POST /explain` and the MCP `explain` tool) is
 `advise()` -> `check()` (`check_dos()`/`check_relax()` for those tasks): every
-decision plus `blocking`, the reasons `run` would refuse to generate, without
-rendering anything. Its `layout`, which `run`'s JSON summary carries too, names
+decision plus `blocking`, the findings `run` would refuse to generate an input
+for (as finding documents; the CLI prints each with its remedies' `--set`
+flags), without rendering anything. Its `layout`, which `run`'s JSON summary carries too, names
 each record's tier -- `analysis` (the structure alone) or `system` (shared by
 every step) -- or step. Every advice type's `tiers()` (`service.RecordTiers`)
 gives both its flat `records()` and that `layout`, so the two list the same
@@ -428,7 +436,10 @@ decide what is shown, sent or saved. Workbench sends the current draft's
 `/explain` automatically. Once its recommendation has arrived with an empty
 `blocking` verdict, Workbench fetches that draft's archive from `/run` as the
 generated-inputs preview; a draft whose verdict blocks gets no `/run`, and the
-Bundle card lists the reasons. A failure is the outcome of its draft: nothing
+Bundle card lists the findings. The findings of the current draft, from its
+`/explain` verdict or its refused `/run`, are also shown under each control
+their `fields` name, whose Advisors group then reads blocked, and every remedy
+is a button that applies its override patch to the draft. A failure is the outcome of its draft: nothing
 is sent again until the draft or the structure changes or the user presses
 Retry, which every failure offers. Dismiss only hides the banner; the Bundle
 card still shows the failure. Download saves the previewed archive of the

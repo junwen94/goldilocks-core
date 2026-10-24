@@ -12,6 +12,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { App } from "../../src/App";
 import type {
   ArchiveDownload,
+  BlockingFinding,
   Capabilities,
   ComputeRequest,
   CoreClient,
@@ -859,15 +860,13 @@ describe("Goldilocks Workbench", () => {
   });
 
   it("sends no /run for an /explain verdict that blocks, and says why Download is disabled", async () => {
-    // #165: /explain returns the reasons /run would refuse for. A refused
+    // #165: /explain returns the findings /run would refuse with. A refused
     // draft still got the automatic /run, and Download stayed enabled until
     // its 422 arrived.
-    const reason =
-      "occupations='fixed' with a spin-polarized system requires an explicit integer tot_magnetization, but none was set; set tot_magnetization, or use occupations='smearing'.";
-    const core = new CoreStub(Promise.resolve(capabilities));
+    const core = new CoreStub(Promise.resolve(occupationsCapabilities()));
     core.inspectionResults = [Promise.resolve(inspection)];
     core.explainResults = [
-      Promise.resolve({ ...explainResult, blocking: [reason] }),
+      Promise.resolve({ ...explainResult, blocking: [FIXED_WITHOUT_MOMENT] }),
     ];
     const { container } = renderApp(core);
     await openStructure(userEvent.setup(), container);
@@ -879,15 +878,132 @@ describe("Goldilocks Workbench", () => {
     await pause(1000);
 
     expect(core.archiveCalls).toHaveLength(0);
+    const notice = screen.getByRole("status", {
+      name: "Cannot generate input files",
+    });
+    expect(notice).toHaveTextContent(FIXED_WITHOUT_MOMENT.message);
     expect(
-      screen.getByRole("status", { name: "Cannot generate input files" }),
-    ).toHaveTextContent(reason);
+      within(notice).getByRole("button", {
+        name: "Apply occupations = smearing",
+      }),
+    ).toBeEnabled();
     expect(download).toBeDisabled();
     expect(download).toHaveAccessibleDescription(
-      `Input files cannot be generated for the current settings: ${reason}`,
+      `Input files cannot be generated for the current settings: ${FIXED_WITHOUT_MOMENT.message}`,
     );
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText(/will appear here/)).not.toBeInTheDocument();
+    // The verdict alone, with no /run sent, turns the badge of the group its
+    // finding concerns red.
+    expect(groupBadgeStyle("Occupations")).toContain("red");
+    expect(groupBadgeStyle("K sampling")).toContain("green");
+  });
+
+  it("shows a refused /run's finding in the banner and under its control, and sends its remedy with the next /explain", async () => {
+    // #151: the 422 banner showed the gate's prose and named no setting or
+    // override; its findings now carry the settings they concern and the
+    // override patches that resolve them.
+    const user = userEvent.setup();
+    const core = new CoreStub(Promise.resolve(occupationsCapabilities()));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.archiveResults = [
+      failing(
+        new CoreFailure(
+          "advice_incomplete",
+          `cannot generate a runnable input: ${FIXED_WITHOUT_MOMENT.message} Remedy overrides: {"occupations": "smearing"}.`,
+          { findings: [FIXED_WITHOUT_MOMENT] },
+          422,
+        ),
+      ),
+    ];
+    const { container } = renderApp(core);
+    await openStructure(user, container);
+
+    const alert = await screen.findByRole("alert", {}, { timeout: 5000 });
+    expect(alert).toHaveTextContent("Recommendation incomplete");
+    expect(alert).toHaveTextContent(FIXED_WITHOUT_MOMENT.message);
+    expect(alert).not.toHaveTextContent("Remedy overrides");
+    await user.click(within(advisorsPanel()).getByText("Occupations"));
+    const note = within(advisorsPanel()).getByRole("note", {
+      name: "Blocks input generation: occupations",
+    });
+    expect(note).toHaveTextContent(FIXED_WITHOUT_MOMENT.message);
+    // #165: the finding turns the badge of the group it concerns red.
+    expect(groupBadgeStyle("Occupations")).toContain("red");
+    expect(groupBadgeStyle("K sampling")).toContain("green");
+    expect(
+      within(note).getByRole("button", {
+        name: "Apply occupations = smearing",
+      }),
+    ).toBeEnabled();
+    const explained = core.explainCalls.length;
+
+    await user.click(
+      within(alert).getByRole("button", {
+        name: "Apply occupations = smearing",
+      }),
+    );
+
+    await waitFor(
+      () => {
+        expect(core.explainCalls).toHaveLength(explained + 1);
+      },
+      { timeout: 2000 },
+    );
+    expect(core.explainCalls.at(-1)?.overrides).toEqual({
+      occupations: "smearing",
+    });
+  });
+
+  it("clears an override a remedy sets to automatic", async () => {
+    const user = userEvent.setup();
+    const pinnedWidth: BlockingFinding = {
+      code: "occupations.width_rejected",
+      fields: ["degauss"],
+      message: "degauss=0.02 is not usable here. Unset degauss.",
+      remedies: [{ degauss: null }],
+    };
+    const core = new CoreStub(Promise.resolve(occupationsCapabilities()));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [
+      Promise.resolve(explainResult),
+      Promise.resolve({ ...explainResult, blocking: [pinnedWidth] }),
+    ];
+    const { container } = renderApp(core);
+    await openStructure(user, container);
+    await waitFor(
+      () => {
+        expect(core.explainCalls).toHaveLength(1);
+      },
+      { timeout: 2000 },
+    );
+    await user.click(within(advisorsPanel()).getByText("Occupations"));
+    fireEvent.change(screen.getByLabelText("degauss · Ry"), {
+      target: { value: "0.02" },
+    });
+    const notice = await screen.findByRole(
+      "status",
+      { name: "Cannot generate input files" },
+      { timeout: 5000 },
+    );
+    expect(
+      within(advisorsPanel()).getByRole("note", {
+        name: "Blocks input generation: degauss",
+      }),
+    ).toHaveTextContent(pinnedWidth.message);
+
+    await user.click(
+      within(notice).getByRole("button", { name: "Apply degauss = automatic" }),
+    );
+
+    await waitFor(
+      () => {
+        expect(core.explainCalls).toHaveLength(3);
+      },
+      { timeout: 2000 },
+    );
+    expect(core.explainCalls[1]?.overrides).toEqual({ degauss: 0.02 });
+    expect(core.explainCalls[2]?.overrides).toEqual({});
   });
 
   it("submits smearing treatment and width as overrides in the occupations group", async () => {
@@ -1697,6 +1813,39 @@ function setting(
   };
 }
 
+/** The finding of an explicit occupations=fixed on a collinear
+ * spin-polarized run without a moment, as Core returns it. */
+const FIXED_WITHOUT_MOMENT: BlockingFinding = {
+  code: "occupations.fixed_needs_tot_magnetization",
+  fields: ["occupations", "tot_magnetization"],
+  message:
+    "occupations=fixed on a collinear spin-polarized run needs an integer tot_magnetization of the electron count's parity, and none was set or derived. Set occupations=smearing, or set tot_magnetization.",
+  remedies: [{ occupations: "smearing" }],
+};
+
+/** `capabilities` plus the occupations scheme, which the occupations group
+ * holds next to the smearing settings. */
+function occupationsCapabilities(): Capabilities {
+  return {
+    ...capabilities,
+    settings: [
+      ...capabilities.settings,
+      setting({
+        key: "occupations",
+        group: "occupations",
+        type: "string",
+        enum: ["fixed", "smearing", "tetrahedra_opt"],
+        steps: ["scf", "relax"],
+        programs: ["pw.x"],
+        scope: "per_step",
+        structure_specific: true,
+        resolved_in: { record: "occupations", path: ["occupations"] },
+        description: "Occupation scheme.",
+      }),
+    ],
+  };
+}
+
 /** `capabilities` plus the magnetic settings the magnetic record holds
  * under their own names or none. */
 function magneticCapabilities(): Capabilities {
@@ -1981,6 +2130,15 @@ async function pause(milliseconds: number): Promise<void> {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, milliseconds));
   });
+}
+
+/** The inline style of the status badge on an Advisors group's header, which
+ * carries the badge's colour. */
+function groupBadgeStyle(group: string): string {
+  const header = within(advisorsPanel()).getByRole("button", { name: group });
+  return (
+    header.querySelector(".mantine-Badge-root")?.getAttribute("style") ?? ""
+  );
 }
 
 /** A settings group's humanized name (e.g. "Magnetic") can collide with

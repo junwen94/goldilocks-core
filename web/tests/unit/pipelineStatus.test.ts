@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import type { BlockingFinding } from "../../src/api/coreClient";
 import { CoreFailure } from "../../src/api/coreClient";
 import {
   bannerFailure,
   bundleStatus,
   currentArchive,
+  currentFindings,
   downloadState,
   explainDue,
   needsAttention,
@@ -35,10 +37,27 @@ const otherInput: PipelineKey = {
   revision: REVISION,
 };
 const archive = buildArchive("Si.cif-scf_single_point.zip");
-const reason =
-  "occupations='fixed' with a spin-polarized system requires an explicit integer tot_magnetization, but none was set; set tot_magnetization, or use occupations='smearing'.";
-const npoolReason =
-  "npool=7 does not divide ntasks=64; QE refuses this MPI layout.";
+const reason: BlockingFinding = {
+  code: "occupations.fixed_needs_tot_magnetization",
+  fields: ["occupations", "tot_magnetization"],
+  message:
+    "occupations=fixed on a collinear spin-polarized run needs an integer tot_magnetization of the electron count's parity, and none was set or derived. Set occupations=smearing, or set tot_magnetization.",
+  remedies: [{ occupations: "smearing" }],
+};
+const npoolReason: BlockingFinding = {
+  code: "parallelisation.npool_does_not_divide_ntasks",
+  fields: ["npool", "ntasks"],
+  message:
+    "npool=7 does not divide ntasks=64, and pw.x refuses that layout. Unset npool for the default, or set npool to a divisor of ntasks.",
+  remedies: [{ npool: null }],
+};
+/** A /run refused with `npoolReason`, and an entry that is no finding. */
+const refusedWithFindings = new CoreFailure(
+  "advice_incomplete",
+  "cannot generate a runnable input: npool=7 does not divide ntasks=64.",
+  { findings: [npoolReason, { message: "no code" }] },
+  422,
+);
 const refusedRun = new CoreFailure(
   "generation_error",
   "Rutile TiO2 cannot be generated.",
@@ -72,7 +91,10 @@ function snapshot(fields: Partial<WorkspaceSnapshot> = {}): WorkspaceSnapshot {
   };
 }
 
-function explained(key: PipelineKey, blocking: readonly string[] = []) {
+function explained(
+  key: PipelineKey,
+  blocking: readonly BlockingFinding[] = [],
+) {
   const value = { ...explainResult, blocking };
   return { key, status: "result", value } as const;
 }
@@ -187,13 +209,13 @@ describe("bundleStatus", () => {
     expect(bundleStatus(snapshot(fields)).kind).toBe(kind);
   });
 
-  it("carries the failure and the verdict's reasons", () => {
+  it("carries the failure and the verdict's findings", () => {
     expect(bundleStatus(snapshot({ explain: explainFailed(current) }))).toEqual(
       { kind: "explainFailed", failure: rejectedExplain },
     );
     expect(
       bundleStatus(snapshot({ explain: explained(current, [reason]) })),
-    ).toEqual({ kind: "blocked", reasons: [reason] });
+    ).toEqual({ kind: "blocked", findings: [reason] });
     expect(bundleStatus(snapshot(generated(previewFailed(current))))).toEqual({
       kind: "generationFailed",
       failure: refusedRun,
@@ -231,7 +253,7 @@ describe("downloadState", () => {
     {
       state: "the verdict blocks",
       fields: { explain: explained(current, [reason, npoolReason]) },
-      reason: `Input files cannot be generated for the current settings: ${reason} ${npoolReason}`,
+      reason: `Input files cannot be generated for the current settings: ${reason.message} ${npoolReason.message}`,
     },
     {
       state: "the preview is on its way",
@@ -252,6 +274,20 @@ describe("downloadState", () => {
     expect(downloadState(snapshot(fields))).toEqual({
       enabled: false,
       reason,
+    });
+  });
+
+  it("gives the messages of a refused preview's findings, not its remedies", () => {
+    const refused = generated({
+      key: current,
+      status: "failure",
+      failure: refusedWithFindings,
+      dismissed: false,
+    });
+
+    expect(downloadState(snapshot(refused))).toEqual({
+      enabled: false,
+      reason: `Input generation failed for the current settings: ${npoolReason.message}`,
     });
   });
 
@@ -467,5 +503,55 @@ describe("explainDue and previewDue", () => {
     readonly due: boolean;
   }[])("sends the preview /run ($due) when $state", ({ fields, due }) => {
     expect(previewDue(snapshot(fields))).toBe(due);
+  });
+});
+
+describe("currentFindings", () => {
+  it("is the current verdict's findings, whatever the preview did", () => {
+    expect(
+      currentFindings(
+        snapshot({ explain: explained(current, [reason, npoolReason]) }),
+      ),
+    ).toEqual([reason, npoolReason]);
+  });
+
+  it("is the findings a refused preview returned, malformed entries left out", () => {
+    const preview = {
+      key: current,
+      status: "failure",
+      failure: refusedWithFindings,
+      dismissed: true,
+    } as const;
+
+    expect(currentFindings(snapshot(generated(preview)))).toEqual([
+      npoolReason,
+    ]);
+  });
+
+  it.each([
+    { state: "nothing has settled", fields: {} },
+    {
+      state: "the verdict blocks an older revision",
+      fields: { explain: explained(olderRevision, [reason]) },
+    },
+    {
+      state: "a preview of an older revision was refused",
+      fields: generated({
+        key: olderRevision,
+        status: "failure",
+        failure: refusedWithFindings,
+        dismissed: false,
+      }),
+    },
+    {
+      state: "the preview failed without findings",
+      fields: generated(previewFailed(current)),
+    },
+    { state: "the archive arrived", fields: generated(previewed(current)) },
+  ] satisfies readonly {
+    readonly state: string;
+    readonly fields: Partial<WorkspaceSnapshot>;
+  }[])("is empty when $state", ({ fields }) => {
+    expect(currentFindings(snapshot(fields))).toEqual([]);
   });
 });

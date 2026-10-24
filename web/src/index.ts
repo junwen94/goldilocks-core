@@ -45,16 +45,23 @@ export type {
 } from "./workspace/workspace";
 // The snapshot keeps the latest /explain and preview outcome with the
 // structure and revision it belongs to; these read the current draft's.
+// `currentFindings` are the current draft's blocking findings, from its
+// /explain verdict or its refused preview /run, each with its remedies.
 export {
   bannerFailure,
   currentArchive,
   currentExplain,
+  currentFindings,
   currentPreview,
 } from "./workspace/pipelineStatus";
 export type { WorkspaceFailure } from "./workspace/pipelineStatus";
 export { useWorkspace, useWorkspaceSnapshot } from "./workspace/useWorkspace";
-export { HttpCoreClient } from "./api/coreClient";
-export type { CoreClient, StructureInput } from "./api/coreClient";
+export { HttpCoreClient, findingsOf } from "./api/coreClient";
+export type {
+  BlockingFinding,
+  CoreClient,
+  StructureInput,
+} from "./api/coreClient";
 // Code/Task/HPC-profile pickers, self-contained (reads useWorkspace/
 // useWorkspaceSnapshot itself, no props) -- re-exported so an embedder can
 // build a custom Structure Setup surface (e.g. swapping out

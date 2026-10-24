@@ -19,6 +19,7 @@ from goldilocks_core.bundle import ArchiveOutput, DirectoryOutput, bundle_files,
 from goldilocks_core.cli._common import (
     add_fetch_missing_argument,
     add_run_arguments,
+    finding_lines,
     records_to_json,
     resolve_request,
 )
@@ -43,12 +44,11 @@ from goldilocks_core.service import (
 from goldilocks_core.steps import default_shared_context
 
 
-def _print_blocked_and_exit(blocking: tuple[str, ...]) -> None:
-    # Many fields can share one root cause (report.blocking has one
-    # entry per blocked field, not per distinct cause); dedupe for a
-    # human, not for a machine reading --json elsewhere.
-    for reason in dict.fromkeys(blocking):
-        print(f"blocked: {reason}", file=sys.stderr)
+def _print_blocked_and_exit(lines: list[str]) -> None:
+    """``lines`` (``finding_lines``: each finding and its remedies' --set
+    flags) on stderr, then exit 2."""
+    for line in lines:
+        print(line, file=sys.stderr)
     raise SystemExit(2)
 
 
@@ -76,7 +76,7 @@ def _run_dos(request, args, ctx):
     )
     dos_report = check_dos(dos_advice)
     if not dos_report.ok:
-        _print_blocked_and_exit(dos_report.blocking)
+        _print_blocked_and_exit(finding_lines(dos_report.blocking))
     steps = generate_dos(dos_advice, dos_report, ctx=ctx)
     script = render_submission_dos(dos_advice, request.hpc, args.code, steps)
     bundle_input = to_bundle_input_dos(
@@ -103,7 +103,7 @@ def _run_relax(request, args, ctx):
     )
     relax_report = check_relax(relax_advice)
     if not relax_report.ok:
-        _print_blocked_and_exit(relax_report.blocking)
+        _print_blocked_and_exit(finding_lines(relax_report.blocking))
     steps = generate_relax(relax_advice, relax_report, ctx=ctx)
     script = render_submission_relax(relax_advice, request.hpc, args.code, steps)
     bundle_input = to_bundle_input_relax(
@@ -129,7 +129,7 @@ def _run_scf(request, args, ctx):
     )
     report = check(advice)
     if not report.ok:
-        _print_blocked_and_exit(report.blocking)
+        _print_blocked_and_exit(finding_lines(report.blocking))
     steps = generate(advice, report)
     script = render_submission(advice, request.hpc, args.code, steps)
     bundle_input = to_bundle_input(

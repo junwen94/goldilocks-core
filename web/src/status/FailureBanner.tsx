@@ -1,8 +1,12 @@
-import { Alert, Button, Group, Text } from "@mantine/core";
+import { Alert, Box, Button, Group, Text } from "@mantine/core";
 import { RotateCw } from "lucide-react";
 
-import type { CoreFailure } from "../api/coreClient";
+import { type CoreFailure, findingsOf } from "../api/coreClient";
+import { FindingList } from "./FindingNote";
 
+/** A failure with Retry and, but for a capabilities failure, Dismiss. A
+ * refused `/run` lists its findings, each with a button per remedy, in
+ * place of the message that joins them (#151). */
 export function FailureBanner({
   failure,
   dismissAvailable,
@@ -14,6 +18,7 @@ export function FailureBanner({
   readonly onRetry: () => void;
   readonly onDismiss: () => void;
 }) {
+  const findings = findingsOf(failure);
   return (
     <Alert
       className="failure-banner"
@@ -26,7 +31,13 @@ export function FailureBanner({
       role="alert"
     >
       <Group justify="space-between">
-        <Text flex={1}>{failure.message}</Text>
+        {findings.length === 0 ? (
+          <Text flex={1}>{failure.message}</Text>
+        ) : (
+          <Box flex={1}>
+            <FindingList findings={findings} />
+          </Box>
+        )}
         <Button
           color="red"
           variant="light"

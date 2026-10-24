@@ -261,13 +261,26 @@ export interface RecordLayout {
   readonly steps: readonly StepLayout[];
 }
 
+/** One reason `/run` refuses a draft (`checks.Finding` on the wire, #151):
+ * a stable `code`, the setting or fact keys it concerns (`fields`, as
+ * `/capabilities` names them), the `message` to show, and `remedies`, each a
+ * complete override patch that resolves it, where `null` clears that
+ * override. An `advice.blocked` finding names a decision that could not be
+ * made, its root cause the message; it has no fields and no remedy. */
+export interface BlockingFinding {
+  readonly code: string;
+  readonly fields: readonly string[];
+  readonly message: string;
+  readonly remedies: readonly Readonly<Record<string, unknown>>[];
+}
+
 export interface ExplainResult {
   readonly records: Readonly<Record<string, ResolvedField>>;
   readonly warnings: readonly RecordWarning[];
-  /** The distinct reasons `/run` would refuse to generate input files
-   * for (the task's `check()` verdict, in first-seen order); empty when
-   * those checks pass. */
-  readonly blocking: readonly string[];
+  /** The findings `/run` would refuse to generate input files for (the
+   * task's `check()` verdict, one per root cause in first-seen order);
+   * empty when those checks pass. */
+  readonly blocking: readonly BlockingFinding[];
   readonly layout: RecordLayout;
 }
 
@@ -327,7 +340,7 @@ export interface CoreClient {
   /** Advice-only preview: never generates files, and still succeeds when
    * `run` would refuse with `advice_incomplete` (the tri-state
    * "diagnosis is always available" promise) -- `blocking` then lists
-   * the reasons `run` would give. */
+   * the findings `run` would refuse with. */
   explain(request: ComputeRequest): Promise<ExplainResult>;
   /** Lists candidate magnetic orderings (FM plus any AFM candidates),
    * optionally mMACE-ranked by relaxed energy per atom. Aborting `signal`
@@ -532,11 +545,43 @@ async function decodeResponse(response: Response): Promise<unknown> {
   }
 }
 
-// The wire error envelope (server/documents.py's `ErrorResponseDocument`)
-// no longer carries `retryable` -- v1's error taxonomy did, v2's
-// `ExpectedFailure.public_error()` deliberately only returns
-// `{kind, message}` (`details` is additive, added ad hoc by validation/
-// readiness handlers).
+/** The findings a refused `/run` (`advice_incomplete`) carries in its error
+ * envelope's `details.findings` (#151): the same findings `/explain`
+ * returns as its verdict. An entry that is not a finding is left out, and
+ * any other failure has none. */
+export function findingsOf(failure: CoreFailure): readonly BlockingFinding[] {
+  const findings = failure.details.findings;
+  return Array.isArray(findings) ? findings.filter(isBlockingFinding) : [];
+}
+
+function isBlockingFinding(value: unknown): value is BlockingFinding {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "code" in value &&
+    typeof value.code === "string" &&
+    "message" in value &&
+    typeof value.message === "string" &&
+    "fields" in value &&
+    Array.isArray(value.fields) &&
+    value.fields.every((field) => typeof field === "string") &&
+    "remedies" in value &&
+    Array.isArray(value.remedies) &&
+    value.remedies.every(isOverridePatch)
+  );
+}
+
+function isOverridePatch(
+  value: unknown,
+): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+// The wire error envelope, `{"error": ...}` (server/http.py's
+// `expected_failure_handler`): `ExpectedFailure.public_error()`'s
+// `{kind, message}`, plus `details` where a failure has structured data
+// (`AdviceIncomplete.public_error()`'s findings, which `findingsOf` reads;
+// the validation and readiness handlers add their own).
 function isErrorEnvelope(value: unknown): value is {
   readonly error: {
     readonly kind: string;
