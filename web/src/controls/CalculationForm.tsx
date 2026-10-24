@@ -26,7 +26,7 @@ import { SourceLabel } from "../api/SourceLabel";
 import { isAdvisorWarning } from "../review/warnings";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
 import { OverrideControl } from "./OverrideControl";
-import { describeSource } from "./overrideFieldMeta";
+import { CONTROL_LABELS, describeSource } from "./overrideFieldMeta";
 import { OverrideSelect } from "./OverrideSelect";
 
 const STATUS_COLORS: Readonly<Record<ResolvedField["status"], string>> = {
@@ -299,7 +299,7 @@ function PseudoTableControl({
     !matching.some((table) => table.id === effectiveId);
   return (
     <OverrideSelect
-      label="Pseudopotential table"
+      label={CONTROL_LABELS.pseudo_table_id}
       description={
         noMatch ?? describeSource(description, pinnedId !== undefined, source)
       }
@@ -349,7 +349,7 @@ function FunctionalControl({
     effective === undefined || !options.includes(effective);
   return (
     <OverrideSelect
-      label="Functional"
+      label={CONTROL_LABELS.functional}
       description={describeSource(description, pinned, source)}
       disabled={disabled}
       pinned={pinned}
@@ -387,7 +387,7 @@ function FunctionalControl({
  * contains instead of a literal, ID-suffixed rendering of the group
  * name. */
 const GROUP_DISPLAY_NAMES: Readonly<Record<string, string>> = {
-  pseudo_table_id: "Pseudopotential table",
+  pseudo_table_id: CONTROL_LABELS.pseudo_table_id,
 };
 
 function humanizeGroup(group: string): string {
@@ -1018,12 +1018,12 @@ function KGridControl({
       : undefined;
   const effective = pinned ?? resolvedMesh;
   return (
-    <Fieldset legend="K-point grid">
+    <Fieldset legend={CONTROL_LABELS.k_grid}>
       <SimpleGrid cols={3} spacing="xs">
         {(["x", "y", "z"] as const).map((axis, index) => (
           <NumberInput
             key={axis}
-            aria-label={`K-point grid ${axis}`}
+            aria-label={`${CONTROL_LABELS.k_grid} ${axis}`}
             min={1}
             max={99}
             disabled={disabled}

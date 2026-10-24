@@ -395,6 +395,10 @@ ranking runs in a fresh process, one ranking at a time
 an absolute path once, when the app is created.
 
 Workbench keeps the editable draft and reviewed response in its browser store.
+Opening another structure keeps the draft's code, task, HPC profile and the
+overrides of settings that `/capabilities` does not mark `structure_specific`;
+it clears the structure-specific overrides and every fact override, and the
+Advisors card lists what it cleared until dismissed.
 Opening a structure or editing the draft starts a new revision, and each
 `/explain` and preview `/run` outcome, result or failure, is stored with the
 structure and revision it was sent for; only the current revision's outcomes

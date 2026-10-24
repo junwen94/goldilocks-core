@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import type { Source } from "../api/coreClient";
+import type { Setting, Source } from "../api/coreClient";
 import { SourceLabel } from "../api/SourceLabel";
 
 export interface OverrideFieldMeta {
@@ -12,9 +12,33 @@ export interface OverrideFieldMeta {
   readonly description: string;
 }
 
-export function fieldLabel(meta: OverrideFieldMeta): string {
+export function fieldLabel(
+  meta: Pick<OverrideFieldMeta, "key" | "unit">,
+): string {
   const humanized = meta.key.replace(/_/g, " ");
   return meta.unit ? `${humanized} · ${meta.unit}` : humanized;
+}
+
+/** The labels of the override controls that do not show their
+ * `fieldLabel`. */
+export const CONTROL_LABELS = {
+  functional: "Functional",
+  pseudo_table_id: "Pseudopotential table",
+  k_grid: "K-point grid",
+} as const;
+
+const CONTROL_LABEL_BY_KEY: ReadonlyMap<string, string> = new Map(
+  Object.entries(CONTROL_LABELS),
+);
+
+/** The label of the control that edits override `key`, a setting or a fact
+ * (which has no unit): `CONTROL_LABELS` or its `fieldLabel`. */
+export function overrideLabel(
+  key: string,
+  settings: readonly Setting[],
+): string {
+  const unit = settings.find((setting) => setting.key === key)?.unit ?? null;
+  return CONTROL_LABEL_BY_KEY.get(key) ?? fieldLabel({ key, unit });
 }
 
 /** `unknown`-safe stringification -- most override values are

@@ -61,6 +61,7 @@ function snapshot(fields: Partial<WorkspaceSnapshot> = {}): WorkspaceSnapshot {
     inspection,
     inspectFailure: null,
     draft,
+    clearedOverrides: [],
     revision: REVISION,
     reviewed: null,
     explain: null,

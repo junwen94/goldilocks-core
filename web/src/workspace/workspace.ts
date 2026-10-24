@@ -58,7 +58,9 @@ export interface MagneticOrderingsListing {
  * `.facts` (see `capabilities.py`'s own "add an advisor, its settings
  * automatically appear" design goal). A key's absence from `overrides`
  * means "let the heuristic/ml/llm chain decide" -- there is no separate
- * "automatic" sentinel value, matching `--set`'s own semantics. */
+ * "automatic" sentinel value, matching `--set`'s own semantics. Opening
+ * another structure keeps the draft except the overrides that describe the
+ * structure it replaces (`carryOverDraft`, #188). */
 export interface CalculationDraft {
   readonly code: string;
   readonly task: CalcTask;
@@ -106,6 +108,12 @@ export interface WorkspaceSnapshot {
    * Dismiss or Retry. */
   readonly inspectFailure: InspectFailure | null;
   readonly draft: CalculationDraft | null;
+  /** The override keys cleared from the draft when the open structure was
+   * opened, in draft order: structure-specific settings and facts, which
+   * described the structure it replaced (`carryOverDraft`, #188). Empty
+   * before the first structure opens and after reset; a structure that
+   * fails to open changes nothing. */
+  readonly clearedOverrides: readonly string[];
   /** Counts every opened structure and every draft change for the
    * workspace's lifetime and is never reset, so every `PipelineKey` is
    * new, even when an embedder opens the same `StructureInput` again. */
@@ -130,6 +138,9 @@ export interface WorkspaceSnapshot {
 
 export type WorkspaceAction =
   | { readonly type: "workspace.start" }
+  /** Inspects `input` and, once it parses, makes it the open structure,
+   * with the draft carried over (`carryOverDraft`) and the outcomes and
+   * listing of the structure it replaces dropped. */
   | { readonly type: "source.open"; readonly input: StructureInput }
   | {
       readonly type: "draft.patch";
@@ -191,6 +202,7 @@ const EMPTY_SNAPSHOT: WorkspaceSnapshot = {
   inspection: null,
   inspectFailure: null,
   draft: null,
+  clearedOverrides: [],
   revision: 0,
   reviewed: null,
   explain: null,
@@ -207,6 +219,31 @@ function defaultDraft(capabilities: Capabilities): CalculationDraft {
     hpc: null,
     overrides: {},
     fetchMissing: false,
+  };
+}
+
+/** The draft for a newly opened structure: `previous` with the code, task,
+ * HPC profile and `fetchMissing` kept, and only the overrides of settings
+ * that `capabilities` marks not `structure_specific` (#188). The other
+ * overrides are cleared and listed in `cleared`, in draft order: those of
+ * structure-specific settings, of facts (judgements about the structure by
+ * definition) and of any key that is not a setting. */
+function carryOverDraft(
+  previous: CalculationDraft,
+  capabilities: Capabilities,
+): { readonly draft: CalculationDraft; readonly cleared: readonly string[] } {
+  const kept = new Set(
+    capabilities.settings
+      .filter((setting) => !setting.structure_specific)
+      .map((setting) => setting.key),
+  );
+  const entries = Object.entries(previous.overrides);
+  return {
+    draft: {
+      ...previous,
+      overrides: Object.fromEntries(entries.filter(([key]) => kept.has(key))),
+    },
+    cleared: entries.map(([key]) => key).filter((key) => !kept.has(key)),
   };
 }
 
@@ -362,13 +399,18 @@ export function createWorkspace(
       const inspection = await core.inspectStructure(input);
       if (activeOperation !== owner) return;
       // Only now is the open structure replaced: an inspection that fails
-      // leaves it, its outcomes and the listing request in flight for it in
-      // place.
+      // leaves it, its draft, its outcomes and the listing request in flight
+      // for it in place. The draft is null only after reset.
       abortOrderingsRequest();
+      const { draft, cleared } = carryOverDraft(
+        store.getState().draft ?? defaultDraft(capabilities),
+        capabilities,
+      );
       completeOperation(owner, {
         structureInput: input,
         inspection,
-        draft: defaultDraft(capabilities),
+        draft,
+        clearedOverrides: cleared,
         revision: store.getState().revision + 1,
         reviewed: null,
         explain: null,

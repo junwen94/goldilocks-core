@@ -503,6 +503,107 @@ describe("Goldilocks Workbench", () => {
     expect(core.inspectedInputs).toHaveLength(1);
   });
 
+  it("keeps the task and structure-independent settings after Replace file, and lists the overrides it reset", async () => {
+    // #188: Replace file reset the Task, the account and the functional to
+    // their defaults without a word. Only structure-specific overrides and
+    // facts are reset now, and the Advisors card names them.
+    const user = userEvent.setup();
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [
+      Promise.resolve(inspection),
+      Promise.resolve(inspection),
+      Promise.resolve(inspection),
+    ];
+    const { container } = renderApp(core);
+    await openStructure(user, container);
+    await user.selectOptions(screen.getByLabelText("Task"), "relax");
+    const advisors = advisorsPanel();
+    for (const group of ["Job", "Functional", "Magnetic", "Hubbard"]) {
+      await user.click(within(advisors).getByRole("button", { name: group }));
+    }
+    await user.type(within(advisors).getByLabelText("account"), "acct-001");
+    await user.selectOptions(
+      within(advisors).getByRole("combobox", { name: "Functional" }),
+      "PBE",
+    );
+    await user.selectOptions(
+      within(advisors).getByLabelText("spin orbit coupling"),
+      "true",
+    );
+    await user.click(within(advisors).getByLabelText("u by element · eV"));
+    await user.paste('{"Si": 2}');
+    await user.selectOptions(
+      within(
+        screen.getByRole("region", { name: "Goldilocks analysis" }),
+      ).getByLabelText("is metal"),
+      "non_metal",
+    );
+
+    await user.upload(
+      structureInputElement(container),
+      structureFile("Al.cif", "data_Al"),
+    );
+
+    await waitFor(
+      () => {
+        expect(core.explainCalls.at(-1)?.structure_content).toBe("data_Al");
+      },
+      { timeout: 2000 },
+    );
+    expect(core.explainCalls.at(-1)).toMatchObject({ task: "relax" });
+    expect(core.explainCalls.at(-1)?.overrides).toEqual({
+      account: "acct-001",
+      functional: "PBE",
+    });
+    expect(screen.getByLabelText("Task")).toHaveDisplayValue(
+      "Ionic relaxation",
+    );
+    expect(within(advisors).getByLabelText("account")).toHaveValue("acct-001");
+    expect(
+      within(advisors).getByRole("combobox", { name: "Functional" }),
+    ).toHaveValue("PBE");
+    expect(
+      within(advisors).queryByRole("button", {
+        name: "Reset spin orbit coupling to automatic",
+      }),
+    ).not.toBeInTheDocument();
+    expect(within(advisors).getByLabelText("u by element · eV")).toHaveValue(
+      "",
+    );
+    // Each named by the label of its control.
+    const notice = within(advisors).getByRole("status", {
+      name: "Structure-specific overrides reset",
+    });
+    expect(
+      within(notice)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual(["spin orbit coupling", "u by element · eV", "is metal"]);
+
+    await user.click(
+      within(notice).getByRole("button", { name: "Dismiss notice" }),
+    );
+    expect(notice).not.toBeInTheDocument();
+
+    // The next structure's own reset brings the notice back.
+    await user.selectOptions(
+      within(advisors).getByLabelText("spin orbit coupling"),
+      "true",
+    );
+    await user.upload(
+      structureInputElement(container),
+      structureFile("Pt.cif", "data_Pt"),
+    );
+    const next = await within(advisors).findByRole("status", {
+      name: "Structure-specific overrides reset",
+    });
+    expect(
+      within(next)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual(["spin orbit coupling"]);
+  });
+
   it("recomputes edits before generating input files, then downloads the exact archive", async () => {
     const user = userEvent.setup();
     const archive = buildArchive();

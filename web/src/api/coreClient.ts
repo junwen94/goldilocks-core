@@ -75,7 +75,11 @@ export interface RecordWarning extends AdvisorWarning {
 /** `tasks` are the tasks a setting applies to; a request for any other
  * task is refused. `steps`/`programs` are the steps (the names
  * `steps.<step>.<key>` takes) and programs a `per_step` setting applies to,
- * `null` for a `system` or `task` setting, which is set once per task. */
+ * `null` for a `system` or `task` setting, which is set once per task.
+ * `structure_specific` says whether a value is a judgement about the
+ * structure it was set for (its elements, magnetism, geometry, size or
+ * k-mesh) rather than a method, accuracy or job choice; opening another
+ * structure clears it from the draft (#188). */
 export interface Setting {
   readonly key: string;
   readonly group: string;
@@ -89,6 +93,7 @@ export interface Setting {
   readonly steps: readonly string[] | null;
   readonly programs: readonly string[] | null;
   readonly scope: "system" | "task" | "per_step";
+  readonly structure_specific: boolean;
   readonly ml_target: string | null;
   readonly approaches: readonly Source[];
   readonly description: string;

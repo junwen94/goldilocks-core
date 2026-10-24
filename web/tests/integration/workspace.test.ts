@@ -148,6 +148,7 @@ describe("Workspace", () => {
       inspection,
       inspectFailure: null,
       draft,
+      clearedOverrides: [],
       reviewed: null,
       explain: null,
       preview: null,
@@ -232,6 +233,66 @@ describe("Workspace", () => {
       structureInput: replacementInput,
       inspectFailure: null,
     });
+  });
+
+  it("keeps the task, HPC profile and structure-independent overrides for the next structure, and lists the overrides it clears", async () => {
+    // #188: opening another structure replaced the whole draft with the
+    // default, so the task, the account and the functional went too, without
+    // a word. It now clears only the settings capabilities marks
+    // structure_specific, and every fact override.
+    const core = new CoreStub();
+    core.inspectionResults = [
+      Promise.resolve(inspection),
+      Promise.resolve(inspection),
+    ];
+    core.explainResults = [Promise.resolve(explainResult)];
+    const workspace = createWorkspace(core);
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({
+      type: "draft.patch",
+      task: "relax",
+      hpc: "scarf",
+      overrides: {
+        functional: "PBE",
+        k_grid: [5, 5, 5],
+        account: "acct-001",
+        spin_orbit_coupling: true,
+        is_metal: "metal",
+        u_by_element: { Si: 2 },
+      },
+    });
+
+    await workspace.dispatch({ type: "source.open", input: replacementInput });
+
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot.draft).toEqual({
+      ...draft,
+      task: "relax",
+      hpc: "scarf",
+      overrides: { functional: "PBE", account: "acct-001" },
+    });
+    expect(snapshot.clearedOverrides).toEqual([
+      "k_grid",
+      "spin_orbit_coupling",
+      "is_metal",
+      "u_by_element",
+    ]);
+    await workspace.dispatch({ type: "review.compute" });
+    expect(core.explainCalls).toEqual([
+      {
+        ...baseRequest(),
+        structure_content: replacementInput.structure_content,
+        structure_name: replacementInput.structure_name,
+        structure_format: "poscar",
+        task: "relax",
+        hpc: "scarf",
+        overrides: { functional: "PBE", account: "acct-001" },
+      },
+    ]);
+
+    await workspace.dispatch({ type: "workspace.reset" });
+    expect(workspace.getSnapshot().clearedOverrides).toEqual([]);
   });
 
   it("submits the exact request and stores the explain preview", async () => {

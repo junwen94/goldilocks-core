@@ -37,6 +37,12 @@ const IRON_BCC_CIF = fileURLToPath(
     import.meta.url,
   ),
 );
+const PLATINUM_FCC_CIF = fileURLToPath(
+  new URL(
+    "../../../src/goldilocks_core/examples/structures/Pt_fcc.cif",
+    import.meta.url,
+  ),
+);
 /** One-atom fcc Ni, the cell of MC3D mc3d-4988. */
 const NICKEL_FCC_POSCAR = `Nickel fcc primitive
 3.524
@@ -1050,9 +1056,11 @@ test("table choices exclude tables that don't cover the structure's elements", a
   await expect(page.getByLabel("Inspected structure summary")).toContainText(
     "Ce1",
   );
-  await page
-    .getByRole("combobox", { name: "Functional", exact: true })
-    .selectOption("PBE");
+  // The functional is not specific to a structure, so it carries over
+  // (#188).
+  await expect(
+    page.getByRole("combobox", { name: "Functional", exact: true }),
+  ).toHaveValue("PBE");
   // Confirmed against a live /capabilities call: three real tables cover
   // Ce+PBE (pseudodojo's own lanthanides table plus both sssp accuracy
   // levels). The frontend deliberately doesn't replicate the backend's
@@ -1267,6 +1275,95 @@ test("lists and bundles the open structure's own magnetic orderings", async ({
     sha256: sha256(new Uint8Array(Buffer.from(NICKEL_FCC_POSCAR))),
   });
   expect(listed).toEqual(["Fe_bcc.cif", "POSCAR"]);
+});
+
+test("keeps the task, account and functional when the structure is replaced", async ({
+  page,
+}) => {
+  // #188: Replace file reset the whole draft, so the next bundle was a
+  // calculation='scf' input with no #SBATCH --account line under the
+  // heuristic functional, and nothing said so. Only the structure-specific
+  // overrides are reset now, and the Advisors card names them.
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
+  await waitForBundleReady(page);
+  await page.getByLabel("Task", { exact: true }).selectOption("relax");
+  for (const group of ["Job", "Functional", "K sampling"]) {
+    await expandAdvisorGroup(page, group);
+  }
+  const advisors = page.getByRole("region", { name: "Goldilocks advisors" });
+  await advisors.getByLabel("account", { exact: true }).fill("e2e-acct-001");
+  await advisors
+    .getByRole("combobox", { name: "Functional", exact: true })
+    .selectOption("PBE");
+  const pinned = page.waitForRequest((request) => {
+    if (new URL(request.url()).pathname !== "/explain") return false;
+    return "k_grid" in requestOverrides(request);
+  });
+  await advisors.getByLabel("K-point grid x").fill("5");
+  expect(requestOverrides(await pinned)).toMatchObject({
+    account: "e2e-acct-001",
+    functional: "PBE",
+    k_grid: [5, expect.any(Number), expect.any(Number)],
+  });
+  // The notice must be in view wherever the user left the settings list.
+  await advisors
+    .locator(".card-body")
+    .evaluate((body: { scrollTop: number; readonly scrollHeight: number }) => {
+      body.scrollTop = body.scrollHeight;
+    });
+
+  const replaced = page.waitForRequest(
+    (request) =>
+      new URL(request.url()).pathname === "/explain" &&
+      (request.postDataJSON() as { structure_name: string }).structure_name ===
+        "Pt_fcc.cif",
+  );
+  await page.locator('input[type="file"]').setInputFiles(PLATINUM_FCC_CIF);
+  const request = await replaced;
+  expect(request.postDataJSON()).toMatchObject({ task: "relax" });
+  expect(requestOverrides(request)).toEqual({
+    account: "e2e-acct-001",
+    functional: "PBE",
+  });
+  await expect(page.getByLabel("Task", { exact: true })).toHaveValue("relax");
+  await expect(advisors.getByLabel("account", { exact: true })).toHaveValue(
+    "e2e-acct-001",
+  );
+  const notice = advisors.getByRole("status", {
+    name: "Structure-specific overrides reset",
+  });
+  await expect(notice.getByRole("listitem")).toHaveText(["K-point grid"]);
+  await expect(notice).toBeInViewport();
+
+  await waitForBundleReady(page);
+  await expectNoAxeViolations(page);
+  await notice.getByRole("button", { name: "Dismiss notice" }).click();
+  await expect(notice).toHaveCount(0);
+  const downloadStarted = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download (.zip)" }).click();
+  const download = await downloadStarted;
+  expect(download.suggestedFilename()).toBe("Pt_fcc.cif-relax.zip");
+  const path = await download.path();
+  assert(path, "Download must have a local path");
+  const entries = unzipSync(new Uint8Array(await readFile(path)));
+  expect(textEntry(entries, "relax.in")).toMatch(/calculation\s*=\s*'relax'/);
+  expect(textEntry(entries, "submit.sh")).toContain(
+    "#SBATCH --account=e2e-acct-001",
+  );
+  const manifest = JSON.parse(textEntry(entries, "goldilocks.json")) as {
+    readonly records: {
+      readonly functional?: {
+        readonly value?: string;
+        readonly source?: string;
+      };
+    };
+  };
+  expect(manifest.records.functional).toMatchObject({
+    value: "PBE",
+    source: "human",
+  });
 });
 
 /** Every settings-group Accordion.Panel is a `role="region"` whose

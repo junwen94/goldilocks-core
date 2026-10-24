@@ -162,6 +162,14 @@ purpose: `scf` (`scf_single_point`), `relax`, `vc-relax`, and `scf`, `nscf`,
   `steps.<step>.KEY` for a step that does not read it, such as
   `steps.nscf.mixing_beta`.
 
+Each setting's `structure_specific` says whether its value is a judgement
+about the structure it was set for — its elements, magnetism, geometry, size
+or k-mesh, such as `k_grid`, `u_by_element`, `starting_magnetization` or
+`spin_orbit_coupling` — rather than a method, accuracy or job choice, such as
+`functional`, `conv_thr` or `account`. When another structure is opened, the
+Workbench keeps the values of the settings that are not structure-specific
+and clears the others and every fact override (`is_metal`, ...).
+
 Quote `--set` values that contain brackets or braces (e.g. `--set
 'k_grid=[8,8,8]'`) so the shell does not glob-expand them; array and object
 values must be valid JSON. Numbers must be finite: `inf`, `nan` and values

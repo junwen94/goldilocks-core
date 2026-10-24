@@ -460,6 +460,56 @@ class TestSettingApplicability:
             assert steps == setting["steps"], setting["key"]
 
 
+class TestStructureSpecific:
+    """#188: opening another structure reset the Workbench's task and every
+    override, the account and the functional included. Each setting now says
+    whether its value is a judgement about the structure (its elements,
+    magnetism, geometry, size or k-mesh), which a client clears when the
+    structure changes, or a method, accuracy or job choice, which it keeps."""
+
+    def _settings(self) -> dict[str, dict[str, object]]:
+        return {s["key"]: s for s in capabilities()["settings"]}
+
+    def test_every_setting_declares_a_boolean(self) -> None:
+        for setting in capabilities()["settings"]:
+            assert type(setting.get("structure_specific")) is bool, setting["key"]
+
+    def test_judgements_about_the_structure_are_structure_specific(self) -> None:
+        settings = self._settings()
+
+        # spin_orbit_coupling too: only a fully relativistic table that covers
+        # the elements can serve it, so it is not a choice for any structure.
+        for key in (
+            "u_by_element",
+            "hubbard_needs_correlation",
+            "k_grid",
+            "starting_magnetization",
+            "magnetic_ordering",
+            "spin_orbit_coupling",
+            "pseudo_table_id",
+            "isolation",
+            "fix_bottom_layers",
+            "emin",
+        ):
+            assert settings[key]["structure_specific"] is True, key
+
+    def test_method_accuracy_and_job_choices_are_not(self) -> None:
+        settings = self._settings()
+
+        for key in (
+            "account",
+            "partition",
+            "walltime_h",
+            "functional",
+            "conv_thr",
+            "forc_conv_thr",
+            "k_distance",
+            "smearing_type",
+            "delta_e",
+        ):
+            assert settings[key]["structure_specific"] is False, key
+
+
 class TestFacts:
     def test_exactly_the_four_scalar_overridable_facts(self) -> None:
         keys = {f["key"] for f in capabilities()["facts"]}
