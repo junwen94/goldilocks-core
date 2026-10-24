@@ -124,7 +124,7 @@ its type, default, and description; a selection of commonly used keys:
 | `k_distance`                        | Target k-point spacing along each periodic axis; axes the point group mixes share the larger count, and a vacuum axis always gets one k-point (heuristic default 0.15 for metals or when metallicity is unknown, 0.30 for a confirmed non-metal) |
 | `smearing_type`                     | Smearing function when `occupations=smearing`: `gaussian`, `mp` (Methfessel-Paxton), `cold` (Marzari-Vanderbilt) or `fd` (Fermi-Dirac); default `cold` |
 | `degauss`                           | Smearing width in Ry (default 0.01)                                   |
-| `spin_polarized`, `spin_orbit_coupling` | Force spin polarization / spin-orbit coupling                     |
+| `spin_polarized`, `spin_orbit_coupling` | Force spin polarization / spin-orbit coupling; `spin_orbit_coupling` is the only SOC switch (the `needs_soc` fact is read-only advice) |
 | `moment_direction`                  | Lattice direction of the uploaded cell the moments of a magnetic spin-orbit run start along, e.g. `--set 'moment_direction=[1,1,0]'` (default `[0,0,1]`) |
 | `use_vdw`, `method`                 | Force a dispersion correction; only `d3bj` is implemented, for PBE and PBEsol |
 | `isolation`                         | Electrostatic boundary: `periodic`, `slab` (Quantum ESPRESSO's 2D truncation, `assume_isolated='2D'`) or `isolated` (Martyna-Tuckerman); see [boundary conditions](science.md#check-boundary-conditions-and-vacuum) |

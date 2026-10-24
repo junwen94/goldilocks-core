@@ -32,7 +32,7 @@ from goldilocks_core.analysis.needs_correlation import (
     NeedsCorrelationHumanInput,
     needs_correlation,
 )
-from goldilocks_core.analysis.needs_soc import NeedsSocHumanInput, needs_soc
+from goldilocks_core.analysis.needs_soc import needs_soc
 from goldilocks_core.analysis.symmetry import SymmetryFacts, symmetry
 from goldilocks_core.resolution import FieldState
 
@@ -43,7 +43,6 @@ class AnalysisOverrides:
     is_metal_llm: IsMetalLlmInput | None = None
     is_magnetic: IsMagneticHumanInput | None = None
     is_magnetic_llm: IsMagneticLlmInput | None = None
-    needs_soc: NeedsSocHumanInput | None = None
     needs_correlation: NeedsCorrelationHumanInput | None = None
 
 
@@ -90,7 +89,7 @@ def analyze(structure: Structure, overrides: AnalysisOverrides) -> AnalysisFacts
         is_magnetic=is_magnetic(
             structure, overrides.is_magnetic, overrides.is_magnetic_llm
         ),
-        needs_soc=needs_soc(composition_state, overrides.needs_soc),
+        needs_soc=needs_soc(composition_state),
         needs_correlation=needs_correlation(
             composition_state, overrides.needs_correlation
         ),

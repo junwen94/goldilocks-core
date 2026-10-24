@@ -84,9 +84,10 @@ export const capabilities: Capabilities = {
       type: "boolean",
       values: null,
       ml_target: null,
-      approaches: ["human", "heuristic"],
-      overridable: true,
-      description: "Whether spin-orbit coupling is likely relevant.",
+      approaches: ["heuristic"],
+      overridable: false,
+      description:
+        "Whether spin-orbit coupling is likely relevant. Advice only: the spin_orbit_coupling setting enables it.",
     },
   ],
   settings: [

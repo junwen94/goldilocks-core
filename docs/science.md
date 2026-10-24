@@ -324,10 +324,13 @@ Spin-orbit coupling (SOC) couples electron spin to orbital motion. Goldilocks
 flags elements at or above Rb (Z=37) whose valence character is p, d, or f for
 consideration, but does not enable SOC unless you request it -- heavy s-block
 elements (Rb, Sr, Cs, Ba) are excluded because s orbitals carry no
-first-order spin-orbit splitting. Whether SOC matters depends on the property,
-not only the elements. Enabling it changes the required pseudopotentials and
-the QE spin settings. See [relativistic modes](conventions.md#relativistic-modes)
-and the [table restrictions](pseudopotentials.md#choose-a-table). The info
+first-order spin-orbit splitting. The flag is the read-only fact `needs_soc`:
+it takes no override (`--set needs_soc=...` is an unknown setting) and changes
+nothing in the input. `spin_orbit_coupling` is the only setting that enables
+SOC. Whether SOC matters depends on the property, not only the elements.
+Enabling it changes the required pseudopotentials and the QE spin settings.
+See [relativistic modes](conventions.md#relativistic-modes) and the
+[table restrictions](pseudopotentials.md#choose-a-table). The info
 notice follows the table selection SOC would make. `magnetic.soc_suggested`
 names the fully relativistic table automatic selection would use, for
 example `pseudodojo-pbesol-efficiency-fr` for fcc Pb under PBEsol. Where no

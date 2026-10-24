@@ -215,7 +215,9 @@ def test_settings_human_output_lists_the_facts_and_their_values() -> None:
     assert lines[is_metal + 1] == "  values: metal, non_metal"
     is_magnetic = lines.index("is_magnetic [analysis] enum")
     assert lines[is_magnetic + 1] == "  values: magnetic, non_magnetic"
-    assert "needs_soc [analysis] boolean" in lines
+    assert "needs_correlation [analysis] boolean" in lines
+    # #186: needs_soc is advice, not a --set key.
+    assert not any(line.startswith("needs_soc ") for line in lines)
 
 
 def test_capabilities_json_matches_the_real_capabilities_payload() -> None:

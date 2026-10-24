@@ -76,7 +76,10 @@ Literal's members, ``FieldState[bool]`` a boolean), and ``overridable``
 is whether the key has an analysis binding. The overrides are typed with
 the same record Literals, so every advertised value is an accepted one
 (#139: ``is_metal`` advertised ``metal``/``non_metal`` while its override
-took only booleans). ``composition``/``geometry``/``symmetry`` are
+took only booleans). ``needs_soc`` has no binding (#186): only a notice
+reads it and ``spin_orbit_coupling`` alone enables spin-orbit coupling, so
+it is published read-only, with no ``human`` approach.
+``composition``/``geometry``/``symmetry`` are
 structural, multi-field records with no override at all
 (``analysis/composition.py``'s and ``analysis/symmetry.py``'s own
 docstrings say so explicitly) and don't fit this shape; they are not
@@ -789,7 +792,8 @@ _FACTS: tuple[_FactMeta, ...] = (
         key="needs_soc",
         ml_target=None,
         description=(
-            "Whether spin-orbit coupling is likely relevant for this structure."
+            "Whether spin-orbit coupling is likely relevant for this structure. "
+            "Advice only: the spin_orbit_coupling setting enables it."
         ),
     ),
     _FactMeta(
@@ -994,12 +998,12 @@ def _setting_from_leaf(leaf: SettingBinding) -> Setting:
 
 
 def _settings() -> list[Setting]:
-    """Every ``--set``-able leaf *except* the four analysis facts
-    (``is_metal``/``is_magnetic``/``needs_soc``/``needs_correlation``):
-    ``facts()`` already describes them, with the type and values of the
-    record their override is typed by. They still walk through
-    ``_leaves()`` so ``bindings()`` (the `--set`/override construction
-    path) accepts them; only this JSON projection skips them."""
+    """Every ``--set``-able leaf *except* the overridable analysis facts
+    (``is_metal``/``is_magnetic``/``needs_correlation``): ``facts()``
+    already describes them, with the type and values of the record their
+    override is typed by. They still walk through ``_leaves()`` so
+    ``bindings()`` (the `--set`/override construction path) accepts them;
+    only this JSON projection skips them."""
     fact_keys = {fact.key for fact in _FACTS}
     return [_setting_from_leaf(leaf) for leaf in _leaves() if leaf.key not in fact_keys]
 
@@ -1023,20 +1027,25 @@ def _facts() -> list[Fact]:
     computed per call, not at import time, since ``_approaches`` checks
     live installed-asset state (v2 epic 11, #11). A fact is overridable
     exactly when its key has an analysis binding (a ``HumanInput`` on
-    ``AnalysisOverrides``)."""
+    ``AnalysisOverrides``); one without a binding (``needs_soc``, #186)
+    lists no ``human`` approach."""
     records = typing.get_type_hints(AnalysisFacts)
-    overridable = {leaf.key for leaf in _leaves() if leaf.branch == "analysis"}
+    bound = {leaf.key for leaf in _leaves() if leaf.branch == "analysis"}
     facts: list[Fact] = []
     for meta in _FACTS:
         fact_type, values = _fact_schema(records[meta.key])
+        overridable = meta.key in bound
+        approaches = _approaches(meta.ml_target)
         facts.append(
             Fact(
                 key=meta.key,
                 type=fact_type,
                 values=values,
                 ml_target=meta.ml_target,
-                approaches=_approaches(meta.ml_target),
-                overridable=meta.key in overridable,
+                approaches=[
+                    source for source in approaches if overridable or source != "human"
+                ],
+                overridable=overridable,
                 description=meta.description,
             )
         )

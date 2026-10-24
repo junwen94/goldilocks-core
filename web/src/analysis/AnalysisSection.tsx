@@ -4,15 +4,19 @@ import { OverrideControl } from "../controls/OverrideControl";
 import { RecordAccordionItem } from "../review/RecordAccordionItem";
 import { isAdvisorRecordKey } from "../workspace/recordGroups";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
+import { FactSummary } from "./FactSummary";
 
 /** goldilocks-core's own analysis tier only ever needs the structure --
- * `capabilities.facts` (is_metal/is_magnetic/needs_soc/needs_correlation,
- * each overridable) plus any other resolved record that isn't tied to a
- * settings group (composition/geometry/symmetry/... -- see
- * recordGroups.ts for exactly how that split is derived). Advisor
- * records live in the Advisors card instead, next to the override
- * control they belong to. Rendered inside `AnalysisCard`, which owns the
- * "Analysis" heading -- this component starts directly with its content. */
+ * `capabilities.facts` (is_metal/is_magnetic/needs_soc/needs_correlation)
+ * plus any other resolved record that isn't tied to a settings group
+ * (composition/geometry/symmetry/... -- see recordGroups.ts for exactly
+ * how that split is derived). A fact is an override control only when
+ * `Fact.overridable` says the core takes a value for it; the others
+ * (needs_soc, advice that only a notice reads, #186) are read-only
+ * `FactSummary`s. Advisor records live in the Advisors card instead, next
+ * to the override control they belong to. Rendered inside `AnalysisCard`,
+ * which owns the "Analysis" heading -- this component starts directly
+ * with its content. */
 export function AnalysisSection() {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
@@ -37,29 +41,33 @@ export function AnalysisSection() {
             const record = reviewed?.records[fact.key];
             return (
               <div key={fact.key}>
-                <OverrideControl
-                  meta={{
-                    key: fact.key,
-                    type: fact.type,
-                    enum: fact.values ?? undefined,
-                    unit: null,
-                    description: fact.description,
-                  }}
-                  value={overrides[fact.key]}
-                  resolvedValue={
-                    record?.status === "resolved" ? record.value : undefined
-                  }
-                  source={
-                    record?.status === "resolved" ? record.source : undefined
-                  }
-                  disabled={disabled}
-                  onChange={(value) => {
-                    void workspace.dispatch({
-                      type: "draft.patch",
-                      overrides: { [fact.key]: value },
-                    });
-                  }}
-                />
+                {fact.overridable ? (
+                  <OverrideControl
+                    meta={{
+                      key: fact.key,
+                      type: fact.type,
+                      enum: fact.values ?? undefined,
+                      unit: null,
+                      description: fact.description,
+                    }}
+                    value={overrides[fact.key]}
+                    resolvedValue={
+                      record?.status === "resolved" ? record.value : undefined
+                    }
+                    source={
+                      record?.status === "resolved" ? record.source : undefined
+                    }
+                    disabled={disabled}
+                    onChange={(value) => {
+                      void workspace.dispatch({
+                        type: "draft.patch",
+                        overrides: { [fact.key]: value },
+                      });
+                    }}
+                  />
+                ) : (
+                  <FactSummary fact={fact} record={record} />
+                )}
                 {record === undefined || record.status === "resolved" ? null : (
                   <Text
                     size="xs"

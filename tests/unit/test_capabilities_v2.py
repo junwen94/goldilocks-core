@@ -511,10 +511,26 @@ class TestStructureSpecific:
 
 
 class TestFacts:
-    def test_exactly_the_four_scalar_overridable_facts(self) -> None:
+    def test_exactly_the_four_scalar_facts(self) -> None:
         keys = {f["key"] for f in capabilities()["facts"]}
 
         assert keys == {"is_metal", "is_magnetic", "needs_soc", "needs_correlation"}
+
+    def test_needs_soc_is_published_as_read_only_advice(self) -> None:
+        """#186: only the magnetic.soc_suggested notice reads needs_soc, so a
+        human value changed no generated file while the Workbench offered it
+        as an On/Off switch. spin_orbit_coupling is the one SOC setting."""
+        facts = {f["key"]: f for f in capabilities()["facts"]}
+
+        assert facts["needs_soc"]["overridable"] is False
+        assert facts["needs_soc"]["approaches"] == ["heuristic"]
+        assert "needs_soc" not in bindings()
+        assert "spin_orbit_coupling" in facts["needs_soc"]["description"]
+        assert {key for key, fact in facts.items() if fact["overridable"]} == {
+            "is_metal",
+            "is_magnetic",
+            "needs_correlation",
+        }
 
     def test_is_metal_values_match_the_real_metallicity_type(self) -> None:
         facts = {f["key"]: f for f in capabilities()["facts"]}

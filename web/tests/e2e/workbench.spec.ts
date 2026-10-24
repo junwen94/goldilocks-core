@@ -242,6 +242,41 @@ test("corrects the metallicity classification from the Analysis card", async ({
   );
 });
 
+test("shows needs soc as read-only advice beside the spin-orbit setting", async ({
+  page,
+}) => {
+  // #186: needs_soc was an On/Off select whose value changed no generated
+  // file. spin_orbit_coupling is the one SOC setting, and the advice is a
+  // note in its group.
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.locator('input[type="file"]').setInputFiles(PLATINUM_FCC_CIF);
+  await waitForBundleReady(page);
+
+  const analysis = page.getByRole("region", { name: "Goldilocks analysis" });
+  const needsSoc = analysis.getByRole("group", { name: "needs soc" });
+  await expect(needsSoc.getByText("Yes", { exact: true })).toBeVisible();
+  await expect(needsSoc).toHaveAccessibleDescription(
+    /spin_orbit_coupling setting enables it\. · Heuristic default$/,
+  );
+  await expect(
+    analysis.getByRole("combobox", { name: "needs soc" }),
+  ).toHaveCount(0);
+  await expect(
+    analysis.getByRole("combobox", { name: "needs correlation", exact: true }),
+  ).toBeEnabled();
+
+  await expandAdvisorGroup(page, "Magnetic");
+  const magnetic = page.getByRole("region", { name: "Magnetic", exact: true });
+  await expect(
+    magnetic.getByRole("combobox", { name: "spin orbit coupling" }),
+  ).toBeEnabled();
+  await expect(
+    magnetic.getByText(/consider enabling spin_orbit_coupling/),
+  ).toBeVisible();
+  await expectNoAxeViolations(page);
+});
+
 test("resets every kind of pinned select to automatic with a mouse click", async ({
   page,
 }) => {

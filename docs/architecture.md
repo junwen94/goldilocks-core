@@ -395,6 +395,9 @@ ranking runs in a fresh process, one ranking at a time
 an absolute path once, when the app is created.
 
 Workbench keeps the editable draft and reviewed response in its browser store.
+The Analysis card offers an override control for a fact only when
+`/capabilities` marks it `overridable`, and shows the others, such as
+`needs_soc`, read-only.
 Opening another structure keeps the draft's code, task, HPC profile and the
 overrides of settings that `/capabilities` does not mark `structure_specific`;
 it clears the structure-specific overrides and every fact override, and the

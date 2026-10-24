@@ -941,6 +941,50 @@ describe("Goldilocks Workbench", () => {
     );
   });
 
+  it("shows a fact that takes no override as read-only advice", async () => {
+    // #186: needs_soc was an On/Off select, yet no value of it changed the
+    // input; spin_orbit_coupling is the one SOC setting.
+    const user = userEvent.setup();
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [
+      Promise.resolve({
+        ...explainResult,
+        records: {
+          ...explainResult.records,
+          needs_soc: { status: "resolved", value: true, source: "heuristic" },
+        },
+      }),
+    ];
+    const { container } = renderApp(core);
+
+    await openStructure(user, container);
+    const analysis = screen.getByRole("region", {
+      name: "Goldilocks analysis",
+    });
+    const needsSoc = within(analysis).getByRole("group", {
+      name: "needs soc",
+    });
+    expect(
+      await within(needsSoc).findByText("Yes", { exact: true }),
+    ).toBeInTheDocument();
+    expect(needsSoc).toHaveAccessibleDescription(
+      /spin_orbit_coupling setting enables it\. · Heuristic default$/,
+    );
+    expect(
+      within(analysis).queryByRole("combobox", { name: "needs soc" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(analysis).queryByRole("button", {
+        name: "Reset needs soc to automatic",
+      }),
+    ).not.toBeInTheDocument();
+    // An overridable fact keeps its select.
+    expect(
+      within(analysis).getByRole("combobox", { name: "is metal" }),
+    ).toBeEnabled();
+  });
+
   it.each([
     {
       site: "a boolean setting",
