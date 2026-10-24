@@ -39,7 +39,8 @@ export function App() {
 // its own header/navigation already), re-exported via `index.ts`'s library
 // build for that purpose. Kept in sync with `Workbench` below by
 // construction (one calls the other), not by duplicating this JSX a
-// second time.
+// second time. It fills its container's height (App.css,
+// `.workbench-content`).
 export function WorkbenchContent() {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
@@ -56,14 +57,18 @@ export function WorkbenchContent() {
   const showMagneticOrderings = spinPolarized(
     snapshot.reviewed?.records.magnetic,
   );
-  const columns = showMagneticOrderings ? 5 : 4;
+  // Structure, Analysis and Advisors sit on the narrow column floor,
+  // Magnetic Orderings and Bundle on the wide one; App.css caps the grid's
+  // width no lower than these floors add up to (#190).
+  const wideColumns = showMagneticOrderings ? 2 : 1;
+  const columns = 3 + wideColumns;
   // Every failure offers Retry, a deterministic 4xx too: it sends the failed
   // request once more. Dismiss only hides the banner; the failure stays the
   // outcome of its draft, so nothing is sent again on its own (#150).
   const banner = bannerFailure(snapshot);
 
   return (
-    <>
+    <div className="workbench-content">
       <OperationStatus
         operation={snapshot.operation}
         needsAttention={needsAttention(snapshot)}
@@ -91,7 +96,12 @@ export function WorkbenchContent() {
       <main
         className="workbench-grid"
         aria-labelledby="workbench-title"
-        style={{ "--workbench-columns": columns } as CSSProperties}
+        style={
+          {
+            "--workbench-columns": columns,
+            "--workbench-wide-columns": wideColumns,
+          } as CSSProperties
+        }
       >
         <VisuallyHidden>
           <h1 id="workbench-title">Goldilocks SCF setup</h1>
@@ -102,7 +112,7 @@ export function WorkbenchContent() {
         {showMagneticOrderings ? <MagneticOrderingsCard kicker="04" /> : null}
         <BundleCard kicker={showMagneticOrderings ? "05" : "04"} />
       </main>
-    </>
+    </div>
   );
 }
 
@@ -124,9 +134,9 @@ function Workbench() {
   }, [theme]);
 
   return (
-    <>
+    <div className="app-layout">
       <AppHeader theme={theme} onToggleTheme={toggleTheme} />
       <WorkbenchContent />
-    </>
+    </div>
   );
 }

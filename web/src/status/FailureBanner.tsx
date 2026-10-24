@@ -16,6 +16,7 @@ export function FailureBanner({
 }) {
   return (
     <Alert
+      className="failure-banner"
       color="red"
       title={FAILURE_TITLES[failure.kind] ?? "Calculation failed"}
       withCloseButton={dismissAvailable}

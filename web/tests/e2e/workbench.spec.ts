@@ -758,16 +758,7 @@ test("keeps the document static and scrolls long content inside its own card", a
   await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
   await waitForBundleReady(page);
 
-  const documentScrolls = await page.evaluate<{
-    readonly scrollHeight: number;
-    readonly viewportHeight: number;
-  }>(`({
-    scrollHeight: document.documentElement.scrollHeight,
-    viewportHeight: window.innerHeight,
-  })`);
-  expect(documentScrolls.scrollHeight).toBeLessThanOrEqual(
-    documentScrolls.viewportHeight,
-  );
+  await expectDocumentWithinViewportHeight(page);
 
   for (const name of [
     "Composition composition",
@@ -785,6 +776,128 @@ test("keeps the document static and scrolls long content inside its own card", a
     "(element) => { element.scrollTop = element.scrollHeight; }",
   );
   await expect(lastRecord).toBeInViewport();
+});
+
+test("fits all five columns once the viewport clears their floors", async ({
+  page,
+}) => {
+  // #190: the grid was capped at 120rem, below the 126rem that five column
+  // floors, their gaps and the padding need, so with Magnetic orderings open
+  // it scrolled sideways at every window width and cut off the Bundle card.
+  await page.setViewportSize({ width: 2400, height: 1100 });
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.locator('input[type="file"]').setInputFiles(IRON_BCC_CIF);
+  await expect(
+    page.getByRole("region", { name: "Magnetic orderings" }),
+  ).toBeVisible({ timeout: 20_000 });
+  await waitForBundleReady(page);
+
+  const grid = await page.evaluate<{
+    readonly scrollWidth: number;
+    readonly clientWidth: number;
+  }>(`(() => {
+    const grid = document.querySelector("main");
+    return { scrollWidth: grid.scrollWidth, clientWidth: grid.clientWidth };
+  })()`);
+  expect(grid.scrollWidth).toBe(grid.clientWidth);
+  await expectDocumentWithinViewportHeight(page);
+
+  // The Structure card sits at its 20rem floor, where its status line and the
+  // Replace file button share one row: neither may be cut off (#194).
+  await expect(page.locator("#structure-source-help")).toHaveText(
+    "2 sites · parsed",
+  );
+  const clipped = await page.evaluate<readonly string[]>(`(() => {
+    const status = document.getElementById("structure-source-help");
+    const replace = document.querySelector(
+      'button[aria-label="Replace structure file"] .mantine-Button-label',
+    );
+    return [status, replace]
+      .filter((element) => element.scrollWidth > element.clientWidth)
+      .map((element) => element.textContent);
+  })()`);
+  expect(clipped).toEqual([]);
+});
+
+test("keeps the failure banner and the cards within one screen", async ({
+  page,
+}) => {
+  // #190: the grid's height left room for the header alone, so the failure
+  // banner above it pushed the grid below the fold.
+  await page.setViewportSize({ width: 1440, height: 700 });
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  await page.route("**/explain", async (route) => {
+    await route.fulfill({
+      status: 424,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          kind: "advice_incomplete",
+          message: "Core failed temporarily.",
+        },
+      }),
+    });
+  });
+  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
+  await expect(page.getByRole("alert")).toContainText(
+    "Core failed temporarily.",
+    { timeout: 20_000 },
+  );
+
+  await expectDocumentWithinViewportHeight(page);
+  const grid = await page.getByRole("main").boundingBox();
+  assert(grid, "The grid must have a layout box");
+  expect(grid.y + grid.height).toBeLessThanOrEqual(700);
+});
+
+test("keeps a refused preview's long failure notice within one screen", async ({
+  page,
+}) => {
+  // #190: once a long failure notice pushed Download below the Bundle card's
+  // fold, the hidden reason Download is disabled for, positioned against the
+  // page rather than the card, made the page scroll.
+  await page.setViewportSize({ width: 1440, height: 700 });
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  const message = `cannot generate a runnable input: ${"the writer could not render this structure's settings into an input pw.x accepts, and nothing it was given resolves that. ".repeat(6)}`;
+  await page.route("**/run", async (route) => {
+    await route.fulfill({
+      status: 422,
+      contentType: "application/json",
+      body: JSON.stringify({ error: { kind: "generation_error", message } }),
+    });
+  });
+  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
+  await expect(
+    page.getByRole("button", { name: "Download (.zip)" }),
+  ).toHaveAccessibleDescription(
+    /^Input generation failed for the current settings: /,
+    { timeout: 20_000 },
+  );
+
+  await expectDocumentWithinViewportHeight(page);
+});
+
+test("keeps the header in view while the narrow layout scrolls", async ({
+  page,
+}) => {
+  // Below 47.5rem the cards stack at their own height and the document
+  // scrolls; the sticky header stays at the top past the first screen.
+  await page.setViewportSize({ width: 720, height: 500 });
+  await page.goto("/");
+  await expect(
+    page.getByRole("heading", { name: "No structure selected" }),
+  ).toBeVisible();
+
+  const scrollY = await page.evaluate<number>(
+    "window.scrollTo(0, 2 * window.innerHeight), window.scrollY",
+  );
+  expect(scrollY).toBe(1000);
+  const header = await page.getByRole("banner").boundingBox();
+  assert(header, "The header must have a layout box");
+  expect(header.y).toBe(0);
 });
 
 test("reflows at effective 200 percent zoom without clipping", async ({
@@ -1237,6 +1350,19 @@ async function waitForBundleReady(page: Page): Promise<void> {
   await expect(
     page.getByRole("button", { name: "Download (.zip)" }),
   ).toBeEnabled({ timeout: 20_000 });
+}
+
+/** Asserts that the document does not scroll vertically: the wide layout fits
+ * one screen, and each card scrolls its own body instead. */
+async function expectDocumentWithinViewportHeight(page: Page): Promise<void> {
+  const { scrollHeight, viewportHeight } = await page.evaluate<{
+    readonly scrollHeight: number;
+    readonly viewportHeight: number;
+  }>(`({
+    scrollHeight: document.documentElement.scrollHeight,
+    viewportHeight: window.innerHeight,
+  })`);
+  expect(scrollHeight).toBeLessThanOrEqual(viewportHeight);
 }
 
 /** Projects the shown unit cell's centroid and eight corners through the live
