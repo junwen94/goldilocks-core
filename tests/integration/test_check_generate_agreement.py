@@ -265,7 +265,7 @@ def _generate(task: str, scenario: _Scenario, store: AssetStore):
             structure, calculation=task, hpc=_hpc(), overrides=overrides, store=store
         )
         report, render = check_relax(advice), generate_relax
-    assert report.ok, report.blocking
+    assert report.ok, [finding.message for finding in report.blocking]
     return advice, render(advice, report)
 
 
@@ -327,4 +327,5 @@ def test_check_refuses_a_request_no_input_can_express(
 
     report = check(advice)
 
-    assert any(refusal.reason in reason for reason in report.blocking), report.blocking
+    messages = [finding.message for finding in report.blocking]
+    assert any(refusal.reason in message for message in messages), messages

@@ -217,17 +217,27 @@ def test_a_slab_with_a_and_b_out_of_the_xy_plane_is_blocked() -> None:
 @pytest.mark.parametrize(
     ("vacuum_axes", "suggestion"),
     [
-        (("a", "b"), "cell_dofree='z' relaxes only the z component of c"),
-        (("a", "c"), "cell_dofree='y' relaxes only the y component of b"),
-        (("b", "c"), "cell_dofree='x' relaxes only the x component of a"),
+        (
+            ("a", "b"),
+            "cell_dofree='epitaxial_ab' holds a and b fixed and relaxes only c,",
+        ),
+        (
+            ("a", "c"),
+            "cell_dofree='epitaxial_ac' holds a and c fixed and relaxes only b,",
+        ),
+        (
+            ("b", "c"),
+            "cell_dofree='epitaxial_bc' holds b and c fixed and relaxes only a,",
+        ),
     ],
 )
 def test_a_wire_is_blocked_with_the_constraint_on_its_period(
     vacuum_axes: tuple[str, str], suggestion: str
 ) -> None:
-    """QE's 'x', 'y' and 'z' move one Cartesian component of a, b and c,
-    the wire's period when the wire's lattice vector lies along that
-    axis."""
+    """QE's epitaxial constraints move every component of one lattice vector
+    and hold the other two (QE 7.3 Modules/cell_base.f90:825-842), so they
+    relax a wire's period and hold its vacuum in any orientation, where 'x',
+    'y' or 'z' would move one Cartesian component of the period."""
     state = _vc_relax(_geometry("1d", vacuum_axes))
 
     assert isinstance(state, Blocked)

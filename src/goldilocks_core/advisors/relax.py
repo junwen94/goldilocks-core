@@ -154,9 +154,16 @@ _CELL_FACTOR_DEFAULT = 2.0
 not expansion (audit finding #3)."""
 _DEFAULT_CELL_DOFREE: CellDofree = "all"
 _SLAB_CELL_DOFREE: CellDofree = "2Dxy"
-_WIRE_CELL_DOFREE: dict[LatticeAxis, CellDofree] = {"a": "x", "b": "y", "c": "z"}
-"""The one-component constraint that relaxes only a wire's period, when the
-wire's lattice vector lies along the matching Cartesian axis."""
+_WIRE_CELL_DOFREE: dict[LatticeAxis, CellDofree] = {
+    "a": "epitaxial_bc",
+    "b": "epitaxial_ac",
+    "c": "epitaxial_ab",
+}
+"""The constraint that relaxes only a wire's period, by the period's lattice
+vector: it moves every component of that vector and holds the other two, the
+vacuum vectors, fixed (QE 7.3 Modules/cell_base.f90:825-842), whatever their
+orientation. 'x', 'y' and 'z' move one Cartesian component of a, b or c, which
+leaves a period off that axis unrelaxed."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,15 +359,24 @@ def _slab_outside_xy_frame(slab: SlabGeometry) -> str:
     )
 
 
-def _wire(vacuum_axes: tuple[LatticeAxis, ...]) -> str:
+def wire_period(
+    vacuum_axes: tuple[LatticeAxis, ...],
+) -> tuple[LatticeAxis, CellDofree]:
+    """The lattice vector along a wire whose vacuum lies along the other two,
+    ``vacuum_axes``, and the ``cell_dofree`` that relaxes only that vector and
+    holds both vacuum vectors fixed, in any orientation."""
     (period,) = (axis for axis in _WIRE_CELL_DOFREE if axis not in vacuum_axes)
-    component = _WIRE_CELL_DOFREE[period]
+    return period, _WIRE_CELL_DOFREE[period]
+
+
+def _wire(vacuum_axes: tuple[LatticeAxis, ...]) -> str:
+    period, constraint = wire_period(vacuum_axes)
+    vacuum = " and ".join(vacuum_axes)
     return (
-        f"vc-relax of a wire (vacuum along {' and '.join(vacuum_axes)}) has no "
-        "default cell_dofree, because 'all' would also relax the vacuum. Set "
-        f"cell_dofree explicitly: cell_dofree={component!r} relaxes only the "
-        f"{component} component of {period}, the wire's period when {period} lies "
-        f"along {component}."
+        f"vc-relax of a wire (vacuum along {vacuum}) has no default cell_dofree, "
+        "because 'all' would also relax the vacuum. Set cell_dofree explicitly: "
+        f"cell_dofree={constraint!r} holds {vacuum} fixed and relaxes only "
+        f"{period}, the wire's period."
     )
 
 

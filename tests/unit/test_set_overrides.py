@@ -186,7 +186,6 @@ class TestBuildOverrides:
             {
                 "is_metal": "non_metal",
                 "is_magnetic": "magnetic",
-                "needs_soc": True,
                 "needs_correlation": True,
             },
             task="scf_single_point",
@@ -194,8 +193,13 @@ class TestBuildOverrides:
 
         assert overrides.analysis.is_metal.is_metal == "non_metal"
         assert overrides.analysis.is_magnetic.is_magnetic == "magnetic"
-        assert overrides.analysis.needs_soc.needs_soc is True
         assert overrides.analysis.needs_correlation.needs_correlation is True
+
+    def test_needs_soc_is_refused(self) -> None:
+        """#186: only a notice read a human needs_soc, so it changed no
+        generated file; spin_orbit_coupling is the one SOC setting."""
+        with pytest.raises(InvalidSetting, match="unknown setting 'needs_soc'"):
+            build_overrides({"needs_soc": True}, task="scf_single_point")
 
     @pytest.mark.parametrize(
         ("key", "values"),

@@ -11,6 +11,7 @@ import {
 import { Upload } from "lucide-react";
 
 import type { StructureInput, StructureInspection } from "../api/coreClient";
+import { formatSiteCount } from "../viewer/siteCount";
 
 export function StructureSourceControls({
   source,
@@ -69,7 +70,7 @@ export function StructureSourceControls({
   let sourceHelp = "CIF or POSCAR · 5 MB maximum file size";
   if (source !== null) sourceHelp = "Inspecting structure";
   if (inspection !== null) {
-    sourceHelp = `${String(inspection.structure.site_count)} sites · parsed`;
+    sourceHelp = `${formatSiteCount(inspection.structure.site_count, "site")} · parsed`;
   }
 
   const dropzoneProps = {
@@ -184,7 +185,9 @@ function StructureSummary({
       ),
     ),
   ];
-  const periodicity = structure.periodicity.every(Boolean) ? "3D" : "Partial";
+  // No periodicity token: pymatgen marks every CIF/POSCAR fully periodic,
+  // so it never varies, and next to the formula it reads as the
+  // structure's dimensionality (a monolayer would show "3D").
   return (
     <Text
       size="sm"
@@ -193,7 +196,7 @@ function StructureSummary({
       aria-label="Inspected structure summary"
     >
       {structure.formula} · {elements.join(" ")} ·{" "}
-      {structure.lattice.volume_angstrom3.toFixed(1)} Å³ · {periodicity}
+      {structure.lattice.volume_angstrom3.toFixed(1)} Å³
     </Text>
   );
 }

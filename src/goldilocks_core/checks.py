@@ -106,6 +106,20 @@ is now where that decision belongs.
    '2Dshape' are left to the 2D-frame rule, since they act on a and b in
    the plane they span once that plane is xy, however it got there.
 
+**Findings, not prose (#151).** Every refusal is a ``Finding``: a code
+from ``FINDING_CATALOGUE``, the setting keys it concerns (``fields``, as
+``capabilities()`` names them), a user-facing ``message`` and its
+``remedies``, each a complete override patch that resolves it (a ``None``
+value clears that override). A catalogue entry fixes a code's fields and
+remedies; each rule fills in the message of its occurrence, and drops a
+remedy that would not hold for it (cell_dofree=all for a cell with vacuum,
+which it would relax too). A value only the user can choose (a
+``tot_magnetization``) is named in the message, never guessed in a remedy.
+A ``Blocked`` chain reaches the gate as ``advice.blocked`` with its root
+cause and no remedy: a refusal that needs one must be a named rule here.
+``CheckReport`` keeps one finding per root cause, however many fields share
+it.
+
 **Everything else in the design doc's "constraint check table"** is
 not a rule here. Memory overflow is a warning, not a block
 (``job.memory_exceeds_node`` in ``advisors/job_resources.py``), like a
@@ -121,7 +135,7 @@ today, not to enumerate every rule up front.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from pymatgen.core import Structure
 
@@ -138,7 +152,7 @@ from goldilocks_core.advisors.parallelisation import (
     ParallelisationDecision,
     diag_grid_side,
 )
-from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
+from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions, wire_period
 from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.analysis.geometry import (
     LatticeAxis,
@@ -151,11 +165,6 @@ from goldilocks_core.functionals import D3BJ_FUNCTIONALS, has_d3bj_parameters
 from goldilocks_core.plan import SCF_LIKE_PURPOSES
 from goldilocks_core.resolution import Blocked, FieldState
 
-_MISSING_TOT_MAGNETIZATION = (
-    "occupations='fixed' with a spin-polarized system requires an explicit "
-    "integer tot_magnetization, but none was set; set tot_magnetization, or "
-    "use occupations='smearing'."
-)
 _TWO_D_CELL_DOFREE = frozenset({"2Dxy", "2Dshape"})
 """``cell_dofree`` values that move only the x and y components of a and b."""
 _CARTESIAN_CELL_DOFREE = frozenset(
@@ -166,17 +175,231 @@ the lattice vectors (rule 6 of the module docstring)."""
 
 
 @dataclass(frozen=True, slots=True)
+class Finding:
+    """One reason the gate refuses a request (module docstring). ``code`` is
+    a stable ``FINDING_CATALOGUE`` key a caller may match on; ``fields`` are
+    the ``capabilities()`` setting keys it concerns; ``message`` is the text
+    a user reads, with the occurrence's values filled in; each of
+    ``remedies`` is a complete override patch that resolves it, a ``None``
+    value clearing that override."""
+
+    code: str
+    message: str
+    fields: tuple[str, ...] = ()
+    remedies: tuple[dict[str, object], ...] = ()
+
+    def to_document(self) -> dict[str, object]:
+        """The JSON every transport returns for this finding."""
+        return {
+            "code": self.code,
+            "fields": list(self.fields),
+            "message": self.message,
+            "remedies": [dict(remedy) for remedy in self.remedies],
+        }
+
+
+_SMEARING = {"occupations": "smearing"}
+_PERIODIC = {"isolation": "periodic"}
+_MOMENT_FIELDS = ("occupations", "tot_magnetization")
+
+_BLOCKED = Finding(
+    code="advice.blocked",
+    message=(
+        "A decision the input needs could not be made; the message gives the "
+        "root cause."
+    ),
+)
+_MISSING_TOT_MAGNETIZATION = Finding(
+    code="occupations.fixed_needs_tot_magnetization",
+    message=(
+        "occupations=fixed on a collinear spin-polarized run needs an integer "
+        "tot_magnetization of the electron count's parity, and none was set or "
+        "derived. Set occupations=smearing, or set tot_magnetization."
+    ),
+    fields=_MOMENT_FIELDS,
+    remedies=(_SMEARING,),
+)
+_NON_INTEGER_TOT_MAGNETIZATION = Finding(
+    code="occupations.fixed_needs_integer_tot_magnetization",
+    message=(
+        "occupations=fixed on a collinear spin-polarized run needs an integer "
+        "tot_magnetization."
+    ),
+    fields=_MOMENT_FIELDS,
+    remedies=(_SMEARING,),
+)
+_TOT_MAGNETIZATION_PARITY = Finding(
+    code="occupations.fixed_tot_magnetization_parity",
+    message=(
+        "occupations=fixed needs tot_magnetization to share parity with the "
+        "electron count."
+    ),
+    fields=_MOMENT_FIELDS,
+    remedies=(_SMEARING,),
+)
+_ODD_ELECTRON_COUNT = Finding(
+    code="occupations.fixed_needs_even_electron_count",
+    message=(
+        "occupations=fixed without spin polarization needs an even electron count."
+    ),
+    fields=("occupations", "spin_polarized"),
+    remedies=(_SMEARING, {"spin_polarized": True, **_SMEARING}),
+)
+_TOO_FEW_BANDS = Finding(
+    code="nbnd.too_few_bands",
+    message=(
+        "nbnd is below the band count pw.x needs for the electrons of each spin "
+        "channel."
+    ),
+    fields=("nbnd", "extra_bands"),
+    remedies=({"nbnd": None, "extra_bands": None},),
+)
+_NPOOL = Finding(
+    code="parallelisation.npool_does_not_divide_ntasks",
+    message="npool must divide ntasks.",
+    fields=("npool", "ntasks"),
+    remedies=({"npool": None},),
+)
+_NDIAG = Finding(
+    code="parallelisation.ndiag_grid_too_large",
+    message="ndiag gives a diagonalization grid too large for nbnd.",
+    fields=("ndiag", "nbnd"),
+    remedies=({"ndiag": None},),
+)
+_VC_RELAX_ION_DYNAMICS = Finding(
+    code="relax.vc_relax_needs_bfgs",
+    message="vc-relax is generated only with ion_dynamics=bfgs.",
+    fields=("ion_dynamics",),
+    remedies=({"ion_dynamics": "bfgs"},),
+)
+_ISOLATED_WITHOUT_VACUUM = Finding(
+    code="boundary.isolated_needs_vacuum",
+    message=(
+        "isolation=isolated needs vacuum along a, b and c of the cell to be written."
+    ),
+    fields=("isolation",),
+    remedies=(_PERIODIC,),
+)
+_SLAB_UNSUITED = Finding(
+    code="boundary.slab_unsuited_to_2d_truncation",
+    message=(
+        "isolation=slab needs a cell that suits Quantum ESPRESSO's 2D Coulomb "
+        "truncation."
+    ),
+    fields=("isolation",),
+    remedies=(_PERIODIC,),
+)
+_ISOLATED_VC_RELAX = Finding(
+    code="boundary.isolated_forbids_vc_relax",
+    message=(
+        "vc-relax cannot relax the cell with isolation=isolated "
+        "(Martyna-Tuckerman): pw.x computes no stress for an isolated system, so "
+        "the input cell would be reported as converged. Use the relax task for a "
+        "molecule or cluster in a box, or set isolation=periodic for a periodic "
+        "structure."
+    ),
+    fields=("isolation",),
+)
+"""No remedy: only a cell with vacuum along a, b and c may be isolated (the
+vacuum rule refuses any other, offering isolation=periodic), and for such a
+molecule or cluster the fix is the relax task, which no override expresses.
+isolation=periodic would pass, but vc-relax would then move the vacuum
+box."""
+_SLAB_VC_RELAX_CELL_DOFREE = Finding(
+    code="relax.slab_vc_relax_needs_2d_cell_dofree",
+    message="vc-relax with isolation=slab needs a 2D cell_dofree.",
+    fields=("cell_dofree", "isolation"),
+    remedies=({"cell_dofree": "2Dxy"}, {**_PERIODIC, "cell_dofree": None}),
+)
+"""The periodic remedy also clears cell_dofree, so that the slab's default
+'2Dxy' holds c, which is the vacuum, fixed: an explicit 'all' kept under
+isolation=periodic would pass, but relax the vacuum. Both remedies hold only
+on a slab with its vacuum along c in the xy frame, so the rule leaves any
+other cell to the boundary rule's isolation=periodic."""
+_TWO_D_CELL_DOFREE_FRAME = Finding(
+    code="relax.two_d_cell_dofree_needs_xy_frame",
+    message="A 2D cell_dofree needs a and b in the Cartesian xy plane.",
+    fields=("cell_dofree",),
+    remedies=({"cell_dofree": "all"},),
+)
+"""The remedy holds for a cell without vacuum only: with vacuum, 'all'
+would relax the vacuum too, so the rule offers none there and names what
+holds the vacuum fixed instead."""
+_CARTESIAN_CELL_DOFREE_ROTATED = Finding(
+    code="relax.cartesian_cell_dofree_on_rotated_cell",
+    message=(
+        "A cell_dofree that masks Cartesian components needs the cell written "
+        "unrotated."
+    ),
+    fields=("cell_dofree",),
+    remedies=({"cell_dofree": None},),
+)
+_DISPERSION_FUNCTIONAL = Finding(
+    code="vdw.use_vdw_without_d3bj_parameters",
+    message="use_vdw=true needs a functional with D3(BJ) parameters.",
+    fields=("use_vdw", "functional"),
+    remedies=({"use_vdw": False},),
+)
+_FIX_BOTTOM_LAYERS_WITHOUT_SLAB = Finding(
+    code="relax.fix_bottom_layers_needs_slab",
+    message="fix_bottom_layers needs a slab.",
+    fields=("fix_bottom_layers",),
+    remedies=({"fix_bottom_layers": None},),
+)
+_FIX_BOTTOM_LAYERS_EXCEEDS = Finding(
+    code="relax.fix_bottom_layers_exceeds_layers",
+    message="fix_bottom_layers exceeds the atomic layers of the slab.",
+    fields=("fix_bottom_layers",),
+    remedies=({"fix_bottom_layers": None},),
+)
+
+FINDING_CATALOGUE = (
+    _BLOCKED,
+    _MISSING_TOT_MAGNETIZATION,
+    _NON_INTEGER_TOT_MAGNETIZATION,
+    _TOT_MAGNETIZATION_PARITY,
+    _ODD_ELECTRON_COUNT,
+    _TOO_FEW_BANDS,
+    _VC_RELAX_ION_DYNAMICS,
+    _ISOLATED_WITHOUT_VACUUM,
+    _SLAB_UNSUITED,
+    _ISOLATED_VC_RELAX,
+    _SLAB_VC_RELAX_CELL_DOFREE,
+    _TWO_D_CELL_DOFREE_FRAME,
+    _CARTESIAN_CELL_DOFREE_ROTATED,
+    _DISPERSION_FUNCTIONAL,
+    _FIX_BOTTOM_LAYERS_WITHOUT_SLAB,
+    _FIX_BOTTOM_LAYERS_EXCEEDS,
+    _NPOOL,
+    _NDIAG,
+)
+"""Every finding the gate can return, with its code's fields and remedies
+and a generic message; a rule returns its entry with the occurrence's
+message, less any remedy that would not hold for it (module docstring)."""
+
+
+@dataclass(frozen=True, slots=True)
 class CheckReport:
-    blocking: tuple[str, ...] = ()
-    warnings: tuple[str, ...] = ()
+    """The gate's verdict: ``blocking`` holds one finding per root cause, in
+    first-seen order; findings with the same code and message are kept once,
+    since many blocked fields can share one upstream cause."""
+
+    blocking: tuple[Finding, ...] = ()
+
+    def __post_init__(self) -> None:
+        unique: dict[tuple[str, str], Finding] = {}
+        for finding in self.blocking:
+            unique.setdefault((finding.code, finding.message), finding)
+        object.__setattr__(self, "blocking", tuple(unique.values()))
 
     @property
     def ok(self) -> bool:
         return not self.blocking
 
 
-def collect_blocked(*field_states: FieldState[object]) -> tuple[str, ...]:
-    """Every ``Blocked`` field state's root cause, in the order given.
+def collect_blocked(*field_states: FieldState[object]) -> tuple[Finding, ...]:
+    """An ``advice.blocked`` finding naming each ``Blocked`` field state's
+    root cause, in the order given.
 
     ``Unavailable`` and ``Resolved`` states are not blocking on their
     own -- an advisor that could not tell, or a caller that never
@@ -184,7 +407,9 @@ def collect_blocked(*field_states: FieldState[object]) -> tuple[str, ...]:
     failure. Only genuine ``Blocked`` propagation reaches here.
     """
     return tuple(
-        state.root_cause() for state in field_states if isinstance(state, Blocked)
+        replace(_BLOCKED, message=state.root_cause())
+        for state in field_states
+        if isinstance(state, Blocked)
     )
 
 
@@ -214,8 +439,8 @@ def check_all(
     ``Blocked`` scan, so a caller does not need to repeat them in
     ``field_states`` as well.
 
-    Each rule returns its blocking reason or ``None``; a new rule is one
-    more entry in ``rule_reasons``.
+    Each rule returns its finding or ``None``; a new rule is one more
+    entry in ``rule_findings`` and one in ``FINDING_CATALOGUE``.
     """
     optional = tuple(
         s
@@ -233,7 +458,7 @@ def check_all(
         )
         if s is not None
     )
-    rule_reasons = (
+    rule_findings = (
         _fixed_occupations_needs_integer_moment(
             occupations, magnetic, electron_count, purpose
         ),
@@ -244,7 +469,7 @@ def check_all(
         _vc_relax_requires_bfgs_ion_dynamics(relax, purpose),
         _isolation_matches_written_cell(boundary, magnetic),
         _vc_relax_forbids_isolated_boundary(boundary, purpose),
-        _slab_vc_relax_needs_2d_cell_dofree(boundary, relax),
+        _slab_vc_relax_needs_2d_cell_dofree(boundary, relax, magnetic),
         _two_d_cell_dofree_needs_xy_frame(relax, magnetic),
         _cartesian_cell_dofree_needs_unrotated_cell(relax, magnetic),
         _dispersion_needs_parameterised_functional(vdw, functional),
@@ -255,7 +480,7 @@ def check_all(
     return CheckReport(
         blocking=(
             *collect_blocked(*field_states, *optional),
-            *(reason for reason in rule_reasons if reason is not None),
+            *(finding for finding in rule_findings if finding is not None),
         )
     )
 
@@ -265,7 +490,7 @@ def _fixed_occupations_needs_integer_moment(
     magnetic: FieldState[MagneticConfigFacts] | None,
     electron_count: FieldState[ElectronCountDecision] | None,
     purpose: str,
-) -> str | None:
+) -> Finding | None:
     if purpose not in SCF_LIKE_PURPOSES or occupations is None or magnetic is None:
         return None
     if not (occupations.ok and magnetic.ok):
@@ -279,9 +504,14 @@ def _fixed_occupations_needs_integer_moment(
     if tot is None:
         return _MISSING_TOT_MAGNETIZATION
     if tot != int(tot):
-        return (
-            "occupations='fixed' with a spin-polarized system requires an "
-            f"integer tot_magnetization; got {tot!r}."
+        return replace(
+            _NON_INTEGER_TOT_MAGNETIZATION,
+            message=(
+                "occupations=fixed on a collinear spin-polarized run needs an "
+                f"integer tot_magnetization, not {tot:.10g}. Set "
+                "occupations=smearing, or an integer tot_magnetization of the "
+                "electron count's parity."
+            ),
         )
     # nelup = (nelec + tot) / 2, neldw = (nelec - tot) / 2 (#70): both need
     # to be integers, which needs tot_magnetization and nelec to share
@@ -292,11 +522,17 @@ def _fixed_occupations_needs_integer_moment(
         and electron_count.ok
         and not whole_spin_channels(electron_count.value.nelec, tot)
     ):
-        return (
-            "occupations='fixed' requires tot_magnetization to share "
-            "parity with the electron count, so nelup/neldw are both "
-            f"integers; got tot_magnetization={tot!r}, "
-            f"nelec={electron_count.value.nelec!r}."
+        return replace(
+            _TOT_MAGNETIZATION_PARITY,
+            message=(
+                "occupations=fixed fills (nelec + tot_magnetization)/2 spin-up "
+                "and (nelec - tot_magnetization)/2 spin-down electrons, which "
+                "must both be whole numbers, so tot_magnetization must share "
+                f"parity with the electron count; tot_magnetization={tot:.10g} "
+                f"and nelec={electron_count.value.nelec:.10g} do not. Set "
+                "occupations=smearing, or a tot_magnetization of the electron "
+                "count's parity."
+            ),
         )
     return None
 
@@ -306,7 +542,7 @@ def _fixed_occupations_needs_even_electron_count(
     magnetic: FieldState[MagneticConfigFacts] | None,
     electron_count: FieldState[ElectronCountDecision] | None,
     purpose: str,
-) -> str | None:
+) -> Finding | None:
     """Sibling of ``_fixed_occupations_needs_integer_moment`` above, for
     runs without spin polarization, spin-orbit or not: found empirically
     2026-09-16, verified against real QE 7.3 source
@@ -324,11 +560,15 @@ def _fixed_occupations_needs_even_electron_count(
         return None
     nelec = electron_count.value.nelec
     if not whole_spin_channels(nelec, 0.0):
-        return (
-            "occupations='fixed' with a non-spin-polarized system requires "
-            f"an even electron count; got nelec={nelec!r}, which likely means "
-            "an unpaired electron -- set spin_polarized=true, or "
-            "occupations=smearing/tetrahedra_opt if this is genuinely metallic."
+        return replace(
+            _ODD_ELECTRON_COUNT,
+            message=(
+                "occupations=fixed without spin polarization needs an even "
+                f"electron count, but nelec={nelec:.10g} is odd, which leaves one "
+                "band half filled. Set occupations=smearing, or "
+                "spin_polarized=true with occupations=smearing for an unpaired "
+                "electron."
+            ),
         )
     return None
 
@@ -338,7 +578,7 @@ def _nbnd_holds_every_electron(
     occupations: FieldState[OccupationsDecision] | None,
     magnetic: FieldState[MagneticConfigFacts] | None,
     electron_count: FieldState[ElectronCountDecision] | None,
-) -> str | None:
+) -> Finding | None:
     """Rule 4 of this module's docstring: the first of pw.x's band floors
     ``nbnd`` falls below, with the fewest bands that pass them all."""
     if (
@@ -356,18 +596,21 @@ def _nbnd_holds_every_electron(
     if not short:
         return None
     floor = short[0]
-    return (
-        f"nbnd={bands} cannot hold {floor.electrons:.10g} {floor.held}: pw.x "
-        f"stops in setup with '{floor.error}'. Set nbnd to at least "
-        f"{max(each.bands for each in floors)}, or unset nbnd and extra_bands "
-        "for the default."
+    return replace(
+        _TOO_FEW_BANDS,
+        message=(
+            f"nbnd={bands} cannot hold {floor.electrons:.10g} {floor.held}: pw.x "
+            f"stops in setup with '{floor.error}'. Unset nbnd and extra_bands for "
+            f"the default, or set nbnd to at least "
+            f"{max(each.bands for each in floors)}."
+        ),
     )
 
 
 def _npool_must_divide_ntasks(
     job: FieldState[JobDecision] | None,
     parallel: FieldState[ParallelisationDecision] | None,
-) -> str | None:
+) -> Finding | None:
     """``npool`` not dividing ``ntasks`` is a hard MPI-layout requirement
     QE itself refuses (``advisors/parallelisation.py``'s own docstring):
     a bad ``npool`` fails only once compute is already allocated and the
@@ -380,9 +623,13 @@ def _npool_must_divide_ntasks(
     if job is None or parallel is None or not job.ok or not parallel.ok:
         return None
     if job.value.ntasks % parallel.value.npool != 0:
-        return (
-            f"npool={parallel.value.npool} does not divide "
-            f"ntasks={job.value.ntasks}; QE refuses this MPI layout."
+        return replace(
+            _NPOOL,
+            message=(
+                f"npool={parallel.value.npool} does not divide "
+                f"ntasks={job.value.ntasks}, and pw.x refuses that layout. Unset "
+                "npool for the default, or set npool to a divisor of ntasks."
+            ),
         )
     return None
 
@@ -391,7 +638,7 @@ def _ndiag_grid_must_distribute_bands(
     job: FieldState[JobDecision] | None,
     parallel: FieldState[ParallelisationDecision] | None,
     nbnd: FieldState[NbndDecision] | None,
-) -> str | None:
+) -> Finding | None:
     """Rule 5 of this module's docstring. ``parallelisation()`` never
     sets ``ndiag`` itself, so this only fires for a human override; like
     a bad ``npool``, such a layout fails only after queueing, or hangs a
@@ -405,19 +652,22 @@ def _ndiag_grid_must_distribute_bands(
     side = diag_grid_side(ndiag, job.value.ntasks // parallel.value.npool, bands)
     if bands > (side - 1) ** 2:
         return None
-    return (
-        f"ndiag={ndiag} gives a {side}x{side} diagonalization grid, which "
-        f"cannot distribute nbnd={bands} bands (it needs nbnd > "
-        f"{(side - 1) ** 2}); pw.x would abort at startup or fail in the "
-        "parallel eigensolver. Unset ndiag so pw.x chooses it from nbnd, "
-        f"or use ndiag <= {(math.isqrt(bands - 1) + 1) ** 2}."
+    return replace(
+        _NDIAG,
+        message=(
+            f"ndiag={ndiag} gives a {side}x{side} diagonalization grid, which "
+            f"cannot distribute nbnd={bands} bands (it needs nbnd > "
+            f"{(side - 1) ** 2}); pw.x would abort at startup or fail in the "
+            "parallel eigensolver. Unset ndiag so pw.x chooses it from nbnd, "
+            f"or use ndiag <= {(math.isqrt(bands - 1) + 1) ** 2}."
+        ),
     )
 
 
 def _vc_relax_requires_bfgs_ion_dynamics(
     relax: FieldState[RelaxOptions | VcRelaxOptions] | None,
     purpose: str,
-) -> str | None:
+) -> Finding | None:
     """QE couples ``cell_dynamics`` to ``ion_dynamics`` for vc-relax
     (``advisors/relax.py``'s own docstring, audit finding B5): this
     codebase's ``VcRelaxOptions.cell_dynamics`` is a derived property
@@ -429,12 +679,14 @@ def _vc_relax_requires_bfgs_ion_dynamics(
     if purpose != "vc-relax" or relax is None or not relax.ok:
         return None
     if relax.value.ion_dynamics != "bfgs":
-        return (
-            "vc-relax requires ion_dynamics='bfgs' in this codebase (got "
-            f"{relax.value.ion_dynamics!r}): QE couples cell_dynamics to "
-            "ion_dynamics for vc-relax, and only the bfgs/bfgs combination "
-            "is modelled here -- damp-paired cell dynamics is a future "
-            "epic's scope."
+        return replace(
+            _VC_RELAX_ION_DYNAMICS,
+            message=(
+                "vc-relax is generated only with ion_dynamics=bfgs, not "
+                f"{relax.value.ion_dynamics}: Quantum ESPRESSO pairs cell_dynamics "
+                "with ion_dynamics in a vc-relax, and only the bfgs pair is "
+                "written. Set ion_dynamics=bfgs."
+            ),
         )
     return None
 
@@ -442,7 +694,7 @@ def _vc_relax_requires_bfgs_ion_dynamics(
 def _isolation_matches_written_cell(
     boundary: FieldState[BoundaryFacts] | None,
     magnetic: FieldState[MagneticConfigFacts] | None,
-) -> str | None:
+) -> Finding | None:
     """'isolated' and 'slab' truncate the Coulomb interaction, which is right
     only for the vacuum each assumes (#161). Checked on the cell the writer
     renders, whatever the source of ``isolation``."""
@@ -456,7 +708,7 @@ def _isolation_matches_written_cell(
     return None
 
 
-def _isolated_needs_vacuum_along_every_axis(cell: Structure) -> str | None:
+def _isolated_needs_vacuum_along_every_axis(cell: Structure) -> Finding | None:
     """Martyna-Tuckerman treats the system as a molecule or cluster in a 3D
     supercell (QE 7.3 PW/Doc/INPUT_PW.def:1593-1594); pw.x has no 1D
     truncation for a wire."""
@@ -464,15 +716,18 @@ def _isolated_needs_vacuum_along_every_axis(cell: Structure) -> str | None:
     if len(axes) == 3:
         return None
     found = f"vacuum only along {_along(axes)}" if axes else "no vacuum"
-    return (
-        "isolation='isolated' writes Martyna-Tuckerman (assume_isolated="
-        "'martyna-tuckerman'), which treats the system as a molecule or cluster "
-        "in a box and needs vacuum along a, b and c, but the cell to be written "
-        f"has {found}. Set isolation='periodic'."
+    return replace(
+        _ISOLATED_WITHOUT_VACUUM,
+        message=(
+            "isolation=isolated writes Martyna-Tuckerman (assume_isolated="
+            "'martyna-tuckerman'), which treats the system as a molecule or "
+            "cluster in a box and needs vacuum along a, b and c, but the cell to "
+            f"be written has {found}. Set isolation=periodic."
+        ),
     )
 
 
-def _slab_needs_room_for_the_2d_truncation(cell: Structure) -> str | None:
+def _slab_needs_room_for_the_2d_truncation(cell: Structure) -> Finding | None:
     """QE's 2D Coulomb truncation cuts the interaction between charges more
     than half the cell height apart along z (QE 7.3
     PW/src/Coul_cut_2D.f90:77-81). It assumes a and b in the xy plane
@@ -490,18 +745,21 @@ def _slab_needs_room_for_the_2d_truncation(cell: Structure) -> str | None:
         found = list(two_d_truncation_obstacles(cell))
     if not found:
         return None
-    return (
-        "isolation='slab' writes Quantum ESPRESSO's 2D Coulomb truncation "
-        "(assume_isolated='2D'), which needs vacuum along c only, a and b in the "
-        "Cartesian xy plane, c along z, and room along z for the pseudopotentials "
-        f"and the slab, but the cell to be written has {' and '.join(found)}. "
-        "Set isolation='periodic'."
+    return replace(
+        _SLAB_UNSUITED,
+        message=(
+            "isolation=slab writes Quantum ESPRESSO's 2D Coulomb truncation "
+            "(assume_isolated='2D'), which needs vacuum along c only, a and b in "
+            "the Cartesian xy plane, c along z, and room along z for the "
+            "pseudopotentials and the slab, but the cell to be written has "
+            f"{' and '.join(found)}. Set isolation=periodic."
+        ),
     )
 
 
 def _vc_relax_forbids_isolated_boundary(
     boundary: FieldState[BoundaryFacts] | None, purpose: str
-) -> str | None:
+) -> Finding | None:
     """Under Martyna-Tuckerman, from any source, pw.x clears ``tstress``
     (QE 7.3 PW/src/input.f90:1361-1365) even though vc-relax had switched
     it on (input.f90:646): BFGS then sees a zero cell gradient and reports
@@ -510,43 +768,53 @@ def _vc_relax_forbids_isolated_boundary(
         return None
     if boundary.value.isolation != "isolated":
         return None
-    return (
-        "vc-relax cannot relax the cell with isolation='isolated' "
-        "(Martyna-Tuckerman): pw.x computes no stress for an isolated system, so "
-        "the input cell would be reported as converged. Use task='relax' for a "
-        "molecule or cluster in a box, or set isolation='periodic' for a periodic "
-        "structure."
-    )
+    return _ISOLATED_VC_RELAX
 
 
 def _slab_vc_relax_needs_2d_cell_dofree(
     boundary: FieldState[BoundaryFacts] | None,
     relax: FieldState[RelaxOptions | VcRelaxOptions] | None,
-) -> str | None:
+    magnetic: FieldState[MagneticConfigFacts] | None,
+) -> Finding | None:
     """Under QE's 2D Coulomb truncation only in-plane stresses make sense, and
     QE asks a vc-relax to use cell_dofree='2Dxy' (QE 7.3
     PW/Doc/INPUT_PW.def:1677-1678); pw.x itself does not check it. Any value
-    in ``_TWO_D_CELL_DOFREE`` holds c and the z components of a and b."""
-    if boundary is None or relax is None or not (boundary.ok and relax.ok):
+    in ``_TWO_D_CELL_DOFREE`` holds c and the z components of a and b.
+    Checked only on a written cell that is a slab with its vacuum along c in
+    the xy frame, whose default is '2Dxy': there '2Dxy' passes the 2D-frame
+    rule and is what isolation=periodic with cell_dofree unset writes, so
+    both remedies hold and neither relaxes the vacuum. The boundary rule
+    refuses isolation=slab on any other cell, with isolation=periodic as its
+    remedy; there '2Dxy' fails the 2D-frame rule unless a and b lie in the xy
+    plane without vacuum, and an unset cell_dofree blocks a wire or a slab
+    with its vacuum along a or b and gives a box 'all'."""
+    if boundary is None or relax is None or magnetic is None:
+        return None
+    if not (boundary.ok and relax.ok and magnetic.ok):
         return None
     options = relax.value
     if boundary.value.isolation != "slab" or not isinstance(options, VcRelaxOptions):
         return None
     if options.cell_dofree in _TWO_D_CELL_DOFREE:
         return None
-    return (
-        "vc-relax with isolation='slab' cannot use "
-        f"cell_dofree={options.cell_dofree!r}: under Quantum ESPRESSO's 2D Coulomb "
-        "truncation only the in-plane stress is meaningful, so c and the z "
-        "components of a and b must stay fixed. Set cell_dofree='2Dxy' (or "
-        "'2Dshape'), or isolation='periodic'."
+    if _xy_frame_obstacles(magnetic.value.cell, allowed_vacuum=(("c",),)):
+        return None
+    return replace(
+        _SLAB_VC_RELAX_CELL_DOFREE,
+        message=(
+            "vc-relax with isolation=slab cannot use "
+            f"cell_dofree={options.cell_dofree}: under Quantum ESPRESSO's 2D "
+            "Coulomb truncation only the in-plane stress is meaningful, so c and "
+            "the z components of a and b must stay fixed. Set cell_dofree=2Dxy "
+            "(or 2Dshape), or isolation=periodic with cell_dofree unset."
+        ),
     )
 
 
 def _two_d_cell_dofree_needs_xy_frame(
     relax: FieldState[RelaxOptions | VcRelaxOptions] | None,
     magnetic: FieldState[MagneticConfigFacts] | None,
-) -> str | None:
+) -> Finding | None:
     """QE's 2D cell constraints move only the x and y components of a and b
     and hold c fixed, in Cartesian axes (QE 7.3 Modules/cell_base.f90:742-749
     and :803-808), and BFGS judges convergence on the masked stress. With a
@@ -554,7 +822,9 @@ def _two_d_cell_dofree_needs_xy_frame(
     shrank a and b of rhombohedral Bi2Se3 under '2Dxy' while c stayed fixed.
     With vacuum along a or b they free a vacuum vector and freeze one in the
     sheet (#132). Checked on the cell the writer renders, whatever the
-    source of ``cell_dofree``."""
+    source of ``cell_dofree``. 'all' is the remedy only for a cell without
+    vacuum: with vacuum it would relax the vacuum too, which is why the relax
+    advisor gives a wire or a slab outside the xy frame no default."""
     if relax is None or magnetic is None or not (relax.ok and magnetic.ok):
         return None
     options = relax.value
@@ -562,23 +832,63 @@ def _two_d_cell_dofree_needs_xy_frame(
         return None
     if options.cell_dofree not in _TWO_D_CELL_DOFREE:
         return None
-    found = _xy_frame_obstacles(magnetic.value.cell, allowed_vacuum=((), ("c",)))
+    cell = magnetic.value.cell
+    found = _xy_frame_obstacles(cell, allowed_vacuum=((), ("c",)))
     if not found:
         return None
+    message = (
+        f"cell_dofree={options.cell_dofree} moves only the x and y components "
+        "of a and b and holds c fixed, so it needs a and b in the Cartesian xy "
+        "plane and any vacuum along c, but the cell to be written has "
+        f"{' and '.join(found)}."
+    )
+    axes = vacuum_axes(cell)
+    if not axes:
+        return replace(
+            _TWO_D_CELL_DOFREE_FRAME,
+            message=f"{message} Set cell_dofree=all, or reorient the cell.",
+        )
+    return replace(
+        _TWO_D_CELL_DOFREE_FRAME,
+        message=f"{message} {_holding_the_vacuum(axes)}",
+        remedies=(),
+    )
+
+
+def _holding_the_vacuum(axes: tuple[LatticeAxis, ...]) -> str:
+    """What holds the vacuum along ``axes`` fixed in a vc-relax, for a
+    2D cell constraint refused on that cell: no orientation suits a wire or
+    a box, whose two or three vacuum vectors cannot all lie along c."""
+    if len(axes) == 3:
+        return (
+            "Use the relax task for a molecule or cluster in a box: every "
+            "lattice vector is a vacuum vector, so a vc-relax would relax the "
+            "vacuum."
+        )
+    if len(axes) == 2:
+        period, constraint = wire_period(axes)
+        return (
+            "Set a cell_dofree that holds the vacuum fixed: "
+            f"cell_dofree={constraint} holds {' and '.join(axes)} fixed and "
+            f"relaxes only {period}, the wire's period, while cell_dofree=all "
+            "would relax the vacuum too."
+        )
     return (
-        f"cell_dofree={options.cell_dofree!r} moves only the x and y components of "
-        "a and b and holds c fixed, so it needs a and b in the Cartesian xy plane "
-        "and any vacuum along c, but the cell to be written has "
-        f"{' and '.join(found)}. Set cell_dofree='all', or reorient the cell."
+        "Reorient the cell, or set a cell_dofree that holds the vacuum fixed: "
+        "cell_dofree=all would relax the vacuum too."
     )
 
 
 def _cartesian_cell_dofree_needs_unrotated_cell(
     relax: FieldState[RelaxOptions | VcRelaxOptions] | None,
     magnetic: FieldState[MagneticConfigFacts] | None,
-) -> str | None:
+) -> Finding | None:
     """Rule 6 of this module's docstring, whatever the source of
-    ``cell_dofree``."""
+    ``cell_dofree``. The remedy clears the override rather than naming
+    'all': a rotated cell is a bulk crystal, whose default is 'all', or a
+    slab with its vacuum along c, whose default '2Dxy' keeps the vacuum
+    fixed and also passes the 2D-truncation rule under isolation='slab',
+    which 'all' would not."""
     if relax is None or magnetic is None or not (relax.ok and magnetic.ok):
         return None
     options = relax.value
@@ -587,13 +897,16 @@ def _cartesian_cell_dofree_needs_unrotated_cell(
         return None
     if options.cell_dofree not in _CARTESIAN_CELL_DOFREE:
         return None
-    return (
-        f"cell_dofree={options.cell_dofree!r} holds or frees single Cartesian "
-        "components of the lattice vectors, but the cell to be written is the "
-        f"uploaded one {frame.describe_rotation()} into pw.x's frame, so its x, "
-        "y and z are not the uploaded cell's. Set "
-        "cell_dofree='all' or 'shape', or fix whole lattice vectors with 'fixa', "
-        "'fixb' or 'fixc'."
+    return replace(
+        _CARTESIAN_CELL_DOFREE_ROTATED,
+        message=(
+            f"cell_dofree={options.cell_dofree} holds or frees single Cartesian "
+            "components of the lattice vectors, but the cell to be written is the "
+            f"uploaded one {frame.describe_rotation()} into pw.x's frame, so its "
+            "x, y and z are not the uploaded cell's. Unset cell_dofree for the "
+            "default, or use cell_dofree=all or shape, or fixa, fixb or fixc to "
+            "fix whole lattice vectors."
+        ),
     )
 
 
@@ -620,7 +933,7 @@ def _along(axes: tuple[LatticeAxis, ...]) -> str:
 
 def _dispersion_needs_parameterised_functional(
     vdw: FieldState[VdwFacts] | None, functional: FieldState[str] | None
-) -> str | None:
+) -> Finding | None:
     """D3(BJ), the only dispersion method generated, needs damping
     parameters for the functional: pw.x passes DFT-D3 the pseudopotentials'
     short functional name (QE 7.3 PW/src/input.f90:2039-2041) and stops with
@@ -631,18 +944,22 @@ def _dispersion_needs_parameterised_functional(
         return None
     if not vdw.value.use_vdw or has_d3bj_parameters(functional.value):
         return None
-    return (
-        "use_vdw=true adds D3(BJ) dispersion, but Quantum ESPRESSO's DFT-D3 has "
-        f"no parameters for functional {functional.value!r}, so pw.x would stop "
-        "with 'functional name unknown'. Set use_vdw=false, or choose a "
-        f"functional with D3(BJ) parameters ({', '.join(sorted(D3BJ_FUNCTIONALS))})."
+    return replace(
+        _DISPERSION_FUNCTIONAL,
+        message=(
+            "use_vdw=true adds D3(BJ) dispersion, but Quantum ESPRESSO's DFT-D3 "
+            f"has no parameters for functional {functional.value}, so pw.x would "
+            "stop with 'functional name unknown'. Set use_vdw=false, or choose a "
+            "functional with D3(BJ) parameters "
+            f"({', '.join(sorted(D3BJ_FUNCTIONALS))})."
+        ),
     )
 
 
 def _fix_bottom_layers_requires_slab(
     relax: FieldState[RelaxOptions | VcRelaxOptions] | None,
     magnetic: FieldState[MagneticConfigFacts] | None,
-) -> str | None:
+) -> Finding | None:
     """``relax.fix_bottom_layers`` (#44) freezes a slab's bottom N atomic
     layers, which ``analysis.geometry.slab_layers`` counts up from the vacuum
     of a cell with exactly one vacuum axis. A '2d' rank is no evidence of a
@@ -657,17 +974,23 @@ def _fix_bottom_layers_requires_slab(
     cell = magnetic.value.cell
     layers = slab_layers(cell)
     if layers is None:
-        return (
-            "relax.fix_bottom_layers requires a slab: it freezes the bottom atomic "
-            "layers counted up from the vacuum, so the cell needs one vacuum gap, "
-            "along exactly one lattice vector, but the cell to be written has "
-            f"{_no_single_slab(cell)}. Unset fix_bottom_layers."
+        return replace(
+            _FIX_BOTTOM_LAYERS_WITHOUT_SLAB,
+            message=(
+                "fix_bottom_layers freezes the bottom atomic layers counted up "
+                "from the vacuum, so it needs a slab: one vacuum gap, along "
+                "exactly one lattice vector. The cell to be written has "
+                f"{_no_single_slab(cell)}. Unset fix_bottom_layers."
+            ),
         )
     if count > len(layers):
-        return (
-            f"relax.fix_bottom_layers={count} exceeds the {len(layers)} atomic "
-            "layers of the slab to be written. Set fix_bottom_layers to at most "
-            f"{len(layers)}, or unset it."
+        return replace(
+            _FIX_BOTTOM_LAYERS_EXCEEDS,
+            message=(
+                f"fix_bottom_layers={count} exceeds the {len(layers)} atomic "
+                "layers of the slab to be written. Set fix_bottom_layers to at "
+                f"most {len(layers)}, or unset it."
+            ),
         )
     return None
 

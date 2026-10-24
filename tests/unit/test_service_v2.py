@@ -259,8 +259,9 @@ class TestAdviseEndToEnd:
         assert advice.step.resources.job.value.ntasks == 64
         report = check(advice)
 
-        assert not report.ok
-        assert any("npool=7" in reason for reason in report.blocking)
+        (finding,) = report.blocking
+        assert finding.code == "parallelisation.npool_does_not_divide_ntasks"
+        assert finding.message.startswith("npool=7 does not divide ntasks=64")
 
     @pytest.mark.parametrize(
         "setting", [{"nbnd": 2}, {"extra_bands": -6}], ids=["nbnd", "extra_bands"]
@@ -279,8 +280,9 @@ class TestAdviseEndToEnd:
         assert advice.step.kpoints.nbnd.value.nbnd == 2
         report = check(advice)
 
-        assert not report.ok
-        assert any("'too few bands'" in reason for reason in report.blocking)
+        (finding,) = report.blocking
+        assert finding.code == "nbnd.too_few_bands"
+        assert "'too few bands'" in finding.message
 
     def test_human_overrides_flow_through_to_generated_input(
         self, silicon, hpc, installed_table
@@ -490,7 +492,7 @@ class TestJobMemory:
         assert "Si.upf" in job.reason
         assert "number_of_proj" in job.reason
         report = check(advice)
-        assert any("Si.upf" in reason for reason in report.blocking)
+        assert any("Si.upf" in finding.message for finding in report.blocking)
 
     def test_a_disordered_cell_leaves_the_job_unavailable_not_a_crash(
         self, hpc, installed_table
@@ -766,22 +768,25 @@ class TestAdviseDegradation:
             generate(advice, report)
         assert excinfo.value.report is report
 
-    def test_advice_incomplete_message_deduplicates_repeated_root_causes(
-        self, silicon, hpc
-    ) -> None:
-        """report.blocking has one entry per blocked field, not per
-        distinct cause -- many fields share the one pseudo_table_id
-        failure here. The exception message must say it once."""
+    def test_one_root_cause_is_one_finding_and_said_once(self, silicon, hpc) -> None:
+        """Many fields share the one pseudo_table_id failure here; the
+        report holds it once (#151), as advice.blocked without a remedy,
+        and the exception message says it once."""
         overrides = RunOverrides(
             system=SystemOverrides(pseudo_table_id="does-not-exist")
         )
         advice = advise(silicon, hpc=hpc, overrides=overrides)
+        blocked = [
+            state for state in advice.field_states() if isinstance(state, Blocked)
+        ]
         report = check(advice)
-        assert len(report.blocking) > 1, "test assumes multiple fields share one cause"
+        assert len(blocked) > 1, "test assumes multiple fields share one cause"
 
         with pytest.raises(AdviceIncomplete) as excinfo:
             generate(advice, report)
 
+        (finding,) = report.blocking
+        assert (finding.code, finding.remedies) == ("advice.blocked", ())
         assert str(excinfo.value).count("unknown pseudopotential table") == 1
 
     def test_fetch_missing_false_degrades_without_raising(

@@ -99,10 +99,12 @@ def test_user_ndiag_that_cannot_hold_nbnd_is_refused(tmp_path, monkeypatch) -> N
 
     report = check(advice)
 
-    (reason,) = report.blocking
-    assert "ndiag=64" in reason
-    assert "8x8" in reason
-    assert "nbnd=8" in reason
+    (finding,) = report.blocking
+    assert finding.code == "parallelisation.ndiag_grid_too_large"
+    assert finding.remedies == ({"ndiag": None},)
+    assert "ndiag=64" in finding.message
+    assert "8x8" in finding.message
+    assert "nbnd=8" in finding.message
 
 
 def test_user_ndiag_that_holds_nbnd_reaches_pw_x(tmp_path, monkeypatch) -> None:

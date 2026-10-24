@@ -1,8 +1,7 @@
-import { type ReactNode, useId } from "react";
+import { Fragment, type ReactNode, useId } from "react";
 import {
   Accordion,
   Badge,
-  CloseButton,
   Fieldset,
   Group,
   NativeSelect,
@@ -15,7 +14,6 @@ import {
 import type {
   AdvisorWarning,
   CalcTask,
-  ExplainResult,
   HpcProfile,
   PseudopotentialTable,
   ResolvedField,
@@ -25,9 +23,19 @@ import type {
 } from "../api/coreClient";
 import { SourceLabel } from "../api/SourceLabel";
 import { isAdvisorWarning } from "../review/warnings";
+import { FindingNotes } from "../status/FindingNote";
+import { currentFindings } from "../workspace/pipelineStatus";
+import { readOnlyAdvisorRecords } from "../workspace/recordGroups";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
+import { AdvisorRecordItems, AdvisorStepRecords } from "./AdvisorRecords";
 import { OverrideControl } from "./OverrideControl";
-import { describeSource } from "./overrideFieldMeta";
+import { CONTROL_LABELS, describeSource } from "./overrideFieldMeta";
+import { OverrideSelect } from "./OverrideSelect";
+import {
+  resolvedSource,
+  resolvedValue,
+  settingRecord,
+} from "./resolvedSetting";
 
 const STATUS_COLORS: Readonly<Record<ResolvedField["status"], string>> = {
   resolved: "green",
@@ -194,6 +202,26 @@ export function CalculationForm() {
 
   const elements = inspection === null ? [] : uniqueElements(inspection);
   const overrides = draft.overrides;
+  // The core refuses a setting no step of the task reads (#154), so a
+  // setting is offered only for the tasks it declares.
+  const settings = capabilities.settings.filter((setting) =>
+    setting.tasks.includes(draft.task),
+  );
+  // Every advisor record of the response is shown: with the settings that
+  // resolve into it, else read-only after them, by the response's layout.
+  const readOnly =
+    reviewed === null
+      ? null
+      : readOnlyAdvisorRecords(
+          reviewed.layout,
+          new Set(settings.map((setting) => setting.resolved_in.record)),
+        );
+
+  // A finding of the current draft turns the group of every setting it
+  // concerns red (#165), and is shown under that setting's control (#151).
+  const findingFields = new Set(
+    currentFindings(snapshot).flatMap((finding) => finding.fields),
+  );
 
   function patchOverrides(patch: Readonly<Record<string, unknown>>): void {
     void workspace.dispatch({ type: "draft.patch", overrides: patch });
@@ -219,16 +247,32 @@ export function CalculationForm() {
         classNames={{ label: "workbench-accordion-label" }}
       >
         <SettingsGroupItems
-          settings={capabilities.settings}
-          task={draft.task}
+          settings={settings}
           overrides={overrides}
-          reviewed={reviewed}
+          records={reviewed?.records}
+          findingFields={findingFields}
           elements={elements}
           pseudopotentialTables={capabilities.pseudopotential_tables}
           disabled={disabled}
           onChange={patchOverrides}
         />
+        {readOnly === null || reviewed === null ? null : (
+          <AdvisorRecordItems
+            names={readOnly.ungrouped}
+            records={reviewed.records}
+          />
+        )}
       </Accordion>
+      {readOnly === null || reviewed === null
+        ? null
+        : readOnly.steps.map((step) => (
+            <AdvisorStepRecords
+              key={step.name}
+              step={step.name}
+              names={step.records}
+              records={reviewed.records}
+            />
+          ))}
     </Stack>
   );
 }
@@ -251,15 +295,16 @@ function uniqueFunctionals(tables: readonly PseudopotentialTable[]): string[] {
  * value pre-selected (with a source-naming description above the box)
  * rather than a separate read-only "here's what resolved" card next to
  * an always-"Automatic" select -- the same `resolvedValue`/`source`
- * pattern `OverrideControl` already uses for scalar/enum fields, just
- * hand-written here since a pseudopotential-table pick needs its own
- * elements/functional filtering `OverrideControl` doesn't know about. */
+ * pattern `OverrideControl` already uses for scalar/enum fields, on the
+ * same `OverrideSelect`, just hand-written here since a
+ * pseudopotential-table pick needs its own elements/functional filtering
+ * `OverrideControl` doesn't know about. */
 function PseudoTableControl({
   tables,
   elements,
   functionalOverride,
   pinned,
-  resolvedTable,
+  resolvedId,
   source,
   description,
   disabled,
@@ -269,8 +314,8 @@ function PseudoTableControl({
   readonly elements: readonly string[];
   readonly functionalOverride: string | undefined;
   readonly pinned: unknown;
-  readonly resolvedTable: unknown;
-  readonly source: Source | null | undefined;
+  readonly resolvedId: string | undefined;
+  readonly source: Source | undefined;
   readonly description: string;
   readonly disabled: boolean;
   readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
@@ -282,12 +327,6 @@ function PseudoTableControl({
       elements.every((element) => table.elements.includes(element)),
   );
   const pinnedId = typeof pinned === "string" ? pinned : undefined;
-  const resolvedId =
-    typeof resolvedTable === "object" &&
-    resolvedTable !== null &&
-    typeof (resolvedTable as { id?: unknown }).id === "string"
-      ? (resolvedTable as { id: string }).id
-      : undefined;
   const effectiveId = pinnedId ?? resolvedId;
   const noMatch =
     matching.length === 0
@@ -297,27 +336,13 @@ function PseudoTableControl({
     effectiveId === undefined ||
     !matching.some((table) => table.id === effectiveId);
   return (
-    <NativeSelect
-      label="Pseudopotential table"
+    <OverrideSelect
+      label={CONTROL_LABELS.pseudo_table_id}
       description={
         noMatch ?? describeSource(description, pinnedId !== undefined, source)
       }
       disabled={disabled}
-      rightSection={
-        pinnedId === undefined ? undefined : (
-          <CloseButton
-            aria-label="Reset Pseudopotential table to automatic"
-            size="sm"
-            disabled={disabled}
-            onMouseDown={(event) => {
-              event.preventDefault();
-            }}
-            onClick={() => {
-              onChange({ pseudo_table_id: undefined });
-            }}
-          />
-        )
-      }
+      pinned={pinnedId !== undefined}
       value={effectiveId ?? ""}
       data={[
         ...(needsPlaceholder
@@ -328,8 +353,10 @@ function PseudoTableControl({
           label: `${table.provider} · ${table.functional} · ${table.accuracy} · ${table.relativistic}`,
         })),
       ]}
-      onChange={(event) => {
-        const raw = event.currentTarget.value;
+      onReset={() => {
+        onChange({ pseudo_table_id: undefined });
+      }}
+      onChange={(raw) => {
         onChange({ pseudo_table_id: raw === "" ? undefined : raw });
       }}
     />
@@ -348,7 +375,7 @@ function FunctionalControl({
   readonly tables: readonly PseudopotentialTable[];
   readonly value: string | undefined;
   readonly resolvedValue: string | undefined;
-  readonly source: Source | null | undefined;
+  readonly source: Source | undefined;
   readonly description: string;
   readonly disabled: boolean;
   readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
@@ -359,25 +386,11 @@ function FunctionalControl({
   const needsPlaceholder =
     effective === undefined || !options.includes(effective);
   return (
-    <NativeSelect
-      label="Functional"
+    <OverrideSelect
+      label={CONTROL_LABELS.functional}
       description={describeSource(description, pinned, source)}
       disabled={disabled}
-      rightSection={
-        pinned ? (
-          <CloseButton
-            aria-label="Reset Functional to automatic"
-            size="sm"
-            disabled={disabled}
-            onMouseDown={(event) => {
-              event.preventDefault();
-            }}
-            onClick={() => {
-              onChange({ functional: undefined, pseudo_table_id: undefined });
-            }}
-          />
-        ) : undefined
-      }
+      pinned={pinned}
       value={effective ?? ""}
       data={[
         ...(needsPlaceholder
@@ -388,14 +401,16 @@ function FunctionalControl({
           label: functional,
         })),
       ]}
-      onChange={(event) => {
-        const raw = event.currentTarget.value;
-        // A pinned table pinned under the old functional may no
-        // longer be a valid choice (and won't even appear in the
-        // now-refiltered dropdown) -- clear it rather than silently
-        // keep submitting a now-invisible override, matching how a
-        // pseudopotential-table pin has always been invalidated by
-        // changing the functional it was chosen under.
+      // A table pinned under the old functional may no longer be a valid
+      // choice (and won't even appear in the now-refiltered dropdown) --
+      // a reset or a change clears it rather than silently keep
+      // submitting a now-invisible override, matching how a
+      // pseudopotential-table pin has always been invalidated by changing
+      // the functional it was chosen under.
+      onReset={() => {
+        onChange({ functional: undefined, pseudo_table_id: undefined });
+      }}
+      onChange={(raw) => {
         onChange({
           functional: raw === "" ? undefined : raw,
           pseudo_table_id: undefined,
@@ -410,7 +425,7 @@ function FunctionalControl({
  * contains instead of a literal, ID-suffixed rendering of the group
  * name. */
 const GROUP_DISPLAY_NAMES: Readonly<Record<string, string>> = {
-  pseudo_table_id: "Pseudopotential table",
+  pseudo_table_id: CONTROL_LABELS.pseudo_table_id,
 };
 
 function humanizeGroup(group: string): string {
@@ -420,43 +435,31 @@ function humanizeGroup(group: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
-/** A settings group's own record key doesn't always equal the group
- * name verbatim (`pseudo_table_id` the group vs `pseudo_table` the
- * record, see recordGroups.ts) -- this is the one alias the advisors
- * accordion needs to look its own resolved value up. */
-function recordKeyForGroup(group: string): string {
-  return group === "pseudo_table_id" ? "pseudo_table" : group;
-}
-
-/** One `Setting` plus which real `Setting.group`/record it came from --
- * needed once a group can display another group's settings inline
- * (`GROUP_MERGE_INTO`): the display grouping and the record a setting's
- * resolved value/source come from are no longer always the same key. */
+/** One `Setting` plus its real `Setting.group` -- a group can display
+ * another group's settings inline (`GROUP_MERGE_INTO`) -- and the record
+ * its `resolved_in` names, which holds its resolved value and tier (#187).
+ * A setting's record is never looked up by its key or group name. */
 interface GroupedSetting {
   readonly originalGroup: string;
   readonly setting: Setting;
+  readonly record: ResolvedField | undefined;
 }
 
-/** A compound decision's own field, looked up by the same name its
- * `Setting.key` uses -- works whenever an advisor's `*Decision` and
- * `*HumanInput` share field names (true for cutoffs/occupations/
- * convergence/job/parallelisation/...), silently falls back to
- * "nothing resolved yet" (the pre-existing "Automatic" placeholder
- * behaviour) for the handful that don't (e.g. k_sampling's `k_grid` ->
- * `mesh`, handled by hand where that's rendered). */
-function fieldValue(record: ResolvedField | undefined, key: string): unknown {
-  if (record?.status !== "resolved") return undefined;
-  const value = record.value;
-  if (typeof value !== "object" || value === null) return undefined;
-  return (value as Readonly<Record<string, unknown>>)[key];
+/** The records `entries` resolve into, once each, by record name. */
+function entryRecords(
+  entries: readonly GroupedSetting[],
+): Map<string, ResolvedField | undefined> {
+  return new Map(
+    entries.map((entry) => [entry.setting.resolved_in.record, entry.record]),
+  );
 }
 
-function fieldSource(
-  record: ResolvedField | undefined,
-  key: string,
-): Source | null | undefined {
-  if (record?.status !== "resolved") return undefined;
-  return record.field_sources?.[key] ?? record.source;
+/** The record of the first of `entries` from settings group `group`. */
+function groupRecord(
+  entries: readonly GroupedSetting[],
+  group: string,
+): ResolvedField | undefined {
+  return entries.find((entry) => entry.originalGroup === group)?.record;
 }
 
 /** Every compound decision that carries a `warnings` list used to
@@ -490,20 +493,41 @@ function GroupNotes({ notes }: { readonly notes: readonly AdvisorWarning[] }) {
   );
 }
 
+/** The status a group's badge shows: blocked when a finding concerns one of
+ * its settings, else the worst status of the records they resolve into;
+ * none while there is neither. */
+function groupStatus(
+  groupedSettings: readonly GroupedSetting[],
+  findingFields: ReadonlySet<string>,
+): ResolvedField["status"] | undefined {
+  if (groupedSettings.some((entry) => findingFields.has(entry.setting.key))) {
+    return "blocked";
+  }
+  return [...entryRecords(groupedSettings).values()].reduce<
+    ResolvedField["status"] | undefined
+  >((worst, record) => {
+    if (record === undefined) return worst;
+    if (worst === undefined) return record.status;
+    return STATUS_SEVERITY[record.status] > STATUS_SEVERITY[worst]
+      ? record.status
+      : worst;
+  }, undefined);
+}
+
 function SettingsGroupItems({
   settings,
-  task,
   overrides,
-  reviewed,
+  records,
+  findingFields,
   elements,
   pseudopotentialTables,
   disabled,
   onChange,
 }: {
   readonly settings: readonly Setting[];
-  readonly task: CalcTask;
   readonly overrides: Readonly<Record<string, unknown>>;
-  readonly reviewed: ExplainResult | null;
+  readonly records: Readonly<Record<string, ResolvedField>> | undefined;
+  readonly findingFields: ReadonlySet<string>;
   readonly elements: readonly string[];
   readonly pseudopotentialTables: readonly PseudopotentialTable[];
   readonly disabled: boolean;
@@ -511,11 +535,12 @@ function SettingsGroupItems({
 }) {
   const groups = new Map<string, GroupedSetting[]>();
   for (const setting of settings) {
-    // The core refuses a setting no step of the task reads (#154), so a
-    // setting is offered only for the tasks it declares.
-    if (!setting.tasks.includes(task)) continue;
     const displayGroup = GROUP_MERGE_INTO[setting.group] ?? setting.group;
-    const entry: GroupedSetting = { originalGroup: setting.group, setting };
+    const entry: GroupedSetting = {
+      originalGroup: setting.group,
+      setting,
+      record: settingRecord(setting, records),
+    };
     const bucket = groups.get(displayGroup);
     if (bucket === undefined) {
       groups.set(displayGroup, [entry]);
@@ -537,30 +562,9 @@ function SettingsGroupItems({
       {orderedGroups.map((group) => {
         const groupedSettings = groups.get(group);
         if (groupedSettings === undefined) return null;
-        const originalGroups = [
-          ...new Set(groupedSettings.map((entry) => entry.originalGroup)),
-        ];
-        const records = new Map(
-          originalGroups.map(
-            (originalGroup) =>
-              [
-                originalGroup,
-                reviewed?.records[recordKeyForGroup(originalGroup)],
-              ] as const,
-          ),
-        );
-        const worstStatus = [...records.values()].reduce<
-          ResolvedField["status"] | undefined
-        >((worst, record) => {
-          if (record === undefined) return worst;
-          if (worst === undefined) return record.status;
-          return STATUS_SEVERITY[record.status] > STATUS_SEVERITY[worst]
-            ? record.status
-            : worst;
-        }, undefined);
-        const notes = originalGroups.flatMap((originalGroup) =>
-          recordNotes(records.get(originalGroup)),
-        );
+        const groupRecords = [...entryRecords(groupedSettings).values()];
+        const worstStatus = groupStatus(groupedSettings, findingFields);
+        const notes = groupRecords.flatMap(recordNotes);
 
         return (
           <Accordion.Item key={group} value={group}>
@@ -582,7 +586,6 @@ function SettingsGroupItems({
                 <GroupBody
                   group={group}
                   groupedSettings={groupedSettings}
-                  records={records}
                   elements={elements}
                   pseudopotentialTables={pseudopotentialTables}
                   functionalOverride={functionalOverride}
@@ -600,34 +603,47 @@ function SettingsGroupItems({
   );
 }
 
-/** One setting's own control -- `k_grid` keeps its dedicated
- * `KGridControl` (a single scalar select can't represent a 3-tuple),
- * everything else goes through the generic `OverrideControl`, now with
- * `resolvedValue`/`source` looked up from whichever record the
- * setting's *original* group resolved (see `GroupedSetting`). */
-function renderSetting({
+/** One setting's own control, then the findings that concern it
+ * (`FindingNotes`, #151). */
+function renderSetting(props: {
+  readonly entry: GroupedSetting;
+  readonly overrides: Readonly<Record<string, unknown>>;
+  readonly disabled: boolean;
+  readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
+}): ReactNode {
+  const { key } = props.entry.setting;
+  return (
+    <Fragment key={key}>
+      {settingControl(props)}
+      <FindingNotes field={key} />
+    </Fragment>
+  );
+}
+
+/** `k_grid` keeps its dedicated `KGridControl` (a single scalar select
+ * can't represent a 3-tuple), everything else goes through the generic
+ * `OverrideControl` -- showing the value and tier `resolved_in` leads to in
+ * the setting's record. */
+function settingControl({
   entry,
-  record,
   overrides,
   disabled,
   onChange,
 }: {
   readonly entry: GroupedSetting;
-  readonly record: ResolvedField | undefined;
   readonly overrides: Readonly<Record<string, unknown>>;
   readonly disabled: boolean;
   readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
 }): ReactNode {
-  const { setting } = entry;
+  const { setting, record } = entry;
   if (setting.key === "k_grid") {
-    const mesh = fieldValue(record, "mesh");
+    const mesh = resolvedValue(setting, record);
     const resolvedMesh =
       Array.isArray(mesh) && mesh.length === 3
         ? (mesh as [number, number, number])
         : undefined;
     return (
       <KGridControl
-        key={setting.key}
         value={overrides.k_grid}
         resolvedMesh={resolvedMesh}
         disabled={disabled}
@@ -639,11 +655,10 @@ function renderSetting({
   }
   return (
     <OverrideControl
-      key={setting.key}
       meta={setting}
       value={overrides[setting.key]}
-      resolvedValue={fieldValue(record, setting.key)}
-      source={fieldSource(record, setting.key)}
+      resolvedValue={resolvedValue(setting, record)}
+      source={resolvedSource(setting, record)}
       disabled={disabled}
       onChange={(value) => {
         onChange({ [setting.key]: value });
@@ -723,40 +738,38 @@ function NIrrKSummary({
 
 function FunctionalGroupBody({
   groupedSettings,
-  record,
   pseudopotentialTables,
   functionalOverride,
   disabled,
   onChange,
 }: {
   readonly groupedSettings: readonly GroupedSetting[];
-  readonly record: ResolvedField | undefined;
   readonly pseudopotentialTables: readonly PseudopotentialTable[];
   readonly functionalOverride: string | undefined;
   readonly disabled: boolean;
   readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
 }) {
+  const entry = groupedSettings[0];
+  if (entry === undefined) return null;
+  const resolved = resolvedValue(entry.setting, entry.record);
   return (
-    <FunctionalControl
-      tables={pseudopotentialTables}
-      value={functionalOverride}
-      resolvedValue={
-        record?.status === "resolved" && typeof record.value === "string"
-          ? record.value
-          : undefined
-      }
-      source={record?.status === "resolved" ? record.source : undefined}
-      description={groupedSettings[0]?.setting.description ?? ""}
-      disabled={disabled}
-      onChange={onChange}
-    />
+    <>
+      <FunctionalControl
+        tables={pseudopotentialTables}
+        value={functionalOverride}
+        resolvedValue={typeof resolved === "string" ? resolved : undefined}
+        source={resolvedSource(entry.setting, entry.record)}
+        description={entry.setting.description}
+        disabled={disabled}
+        onChange={onChange}
+      />
+      <FindingNotes field={entry.setting.key} />
+    </>
   );
 }
 
 function PseudoTableGroupBody({
   groupedSettings,
-  tableRecord,
-  cutoffsRecord,
   elements,
   pseudopotentialTables,
   functionalOverride,
@@ -765,8 +778,6 @@ function PseudoTableGroupBody({
   onChange,
 }: {
   readonly groupedSettings: readonly GroupedSetting[];
-  readonly tableRecord: ResolvedField | undefined;
-  readonly cutoffsRecord: ResolvedField | undefined;
   readonly elements: readonly string[];
   readonly pseudopotentialTables: readonly PseudopotentialTable[];
   readonly functionalOverride: string | undefined;
@@ -774,82 +785,66 @@ function PseudoTableGroupBody({
   readonly disabled: boolean;
   readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
 }) {
-  const pseudoSetting = groupedSettings.find(
+  const table = groupedSettings.find(
     (entry) => entry.originalGroup === "pseudo_table_id",
-  )?.setting;
+  );
+  const resolvedId =
+    table === undefined
+      ? undefined
+      : resolvedValue(table.setting, table.record);
   return (
     <>
-      <PseudoTableControl
-        tables={pseudopotentialTables}
-        elements={elements}
-        functionalOverride={functionalOverride}
-        pinned={overrides.pseudo_table_id}
-        resolvedTable={
-          tableRecord?.status === "resolved" ? tableRecord.value : undefined
-        }
-        source={
-          tableRecord?.status === "resolved" ? tableRecord.source : undefined
-        }
-        description={pseudoSetting?.description ?? ""}
-        disabled={disabled}
-        onChange={onChange}
-      />
+      {table === undefined ? null : (
+        <>
+          <PseudoTableControl
+            tables={pseudopotentialTables}
+            elements={elements}
+            functionalOverride={functionalOverride}
+            pinned={overrides.pseudo_table_id}
+            resolvedId={typeof resolvedId === "string" ? resolvedId : undefined}
+            source={resolvedSource(table.setting, table.record)}
+            description={table.setting.description}
+            disabled={disabled}
+            onChange={onChange}
+          />
+          <FindingNotes field={table.setting.key} />
+        </>
+      )}
       {groupedSettings
         .filter((entry) => entry.originalGroup === "cutoffs")
         .map((entry) =>
-          renderSetting({
-            entry,
-            record: cutoffsRecord,
-            overrides,
-            disabled,
-            onChange,
-          }),
+          renderSetting({ entry, overrides, disabled, onChange }),
         )}
     </>
   );
 }
 
+/** The k-mesh settings, then the note on the interval `k_index` covers
+ * and the irreducible k-point count -- read from the records the k-mesh
+ * and `nosym` settings resolve into -- then `nosym`. */
 function KSamplingGroupBody({
   groupedSettings,
-  kSamplingRecord,
-  nIrrKRecord,
   overrides,
   disabled,
   onChange,
 }: {
   readonly groupedSettings: readonly GroupedSetting[];
-  readonly kSamplingRecord: ResolvedField | undefined;
-  readonly nIrrKRecord: ResolvedField | undefined;
   readonly overrides: Readonly<Record<string, unknown>>;
   readonly disabled: boolean;
   readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
 }) {
+  const render = (group: string) =>
+    groupedSettings
+      .filter((entry) => entry.originalGroup === group)
+      .map((entry) => renderSetting({ entry, overrides, disabled, onChange }));
   return (
     <>
-      {groupedSettings
-        .filter((entry) => entry.originalGroup === "k_sampling")
-        .map((entry) =>
-          renderSetting({
-            entry,
-            record: kSamplingRecord,
-            overrides,
-            disabled,
-            onChange,
-          }),
-        )}
-      <KDistanceIntervalNote record={kSamplingRecord} />
-      <NIrrKSummary record={nIrrKRecord} />
-      {groupedSettings
-        .filter((entry) => entry.originalGroup === "n_irr_k")
-        .map((entry) =>
-          renderSetting({
-            entry,
-            record: nIrrKRecord,
-            overrides,
-            disabled,
-            onChange,
-          }),
-        )}
+      {render("k_sampling")}
+      <KDistanceIntervalNote
+        record={groupRecord(groupedSettings, "k_sampling")}
+      />
+      <NIrrKSummary record={groupRecord(groupedSettings, "n_irr_k")} />
+      {render("n_irr_k")}
     </>
   );
 }
@@ -875,7 +870,13 @@ function AppliedHubbardU({
   readonly record: ResolvedField | undefined;
 }) {
   const labelId = useId();
-  const uValues = fieldValue(record, "u_values");
+  const decision =
+    record?.status === "resolved" &&
+    typeof record.value === "object" &&
+    record.value !== null
+      ? (record.value as { readonly u_values?: unknown })
+      : undefined;
+  const uValues = decision?.u_values;
   if (!Array.isArray(uValues)) return null;
   if (uValues.length === 0) {
     return (
@@ -905,15 +906,15 @@ function AppliedHubbardU({
   );
 }
 
+/** The Hubbard settings, which no record holds a value of, then the U
+ * values the decision they feed applied. */
 function HubbardGroupBody({
   groupedSettings,
-  record,
   overrides,
   disabled,
   onChange,
 }: {
   readonly groupedSettings: readonly GroupedSetting[];
-  readonly record: ResolvedField | undefined;
   readonly overrides: Readonly<Record<string, unknown>>;
   readonly disabled: boolean;
   readonly onChange: (patch: Readonly<Record<string, unknown>>) => void;
@@ -921,9 +922,9 @@ function HubbardGroupBody({
   return (
     <>
       {groupedSettings.map((entry) =>
-        renderSetting({ entry, record, overrides, disabled, onChange }),
+        renderSetting({ entry, overrides, disabled, onChange }),
       )}
-      <AppliedHubbardU record={record} />
+      <AppliedHubbardU record={groupRecord(groupedSettings, "hubbard")} />
     </>
   );
 }
@@ -931,7 +932,6 @@ function HubbardGroupBody({
 function GroupBody({
   group,
   groupedSettings,
-  records,
   elements,
   pseudopotentialTables,
   functionalOverride,
@@ -941,7 +941,6 @@ function GroupBody({
 }: {
   readonly group: string;
   readonly groupedSettings: readonly GroupedSetting[];
-  readonly records: ReadonlyMap<string, ResolvedField | undefined>;
   readonly elements: readonly string[];
   readonly pseudopotentialTables: readonly PseudopotentialTable[];
   readonly functionalOverride: string | undefined;
@@ -953,7 +952,6 @@ function GroupBody({
     return (
       <FunctionalGroupBody
         groupedSettings={groupedSettings}
-        record={records.get("functional")}
         pseudopotentialTables={pseudopotentialTables}
         functionalOverride={functionalOverride}
         disabled={disabled}
@@ -965,8 +963,6 @@ function GroupBody({
     return (
       <PseudoTableGroupBody
         groupedSettings={groupedSettings}
-        tableRecord={records.get("pseudo_table_id")}
-        cutoffsRecord={records.get("cutoffs")}
         elements={elements}
         pseudopotentialTables={pseudopotentialTables}
         functionalOverride={functionalOverride}
@@ -976,39 +972,13 @@ function GroupBody({
       />
     );
   }
-  if (group === "k_sampling") {
-    return (
-      <KSamplingGroupBody
-        groupedSettings={groupedSettings}
-        kSamplingRecord={records.get("k_sampling")}
-        nIrrKRecord={records.get("n_irr_k")}
-        overrides={overrides}
-        disabled={disabled}
-        onChange={onChange}
-      />
-    );
-  }
-  if (group === "hubbard") {
-    return (
-      <HubbardGroupBody
-        groupedSettings={groupedSettings}
-        record={records.get("hubbard")}
-        overrides={overrides}
-        disabled={disabled}
-        onChange={onChange}
-      />
-    );
-  }
+  const bodyProps = { groupedSettings, overrides, disabled, onChange };
+  if (group === "k_sampling") return <KSamplingGroupBody {...bodyProps} />;
+  if (group === "hubbard") return <HubbardGroupBody {...bodyProps} />;
   return (
     <>
       {groupedSettings.map((entry) =>
-        renderSetting({
-          entry,
-          record: records.get(entry.originalGroup),
-          overrides,
-          disabled,
-          onChange,
-        }),
+        renderSetting({ entry, overrides, disabled, onChange }),
       )}
     </>
   );
@@ -1041,12 +1011,12 @@ function KGridControl({
       : undefined;
   const effective = pinned ?? resolvedMesh;
   return (
-    <Fieldset legend="K-point grid">
+    <Fieldset legend={CONTROL_LABELS.k_grid}>
       <SimpleGrid cols={3} spacing="xs">
         {(["x", "y", "z"] as const).map((axis, index) => (
           <NumberInput
             key={axis}
-            aria-label={`K-point grid ${axis}`}
+            aria-label={`${CONTROL_LABELS.k_grid} ${axis}`}
             min={1}
             max={99}
             disabled={disabled}

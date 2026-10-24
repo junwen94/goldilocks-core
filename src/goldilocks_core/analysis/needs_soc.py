@@ -21,6 +21,13 @@ goldilocks-core-design.md's folder layout ("needs_soc.py: reads composition")
 -- and demonstrates the tri-state ``Blocked`` propagation pattern for real: if
 composition is ``Unavailable``/``Blocked``, needs_soc cannot compute at all
 and says so the same way (goldilocks-core-design.md:299-310).
+
+needs_soc is advice and takes no human value (#186): its only reader is the
+``magnetic.soc_suggested`` notice, and ``spin_orbit_coupling`` alone enables
+spin-orbit coupling, so a human needs_soc changed no generated file. No
+override reaches the LLM input either (``AnalysisOverrides`` carries none), so
+the composition heuristic decides it, which keeps that notice's reason --
+heavy, non-s-block elements are present -- true.
 """
 
 from __future__ import annotations
@@ -28,7 +35,7 @@ from __future__ import annotations
 from pymatgen.core.periodic_table import Element
 
 from goldilocks_core.analysis.composition import CompositionFacts
-from goldilocks_core.inputs.overrides import HumanInput, LlmInput
+from goldilocks_core.inputs.overrides import LlmInput
 from goldilocks_core.resolution import (
     Blocked,
     FieldState,
@@ -44,23 +51,15 @@ narrowing true positives -- nothing below Rb needed this heuristic's
 attention under the old rule either."""
 
 
-class NeedsSocHumanInput(HumanInput):
-    needs_soc: bool | None = None
-
-
 class NeedsSocLlmInput(LlmInput):
     needs_soc: bool | None = None
 
 
 def needs_soc(
     composition: FieldState[CompositionFacts],
-    human: NeedsSocHumanInput | None = None,
     llm: NeedsSocLlmInput | None = None,
 ) -> FieldState[bool]:
-    human = human or NeedsSocHumanInput()
     llm = llm or NeedsSocLlmInput()
-    if human.needs_soc is not None:
-        return Resolved(human.needs_soc, Provenance(source="human"))
     ml_value: bool | None = None  # no ml model wired yet; stubbed until epic 11
     if ml_value is not None:
         return Resolved(ml_value, Provenance(source="ml"))

@@ -46,10 +46,17 @@ A `run` (or `explain`) request follows this path:
 3. `service.check(advice, *, purpose="scf", relax=None)` calls
    `checks.check_all(...)`, the one place that refuses a request whose
    decisions are incomplete or inconsistent. It returns a `CheckReport`
-   whose `.ok`/`.blocking` decide whether `generate()` may proceed.
+   whose `.ok`/`.blocking` decide whether `generate()` may proceed. Each
+   entry of `.blocking` is a `checks.Finding`, one per root cause: a code
+   from `checks.FINDING_CATALOGUE`, the settings it concerns (`fields`), a
+   user-facing `message`, and `remedies`, override patches that each
+   resolve it (`None` clears an override). A decision that could not be
+   made reaches it as `advice.blocked`, with its root cause and no remedy.
 4. `service.generate(advice, report, *, ctx, purpose, relax)` raises
    `AdviceIncomplete` (an `ExpectedFailure`, see `failures.py`) if
-   `report.ok` is false; otherwise it renders one or more `Step`s by calling
+   `report.ok` is false, whose message lists each finding with its remedies
+   and whose HTTP error envelope carries the findings in
+   `error.details.findings`; otherwise it renders one or more `Step`s by calling
    `generation.quantum_espresso.scf.write_qe_scf` or
    `generation.quantum_espresso.relax.write_qe_relax` directly. There is no
    dispatch table.
@@ -81,8 +88,13 @@ A `run` (or `explain`) request follows this path:
 
 `explain` (CLI, HTTP `POST /explain` and the MCP `explain` tool) is
 `advise()` -> `check()` (`check_dos()`/`check_relax()` for those tasks): every
-decision plus `blocking`, the reasons `run` would refuse to generate, without
-rendering anything. CLI's `run` is `advise()` -> `check()` -> `generate()` ->
+decision plus `blocking`, the findings `run` would refuse to generate an input
+for (as finding documents; the CLI prints each with its remedies' `--set`
+flags), without rendering anything. Its `layout`, which `run`'s JSON summary carries too, names
+each record's tier -- `analysis` (the structure alone) or `system` (shared by
+every step) -- or step. Every advice type's `tiers()` (`service.RecordTiers`)
+gives both its flat `records()` and that `layout`, so the two list the same
+records. CLI's `run` is `advise()` -> `check()` -> `generate()` ->
 `render_submission()` -> `to_bundle_input()` -> `bundle.publish()`/preview.
 Omitting `-o/--out` gives a memory-only preview (file names and byte sizes
 only, nothing written); a directory path publishes a directory; a path
@@ -324,6 +336,13 @@ requirements.
   set at least one of their settings. A rule that follows another record
   keeps `heuristic` and names that record in `derived_from` rather than
   copying its tier.
+- **Say where each value is published.** `/capabilities` gives every setting
+  a `resolved_in`: the record of the decision it feeds and the path of its
+  value in that record, or no path where the record holds none (an
+  input-only knob such as `extra_bands`). A response's `layout` gives each
+  record's tier and step. Clients read a setting's value, its tier and a
+  record's place from these, never by matching setting names to record
+  names.
 - **Keep remote callers away from local paths.** HTTP and MCP accept inline
   structures and registered table IDs, not filesystem sources, model
   locations, or publication paths. Published records name no local path
@@ -395,9 +414,43 @@ ranking runs in a fresh process, one ranking at a time
 an absolute path once, when the app is created.
 
 Workbench keeps the editable draft and reviewed response in its browser store.
-Editing a draft marks the existing result out of date and prevents downloading
-its archive. Download uses the bytes returned with that result rather than
-recomputing it.
+The Analysis card offers an override control for a fact only when
+`/capabilities` marks it `overridable`, and shows the others, such as
+`needs_soc`, read-only.
+It places records by the response's `layout`: the Analysis card shows the
+analysis tier; the Advisors card shows every other record with the settings
+whose `resolved_in` names it, or read-only after them, a multi-step task's
+per-step records (a `dos` task's `nscf_` records) under their step. Each
+setting control shows the value its `resolved_in` path leads to, captioned
+with the tier that produced that value: the record's per-setting source, or
+its own source -- except a record-level `human`, which another of the
+record's settings caused. A setting without a recorded value has no caption.
+Opening another structure keeps the draft's code, task, HPC profile and the
+overrides of settings that `/capabilities` does not mark `structure_specific`;
+it clears the structure-specific overrides and every fact override, and the
+Advisors card lists what it cleared until dismissed.
+Opening a structure or editing the draft starts a new revision, and each
+`/explain` and preview `/run` outcome, result or failure, is stored with the
+structure and revision it was sent for; only the current revision's outcomes
+decide what is shown, sent or saved. Workbench sends the current draft's
+`/explain` automatically. Once its recommendation has arrived with an empty
+`blocking` verdict, Workbench fetches that draft's archive from `/run` as the
+generated-inputs preview; a draft whose verdict blocks gets no `/run`, and the
+Bundle card lists the findings. The findings of the current draft, from its
+`/explain` verdict or its refused `/run`, are also shown under each control
+their `fields` name, whose Advisors group then reads blocked, and every remedy
+is a button that applies its override patch to the draft. A failure is the outcome of its draft: nothing
+is sent again until the draft or the structure changes or the user presses
+Retry, which every failure offers. Dismiss only hides the banner; the Bundle
+card still shows the failure. Download saves the previewed archive of the
+current draft and sends no request of its own: it stays disabled, and says why,
+until that archive has arrived, and retrying a failed preview refreshes the
+preview without saving a file.
+A magnetic-ordering listing is stored with the structure it was requested for
+and shown only while that structure is open. Opening another structure aborts
+a listing still in flight, and Download selected builds and names each
+candidate bundle from the listing's own structure. A failed listing keeps its
+error on the card and is sent again only by its Retry listing button.
 
 After changing the wire contract, run these from the repository root with the
 HTTP extra installed:

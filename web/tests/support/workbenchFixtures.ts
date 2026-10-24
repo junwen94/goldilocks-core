@@ -5,6 +5,7 @@ import type {
   Capabilities,
   ExplainResult,
   PseudopotentialTable,
+  RecordLayout,
   ResolvedField,
   RunResult,
   StructureInput,
@@ -84,9 +85,10 @@ export const capabilities: Capabilities = {
       type: "boolean",
       values: null,
       ml_target: null,
-      approaches: ["human", "heuristic"],
-      overridable: true,
-      description: "Whether spin-orbit coupling is likely relevant.",
+      approaches: ["heuristic"],
+      overridable: false,
+      description:
+        "Whether spin-orbit coupling is likely relevant. Advice only: the spin_orbit_coupling setting enables it.",
     },
   ],
   settings: [
@@ -102,6 +104,8 @@ export const capabilities: Capabilities = {
       steps: null,
       programs: null,
       scope: "system",
+      structure_specific: false,
+      resolved_in: { record: "functional", path: [] },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Exchange-correlation functional label.",
@@ -116,6 +120,8 @@ export const capabilities: Capabilities = {
       steps: null,
       programs: null,
       scope: "system",
+      structure_specific: true,
+      resolved_in: { record: "pseudo_table", path: ["id"] },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Pin an explicit pseudopotential table id.",
@@ -130,9 +136,30 @@ export const capabilities: Capabilities = {
       steps: null,
       programs: null,
       scope: "system",
+      structure_specific: true,
+      resolved_in: { record: "magnetic", path: ["spin_polarized"] },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Force spin-polarized vs non-spin-polarized.",
+    },
+    {
+      key: "spin_orbit_coupling",
+      group: "magnetic",
+      type: "boolean",
+      unit: null,
+      codes: ["quantum_espresso"],
+      tasks: ["scf_single_point", "relax"],
+      steps: null,
+      programs: null,
+      scope: "system",
+      structure_specific: true,
+      resolved_in: {
+        record: "magnetic",
+        path: ["spin_orbit_enabled"],
+      },
+      ml_target: null,
+      approaches: ["human", "heuristic"],
+      description: "Enable noncollinear spin-orbit-coupling mode.",
     },
     {
       key: "smearing_type",
@@ -145,6 +172,8 @@ export const capabilities: Capabilities = {
       steps: ["scf", "relax"],
       programs: ["pw.x"],
       scope: "per_step",
+      structure_specific: false,
+      resolved_in: { record: "occupations", path: ["smearing_type"] },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Smearing function used when occupations=smearing.",
@@ -159,6 +188,8 @@ export const capabilities: Capabilities = {
       steps: ["scf", "relax"],
       programs: ["pw.x"],
       scope: "per_step",
+      structure_specific: false,
+      resolved_in: { record: "occupations", path: ["degauss"] },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Smearing width used when occupations=smearing.",
@@ -173,6 +204,8 @@ export const capabilities: Capabilities = {
       steps: ["scf", "relax"],
       programs: ["pw.x"],
       scope: "per_step",
+      structure_specific: true,
+      resolved_in: { record: "k_sampling", path: ["mesh"] },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Explicit Monkhorst-Pack mesh dimensions.",
@@ -187,6 +220,8 @@ export const capabilities: Capabilities = {
       steps: ["scf", "relax"],
       programs: ["pw.x"],
       scope: "per_step",
+      structure_specific: false,
+      resolved_in: { record: "k_sampling", path: ["k_distance"] },
       ml_target: "k_distance",
       approaches: ["human", "ml", "heuristic"],
       description: "Target reciprocal-space spacing between k-points.",
@@ -201,6 +236,8 @@ export const capabilities: Capabilities = {
       steps: ["scf", "relax"],
       programs: ["pw.x"],
       scope: "per_step",
+      structure_specific: false,
+      resolved_in: { record: "n_irr_k", path: null },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Disable symmetry reduction when counting k-points.",
@@ -215,6 +252,8 @@ export const capabilities: Capabilities = {
       steps: null,
       programs: null,
       scope: "system",
+      structure_specific: true,
+      resolved_in: { record: "hubbard", path: null },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Force whether a Hubbard +U correction is applied.",
@@ -229,9 +268,27 @@ export const capabilities: Capabilities = {
       steps: null,
       programs: null,
       scope: "system",
+      structure_specific: true,
+      resolved_in: { record: "hubbard", path: null },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Dudarev U_eff in eV (> 0) per element symbol.",
+    },
+    {
+      key: "account",
+      group: "job",
+      type: "string",
+      unit: null,
+      codes: ["quantum_espresso"],
+      tasks: ["scf_single_point", "relax"],
+      steps: null,
+      programs: null,
+      scope: "task",
+      structure_specific: false,
+      resolved_in: { record: "job", path: ["account"] },
+      ml_target: null,
+      approaches: ["human", "heuristic"],
+      description: "HPC accounting/billing code.",
     },
     {
       key: "ion_dynamics",
@@ -245,6 +302,8 @@ export const capabilities: Capabilities = {
       steps: ["relax"],
       programs: ["pw.x"],
       scope: "per_step",
+      structure_specific: false,
+      resolved_in: { record: "relax", path: ["ion_dynamics"] },
       ml_target: null,
       approaches: ["human", "heuristic"],
       description: "Ionic relaxation algorithm for relax/vc-relax.",
@@ -299,6 +358,68 @@ export const inspection: StructureInspection = {
   },
 };
 
+type Coordinates = readonly [number, number, number];
+
+const zirconiaSites: readonly (readonly [string, Coordinates, Coordinates])[] =
+  [
+    ["Zr1", [0.2771, 0.0432, 0.2095], [1.4006, 0.2251, 0.8722]],
+    ["Zr2", [0.7229, 0.5432, 0.2905], [3.6532, 2.8293, 0.9204]],
+    ["Zr3", [0.7229, 0.9568, 0.7905], [3.6532, 4.9832, 3.5674]],
+    ["Zr4", [0.2771, 0.4568, 0.7095], [1.4006, 2.379, 3.5192]],
+    ["O1", [0.0698, 0.3362, 0.3415], [0.353, 1.7509, 1.7485]],
+    ["O2", [0.9302, 0.8362, 0.1585], [4.7008, 4.3551, 0.044]],
+    ["O3", [0.9302, 0.6638, 0.6585], [4.7008, 3.4574, 2.6911]],
+    ["O4", [0.0698, 0.1638, 0.8415], [0.353, 0.8533, 4.3955]],
+    ["O5", [0.4486, 0.7577, 0.4795], [2.2673, 3.9463, 2.1553]],
+    ["O6", [0.5514, 0.2577, 0.0205], [2.7865, 1.3421, -0.3628]],
+    ["O7", [0.5514, 0.2423, 0.5205], [2.7865, 1.2621, 2.2843]],
+    ["O8", [0.4486, 0.7423, 0.9795], [2.2673, 3.8663, 4.8024]],
+  ];
+
+/** Monoclinic ZrO2 (MC3D mc3d-78910) as /inspect returns it, with the
+ * lattice at full precision and the sites rounded to 4 decimals: a
+ * non-orthogonal cell (beta = 99.597 degrees). */
+export const monoclinicInspection: StructureInspection = {
+  schema_version: 1,
+  canonical_cif: "data_ZrO2",
+  source: {
+    origin: "inline",
+    name: "ZrO2.cif",
+    format: "cif",
+    content: "data_ZrO2",
+    sha256: "b".repeat(64),
+    size_bytes: 9,
+  },
+  structure: {
+    schema_version: 1,
+    formula: "Zr4 O8",
+    reduced_formula: "ZrO2",
+    site_count: zirconiaSites.length,
+    periodicity: [true, true, true],
+    lattice: {
+      vectors_angstrom: [
+        [5.053802818385099, 0, -0.8544960672976821],
+        [0, 5.2083461389853, 0],
+        [0, 0, 5.294079653689377],
+      ],
+      lengths_angstrom: [5.125532797294773, 5.2083461389853, 5.294079653689377],
+      angles_degrees: [90, 99.59679594924226, 90],
+      volume_angstrom3: 139.35052321494535,
+    },
+    sites: zirconiaSites.map(([label, fractional, cartesian]) => {
+      const symbol = label.replace(/\d+$/u, "");
+      return {
+        fractional_coordinates: fractional,
+        cartesian_coordinates_angstrom: cartesian,
+        label,
+        species: [
+          { symbol, label: symbol, occupancy: 1, oxidation_state: null },
+        ],
+      };
+    }),
+  },
+};
+
 /** The workspace's own default draft, seeded from `capabilities` above
  * right after a successful `source.open` -- exported so tests can
  * assert against it without re-deriving `defaultDraft`'s logic. */
@@ -347,10 +468,19 @@ export const scientificRecords: Readonly<Record<string, ResolvedField>> = {
   },
 };
 
+/** Where each of `scientificRecords` belongs, as `/explain` lays out an
+ * scf task's records. */
+export const scientificLayout: RecordLayout = {
+  analysis: [],
+  system: ["cutoffs", "magnetic"],
+  steps: [{ name: "scf", records: ["k_sampling", "n_irr_k"] }],
+};
+
 export const explainResult: ExplainResult = {
   records: scientificRecords,
   warnings: [],
   blocking: [],
+  layout: scientificLayout,
 };
 
 export const runResult: RunResult = {
@@ -362,6 +492,7 @@ export const runResult: RunResult = {
   ],
   records: scientificRecords,
   warnings: [],
+  layout: scientificLayout,
 };
 
 const MANIFEST_TEXT = JSON.stringify({

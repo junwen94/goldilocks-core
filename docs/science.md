@@ -188,7 +188,9 @@ still written, and relaxed with `'2Dxy'`, in the xy frame.
 A `cell_dofree` that holds or frees Cartesian components (`a`, `b`, `c`, `x`,
 `y`, `z`, `xy`, `xz`, `yz`, `xyz`) is refused on a turned cell, whose x, y and
 z are not the uploaded cell's; `all`, `shape` and `fixa`, `fixb` or `fixc`
-keep their meaning.
+keep their meaning. The refusal's remedy unsets `cell_dofree`, for the default
+of the written cell: `all`, or `'2Dxy'` for a slab, which `all` would not suit
+under `isolation='slab'`.
 
 A supercell, such as the 8-atom conventional cell of diamond, gets no
 fractional translations in pw.x, so it keeps only the operations that need
@@ -324,10 +326,13 @@ Spin-orbit coupling (SOC) couples electron spin to orbital motion. Goldilocks
 flags elements at or above Rb (Z=37) whose valence character is p, d, or f for
 consideration, but does not enable SOC unless you request it -- heavy s-block
 elements (Rb, Sr, Cs, Ba) are excluded because s orbitals carry no
-first-order spin-orbit splitting. Whether SOC matters depends on the property,
-not only the elements. Enabling it changes the required pseudopotentials and
-the QE spin settings. See [relativistic modes](conventions.md#relativistic-modes)
-and the [table restrictions](pseudopotentials.md#choose-a-table). The info
+first-order spin-orbit splitting. The flag is the read-only fact `needs_soc`:
+it takes no override (`--set needs_soc=...` is an unknown setting) and changes
+nothing in the input. `spin_orbit_coupling` is the only setting that enables
+SOC. Whether SOC matters depends on the property, not only the elements.
+Enabling it changes the required pseudopotentials and the QE spin settings.
+See [relativistic modes](conventions.md#relativistic-modes) and the
+[table restrictions](pseudopotentials.md#choose-a-table). The info
 notice follows the table selection SOC would make. `magnetic.soc_suggested`
 names the fully relativistic table automatic selection would use, for
 example `pseudodojo-pbesol-efficiency-fr` for fcc Pb under PBEsol. Where no
@@ -542,7 +547,12 @@ bohr (10.58 Å) wider than the slab. The last condition is Quantum ESPRESSO's
 safe estimate of a cell more than twice as high as the slab including its
 electrons; a monolayer with about 20 Å of vacuum meets it. Under
 `slab` only the in-plane stress is meaningful, so a `vc-relax` must use
-`cell_dofree='2Dxy'` (the default for such a slab) or `'2Dshape'`.
+`cell_dofree='2Dxy'` (the default for such a slab) or `'2Dshape'`. The
+refusal's remedies set `'2Dxy'`, or `isolation='periodic'` with `cell_dofree`
+unset, since an explicit `all` kept under `periodic` would relax the vacuum.
+This refusal is given only for a slab with its vacuum along c and a and b in
+the xy plane, whose default is `'2Dxy'`; on any other cell Goldilocks refuses
+`slab` itself, with `isolation='periodic'` as the remedy.
 
 A slab can carry a dipole along its normal only if no symmetry operation
 reverses that normal: an inversion centre, a mirror in the sheet, a two-fold
@@ -683,7 +693,15 @@ Goldilocks refuses the `vc-relax` until you set `cell_dofree` or reorient the
 cell. Whatever its source, `'2Dxy'` or `'2Dshape'` is refused
 unless a and b lie in the xy plane and any vacuum lies along c. Otherwise
 pw.x would distort the cell, or move a vacuum vector while holding a vector
-of the sheet fixed.
+of the sheet fixed. The refusal offers `cell_dofree='all'` as its remedy
+only for a cell without vacuum: with vacuum, `all` would relax the vacuum
+too, and the refusal names what holds it fixed instead. That is reorienting
+a slab, the constraint that holds a wire's two vacuum vectors fixed and
+relaxes only its period in any orientation (`'epitaxial_ab'` for a wire
+periodic along c, where `'z'` would move only the z component of c), or the
+`relax` task for a molecule in a box, whose every lattice vector is a vacuum
+vector. A wire's `vc-relax` without `cell_dofree` is refused naming the same
+constraint.
 
 `cell_dofree` accepts only the values pw.x honours under the `ibrav = 0` every
 written input has. `'volume'` is refused, because pw.x stops on it unless

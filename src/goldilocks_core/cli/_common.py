@@ -12,13 +12,17 @@ at that ceiling before this rewrite touched it.
 from __future__ import annotations
 
 import argparse
+import json
+import shlex
 import tomllib
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import get_args
 
 from pymatgen.core import Structure
 
+from goldilocks_core.checks import Finding
 from goldilocks_core.inputs.hpc import HpcProfile, resolve_hpc_profile
 from goldilocks_core.inputs.structure import (
     PathStructureSource,
@@ -159,3 +163,34 @@ def records_to_json(records: dict[str, FieldState[object]]) -> dict[str, object]
     ``goldilocks.json`` use, reached through this module so ``cli._run``
     stays within its import ceiling (``scripts/check_complexity.py``)."""
     return records_document(records)
+
+
+def finding_lines(findings: Iterable[Finding]) -> list[str]:
+    """``explain``'s and ``run``'s text for the gate's findings (#151): a
+    ``blocked:`` line per finding, each followed by one indented ``try:``
+    line per remedy, giving its ``--set`` flags. ``--set`` cannot clear a
+    key, so a key the remedy clears reads ``remove --set <key>``."""
+    lines = []
+    for finding in findings:
+        lines.append(f"blocked: {finding.message}")
+        lines += [f"  try: {_remedy_flags(remedy)}" for remedy in finding.remedies]
+    return lines
+
+
+def _remedy_flags(remedy: Mapping[str, object]) -> str:
+    sets = [
+        "--set " + shlex.quote(f"{key}={_cli_value(value)}")
+        for key, value in remedy.items()
+        if value is not None
+    ]
+    cleared = [f"--set {key}" for key, value in remedy.items() if value is None]
+    parts = [" ".join(sets)] if sets else []
+    if cleared:
+        parts.append("remove " + " and ".join(cleared))
+    return ", ".join(parts)
+
+
+def _cli_value(value: object) -> str:
+    """``value`` as ``--set`` reads it back: a string as it is, anything
+    else as JSON (``true``, ``4``, ``[1, 1, 1]``)."""
+    return value if isinstance(value, str) else json.dumps(value)

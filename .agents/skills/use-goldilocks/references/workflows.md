@@ -58,7 +58,9 @@ from goldilocks_core.steps import default_shared_context
 
 report = check(advice)
 if not report.ok:
-    raise SystemExit(f"blocked: {report.blocking}")
+    raise SystemExit(
+        "blocked: " + "; ".join(finding.message for finding in report.blocking)
+    )
 
 ctx = default_shared_context()
 steps = generate(advice, report, ctx=ctx)
@@ -87,7 +89,11 @@ size).
 `check()` never raises; always inspect `report.ok`/`report.blocking` before
 calling `generate()`, which raises `AdviceIncomplete` on an incomplete
 report rather than silently degrading (delivery has preconditions that
-diagnosis does not).
+diagnosis does not). Each entry of `report.blocking` is a `Finding`: a stable
+`code`, the settings it concerns (`fields`), a `message` to relay, and
+`remedies`, override patches that each resolve it (a `None` value removes
+that override from the assignments). Apply one and call `build_overrides`
+again rather than guessing a fix from the message.
 
 The destination must not exist. Use `ArchiveOutput("run.zip")` for a ZIP, or
 skip `publish` entirely and call `bundle_files(bundle_input)` for a
@@ -146,7 +152,9 @@ if dos_report.ok:
 
 `DosAdvice.records()` keys the shared system-level fields and the task's one
 `job` unprefixed, the nscf step's own fields under `nscf_`, and the DOS
-decision itself under `"dos"`. The job splits 95% of `walltime_h` between the
+decision itself under `"dos"`; `dos_advice.tiers().layout()` names each
+record's tier and step (scf, nscf, dos), which `explain`/`run --json` publish
+as `layout`. The job splits 95% of `walltime_h` between the
 scf and nscf inputs as `max_seconds` (`job.max_seconds_by_step`). Unless the
 request sets them, the nscf step's k-point spacing and occupations come from
 the dos protocol (aiida-quantumespresso `pdos.yaml`); those records read

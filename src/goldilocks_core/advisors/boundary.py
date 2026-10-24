@@ -176,7 +176,7 @@ def _heuristic(
                 source_note=(
                     "vacuum along all three lattice vectors: an isolated system "
                     "needs a Coulomb cutoff to avoid spurious interaction with "
-                    "its own periodic images (pitfall A8)."
+                    "its own periodic images."
                 ),
             ),
         )

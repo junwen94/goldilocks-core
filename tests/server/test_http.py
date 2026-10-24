@@ -349,10 +349,49 @@ class TestExplain:
         assert explained.status_code == 200
         blocking = explained.json()["blocking"]
         assert len(blocking) == 1
-        assert "is not installed" in blocking[0]
+        assert blocking[0]["code"] == "advice.blocked"
+        assert "is not installed" in blocking[0]["message"]
         assert refused.status_code == 422
-        assert refused.json()["error"]["message"] == (
-            "cannot generate a runnable input: " + "; ".join(blocking)
+        error = refused.json()["error"]
+        assert error["details"] == {"findings": blocking}
+        assert error["message"] == (
+            "cannot generate a runnable input: " + blocking[0]["message"]
+        )
+
+    def test_a_refused_run_returns_each_finding_with_its_remedies(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        """#151: the 422 names the setting each finding concerns and the
+        override patches that resolve it, in error.details.findings and in
+        the message. No real assets: the uninstalled table is a finding
+        without a remedy."""
+        response = client.post(
+            "/run",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "task": "vc-relax",
+                "overrides": {"ion_dynamics": "damp"},
+            },
+        )
+
+        assert response.status_code == 422
+        error = response.json()["error"]
+        assert error["kind"] == "advice_incomplete"
+        table, ion_dynamics = error["details"]["findings"]
+        assert table["code"] == "advice.blocked"
+        assert (table["fields"], table["remedies"]) == ([], [])
+        assert ion_dynamics == {
+            "code": "relax.vc_relax_needs_bfgs",
+            "fields": ["ion_dynamics"],
+            "message": ion_dynamics["message"],
+            "remedies": [{"ion_dynamics": "bfgs"}],
+        }
+        assert ion_dynamics["message"].startswith(
+            "vc-relax is generated only with ion_dynamics=bfgs, not damp:"
+        )
+        assert error["message"].endswith(
+            f'{ion_dynamics["message"]} Remedy overrides: {{"ion_dynamics": "bfgs"}}.'
         )
 
     def test_dos_task_returns_nscf_prefixed_records_and_a_dos_record(
@@ -898,8 +937,11 @@ class TestRun:
         )
 
         assert response.status_code == 422
-        message = response.json()["error"]["message"]
-        assert message.count("unknown pseudopotential table") == 1
+        error = response.json()["error"]
+        assert error["message"].count("unknown pseudopotential table") == 1
+        (finding,) = error["details"]["findings"]
+        assert finding["code"] == "advice.blocked"
+        assert "does-not-exist" in finding["message"]
 
     def test_unknown_hpc_profile_is_a_422(
         self, client: TestClient, silicon_cif: str

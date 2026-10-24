@@ -18,9 +18,13 @@ uv run goldilocks run structure.cif --out silicon-run
 advisor, printing each decision and its source (`human`, `ml`, `llm`, or
 `heuristic`), then a `notice: <message>` line for each setting given without a
 step that reached several steps, then the checks `run` applies, printing one
-`blocked: <reason>` line for each reason `run` would refuse to generate an
-input. It never writes anything, even without `--json`, and exits 0 whether or
-not it is blocked.
+`blocked: <message>` line for each finding `run` would refuse to generate an
+input for, followed by a `try:` line per remedy that resolves it: the `--set`
+flags to use, each in place of any `--set` of the same key, then
+`remove --set KEY` for each override to drop, since `--set` cannot clear a
+key. `run` prints the same `blocked:` and `try:` lines on stderr
+when it refuses. `explain` never writes anything, even without `--json`, and
+exits 0 whether or not it is blocked.
 `run` generates a complete runnable input (Quantum ESPRESSO by default) and
 publishes it to `silicon-run` because `-o/--out` was given; omit `-o/--out`
 for a memory-only preview instead. Use `uv run goldilocks --help` or a
@@ -81,11 +85,20 @@ HTTP and MCP `run` record the same block for the same structure and overrides.
 
 `--json` changes the shape of `run`'s output rather than being combined with
 an output flag: without `-o/--out` it prints `{"files": [...], "records":
-{...}, "warnings": [...]}`; with `-o/--out` it prints `{"files": [...],
-"kind": "directory"|"archive", "path": "..."}`. `explain --json` prints
-`{"records": {...}, "warnings": [...], "blocking": [...]}`, where `blocking`
-lists the distinct reasons `run` would refuse to generate an input and is empty
-when its checks pass. `warnings` holds every record's warnings, for every task,
+{...}, "warnings": [...], "layout": {...}}`; with `-o/--out` it prints
+`{"files": [...], "kind": "directory"|"archive", "path": "..."}`. `explain
+--json` prints `{"records": {...}, "warnings": [...], "blocking": [...],
+"layout": {...}}`, where `blocking` lists the findings `run` would refuse to
+generate an input for, one per root cause, and is empty when its checks pass.
+Each finding is `{"code", "fields", "message", "remedies"}`: a stable `code`
+(`advice.blocked` for a decision that could not be made, whose `message` is the
+root cause), the settings it concerns, the text to show, and the override
+patches that each resolve it, where `null` clears that override. `layout` names
+each record's tier and step: `analysis` (what the structure alone decides),
+`system` (what every step shares), then `steps`, one `{"name", "records"}`
+per step of the task in run order -- the task's one `job` with its first step,
+a `dos` task's nscf decisions under their `nscf_` names. Every record is in
+exactly one list. `warnings` holds every record's warnings, for every task,
 each as `{"code", "level", "category", "message", "record"}`, where `record`
 names the record it came from (`nscf_parallelisation` for a `dos` task's nscf
 step), then the request's routing notices under the `record` `overrides`
@@ -124,7 +137,7 @@ its type, default, and description; a selection of commonly used keys:
 | `k_distance`                        | Target k-point spacing along each periodic axis; axes the point group mixes share the larger count, and a vacuum axis always gets one k-point (heuristic default 0.15 for metals or when metallicity is unknown, 0.30 for a confirmed non-metal) |
 | `smearing_type`                     | Smearing function when `occupations=smearing`: `gaussian`, `mp` (Methfessel-Paxton), `cold` (Marzari-Vanderbilt) or `fd` (Fermi-Dirac); default `cold` |
 | `degauss`                           | Smearing width in Ry (default 0.01)                                   |
-| `spin_polarized`, `spin_orbit_coupling` | Force spin polarization / spin-orbit coupling                     |
+| `spin_polarized`, `spin_orbit_coupling` | Force spin polarization / spin-orbit coupling; `spin_orbit_coupling` is the only SOC switch (the `needs_soc` fact is read-only advice) |
 | `moment_direction`                  | Lattice direction of the uploaded cell the moments of a magnetic spin-orbit run start along, e.g. `--set 'moment_direction=[1,1,0]'` (default `[0,0,1]`) |
 | `use_vdw`, `method`                 | Force a dispersion correction; only `d3bj` is implemented, for PBE and PBEsol |
 | `isolation`                         | Electrostatic boundary: `periodic`, `slab` (Quantum ESPRESSO's 2D truncation, `assume_isolated='2D'`) or `isolated` (Martyna-Tuckerman); see [boundary conditions](science.md#check-boundary-conditions-and-vacuum) |
@@ -161,6 +174,29 @@ purpose: `scf` (`scf_single_point`), `relax`, `vc-relax`, and `scf`, `nscf`,
   `relax` and `vc-relax`, and the `dos.x` settings to `dos`. So is
   `steps.<step>.KEY` for a step that does not read it, such as
   `steps.nscf.mixing_beta`.
+
+Each setting's `structure_specific` says whether its value is a judgement
+about the structure it was set for — its elements, magnetism, geometry, size
+or k-mesh, such as `k_grid`, `u_by_element`, `starting_magnetization` or
+`spin_orbit_coupling` — rather than a method, accuracy or job choice, such as
+`functional`, `conv_thr` or `account`. When another structure is opened, the
+Workbench keeps the values of the settings that are not structure-specific
+and clears the others and every fact override (`is_metal`, ...).
+
+Each setting's `resolved_in` says where `explain` and `run` publish its
+resolved value: `record`, the record of the decision it feeds, and `path`,
+the keys of its value inside that record's `value`. Most settings resolve in
+their group's record under their own name (`conv_thr` in
+`convergence.conv_thr`); `functional` is the `functional` record itself
+(`path` `[]`), `pseudo_table_id` resolves in `pseudo_table.id`,
+`spin_orbit_coupling` in `magnetic.spin_orbit_enabled`, `magnetic_ordering`
+in `magnetic.ordering.applied` (`null` for a run without spin polarization,
+which applies no ordering), `moment_direction` in
+`magnetic.moment_direction.uvw` and `k_grid` in `k_sampling.mesh`. `path` is
+`null` where the record holds no value of the setting: `extra_bands` only
+shifts `nbnd`, `nosym` only changes the `n_irr_k` count, and
+`hubbard_needs_correlation` and `u_by_element` decide which U values the
+`hubbard` record lists.
 
 Quote `--set` values that contain brackets or braces (e.g. `--set
 'k_grid=[8,8,8]'`) so the shell does not glob-expand them; array and object
@@ -276,8 +312,8 @@ the address. `--static-root DIRECTORY` also serves a built Workbench; a relative
 | ------------------- | --------------------------------------------------------------------------------- |
 | `GET /capabilities` | Codes, tasks, facts, settings, pseudopotential tables, HPC profiles, models, warnings |
 | `POST /inspect`     | Structure inspection (inline `structure_content`, not a path)                     |
-| `POST /explain`     | Analysis and advisor decisions, plus `blocking`: the reasons `/run` would refuse; never writes anything |
-| `POST /run`         | Generate a runnable input; `respond_with: "json"` (default) returns a JSON summary, `respond_with: "archive"` returns ZIP bytes |
+| `POST /explain`     | Analysis and advisor decisions with their `layout`, plus `blocking`: the findings `/run` would refuse with; never writes anything |
+| `POST /run`         | Generate a runnable input; `respond_with: "json"` (default) returns a JSON summary, `respond_with: "archive"` returns ZIP bytes; a refusal is a 422 `advice_incomplete` with the findings in `error.details.findings` |
 | `GET /health`       | Process health                                                                     |
 | `GET /ready`        | Asset readiness; 503 for missing or corrupt assets                                |
 | `GET /openapi.json` | Request and response schemas                                                      |
@@ -305,9 +341,12 @@ uv run --extra mcp goldilocks serve mcp
 ```
 
 The stdio tools are `capabilities`, `inspect_structure`, `explain`, and `run`.
-MCP's `explain` tool returns the same `records`, `warnings`, and `blocking` as
-`POST /explain`. MCP's `run` tool never writes to the server's filesystem — it
-always returns only the published file list, every resolved decision (with its
-source), and a warnings array the caller must relay verbatim. To obtain actual
-file bytes, use the CLI (`goldilocks run ... -o/--out`) or the HTTP transport's
-`/run` endpoint with `respond_with: "archive"`.
+MCP's `explain` tool returns the same `records`, `warnings`, `blocking` and
+`layout` as `POST /explain`; when `run` refuses, its error lists the same
+findings, each followed by its remedies as JSON override patches. MCP's `run`
+tool never writes to the server's
+filesystem — it always returns only the published file list, every resolved
+decision (with its source) and their `layout`, and a warnings array the caller
+must relay verbatim. To obtain actual file bytes, use the CLI (`goldilocks run
+... -o/--out`) or the HTTP transport's `/run` endpoint with `respond_with:
+"archive"`.

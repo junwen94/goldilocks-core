@@ -223,7 +223,14 @@ def test_walltime_defaults_to_the_partitions_ceiling_with_a_warning() -> None:
     state = job_resources(_SMALL_JOB, _profile())
 
     assert state.value.walltime_h == 168
-    assert any("not specified" in warning.message for warning in state.value.warnings)
+    (warning,) = (
+        warning
+        for warning in state.value.warnings
+        if warning.code == "job.walltime_defaulted"
+    )
+    assert warning.message.startswith(
+        "walltime not specified; requesting the ceiling of partition scarf (168h)."
+    )
 
 
 def test_a_single_step_keeps_the_whole_max_seconds_budget() -> None:
@@ -324,6 +331,9 @@ def test_unknown_partition_name_is_unavailable_not_a_crash() -> None:
 
     assert not state.ok
     assert state.status == "unavailable"
+    assert state.reason == (
+        "HPC profile test-cluster has no partition does-not-exist; available: scarf"
+    )
 
 
 def test_human_nodes_and_ntasks_override_the_heuristic() -> None:
@@ -363,10 +373,14 @@ def test_nodes_exceeding_the_partition_ceiling_warns() -> None:
     )
 
     assert state.value.nodes == 50
-    assert any(
-        warning.code == "job.nodes_exceeds_partition_ceiling"
+    assert [
+        warning.message
         for warning in state.value.warnings
-    )
+        if warning.code == "job.nodes_exceeds_partition_ceiling"
+    ] == [
+        "nodes=50 exceeds the ceiling of partition bigmem (10 nodes); the "
+        "scheduler will likely refuse this request."
+    ]
 
 
 def test_walltime_exceeding_the_partition_ceiling_warns() -> None:
@@ -375,10 +389,14 @@ def test_walltime_exceeding_the_partition_ceiling_warns() -> None:
     state = job_resources(_SMALL_JOB, _profile(), human=JobHumanInput(walltime_h=999.0))
 
     assert state.value.walltime_h == 999.0
-    assert any(
-        warning.code == "job.walltime_exceeds_partition_ceiling"
+    assert [
+        warning.message
         for warning in state.value.warnings
-    )
+        if warning.code == "job.walltime_exceeds_partition_ceiling"
+    ] == [
+        "walltime_h=999 exceeds the ceiling of partition scarf (168h); the "
+        "scheduler will likely refuse this request."
+    ]
 
 
 def test_human_account_passes_through() -> None:
