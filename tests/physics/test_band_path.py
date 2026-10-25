@@ -2,7 +2,8 @@
 written cell and spglib, independently of how the path was built: the
 stars of the textbook points of fcc, rhombohedral and hexagonal zones,
 special points, the 2D time-reversal-invariant points a slab's path must
-visit, and QE's expansion of the path into the k-points pw.x runs."""
+visit, and QE's expansion of the path's K_POINTS card into the k-points
+pw.x runs."""
 
 from __future__ import annotations
 
@@ -47,6 +48,7 @@ from support import (
 
 from goldilocks_core.advisors.k_path import KPathDecision, k_path
 from goldilocks_core.analysis.geometry import LATTICE_AXES, vacuum_axes
+from goldilocks_core.generation.quantum_espresso.bands import k_points_crystal_b
 
 pytestmark = pytest.mark.physics
 
@@ -494,23 +496,21 @@ def test_graphene_zone_vertices_lie_at_their_textbook_in_plane_distances(
         assert math.isclose(in_plane, expected[vertex.label], abs_tol=1e-9)
 
 
-def _expanded(decision: KPathDecision) -> tuple[np.ndarray, np.ndarray]:
-    """The k-points pw.x generates from the path written as K_POINTS
-    crystal_b -- each vertex weighted by its segment's steps, 0 at the end
-    of a branch another follows, 1 at the last; a weight w puts w equal
-    steps up to the next vertex, and 0 jumps straight to it (QE 7.3
-    ``Modules/generate_k_along_lines.f90``) -- and, for each pair of
+def _expanded(card: str) -> tuple[np.ndarray, np.ndarray]:
+    """The k-points pw.x generates from a K_POINTS crystal_b ``card``, read
+    as QE 7.3 reads it (``Modules/read_cards.f90:761-838``): the number of
+    vertices, then for each vertex three coordinates and the nearest integer
+    to a fourth number, the rest of the row unread; a weight w puts w equal
+    steps up to the next vertex, and 0 jumps straight to it
+    (``Modules/generate_k_along_lines.f90``). Also returns, for each pair of
     consecutive points, whether it is such a jump."""
-    rows, weights = [], []
-    for index, branch in enumerate(decision.branches):
-        ending = 1 if index == len(decision.branches) - 1 else 0
-        for position, vertex in enumerate(branch.vertices):
-            rows.append(np.array(vertex.k))
-            weights.append(
-                branch.steps[position] if position < len(branch.steps) else ending
-            )
-    points, jumps = [rows[0]], []
-    for start, end, weight in zip(rows, rows[1:], weights, strict=False):
+    header, count, *rows = card.splitlines()
+    assert header == "K_POINTS crystal_b"
+    assert len(rows) == int(count)
+    vertices = [np.array([float(value) for value in row.split()[:3]]) for row in rows]
+    weights = [round(float(row.split()[3])) for row in rows]
+    points, jumps = [vertices[0]], []
+    for start, end, weight in zip(vertices, vertices[1:], weights, strict=False):
         if weight == 0:
             points.append(end)
             jumps.append(True)
@@ -537,15 +537,18 @@ def _expanded(decision: KPathDecision) -> tuple[np.ndarray, np.ndarray]:
     ],
     ids=lambda value: getattr(value, "__name__", "seeds"),
 )
-def test_qe_expands_the_path_into_the_points_counted(structure, settings) -> None:
-    """The expansion holds ``n_kpoints`` points; no step is longer than
-    ``k_path_distance`` along the periodic directions; no two consecutive
-    points lie within bands.x's 1e-4 2 pi / alat of each other, which would
-    leave it without its plot file (``PP/src/bands.f90:537-541``); and no
-    point repeats the one two places back, a walk back along the path."""
+def test_qe_expands_the_written_card_into_the_points_counted(
+    structure, settings
+) -> None:
+    """The bands step's K_POINTS card, expanded as pw.x expands it, holds
+    ``n_kpoints`` points; no step is longer than ``k_path_distance`` along
+    the periodic directions; no two consecutive points lie within bands.x's
+    1e-4 2 pi / alat of each other, which would leave it without its plot
+    file (``PP/src/bands.f90:537-541``); and no point repeats the one two
+    places back, a walk back along the path."""
     decision = _decision(structure(), **settings)
 
-    points, jumps = _expanded(decision)
+    points, jumps = _expanded(k_points_crystal_b(decision))
     assert len(points) == decision.n_kpoints
     lattice = decision.cell.lattice.matrix
     vacuum = vacuum_axes(decision.cell)

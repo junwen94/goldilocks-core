@@ -95,6 +95,9 @@ def render_namelist(keywords: dict[str, object], binary: str = _DEFAULT_BINARY) 
     version 2026-09-14), a flat single-section list rather than pw.x's
     ``&CONTROL``/``&SYSTEM``/... split -- ``to_nested`` handles both
     shapes the same way, so no dos-specific branch is needed here.
+    ``bands.x``'s ``&BANDS`` (#118) is the third, a single section too
+    (``ALL_KEYS["bands"]``: ``prefix``/``outdir``/``filband``/
+    ``spin_component``/``lsym``/...).
 
     Floats are written to 12 significant digits, never as ``-0.0``
     (module docstring).

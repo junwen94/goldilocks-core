@@ -87,6 +87,12 @@ atomic *type* (species label) plus its Hubbard manifold, e.g.
 label whose element has a U value, and no card when none does, so every
 resolved Hubbard decision renders (#135).
 
+**Shared with the bands writer (#118).** ``generation/quantum_espresso/
+bands.py`` renders ``bands.in`` with this module's namelist and card
+helpers, so its species and every keyword that defines the Hamiltonian
+repeat ``scf.in``'s, and writes its ``K_POINTS crystal_b`` rows with
+``format_float``; only that card is its own.
+
 **Still not in this epic's scope, on purpose:**
 
 - ``ConvergenceDecision.etot_conv_thr``/``RelaxOptions``. QE only
@@ -270,7 +276,7 @@ def control_keywords(
     ctx: SharedContext,
     boundary: BoundaryFacts,
     step: PwSettings,
-    purpose: Literal["scf", "nscf", "relax", "vc-relax"],
+    purpose: Literal["scf", "nscf", "bands", "relax", "vc-relax"],
 ) -> dict[str, object]:
     """``&CONTROL`` keywords. ``tstress`` is written unless ``boundary`` is
     'isolated': pw.x computes no stress under Martyna-Tuckerman and clears
@@ -405,7 +411,7 @@ def electrons_keywords(step: PwSettings) -> dict[str, object]:
 def cell_parameters(structure) -> str:
     lines = ["CELL_PARAMETERS angstrom"]
     lines.extend(
-        "  " + "  ".join(_format_float(value) for value in vector)
+        "  " + "  ".join(format_float(value) for value in vector)
         for vector in structure.lattice.matrix
     )
     return "\n".join(lines) + "\n"
@@ -426,7 +432,7 @@ def atomic_species(
     for label in species_labels:
         element = label_to_element[label]
         pseudo = pseudo_by_element[element]
-        mass = _format_float(float(Element(element).atomic_mass))
+        mass = format_float(float(Element(element).atomic_mass))
         lines.append(f"  {label}  {mass}  {pseudo.filename}")
     return "\n".join(lines) + "\n"
 
@@ -444,7 +450,7 @@ def atomic_positions(
     fixed_site_indices = fixed_site_indices or frozenset()
     lines = ["ATOMIC_POSITIONS crystal"]
     for index, site in enumerate(structure):
-        coords = "  ".join(_format_float(value) for value in site.frac_coords)
+        coords = "  ".join(format_float(value) for value in site.frac_coords)
         line = f"  {site.label}  {coords}"
         if index in fixed_site_indices:
             line += "  0  0  0"
@@ -456,19 +462,20 @@ def hubbard_lines(
     system: SystemSettings, label_to_element: dict[str, str]
 ) -> list[str]:
     """The HUBBARD card for ``system.hubbard.u_values``, shared by
-    ``write_qe_scf``/``write_qe_relax``: one onsite ``U <label>-<manifold>
-    <value>`` line per species label whose element has an entry, in label
-    order, so each species of a split element (``Fe1``/``Fe2``) gets its
-    element's value under the exact label ``ATOMIC_SPECIES`` uses. Returns
-    ``[]`` when no species gets +U: QE stops on a HUBBARD card without a
-    positive value (Modules/read_cards.f90 ``card_hubbard``).
+    ``write_qe_scf``/``write_qe_relax``/``write_qe_bands``: one onsite
+    ``U <label>-<manifold> <value>`` line per species label whose element
+    has an entry, in label order, so each species of a split element
+    (``Fe1``/``Fe2``) gets its element's value under the exact label
+    ``ATOMIC_SPECIES`` uses. Returns ``[]`` when no species gets +U: QE
+    stops on a HUBBARD card without a positive value
+    (Modules/read_cards.f90 ``card_hubbard``).
     ``ortho-atomic`` is QE's recommended projector (Doc/Hubbard_input.tex:
     "It is recommended to use ortho-atomic whenever possible"); nothing
     upstream chooses another, so it is a fixed literal like ``ibrav = 0``."""
     entries = {entry.element: entry for entry in system.hubbard.u_values}
     lines = [
         f"  U  {label}-{entries[element].manifold}  "
-        f"{_format_float(entries[element].u_ev)}"
+        f"{format_float(entries[element].u_ev)}"
         for label, element in sorted(label_to_element.items())
         if element in entries
     ]
@@ -486,7 +493,7 @@ def k_points(step: PwSettings) -> str:
     )
 
 
-def _format_float(value: float) -> str:
+def format_float(value: float) -> str:
     """A card number to 10 significant digits; ``0`` below ``_CARD_ZERO``,
     so never ``-0``."""
     if abs(value) < _CARD_ZERO:

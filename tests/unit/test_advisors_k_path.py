@@ -1,7 +1,7 @@
 """The band path of the written cell (#118): the record, its provenance and
 notices, bulk cells, slabs, wires and boxes, merging, and the triclinic
 fallback. Physical invariants of the paths (stars, special points, 2D
-coverage, QE's expansion of the record) are in
+coverage, QE's expansion of the written card) are in
 ``tests/physics/test_band_path.py``."""
 
 from __future__ import annotations

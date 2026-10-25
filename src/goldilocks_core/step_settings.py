@@ -58,6 +58,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from goldilocks_core.advisors.convergence import ConvergenceDecision
+from goldilocks_core.advisors.k_path import KPathDecision
 from goldilocks_core.advisors.k_sampling import KSamplingDecision
 from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
@@ -67,15 +68,18 @@ from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 
 @dataclass(frozen=True, slots=True)
 class PwSettings:
-    """pw.x: scf / nscf / bands / relax. ``max_seconds`` is this step's
-    share of the task's walltime (``JobDecision.max_seconds_by_step``,
-    ``advisors/job_resources.py``). There is no ``disk_io``: QE's default
-    always writes the status file the submission script checks
-    (``steps.ExitStatusCheck``), and ``disk_io='none'`` would write none
-    (``PW/src/punch.f90:60-63``)."""
+    """pw.x: scf / nscf / bands / relax. ``k_sampling`` is the k-point mesh
+    of an scf, nscf or relaxation step, ``k_path`` the band path of a bands
+    step, which ``write_qe_bands`` writes as ``K_POINTS crystal_b`` (#118).
+    ``max_seconds`` is this step's share of the task's walltime
+    (``JobDecision.max_seconds_by_step``, ``advisors/job_resources.py``).
+    There is no ``disk_io``: QE's default always writes the status file the
+    submission script checks (``steps.ExitStatusCheck``), and
+    ``disk_io='none'`` would write none (``PW/src/punch.f90:60-63``)."""
 
     occupations: OccupationsDecision | None = None
     k_sampling: KSamplingDecision | None = None
+    k_path: KPathDecision | None = None
     n_irr_k: int | None = None
     nbnd: NbndDecision | None = None
     convergence: ConvergenceDecision | None = None
