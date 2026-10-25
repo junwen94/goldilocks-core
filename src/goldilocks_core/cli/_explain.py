@@ -1,13 +1,14 @@
 """``goldilocks explain``: analysis, advisors and ``run``'s check, without
-generating anything (v2 epic 8, #8). Prints every decision with its source,
-then one ``notice:`` line per routing notice of the request (#154), then the
-findings ``run`` would refuse to generate an input for (#165), as ``run``
-prints them: one ``blocked:`` line each, followed by a ``try:`` line per
-remedy (#151). A scientifically incomplete or blocked request still prints
-and exits 0: ``service.advise()`` marks what it cannot decide unavailable or
-blocked instead of raising. ``--json`` returns each finding's document under
-``blocking`` and adds each record's tier and step as ``layout`` (#187), as
-HTTP and MCP ``explain`` do.
+generating anything (v2 epic 8, #8): the ``advise`` and ``check`` of
+``--task``'s row of ``service.TASK_PHASES`` (#118). Prints every decision
+with its source, then one ``notice:`` line per routing notice of the request
+(#154), then the findings ``run`` would refuse to generate an input for
+(#165), as ``run`` prints them: one ``blocked:`` line each, followed by a
+``try:`` line per remedy (#151). A scientifically incomplete or blocked
+request still prints and exits 0: every task's ``advise`` marks what it
+cannot decide unavailable or blocked instead of raising. ``--json`` returns
+each finding's document under ``blocking`` and adds each record's tier and
+step as ``layout`` (#187), as HTTP and MCP ``explain`` do.
 """
 
 from __future__ import annotations
@@ -25,14 +26,7 @@ from goldilocks_core.cli._common import (
     resolve_request,
 )
 from goldilocks_core.cli._output import write_json
-from goldilocks_core.service import (
-    advise,
-    advise_dos,
-    advise_relax,
-    check,
-    check_dos,
-    check_relax,
-)
+from goldilocks_core.service import TASK_PHASES
 
 
 def add_subparser(subparsers: argparse._SubParsersAction) -> None:
@@ -49,34 +43,15 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
 
 def run(args: argparse.Namespace, out: TextIO) -> None:
     request = resolve_request(args)
-    if args.task == "dos":
-        advice = advise_dos(
-            request.structure,
-            code=args.code,
-            hpc=request.hpc,
-            overrides=request.overrides,
-            fetch_missing=args.fetch_missing,
-        )
-        report = check_dos(advice)
-    elif args.task in ("relax", "vc-relax"):
-        advice = advise_relax(
-            request.structure,
-            calculation=args.task,
-            code=args.code,
-            hpc=request.hpc,
-            overrides=request.overrides,
-            fetch_missing=args.fetch_missing,
-        )
-        report = check_relax(advice)
-    else:
-        advice = advise(
-            request.structure,
-            code=args.code,
-            hpc=request.hpc,
-            overrides=request.overrides,
-            fetch_missing=args.fetch_missing,
-        )
-        report = check(advice)
+    phases = TASK_PHASES[args.task]
+    advice = phases.advise(
+        request.structure,
+        code=args.code,
+        hpc=request.hpc,
+        overrides=request.overrides,
+        fetch_missing=args.fetch_missing,
+    )
+    report = phases.check(advice)
     tiers = advice.tiers()
     records = tiers.records()
     warnings = advice.warnings()

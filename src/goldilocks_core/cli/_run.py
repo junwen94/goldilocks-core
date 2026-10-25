@@ -1,6 +1,7 @@
 """``goldilocks run``: advise -> generate -> submission script -> bundle,
 published if ``-o/--out`` is given, otherwise a memory-only preview
-(v2 epic 8, #8).
+(v2 epic 8, #8). Each phase is ``--task``'s function in
+``service.TASK_PHASES`` (#118).
 
 Memory-only is the default, not an auto-picked output directory: P8's
 "never a silent download" extends in spirit to "never a silent write" --
@@ -13,10 +14,17 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import TextIO
+from typing import Any, TextIO
 
-from goldilocks_core.bundle import ArchiveOutput, DirectoryOutput, bundle_files, publish
+from goldilocks_core.bundle import (
+    ArchiveOutput,
+    BundleInput,
+    DirectoryOutput,
+    bundle_files,
+    publish,
+)
 from goldilocks_core.cli._common import (
+    Request,
     add_fetch_missing_argument,
     add_run_arguments,
     finding_lines,
@@ -24,23 +32,7 @@ from goldilocks_core.cli._common import (
     resolve_request,
 )
 from goldilocks_core.cli._output import write_json
-from goldilocks_core.service import (
-    advise,
-    advise_dos,
-    advise_relax,
-    check,
-    check_dos,
-    check_relax,
-    generate,
-    generate_dos,
-    generate_relax,
-    render_submission,
-    render_submission_dos,
-    render_submission_relax,
-    to_bundle_input,
-    to_bundle_input_dos,
-    to_bundle_input_relax,
-)
+from goldilocks_core.service import TASK_PHASES
 from goldilocks_core.steps import default_shared_context
 
 
@@ -66,73 +58,28 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     )
 
 
-def _run_dos(request, args, ctx):
-    dos_advice = advise_dos(
+def _bundle_input(
+    request: Request, args: argparse.Namespace
+) -> tuple[BundleInput, Any]:
+    """``args.task``'s phases in order: advise, check (exiting 2 with the
+    gate's findings when it refuses the request), generate, the submission
+    script and the bundle, all on one ``SharedContext``. Returns the bundle
+    input and the advice it was built from."""
+    phases = TASK_PHASES[args.task]
+    ctx = default_shared_context()
+    advice = phases.advise(
         request.structure,
         code=args.code,
         hpc=request.hpc,
         overrides=request.overrides,
         fetch_missing=args.fetch_missing,
     )
-    dos_report = check_dos(dos_advice)
-    if not dos_report.ok:
-        _print_blocked_and_exit(finding_lines(dos_report.blocking))
-    steps = generate_dos(dos_advice, dos_report, ctx=ctx)
-    script = render_submission_dos(dos_advice, request.hpc, args.code, steps)
-    bundle_input = to_bundle_input_dos(
-        dos_advice,
-        steps,
-        script,
-        ctx,
-        code=args.code,
-        hpc=request.hpc,
-        assignments=request.assignments,
-        source=request.source,
-    )
-    return bundle_input, dos_advice
-
-
-def _run_relax(request, args, ctx):
-    relax_advice = advise_relax(
-        request.structure,
-        calculation=args.task,
-        code=args.code,
-        hpc=request.hpc,
-        overrides=request.overrides,
-        fetch_missing=args.fetch_missing,
-    )
-    relax_report = check_relax(relax_advice)
-    if not relax_report.ok:
-        _print_blocked_and_exit(finding_lines(relax_report.blocking))
-    steps = generate_relax(relax_advice, relax_report, ctx=ctx)
-    script = render_submission_relax(relax_advice, request.hpc, args.code, steps)
-    bundle_input = to_bundle_input_relax(
-        relax_advice,
-        steps,
-        script,
-        ctx,
-        code=args.code,
-        hpc=request.hpc,
-        assignments=request.assignments,
-        source=request.source,
-    )
-    return bundle_input, relax_advice
-
-
-def _run_scf(request, args, ctx):
-    advice = advise(
-        request.structure,
-        code=args.code,
-        hpc=request.hpc,
-        overrides=request.overrides,
-        fetch_missing=args.fetch_missing,
-    )
-    report = check(advice)
+    report = phases.check(advice)
     if not report.ok:
         _print_blocked_and_exit(finding_lines(report.blocking))
-    steps = generate(advice, report)
-    script = render_submission(advice, request.hpc, args.code, steps)
-    bundle_input = to_bundle_input(
+    steps = phases.generate(advice, report, ctx=ctx)
+    script = phases.render_submission(advice, request.hpc, args.code, steps)
+    bundle_input = phases.to_bundle_input(
         advice,
         steps,
         script,
@@ -146,14 +93,7 @@ def _run_scf(request, args, ctx):
 
 
 def run(args: argparse.Namespace, out: TextIO) -> None:
-    request = resolve_request(args)
-    ctx = default_shared_context()
-    if args.task == "dos":
-        bundle_input, advice = _run_dos(request, args, ctx)
-    elif args.task in ("relax", "vc-relax"):
-        bundle_input, advice = _run_relax(request, args, ctx)
-    else:
-        bundle_input, advice = _run_scf(request, args, ctx)
+    bundle_input, advice = _bundle_input(resolve_request(args), args)
 
     if args.out is not None:
         output = (

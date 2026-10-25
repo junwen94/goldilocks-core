@@ -48,6 +48,10 @@ module into one file. Split by pipeline phase instead, matching
   for its scf and nscf steps, rather than a fourth phase of its own
 - ``_relax.py`` -- ``relax``/``vc-relax`` task path (epic 10):
   ``advise_steps`` for its one step (single-step tasks, unlike ``dos``)
+- ``_tasks.py`` -- ``TASK_PHASES``, each task's ``advise``/``check``/
+  ``generate``/``render_submission``/``to_bundle_input`` by
+  ``types.CalcTask``: the one table every transport's ``explain`` and
+  ``run`` dispatch through (#118)
 - ``_magnetic_orderings.py`` -- ``list_magnetic_orderings`` (#87),
   deliberately outside the ``advise()``/``generate()`` pipeline above: a
   listing capability a caller consults *before* deciding which magnetic
@@ -112,9 +116,11 @@ from goldilocks_core.service._step_resources import (
     ResourceStepAdvice,
 )
 from goldilocks_core.service._system import SystemAdvice, SystemOverrides
+from goldilocks_core.service._tasks import TASK_PHASES, TaskPhases
 
 __all__ = [
     "OVERRIDES_WARNING_CATALOGUE",
+    "TASK_PHASES",
     "Advice",
     "AdviceIncomplete",
     "AnalysisFacts",
@@ -139,6 +145,7 @@ __all__ = [
     "StepOverrides",
     "SystemAdvice",
     "SystemOverrides",
+    "TaskPhases",
     "advise",
     "advise_dos",
     "advise_relax",
