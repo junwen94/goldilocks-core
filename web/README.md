@@ -77,7 +77,8 @@ both features still work, just at a lower tier (LLM/heuristic classification,
 unranked ordering list) — never a failure.
 
 "Run mMACE" ranks in a separate backend process, so you can keep editing
-settings while it runs; a ranking can take minutes.
+settings while it runs; a ranking can take minutes. Opening another structure
+abandons the ranking in the Workbench, but the backend still finishes it.
 
 ## Run in Docker
 

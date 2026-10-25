@@ -37,7 +37,9 @@ module into one file. Split by pipeline phase instead, matching
 - ``_step_protocol.py`` -- ``StepProtocol``, a task's own defaults for one
   of its steps, a tier below the request (the dos nscf protocol, #174)
 - ``_advice.py`` -- ``Advice``/``RunOverrides``, composing the three
-  phases above; ``RunOverrides`` holds one task's overrides, per step
+  phases above; ``RunOverrides`` holds one task's overrides, per step;
+  ``RecordTiers``, the records of every advice type's ``tiers()``, and the
+  ``RecordLayout`` it publishes
 - ``_pipeline.py`` -- ``advise()``/``check()``, and ``advise_steps``,
   which advises every ``pw.x`` step of one task with one shared job
 - ``_generate.py`` -- ``generate()``, the hard-fail boundary
@@ -61,7 +63,13 @@ forcing every caller to know the internal phase split above.
 
 from __future__ import annotations
 
-from goldilocks_core.service._advice import Advice, RunOverrides
+from goldilocks_core.service._advice import (
+    Advice,
+    RecordLayout,
+    RecordTiers,
+    RunOverrides,
+    StepLayout,
+)
 from goldilocks_core.service._analysis import AnalysisFacts, AnalysisOverrides
 from goldilocks_core.service._bundle import render_submission, to_bundle_input
 from goldilocks_core.service._dos import (
@@ -119,12 +127,15 @@ __all__ = [
     "MagneticOrderingCandidate",
     "MagneticOrderingsReport",
     "PseudoAdvice",
+    "RecordLayout",
+    "RecordTiers",
     "RelaxAdvice",
     "RelaxOverrides",
     "ResourceOverrides",
     "ResourceStepAdvice",
     "RunOverrides",
     "StepAdvice",
+    "StepLayout",
     "StepOverrides",
     "SystemAdvice",
     "SystemOverrides",

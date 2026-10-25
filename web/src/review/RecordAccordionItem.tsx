@@ -13,12 +13,13 @@ const STATUS_COLORS: Record<ResolvedField["status"], string> = {
 /** One resolved record as a collapsed-by-default accordion item --
  * status dot + human name in the always-visible control, full detail
  * (value, source, per-field sources) behind the expand. Used by
- * AnalysisSection for its read-only records; the Advisors card
- * (CalculationForm's SettingsGroupItems) has its own bespoke inline
- * Accordion instead of this component, since its rows carry real editable
- * controls rather than a read-only detail panel -- but both opt into the
- * shared `workbench-accordion-label` class (see App.css) so the two lists'
- * row spacing still reads as one visual language, not two. */
+ * AnalysisSection for its read-only records and by the Advisors card for
+ * the advisor records no setting resolves into (`AdvisorRecords`); the
+ * Advisors card's settings groups (CalculationForm's SettingsGroupItems)
+ * are bespoke items instead, since their rows carry real editable controls
+ * rather than a read-only detail panel -- but both opt into the shared
+ * `workbench-accordion-label` class (see App.css) so the rows read as one
+ * visual language, not two. */
 export function RecordAccordionItem({
   name,
   field,

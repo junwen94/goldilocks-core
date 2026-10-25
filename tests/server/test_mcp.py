@@ -226,11 +226,12 @@ class TestToolCalls:
         assert explained.is_error is False
         blocking = explained.structured_content["blocking"]
         assert len(blocking) == 1
-        assert "is not installed" in blocking[0]
+        assert blocking[0]["code"] == "advice.blocked"
+        assert "is not installed" in blocking[0]["message"]
         with pytest.raises(ToolError) as excinfo:
             asyncio.run(server.call_tool("run", arguments))
         assert str(excinfo.value).endswith(
-            "cannot generate a runnable input: " + "; ".join(blocking)
+            "cannot generate a runnable input: " + blocking[0]["message"]
         )
 
     def test_unknown_top_level_argument_raises_tool_error(

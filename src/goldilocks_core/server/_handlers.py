@@ -80,9 +80,10 @@ def magnetic_orderings(document: MagneticOrderingsRequestDocument) -> dict[str, 
 
 def explain(document: ComputeRequestDocument) -> dict[str, Any]:
     """Every decision plus the verdict ``run`` reaches before generating
-    (#165): ``blocking`` holds the distinct reasons the task's check
-    refuses generation for, in first-seen order, and is empty when ``run``
-    would go on to generate."""
+    (#165): ``blocking`` holds the document of each finding the task's
+    check refuses generation for (#151), one per root cause in first-seen
+    order, and is empty when ``run`` would go on to generate. ``layout``
+    names each record's tier and step (#187, ``service.RecordTiers``)."""
     structure = normalize_structure(_structure_source(document)).structure
     hpc = resolve_hpc_profile(document.hpc, field=_HPC_FIELD_NAME)
     overrides = build_overrides(document.overrides, task=document.task)
@@ -114,10 +115,12 @@ def explain(document: ComputeRequestDocument) -> dict[str, Any]:
             fetch_missing=document.fetch_missing,
         )
         report = check(advice)
+    tiers = advice.tiers()
     return {
-        "records": records_document(advice.records()),
+        "records": records_document(tiers.records()),
         "warnings": advice.warnings(),
-        "blocking": list(dict.fromkeys(report.blocking)),
+        "blocking": [finding.to_document() for finding in report.blocking],
+        "layout": tiers.layout(),
     }
 
 
@@ -126,7 +129,8 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
     was built from -- HTTP's archive response mode reuses the latter to
     build the zip without recomputing the pipeline; MCP only ever needs
     the former. The bundle records the request (#176): the body's
-    ``overrides`` as sent and the submitted structure's identity."""
+    ``overrides`` as sent and the submitted structure's identity. The
+    summary's ``layout`` is ``explain``'s (#187)."""
     normalized = normalize_structure(_structure_source(document))
     structure = normalized.structure
     hpc = resolve_hpc_profile(document.hpc, field=_HPC_FIELD_NAME)
@@ -153,7 +157,7 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
             assignments=document.overrides,
             source=normalized.source,
         )
-        records, adv_warnings = dos_advice.records(), dos_advice.warnings()
+        tiers, adv_warnings = dos_advice.tiers(), dos_advice.warnings()
     elif document.task in ("relax", "vc-relax"):
         relax_advice = advise_relax(
             structure,
@@ -177,7 +181,7 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
             assignments=document.overrides,
             source=normalized.source,
         )
-        records, adv_warnings = relax_advice.records(), relax_advice.warnings()
+        tiers, adv_warnings = relax_advice.tiers(), relax_advice.warnings()
     else:
         advice = advise(
             structure,
@@ -199,10 +203,11 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
             assignments=document.overrides,
             source=normalized.source,
         )
-        records, adv_warnings = advice.records(), advice.warnings()
+        tiers, adv_warnings = advice.tiers(), advice.warnings()
     summary = {
         "files": [file["path"] for file in bundle_files(bundle_input)],
-        "records": records_document(records),
+        "records": records_document(tiers.records()),
         "warnings": adv_warnings,
+        "layout": tiers.layout(),
     }
     return summary, bundle_input

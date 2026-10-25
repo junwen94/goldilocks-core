@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { StructureInspection } from "../api/coreClient";
 import { StructureFallback } from "./StructureFallback";
+import { formatSiteCount } from "./siteCount";
 import {
   attachStructureViewer,
   type StructureViewer,
@@ -22,6 +23,7 @@ import {
 } from "./structureViewer";
 
 const LATTICE_AXES = ["a", "b", "c"];
+const LATTICE_ANGLES = ["α", "β", "γ"];
 
 export function StructureViewport({
   inspection,
@@ -108,7 +110,7 @@ export function StructureViewport({
         <Group pos="absolute" top={10} left={10} align="baseline" gap={6}>
           <Title order={3}>{inspection.structure.reduced_formula}</Title>
           <Text size="xs" c="dimmed">
-            {inspection.structure.site_count} atomic sites
+            {formatSiteCount(inspection.structure.site_count, "atomic site")}
           </Text>
         </Group>
       </Box>
@@ -155,11 +157,17 @@ export function StructureViewport({
               <Title order={4} mb="xs">
                 Lattice parameters
               </Title>
-              <SimpleGrid component="dl" cols={4} spacing="md" m={0}>
+              <SimpleGrid component="dl" cols={3} spacing="md" m={0}>
                 {lattice.lengths_angstrom.map((length, index) => (
                   <div key={index}>
                     <dt>{LATTICE_AXES[index]}</dt>
                     <dd>{length.toFixed(3)} Å</dd>
+                  </div>
+                ))}
+                {lattice.angles_degrees.map((angle, index) => (
+                  <div key={index}>
+                    <dt>{LATTICE_ANGLES[index]}</dt>
+                    <dd>{angle.toFixed(3)}°</dd>
                   </div>
                 ))}
                 <div>

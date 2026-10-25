@@ -227,10 +227,10 @@ STARTING_NS_EIGENVALUE_WARNING = Warning(
     level="warning",
     category="hubbard",
     message=(
-        "No starting_ns_eigenvalue initial occupation-matrix guess is provided "
-        "(pitfall A10): +U calculations have multiple metastable occupation-matrix "
-        "solutions and may converge to the wrong one silently. Supplying an "
-        "explicit initial guess is recommended but not computed automatically here."
+        "No starting_ns_eigenvalue initial occupation-matrix guess is provided: "
+        "+U calculations have multiple metastable occupation-matrix solutions and "
+        "may converge to the wrong one silently. Supplying an explicit initial "
+        "guess is recommended but not computed automatically here."
     ),
 )
 """A10 (goldilocks-core-design.md:4465): a real initial guess needs a

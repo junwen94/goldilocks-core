@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CoreFailure,
   HttpCoreClient,
+  findingsOf,
+  type BlockingFinding,
   type ComputeRequest,
+  type MagneticOrderingsRequest,
 } from "../../src/api/coreClient";
 import {
   capabilities,
@@ -22,6 +25,14 @@ const request: ComputeRequest = {
   hpc: null,
   overrides: {},
   fetch_missing: false,
+};
+
+const npoolFinding: BlockingFinding = {
+  code: "parallelisation.npool_does_not_divide_ntasks",
+  fields: ["npool", "ntasks"],
+  message:
+    "npool=7 does not divide ntasks=64, and pw.x refuses that layout. Unset npool for the default, or set npool to a divisor of ntasks.",
+  remedies: [{ npool: null }],
 };
 
 describe("HttpCoreClient", () => {
@@ -49,7 +60,6 @@ describe("HttpCoreClient", () => {
 
       await expect(client.capabilities()).rejects.toMatchObject({
         kind: "incompatible_vocabulary",
-        retryable: false,
       });
     });
 
@@ -64,11 +74,10 @@ describe("HttpCoreClient", () => {
       await expect(client.capabilities()).rejects.toMatchObject({
         kind: "invalid_response",
         message: "Goldilocks Core returned an invalid JSON response.",
-        retryable: false,
       });
     });
 
-    it("reports a retryable network failure", async () => {
+    it("reports a network failure", async () => {
       const fetcher = vi
         .fn<typeof fetch>()
         .mockRejectedValue(new TypeError("connection refused"));
@@ -78,12 +87,11 @@ describe("HttpCoreClient", () => {
         name: "CoreFailure",
         kind: "network_error",
         message: "Cannot reach Goldilocks Core: connection refused",
-        retryable: true,
         status: null,
       });
     });
 
-    it("converts a Core error envelope into one typed failure, deriving retryable from status", async () => {
+    it("converts a Core error envelope into one typed failure", async () => {
       const payload = {
         error: {
           kind: "advice_incomplete",
@@ -105,12 +113,58 @@ describe("HttpCoreClient", () => {
       expect(failure).toMatchObject({
         kind: "advice_incomplete",
         message: payload.error.message,
-        retryable: false,
         details: { attempt: 2 },
         status: 424,
         rawResponse: payload,
       });
     });
+  });
+
+  describe("findingsOf", () => {
+    it("reads the findings of a refused /run and leaves out what is not one", async () => {
+      // #151: advice_incomplete carries the gate's findings, each with its
+      // remedies, under details.findings.
+      const payload = {
+        error: {
+          kind: "advice_incomplete",
+          message: `cannot generate a runnable input: ${npoolFinding.message}`,
+          details: {
+            findings: [
+              npoolFinding,
+              { ...npoolFinding, fields: [7] },
+              { ...npoolFinding, remedies: [["npool", null]] },
+              { code: "advice.blocked", fields: [], remedies: [] },
+              "npool=7",
+              null,
+            ],
+          },
+        },
+      };
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json(payload, { status: 422 }));
+      const client = new HttpCoreClient("", fetcher);
+
+      const failure = await client
+        .run(request)
+        .catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(CoreFailure);
+      expect(findingsOf(failure as CoreFailure)).toEqual([npoolFinding]);
+    });
+
+    it.each([
+      { details: {} },
+      { details: { findings: "npool=7" } },
+      { details: { attempt: 2 } },
+    ])(
+      "finds no findings in a failure whose details are $details",
+      ({ details }) => {
+        expect(
+          findingsOf(new CoreFailure("advice_incomplete", "x", details)),
+        ).toEqual([]);
+      },
+    );
   });
 
   describe("inspectStructure", () => {
@@ -168,12 +222,10 @@ describe("HttpCoreClient", () => {
       });
     });
 
-    it("returns the reasons /run would refuse with as a successful verdict", async () => {
+    it("returns the findings /run would refuse with as a successful verdict", async () => {
       const blocked = {
         ...explainResult,
-        blocking: [
-          "npool=7 does not divide ntasks=64; QE refuses this MPI layout.",
-        ],
+        blocking: [npoolFinding],
       };
       const fetcher = vi
         .fn<typeof fetch>()
@@ -200,6 +252,55 @@ describe("HttpCoreClient", () => {
         kind: "advice_incomplete",
       });
       expect(fetcher).toHaveBeenCalledWith("/explain", expect.anything());
+    });
+  });
+
+  describe("magneticOrderings", () => {
+    const orderingsRequest: MagneticOrderingsRequest = {
+      structure_content: structureInput.structure_content,
+      structure_name: structureInput.structure_name,
+      structure_format: "cif",
+      rank_with_mmace: false,
+    };
+
+    it("posts to /magnetic-orderings with the caller's abort signal", async () => {
+      const listing = { ranked: false, candidates: [], warnings: [] };
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json(listing));
+      const client = new HttpCoreClient("", fetcher);
+      const controller = new AbortController();
+
+      await expect(
+        client.magneticOrderings(orderingsRequest, controller.signal),
+      ).resolves.toEqual(listing);
+      expect(fetcher).toHaveBeenCalledWith("/magnetic-orderings", {
+        body: JSON.stringify(orderingsRequest),
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+        signal: controller.signal,
+      });
+    });
+
+    it("rejects an aborted request with the abort, not a network failure", async () => {
+      // #149: the Workbench aborts a listing whose structure was replaced;
+      // that is not a failure to report, nor one to retry.
+      const controller = new AbortController();
+      controller.abort();
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockRejectedValue(controller.signal.reason);
+      const client = new HttpCoreClient("", fetcher);
+
+      const failure = await client
+        .magneticOrderings(orderingsRequest, controller.signal)
+        .catch((error: unknown) => error);
+
+      expect(failure).toBe(controller.signal.reason);
+      expect(failure).toMatchObject({ name: "AbortError" });
     });
   });
 

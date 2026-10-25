@@ -581,7 +581,9 @@ class OrderingRecord:
     the one applied: the label of the antiferromagnetic candidate that replaced
     the input cell (``"afm-1"`` for ``"afm"``), as the listing numbers it,
     otherwise ``"fm"`` -- the input cell kept (the FM identity
-    pass-through, as for every spin-unpolarized run).
+    pass-through). ``None`` for a run without spin polarization, which
+    applies no ordering and keeps the input cell: ``magnetic_ordering``
+    resolves here, and any value of it asks for spin polarization (#187).
 
     ``criterion`` says why ``applied`` was written and ``alternatives``
     lists the other candidates with as many sites, by label (#144); the
@@ -590,7 +592,7 @@ class OrderingRecord:
     ``MagneticConfigFacts.compensated``, not part of this record (#185)."""
 
     requested: str | None
-    applied: str
+    applied: str | None
     criterion: OrderingCriterion = "identity"
     alternatives: tuple[str, ...] = ()
 
@@ -869,7 +871,7 @@ def magnetic_cell(
         warnings = (*warnings, *ordered.warnings)
     else:
         seeded = _Seeded(split_species(structure, None), _site_labels(structure))
-        ordering = OrderingRecord(requested=requested, applied="fm")
+        ordering = OrderingRecord(requested=requested, applied=None)
 
     facts = MagneticCell(
         structure=seeded.cell,
@@ -1218,9 +1220,9 @@ def _requested_seeds(
     if unknown:
         usable = sorted(set(ordered.base.symbol_set) - _split_elements(ordered).keys())
         return (
-            f"starting_magnetization has unknown key(s) {unknown!r}; it takes this "
-            f"cell's site labels ({', '.join(labels)}) or an element symbol for "
-            f"all of that element's sites ({', '.join(usable)})"
+            f"starting_magnetization has unknown key(s) {', '.join(unknown)}; "
+            f"it takes this cell's site labels ({', '.join(labels)}) or an "
+            f"element symbol for all of that element's sites ({', '.join(usable)})"
         )
     return tuple(
         override.get(site.label, elements.get(site.specie.symbol))

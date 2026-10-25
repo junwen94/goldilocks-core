@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import type { Source } from "../api/coreClient";
+import type { Setting, Source } from "../api/coreClient";
 import { SourceLabel } from "../api/SourceLabel";
 
 export interface OverrideFieldMeta {
@@ -12,9 +12,33 @@ export interface OverrideFieldMeta {
   readonly description: string;
 }
 
-export function fieldLabel(meta: OverrideFieldMeta): string {
+export function fieldLabel(
+  meta: Pick<OverrideFieldMeta, "key" | "unit">,
+): string {
   const humanized = meta.key.replace(/_/g, " ");
   return meta.unit ? `${humanized} · ${meta.unit}` : humanized;
+}
+
+/** The labels of the override controls that do not show their
+ * `fieldLabel`. */
+export const CONTROL_LABELS = {
+  functional: "Functional",
+  pseudo_table_id: "Pseudopotential table",
+  k_grid: "K-point grid",
+} as const;
+
+const CONTROL_LABEL_BY_KEY: ReadonlyMap<string, string> = new Map(
+  Object.entries(CONTROL_LABELS),
+);
+
+/** The label of the control that edits override `key`, a setting or a fact
+ * (which has no unit): `CONTROL_LABELS` or its `fieldLabel`. */
+export function overrideLabel(
+  key: string,
+  settings: readonly Setting[],
+): string {
+  const unit = settings.find((setting) => setting.key === key)?.unit ?? null;
+  return CONTROL_LABEL_BY_KEY.get(key) ?? fieldLabel({ key, unit });
 }
 
 /** `unknown`-safe stringification -- most override values are
@@ -32,10 +56,11 @@ export function automaticPlaceholder(meta: OverrideFieldMeta): string {
     : `Automatic (${stringifyValue(meta.default)})`;
 }
 
-/** A boolean/enum `OverrideControl`'s own description names whichever
- * tier actually produced the value the select shows -- "Your override"
- * once pinned, else whatever tier resolved it (heuristic/ml/llm),
- * else the field's own description alone when nothing has resolved yet. */
+/** An override control's own description names the tier that produced
+ * the value it shows -- "Your override" once pinned, else `source`, which
+ * the caller derives from the value shown (`resolvedSource`: a setting
+ * without a recorded value has none, #187), else the field's own
+ * description alone. */
 export function describeSource(
   description: string,
   pinned: boolean,

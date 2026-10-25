@@ -92,9 +92,12 @@ key.
 ## Generate and check before publishing
 
 `advise()` does not refuse an incomplete request; `check()`/`generate()` do,
-if something the run needs is still `unavailable`/`blocked`. Always call
-`check()` first and inspect `report.blocking` rather than relying on
-`generate()`'s exception alone:
+if something the run needs is still `unavailable`/`blocked` or the settings
+contradict each other. Always call `check()` first and inspect
+`report.blocking` rather than relying on `generate()`'s exception alone. It
+holds one `Finding` per root cause: a stable `code`, the settings it concerns
+(`fields`), a `message` to show, and `remedies`, override patches that each
+resolve it (a `None` value clears that override):
 
 ```python
 from goldilocks_core.service import check, generate
@@ -102,8 +105,10 @@ from goldilocks_core.steps import default_shared_context
 
 report = check(advice)
 if not report.ok:
-    for reason in dict.fromkeys(report.blocking):
-        print("blocked:", reason)
+    for finding in report.blocking:
+        print("blocked:", finding.message)
+        for remedy in finding.remedies:
+            print("  try overrides:", remedy)
 else:
     ctx = default_shared_context()
     steps = generate(advice, report, ctx=ctx)

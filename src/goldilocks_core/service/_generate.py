@@ -5,10 +5,11 @@ one ``Advice`` into rendered ``Step``s (v2 epic 8, #8). See
 
 from __future__ import annotations
 
-from typing import Literal
+import json
+from typing import Any, Literal
 
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
-from goldilocks_core.checks import CheckReport
+from goldilocks_core.checks import CheckReport, Finding
 from goldilocks_core.failures import ExpectedFailure
 from goldilocks_core.generation.quantum_espresso.relax import write_qe_relax
 from goldilocks_core.generation.quantum_espresso.scf import write_qe_scf
@@ -20,23 +21,36 @@ from goldilocks_core.system_settings import SystemSettings
 
 class AdviceIncomplete(ExpectedFailure, ValueError):
     """``generate()`` was asked to render a runnable input, but
-    ``checks.check_all`` found at least one required field
-    ``unavailable``/``blocked``. Carries the ``CheckReport`` so a caller
-    can render the blocking reasons without re-deriving them."""
+    ``checks.check_all`` refused it. Carries the ``CheckReport``; the
+    message lists each finding with its remedies as JSON override patches
+    (what the MCP tools relay), and ``public_error()`` adds the findings
+    themselves under ``details.findings`` (#151)."""
 
     kind = "advice_incomplete"
 
     def __init__(self, report: CheckReport) -> None:
         self.report = report
-        # report.blocking has one entry per blocked field, not per
-        # distinct root cause -- many fields sharing one upstream
-        # failure (e.g. every pseudopotential-dependent field, once
-        # pseudo_table itself is Unavailable) would otherwise repeat
-        # the same sentence once per field. dict.fromkeys dedupes while
-        # keeping the first-seen order, which collect_blocked's own
-        # order already is.
-        reasons = dict.fromkeys(report.blocking)
-        super().__init__("cannot generate a runnable input: " + "; ".join(reasons))
+        super().__init__(
+            "cannot generate a runnable input: "
+            + "; ".join(_described(finding) for finding in report.blocking)
+        )
+
+    def public_error(self) -> dict[str, Any]:
+        return {
+            **super().public_error(),
+            "details": {
+                "findings": [finding.to_document() for finding in self.report.blocking]
+            },
+        }
+
+
+def _described(finding: Finding) -> str:
+    """``finding``'s message, then its remedies as override patches, null
+    clearing a key."""
+    if not finding.remedies:
+        return finding.message
+    patches = " or ".join(json.dumps(remedy) for remedy in finding.remedies)
+    return f"{finding.message} Remedy overrides: {patches}."
 
 
 def generate(

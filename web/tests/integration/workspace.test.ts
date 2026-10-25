@@ -21,7 +21,15 @@ import {
   inspection,
   structureInput,
 } from "../support/workbenchFixtures";
-import { createWorkspace } from "../../src/workspace/workspace";
+import {
+  bannerFailure,
+  currentArchive,
+  currentExplain,
+} from "../../src/workspace/pipelineStatus";
+import {
+  createWorkspace,
+  currentOrderings,
+} from "../../src/workspace/workspace";
 
 class CoreStub implements CoreClient {
   capabilitiesResult: Promise<Capabilities> = Promise.resolve(capabilities);
@@ -36,6 +44,7 @@ class CoreStub implements CoreClient {
   archiveCalls: ComputeRequest[] = [];
   magneticOrderingsResults: Promise<MagneticOrderingsResult>[] = [];
   magneticOrderingsCalls: MagneticOrderingsRequest[] = [];
+  magneticOrderingsSignals: (AbortSignal | undefined)[] = [];
 
   capabilities(): Promise<Capabilities> {
     this.capabilitiesCalls += 1;
@@ -70,15 +79,46 @@ class CoreStub implements CoreClient {
     );
   }
 
+  /** Records the signal and, like a client that ignores it, still settles
+   * the queued result; tests reject it with `signal.reason` where they
+   * stand in for fetch, which rejects an aborted request that way. */
   magneticOrderings(
     request: MagneticOrderingsRequest,
+    signal?: AbortSignal,
   ): Promise<MagneticOrderingsResult> {
     this.magneticOrderingsCalls.push(request);
+    this.magneticOrderingsSignals.push(signal);
     return (
       this.magneticOrderingsResults.shift() ??
       Promise.reject(new Error("magnetic orderings not configured"))
     );
   }
+}
+
+const replacementInput: StructureInput = {
+  structure_content: "Silicon B",
+  structure_name: "POSCAR",
+  structure_format: "poscar",
+};
+
+/** A listing of `labels`, each a cell of `natoms` atoms. */
+function orderingsListing(
+  natoms: number,
+  ...labels: readonly string[]
+): MagneticOrderingsResult {
+  return {
+    ranked: false,
+    candidates: labels.map((label) => ({
+      label,
+      formula: "Si",
+      natoms,
+      energy_per_atom_ev: null,
+      status: null,
+      is_recommended: false,
+      overrides: { magnetic_ordering: label },
+    })),
+    warnings: [],
+  };
 }
 
 function baseRequest(): ComputeRequest {
@@ -105,11 +145,14 @@ describe("Workspace", () => {
     expect(core.inspectedInputs).toEqual([structureInput]);
     expect(workspace.getSnapshot()).toMatchObject({
       structureInput,
-      attemptedStructureInput: null,
       inspection,
+      inspectFailure: null,
       draft,
+      clearedOverrides: [],
+      reviewed: null,
+      explain: null,
+      preview: null,
       operation: null,
-      failure: null,
     });
   });
 
@@ -134,22 +177,122 @@ describe("Workspace", () => {
       input: replacementInput,
     });
     obsolete.reject(
-      new CoreFailure("invalid_structure", "Obsolete source failed", false),
+      new CoreFailure("invalid_structure", "Obsolete source failed"),
     );
     await first;
 
     expect(workspace.getSnapshot()).toMatchObject({
-      attemptedStructureInput: replacementInput,
       operation: "inspect",
-      failure: null,
+      inspectFailure: null,
     });
     replacement.resolve(inspection);
     await second;
     expect(workspace.getSnapshot()).toMatchObject({
       structureInput: replacementInput,
       operation: null,
-      failure: null,
+      inspectFailure: null,
     });
+  });
+
+  it("keeps the open structure when another fails to open, and Retry opens the one that failed", async () => {
+    const unreadable = new CoreFailure(
+      "invalid_structure",
+      "Unreadable structure.",
+      {},
+      422,
+    );
+    const core = new CoreStub();
+    core.inspectionResults = [
+      Promise.resolve(inspection),
+      Promise.reject(unreadable),
+      Promise.resolve(inspection),
+    ];
+    const workspace = createWorkspace(core);
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+
+    await workspace.dispatch({ type: "source.open", input: replacementInput });
+
+    expect(workspace.getSnapshot()).toMatchObject({
+      structureInput,
+      inspectFailure: { input: replacementInput, failure: unreadable },
+    });
+    expect(bannerFailure(workspace.getSnapshot())).toEqual({
+      operation: "inspect",
+      failure: unreadable,
+    });
+
+    await workspace.dispatch({ type: "failure.retry", operation: "inspect" });
+
+    expect(core.inspectedInputs).toEqual([
+      structureInput,
+      replacementInput,
+      replacementInput,
+    ]);
+    expect(workspace.getSnapshot()).toMatchObject({
+      structureInput: replacementInput,
+      inspectFailure: null,
+    });
+  });
+
+  it("keeps the task, HPC profile and structure-independent overrides for the next structure, and lists the overrides it clears", async () => {
+    // #188: opening another structure replaced the whole draft with the
+    // default, so the task, the account and the functional went too, without
+    // a word. It now clears only the settings capabilities marks
+    // structure_specific, and every fact override.
+    const core = new CoreStub();
+    core.inspectionResults = [
+      Promise.resolve(inspection),
+      Promise.resolve(inspection),
+    ];
+    core.explainResults = [Promise.resolve(explainResult)];
+    const workspace = createWorkspace(core);
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({
+      type: "draft.patch",
+      task: "relax",
+      hpc: "scarf",
+      overrides: {
+        functional: "PBE",
+        k_grid: [5, 5, 5],
+        account: "acct-001",
+        spin_orbit_coupling: true,
+        is_metal: "metal",
+        u_by_element: { Si: 2 },
+      },
+    });
+
+    await workspace.dispatch({ type: "source.open", input: replacementInput });
+
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot.draft).toEqual({
+      ...draft,
+      task: "relax",
+      hpc: "scarf",
+      overrides: { functional: "PBE", account: "acct-001" },
+    });
+    expect(snapshot.clearedOverrides).toEqual([
+      "k_grid",
+      "spin_orbit_coupling",
+      "is_metal",
+      "u_by_element",
+    ]);
+    await workspace.dispatch({ type: "review.compute" });
+    expect(core.explainCalls).toEqual([
+      {
+        ...baseRequest(),
+        structure_content: replacementInput.structure_content,
+        structure_name: replacementInput.structure_name,
+        structure_format: "poscar",
+        task: "relax",
+        hpc: "scarf",
+        overrides: { functional: "PBE", account: "acct-001" },
+      },
+    ]);
+
+    await workspace.dispatch({ type: "workspace.reset" });
+    expect(workspace.getSnapshot().clearedOverrides).toEqual([]);
   });
 
   it("submits the exact request and stores the explain preview", async () => {
@@ -162,11 +305,15 @@ describe("Workspace", () => {
     await workspace.dispatch({ type: "review.compute" });
 
     expect(core.explainCalls).toEqual([baseRequest()]);
-    expect(workspace.getSnapshot()).toMatchObject({
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot).toMatchObject({
       reviewed: explainResult,
-      outOfDate: false,
       operation: null,
-      failure: null,
+    });
+    expect(currentExplain(snapshot)).toEqual({
+      key: { input: structureInput, revision: snapshot.revision },
+      status: "result",
+      value: explainResult,
     });
   });
 
@@ -183,11 +330,13 @@ describe("Workspace", () => {
       overrides: { k_grid: [5, 5, 5] },
     });
 
-    expect(workspace.getSnapshot()).toMatchObject({
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot).toMatchObject({
       draft: { overrides: { k_grid: [5, 5, 5] } },
       reviewed: explainResult,
-      outOfDate: true,
     });
+    // The review on screen is of the draft before the edit.
+    expect(currentExplain(snapshot)).toBeNull();
   });
 
   it("sends only the overrides that apply to the draft's task", async () => {
@@ -244,7 +393,6 @@ describe("Workspace", () => {
     const failure = new CoreFailure(
       "advice_incomplete",
       "Core failed temporarily.",
-      false,
     );
     const replacementResult: ExplainResult = {
       ...explainResult,
@@ -274,21 +422,22 @@ describe("Workspace", () => {
     });
     await workspace.dispatch({ type: "review.compute" });
 
-    await workspace.dispatch({ type: "failure.retry" });
+    await workspace.dispatch({ type: "failure.retry", operation: "explain" });
 
     expect(core.explainCalls).toHaveLength(3);
-    expect(workspace.getSnapshot()).toMatchObject({
-      reviewed: replacementResult,
-      outOfDate: false,
-      failure: null,
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot.reviewed).toBe(replacementResult);
+    expect(currentExplain(snapshot)).toMatchObject({
+      status: "result",
+      value: replacementResult,
     });
+    expect(bannerFailure(snapshot)).toBeNull();
   });
 
   it("preserves the old review when recomputation fails", async () => {
     const failure = new CoreFailure(
       "advice_incomplete",
       "Core failed temporarily.",
-      false,
     );
     const core = new CoreStub();
     core.explainResults = [
@@ -306,16 +455,20 @@ describe("Workspace", () => {
 
     await workspace.dispatch({ type: "review.compute" });
 
-    expect(workspace.getSnapshot()).toMatchObject({
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot).toMatchObject({
       reviewed: explainResult,
-      outOfDate: true,
       operation: null,
+    });
+    expect(currentExplain(snapshot)).toEqual({
+      key: { input: structureInput, revision: snapshot.revision },
+      status: "failure",
       failure,
-      failureOperation: "explain",
+      dismissed: false,
     });
   });
 
-  it("downloads the archive for the exact reviewed request", async () => {
+  it("downloads the archive previewed for the exact reviewed request", async () => {
     const archive = buildArchive();
     const core = new CoreStub();
     core.explainResults = [Promise.resolve(explainResult)];
@@ -325,51 +478,251 @@ describe("Workspace", () => {
     await workspace.dispatch({ type: "workspace.start" });
     await workspace.dispatch({ type: "source.open", input: structureInput });
     await workspace.dispatch({ type: "review.compute" });
+    await workspace.dispatch({ type: "review.refreshArchive" });
+    expect(saveArchive).not.toHaveBeenCalled();
 
     await workspace.dispatch({ type: "review.download" });
 
+    // Download saves the preview's own archive: one /run in total.
     expect(core.archiveCalls).toEqual([baseRequest()]);
-    expect(saveArchive).toHaveBeenCalledWith(archive);
-    expect(workspace.getSnapshot()).toMatchObject({
-      lastDownload: archive,
-      operation: null,
-      failure: null,
+    expect(saveArchive).toHaveBeenCalledOnce();
+    expect(saveArchive.mock.calls[0]?.[0]).toBe(archive);
+    expect(currentArchive(workspace.getSnapshot())).toBe(archive);
+    expect(workspace.getSnapshot().operation).toBeNull();
+  });
+
+  it("retries a failed automatic preview without saving the archive", async () => {
+    // #189: Retry used to route a failed preview through review.download,
+    // which fetched the archive and saved it as a file nobody asked for.
+    const unavailable = new CoreFailure(
+      "http_error",
+      "The Goldilocks Core server rejected the request (503).",
+      { status: 503 },
+      503,
+    );
+    const archive = buildArchive();
+    const core = new CoreStub();
+    core.explainResults = [Promise.resolve(explainResult)];
+    core.archiveResults = [
+      Promise.reject(unavailable),
+      Promise.resolve(archive),
+    ];
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const workspace = createWorkspace(core, saveArchive);
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({ type: "review.compute" });
+    await workspace.dispatch({ type: "review.refreshArchive" });
+    expect(bannerFailure(workspace.getSnapshot())).toEqual({
+      operation: "preview",
+      failure: unavailable,
+    });
+
+    await workspace.dispatch({ type: "failure.retry", operation: "preview" });
+
+    expect(saveArchive).not.toHaveBeenCalled();
+    expect(core.archiveCalls).toEqual([baseRequest(), baseRequest()]);
+    const snapshot = workspace.getSnapshot();
+    expect(currentArchive(snapshot)).toBe(archive);
+    expect(bannerFailure(snapshot)).toBeNull();
+    expect(snapshot.operation).toBeNull();
+  });
+
+  it("keeps a refused preview as its revision's outcome, so Dismiss and Download send no /run", async () => {
+    // #150: a 422 from the automatic /run was only a dismissible banner.
+    // Dismiss cleared it, so the auto-preview sent the same /run again.
+    const refused = new CoreFailure(
+      "generation_error",
+      "Rutile TiO2 cannot be generated.",
+      {},
+      422,
+    );
+    const core = new CoreStub();
+    core.explainResults = [Promise.resolve(explainResult)];
+    core.archiveResults = [
+      Promise.reject(refused),
+      Promise.resolve(buildArchive()),
+    ];
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const workspace = createWorkspace(core, saveArchive);
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({ type: "review.compute" });
+    await workspace.dispatch({ type: "review.refreshArchive" });
+
+    await workspace.dispatch({ type: "failure.dismiss", operation: "preview" });
+    await workspace.dispatch({ type: "review.download" });
+    // What the automatic preview dispatches once nothing is in flight.
+    await workspace.dispatch({ type: "review.refreshArchive" });
+
+    expect(core.archiveCalls).toEqual([baseRequest()]);
+    expect(saveArchive).not.toHaveBeenCalled();
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot.preview).toEqual({
+      key: { input: structureInput, revision: snapshot.revision },
+      status: "failure",
+      failure: refused,
+      dismissed: true,
     });
   });
 
-  it("downloads a selected ordering as the listed structure plus its label", async () => {
+  it("keeps a failed /explain for its revision until Retry sends it once", async () => {
+    // #150: Dismiss cleared the failure, so the same /explain went out again.
+    const rejected = new CoreFailure(
+      "invalid_setting",
+      "is_metal must be metal or non_metal.",
+      {},
+      422,
+    );
+    const core = new CoreStub();
+    core.explainResults = [
+      Promise.reject(rejected),
+      Promise.resolve(explainResult),
+    ];
+    const workspace = createWorkspace(core, vi.fn());
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({ type: "review.compute" });
+
+    await workspace.dispatch({ type: "failure.dismiss", operation: "explain" });
+    // What the automatic recompute dispatches once nothing is in flight.
+    await workspace.dispatch({ type: "review.compute" });
+    expect(core.explainCalls).toHaveLength(1);
+
+    await workspace.dispatch({ type: "failure.retry", operation: "explain" });
+    // The retried /explain succeeded: nothing is left to retry.
+    await workspace.dispatch({ type: "failure.retry", operation: "explain" });
+
+    expect(core.explainCalls).toEqual([baseRequest(), baseRequest()]);
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot).toMatchObject({
+      reviewed: explainResult,
+      explain: {
+        key: { input: structureInput, revision: snapshot.revision },
+        status: "result",
+        value: explainResult,
+      },
+    });
+  });
+
+  it("sends a new /explain when the same structure input is opened again after a failure", async () => {
+    // #150: a failed /explain is its draft's outcome and is not sent again.
+    // An embedder can open the very same StructureInput object again; the
+    // revision never repeats, so the old failure is not the new draft's.
+    const core = new CoreStub();
+    core.inspectionResults = [
+      Promise.resolve(inspection),
+      Promise.resolve(inspection),
+    ];
+    core.explainResults = [
+      Promise.reject(
+        new CoreFailure("advice_incomplete", "Core failed.", {}, 422),
+      ),
+      Promise.resolve(explainResult),
+      Promise.resolve(explainResult),
+    ];
+    const workspace = createWorkspace(core, vi.fn());
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({ type: "review.compute" });
+    await workspace.dispatch({ type: "review.compute" });
+    expect(core.explainCalls).toHaveLength(1);
+    const failedRevision = workspace.getSnapshot().revision;
+
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({ type: "review.compute" });
+
+    expect(core.explainCalls).toHaveLength(2);
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot.revision).toBeGreaterThan(failedRevision);
+    expect(snapshot).toMatchObject({ structureInput, reviewed: explainResult });
+  });
+
+  it("keeps counting revisions across reset, so no key repeats", async () => {
+    const core = new CoreStub();
+    core.inspectionResults = [
+      Promise.resolve(inspection),
+      Promise.resolve(inspection),
+    ];
+    const workspace = createWorkspace(core, vi.fn());
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    const opened = workspace.getSnapshot().revision;
+
+    await workspace.dispatch({ type: "workspace.reset" });
+    expect(workspace.getSnapshot().revision).toBe(opened);
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+
+    expect(workspace.getSnapshot().revision).toBeGreaterThan(opened);
+  });
+
+  it("sends no /run for a draft whose /explain verdict blocks", async () => {
+    // #165: /explain returns the reasons /run would refuse for, so the
+    // preview /run of that draft could only fail.
+    const blocked: ExplainResult = {
+      ...explainResult,
+      blocking: [
+        {
+          code: "parallelisation.npool_does_not_divide_ntasks",
+          fields: ["npool", "ntasks"],
+          message: "npool=7 does not divide ntasks=8.",
+          remedies: [{ npool: null }],
+        },
+      ],
+    };
+    const core = new CoreStub();
+    core.explainResults = [Promise.resolve(blocked)];
+    core.archiveResults = [Promise.resolve(buildArchive())];
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const workspace = createWorkspace(core, saveArchive);
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({ type: "review.compute" });
+
+    await workspace.dispatch({ type: "review.refreshArchive" });
+    await workspace.dispatch({ type: "review.download" });
+
+    expect(core.archiveCalls).toEqual([]);
+    expect(saveArchive).not.toHaveBeenCalled();
+    expect(workspace.getSnapshot()).toMatchObject({
+      reviewed: blocked,
+      preview: null,
+    });
+  });
+
+  it("saves nothing and sends no /run when Download has no current archive", async () => {
+    const core = new CoreStub();
+    core.explainResults = [Promise.resolve(explainResult)];
+    core.archiveResults = [Promise.resolve(buildArchive())];
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const workspace = createWorkspace(core, saveArchive);
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({ type: "review.compute" });
+
+    await workspace.dispatch({ type: "review.download" });
+
+    expect(core.archiveCalls).toEqual([]);
+    expect(saveArchive).not.toHaveBeenCalled();
+    expect(workspace.getSnapshot()).toMatchObject({
+      preview: null,
+      operation: null,
+    });
+  });
+
+  it("downloads each selected ordering as the listed structure plus its label", async () => {
     // #170: a candidate is generated by its label on the structure that
     // was listed; it carries no structure of its own, and the draft's
     // starting_magnetization (keyed to the uploaded cell's sites) would
-    // refuse the candidate's own species or override its seeds.
-    const listing: MagneticOrderingsResult = {
-      ranked: false,
-      candidates: [
-        {
-          label: "fm",
-          formula: "Si",
-          natoms: 2,
-          energy_per_atom_ev: null,
-          status: null,
-          is_recommended: false,
-          overrides: { magnetic_ordering: "fm" },
-        },
-        {
-          label: "afm-1",
-          formula: "Si",
-          natoms: 4,
-          energy_per_atom_ev: null,
-          status: null,
-          is_recommended: false,
-          overrides: { magnetic_ordering: "afm-1" },
-        },
-      ],
-      warnings: [],
-    };
-    const archive = buildArchive();
+    // refuse the candidate's own species or override its seeds. #149: each
+    // bundle is named after the listing's own structure.
+    const fm = buildArchive("Si.cif-fm-scf_single_point.zip");
+    const afm = buildArchive("Si.cif-afm-1-scf_single_point.zip");
     const core = new CoreStub();
-    core.magneticOrderingsResults = [Promise.resolve(listing)];
-    core.archiveResults = [Promise.resolve(archive)];
+    core.magneticOrderingsResults = [
+      Promise.resolve(orderingsListing(2, "fm", "afm-1", "afm-2")),
+    ];
+    core.archiveResults = [Promise.resolve(fm), Promise.resolve(afm)];
     const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
     const workspace = createWorkspace(core, saveArchive);
     await workspace.dispatch({ type: "workspace.start" });
@@ -386,57 +739,254 @@ describe("Workspace", () => {
 
     await workspace.dispatch({
       type: "magneticOrderings.downloadSelected",
-      labels: ["afm-1"],
+      labels: ["fm", "afm-1"],
     });
 
     expect(core.archiveCalls).toEqual([
+      {
+        ...baseRequest(),
+        structure_name: `${structureInput.structure_name}-fm`,
+        overrides: { spin_polarized: true, magnetic_ordering: "fm" },
+      },
       {
         ...baseRequest(),
         structure_name: `${structureInput.structure_name}-afm-1`,
         overrides: { spin_polarized: true, magnetic_ordering: "afm-1" },
       },
     ]);
-    expect(saveArchive).toHaveBeenCalledWith(archive);
+    expect(saveArchive.mock.calls).toEqual([[fm], [afm]]);
   });
 
-  it("drops a listing that arrives after another structure was opened", async () => {
-    // A stale listing would otherwise send its labels with the new
-    // structure, whose orderings it never listed (#170).
+  it("lists a replacement structure itself and drops the old structure's late listing", async () => {
+    // #149: a listing that arrived after another structure opened was shown
+    // for that structure, kept it from being listed itself, and Download
+    // selected then named the old structure's bundles after the new one.
     const obsoleteListing = deferred<MagneticOrderingsResult>();
-    const replacementInput: StructureInput = {
-      structure_content: "Silicon B",
-      structure_name: "POSCAR",
-      structure_format: "poscar",
-    };
+    const replacementResult = orderingsListing(1, "fm");
     const core = new CoreStub();
     core.inspectionResults = [
       Promise.resolve(inspection),
       Promise.resolve(inspection),
     ];
-    core.magneticOrderingsResults = [obsoleteListing.promise];
+    core.magneticOrderingsResults = [
+      obsoleteListing.promise,
+      Promise.resolve(replacementResult),
+    ];
     const workspace = createWorkspace(core, vi.fn());
     await workspace.dispatch({ type: "workspace.start" });
     await workspace.dispatch({ type: "source.open", input: structureInput });
-
     const listing = workspace.dispatch({ type: "magneticOrderings.list" });
     await workspace.dispatch({ type: "source.open", input: replacementInput });
-    obsoleteListing.resolve({ ranked: false, candidates: [], warnings: [] });
-    await listing;
 
-    expect(workspace.getSnapshot()).toMatchObject({
-      structureInput: replacementInput,
-      magneticOrderings: null,
-      magneticOrderingsOperation: null,
+    // A client that ignores the abort still delivers the old listing.
+    obsoleteListing.resolve(orderingsListing(8, "fm", "afm-1"));
+    await listing;
+    expect(currentOrderings(workspace.getSnapshot())).toBeNull();
+    await workspace.dispatch({
+      type: "magneticOrderings.downloadSelected",
+      labels: ["afm-1"],
+    });
+    expect(core.archiveCalls).toEqual([]);
+
+    await workspace.dispatch({ type: "magneticOrderings.list" });
+
+    expect(
+      core.magneticOrderingsCalls.map((request) => request.structure_content),
+    ).toEqual([
+      structureInput.structure_content,
+      replacementInput.structure_content,
+    ]);
+    expect(currentOrderings(workspace.getSnapshot())).toEqual({
+      input: replacementInput,
+      operation: null,
+      result: replacementResult,
+      error: null,
+    });
+  });
+
+  it("aborts a listing in flight once another structure opens, and on reset", async () => {
+    // #149: nothing could abort a listing, so it ran on after its structure
+    // was replaced. An inspection that fails replaces nothing, so the
+    // listing of the structure still open runs on.
+    const unreadable = deferred<StructureInspection>();
+    const obsoleteListing = deferred<MagneticOrderingsResult>();
+    const replacementListing = deferred<MagneticOrderingsResult>();
+    const core = new CoreStub();
+    core.inspectionResults = [
+      Promise.resolve(inspection),
+      unreadable.promise,
+      Promise.resolve(inspection),
+    ];
+    core.magneticOrderingsResults = [
+      obsoleteListing.promise,
+      replacementListing.promise,
+    ];
+    const workspace = createWorkspace(core, vi.fn());
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    const listing = workspace.dispatch({ type: "magneticOrderings.list" });
+    const [signal] = core.magneticOrderingsSignals;
+    expect(signal).toBeInstanceOf(AbortSignal);
+
+    const failedOpen = workspace.dispatch({
+      type: "source.open",
+      input: replacementInput,
+    });
+    unreadable.reject(
+      new CoreFailure("invalid_structure", "Unreadable structure."),
+    );
+    await failedOpen;
+    expect(signal?.aborted).toBe(false);
+    expect(currentOrderings(workspace.getSnapshot())).toMatchObject({
+      input: structureInput,
+      operation: "list",
+    });
+
+    await workspace.dispatch({ type: "source.open", input: replacementInput });
+    expect(signal?.aborted).toBe(true);
+    // fetch rejects an aborted request with the signal's reason.
+    obsoleteListing.reject(signal?.reason);
+    await listing;
+    expect(workspace.getSnapshot().magneticOrderings).toBeNull();
+
+    const replacing = workspace.dispatch({ type: "magneticOrderings.list" });
+    await workspace.dispatch({ type: "workspace.reset" });
+    const replacementSignal = core.magneticOrderingsSignals[1];
+    expect(replacementSignal?.aborted).toBe(true);
+    replacementListing.reject(replacementSignal?.reason);
+    await replacing;
+    expect(workspace.getSnapshot().magneticOrderings).toBeNull();
+  });
+
+  it.each([
+    {
+      outcome: "is saved",
+      settle: (archive: Deferred<ArchiveDownload>) => {
+        archive.resolve(buildArchive("Si.cif-afm-1-scf_single_point.zip"));
+      },
+      saved: 1,
+    },
+    {
+      outcome: "fails",
+      settle: (archive: Deferred<ArchiveDownload>) => {
+        archive.reject(
+          new CoreFailure("advice_incomplete", "afm-1 is incomplete."),
+        );
+      },
+      saved: 0,
+    },
+  ])(
+    "leaves the replacement's listing alone when an old candidate download $outcome",
+    async ({ settle, saved }) => {
+      // #149: Download selected for the old structure finished by clearing
+      // the replacement listing's busy flag (and showing its own error
+      // there), so the replacement was listed a second time. The old
+      // structure's archives are still saved, named and built from its own
+      // listing.
+      const candidateArchive = deferred<ArchiveDownload>();
+      const replacementListing = deferred<MagneticOrderingsResult>();
+      const replacementResult = orderingsListing(1, "fm");
+      const core = new CoreStub();
+      core.inspectionResults = [
+        Promise.resolve(inspection),
+        Promise.resolve(inspection),
+      ];
+      core.magneticOrderingsResults = [
+        Promise.resolve(orderingsListing(4, "fm", "afm-1")),
+        replacementListing.promise,
+      ];
+      core.archiveResults = [candidateArchive.promise];
+      const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+      const workspace = createWorkspace(core, saveArchive);
+      await workspace.dispatch({ type: "workspace.start" });
+      await workspace.dispatch({ type: "source.open", input: structureInput });
+      await workspace.dispatch({ type: "magneticOrderings.list" });
+      const downloading = workspace.dispatch({
+        type: "magneticOrderings.downloadSelected",
+        labels: ["afm-1"],
+      });
+      await workspace.dispatch({
+        type: "source.open",
+        input: replacementInput,
+      });
+      const listing = workspace.dispatch({ type: "magneticOrderings.list" });
+
+      settle(candidateArchive);
+      await downloading;
+      // The replacement's listing is still in flight, so it is not re-sent.
+      await workspace.dispatch({ type: "magneticOrderings.list" });
+      replacementListing.resolve(replacementResult);
+      await listing;
+
+      expect(
+        core.magneticOrderingsCalls.map((request) => request.structure_name),
+      ).toEqual([
+        structureInput.structure_name,
+        replacementInput.structure_name,
+      ]);
+      expect(
+        core.archiveCalls.map((request) => [
+          request.structure_name,
+          request.structure_content,
+        ]),
+      ).toEqual([["Si.cif-afm-1", structureInput.structure_content]]);
+      expect(saveArchive).toHaveBeenCalledTimes(saved);
+      expect(currentOrderings(workspace.getSnapshot())).toEqual({
+        input: replacementInput,
+        operation: null,
+        result: replacementResult,
+        error: null,
+      });
+    },
+  );
+
+  it("keeps the listing on screen while ranking it", async () => {
+    const listing = orderingsListing(4, "fm", "afm-1");
+    const rankedListing = { ...listing, ranked: true };
+    const pendingRanking = deferred<MagneticOrderingsResult>();
+    const core = new CoreStub();
+    core.magneticOrderingsResults = [
+      Promise.resolve(listing),
+      pendingRanking.promise,
+    ];
+    const workspace = createWorkspace(core, vi.fn());
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({ type: "magneticOrderings.list" });
+
+    const ranking = workspace.dispatch({ type: "magneticOrderings.rank" });
+
+    expect(core.magneticOrderingsCalls.at(-1)).toMatchObject({
+      structure_content: structureInput.structure_content,
+      rank_with_mmace: true,
+    });
+    expect(currentOrderings(workspace.getSnapshot())).toEqual({
+      input: structureInput,
+      operation: "rank",
+      result: listing,
+      error: null,
+    });
+    pendingRanking.resolve(rankedListing);
+    await ranking;
+    expect(currentOrderings(workspace.getSnapshot())).toEqual({
+      input: structureInput,
+      operation: null,
+      result: rankedListing,
+      error: null,
     });
   });
 
   it("refuses to download while the review is out of date", async () => {
+    const archive = buildArchive();
     const core = new CoreStub();
     core.explainResults = [Promise.resolve(explainResult)];
-    const workspace = createWorkspace(core);
+    core.archiveResults = [Promise.resolve(archive)];
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const workspace = createWorkspace(core, saveArchive);
     await workspace.dispatch({ type: "workspace.start" });
     await workspace.dispatch({ type: "source.open", input: structureInput });
     await workspace.dispatch({ type: "review.compute" });
+    await workspace.dispatch({ type: "review.refreshArchive" });
     await workspace.dispatch({
       type: "draft.patch",
       overrides: { k_grid: [5, 5, 5] },
@@ -444,7 +994,15 @@ describe("Workspace", () => {
 
     await workspace.dispatch({ type: "review.download" });
 
-    expect(core.archiveCalls).toHaveLength(0);
+    // The archive in hand belongs to the draft before the edit.
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot.preview).toMatchObject({
+      key: { input: structureInput, revision: snapshot.revision - 1 },
+      value: archive,
+    });
+    expect(currentArchive(snapshot)).toBeNull();
+    expect(saveArchive).not.toHaveBeenCalled();
+    expect(core.archiveCalls).toHaveLength(1);
   });
 
   it("does not pair an obsolete explain with a replacement structure", async () => {
@@ -471,6 +1029,10 @@ describe("Workspace", () => {
     await workspace.dispatch({ type: "workspace.start" });
     await workspace.dispatch({ type: "source.open", input: structureInput });
     await workspace.dispatch({ type: "review.compute" });
+    await workspace.dispatch({
+      type: "draft.patch",
+      overrides: { k_grid: [5, 5, 5] },
+    });
 
     const computing = workspace.dispatch({ type: "review.compute" });
     const replacing = workspace.dispatch({
@@ -485,6 +1047,7 @@ describe("Workspace", () => {
     expect(workspace.getSnapshot()).toMatchObject({
       structureInput: replacementInput,
       reviewed: null,
+      explain: null,
       operation: null,
     });
   });
@@ -511,12 +1074,13 @@ describe("Workspace", () => {
     expect(workspace.getSnapshot()).toMatchObject({
       capabilities,
       structureInput: null,
-      attemptedStructureInput: null,
       inspection: null,
+      inspectFailure: null,
       draft: null,
       reviewed: null,
+      explain: null,
+      preview: null,
       operation: null,
-      failure: null,
     });
   });
 
@@ -524,20 +1088,25 @@ describe("Workspace", () => {
     const failure = new CoreFailure(
       "assets_unavailable",
       "Runtime assets are unavailable.",
-      true,
     );
     const core = new CoreStub();
     core.capabilitiesResult = Promise.reject(failure);
     const workspace = createWorkspace(core);
     await workspace.dispatch({ type: "workspace.start" });
 
-    await workspace.dispatch({ type: "failure.dismiss" });
+    await workspace.dispatch({
+      type: "failure.dismiss",
+      operation: "capabilities",
+    });
 
     expect(workspace.getSnapshot()).toMatchObject({
       capabilities: null,
-      failure,
-      failureOperation: "capabilities",
+      startupFailure: failure,
       operation: null,
+    });
+    expect(bannerFailure(workspace.getSnapshot())).toEqual({
+      operation: "capabilities",
+      failure,
     });
   });
 
@@ -546,7 +1115,6 @@ describe("Workspace", () => {
     const failure = new CoreFailure(
       "assets_unavailable",
       "Runtime assets are unavailable.",
-      true,
     );
     core.capabilitiesResult = Promise.reject(failure);
     const workspace = createWorkspace(core);
@@ -556,16 +1124,17 @@ describe("Workspace", () => {
     expect(workspace.getSnapshot()).toMatchObject({
       capabilities: null,
       operation: null,
-      failure,
-      failureOperation: "capabilities",
+      startupFailure: failure,
     });
 
     core.capabilitiesResult = Promise.resolve(capabilities);
-    await workspace.dispatch({ type: "failure.retry" });
+    await workspace.dispatch({
+      type: "failure.retry",
+      operation: "capabilities",
+    });
     expect(workspace.getSnapshot()).toMatchObject({
       capabilities,
-      failure: null,
-      failureOperation: null,
+      startupFailure: null,
     });
   });
 
@@ -581,7 +1150,7 @@ describe("Workspace", () => {
     expect(workspace.getSnapshot()).toMatchObject({
       capabilities: null,
       operation: "capabilities",
-      failure: null,
+      startupFailure: null,
     });
     pendingCapabilities.resolve(capabilities);
     await starting;
@@ -590,7 +1159,7 @@ describe("Workspace", () => {
     expect(workspace.getSnapshot()).toMatchObject({
       capabilities,
       operation: null,
-      failure: null,
+      startupFailure: null,
     });
   });
 
@@ -605,16 +1174,18 @@ describe("Workspace", () => {
     expect(workspace.getSnapshot()).toMatchObject({
       capabilities,
       operation: null,
-      failure: null,
+      startupFailure: null,
     });
   });
 });
 
-function deferred<T>(): {
+interface Deferred<T> {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
   readonly reject: (reason: unknown) => void;
-} {
+}
+
+function deferred<T>(): Deferred<T> {
   let resolve: (value: T) => void = () => undefined;
   let reject: (reason: unknown) => void = () => undefined;
   const promise = new Promise<T>((finish, fail) => {

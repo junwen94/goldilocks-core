@@ -28,6 +28,7 @@ import hashlib
 import io
 import json
 import math
+import re
 import subprocess
 import sys
 import tarfile
@@ -61,6 +62,15 @@ if TYPE_CHECKING:
     from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
     from goldilocks_core.resolution import FieldState
     from goldilocks_core.types import RelativisticTreatment
+
+INTERNAL_TEXT = re.compile(
+    r"\.py\b|goldilocks_core|''|\[['\"]|plan=|\(pitfall|\bepic\b|design\.md"
+)
+"""What user-facing text must not contain (#151): a module path, the package
+name, a ``repr()`` artefact -- a quoted name followed by ``'s`` reads
+``'scarf''s``, a list of names ``['Fe9']`` -- an internal literal such as
+``plan=``, a design-document id such as ``(pitfall A10)`` or a roadmap note.
+Quantum ESPRESSO literals such as ``occupations='fixed'`` stay quoted."""
 
 REAL_ASSET_ROOT = asset_root()
 """The real, developer-machine asset root (not the per-test isolated
@@ -127,7 +137,10 @@ def strict_json(document: str | bytes) -> Any:
 
 
 def fixture_upf(
-    element: str, z_valence: float, relativistic: RelativisticTreatment = "scalar"
+    element: str,
+    z_valence: float,
+    relativistic: RelativisticTreatment = "scalar",
+    functional: str = "PBEsol",
 ) -> bytes:
     """A minimal SSSP-shaped UPF file for ``element``: only the
     ``PP_HEADER`` attributes the importer reads and the projector counts
@@ -136,7 +149,8 @@ def fixture_upf(
     return (
         b'<UPF version="2.0.1">\n'
         + (
-            f'<PP_HEADER element="{element}" pseudo_type="NC" functional="PBEsol" '
+            f'<PP_HEADER element="{element}" pseudo_type="NC" '
+            f'functional="{functional}" '
             f'relativistic="{relativistic}" z_valence="{z_valence}" '
             'number_of_wfc="2" number_of_proj="4" l_max="1"/>\n'
         ).encode()
@@ -162,6 +176,7 @@ def sssp_fixture_table_spec(
     tmp_path: Path,
     z_valences: dict[str, float] | None = None,
     relativistic: RelativisticTreatment = "scalar",
+    functional: str = "PBEsol",
 ) -> tuple[AssetSpec, PseudoTable]:
     """Build one real, fully-offline SSSP-shaped pseudopotential asset
     (file:// sources, no network) -- shared between
@@ -175,13 +190,16 @@ def sssp_fixture_table_spec(
     can monkeypatch it to vary the header. ``relativistic="full"`` builds
     the fully relativistic table a spin-orbit run selects (it needs
     ``z_valences``), named ``sssp-fixture-fr`` so it installs next to the
-    scalar one."""
+    scalar one. Another ``functional`` (it needs ``z_valences``) suffixes
+    the id with it, ``sssp-fixture-lda`` for LDA."""
     from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
 
     table_id = "sssp-fixture" if relativistic == "scalar" else "sssp-fixture-fr"
+    if functional != "PBEsol":
+        table_id += f"-{functional.lower()}"
     upf_by_element = (
         {
-            element: fixture_upf(element, z_valence, relativistic)
+            element: fixture_upf(element, z_valence, relativistic, functional)
             for element, z_valence in z_valences.items()
         }
         if z_valences
@@ -224,7 +242,7 @@ def sssp_fixture_table_spec(
         provider="sssp",
         upstream_table="fixture",
         version="1",
-        functional="PBEsol",
+        functional=functional,
         relativistic=relativistic,
         accuracy="efficiency",
         licence="fixture licence",
@@ -790,7 +808,7 @@ def written_cell(structure: Structure) -> Resolved[MagneticConfigFacts]:
     of ``checks.check_all`` read."""
     facts = MagneticConfigFacts(
         cell=structure,
-        ordering=OrderingRecord(requested="fm", applied="fm"),
+        ordering=OrderingRecord(requested=None, applied=None),
         spin_polarized=False,
         magnetic_elements=(),
         starting_magnetization=None,

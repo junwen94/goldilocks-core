@@ -1,78 +1,47 @@
 import { useEffect } from "react";
 
+import { explainDue, previewDue } from "./pipelineStatus";
 import type { Workspace, WorkspaceSnapshot } from "./workspace";
 
 const AUTO_COMPUTE_DEBOUNCE_MS = 400;
 const AUTO_PREVIEW_DEBOUNCE_MS = 150;
 
 /** There is no manual "generate"/"update recommendation" control in the
- * UI -- whatever structure is loaded should always drive what the
- * review/scientific-facts cards show, so a recommendation is computed
- * automatically (debounced) on load and after every later settings
- * change, reusing `outOfDate`'s existing staleness tracking to also
- * catch an edit that landed while a request was already in flight. A
- * live, undismissed `explain` failure blocks further auto-attempts --
- * otherwise a persistently failing structure would retry forever. */
+ * UI: the open structure's current draft is sent to `/explain`
+ * automatically (debounced) on load and after every settings change, and
+ * once its recommendation arrives with no blocking reason, its archive is
+ * fetched from `/run` as the generated-inputs preview. The "Download"
+ * button only saves that archive. Each request is sent only while the
+ * current draft has no outcome for it (`explainDue`, `previewDue`): a
+ * failure is that draft's outcome, so a failing request is not sent again
+ * until the draft or the structure changes or the user presses Retry
+ * (#150). */
 export function useAutoCompute(
   workspace: Workspace,
   snapshot: WorkspaceSnapshot,
 ): void {
-  const {
-    draft,
-    structureInput,
-    operation,
-    outOfDate,
-    reviewed,
-    lastDownload,
-    failureOperation,
-  } = snapshot;
+  const { revision } = snapshot;
+  const sendExplain = explainDue(snapshot);
+  const sendPreview = previewDue(snapshot);
 
+  // `revision` restarts the debounce on every edit.
   useEffect(() => {
-    if (draft === null || structureInput === null) return;
-    if (operation !== null) return;
-    if (failureOperation === "explain") return;
-    if (reviewed !== null && !outOfDate) return;
-
+    if (!sendExplain) return;
     const timer = setTimeout(() => {
       void workspace.dispatch({ type: "review.compute" });
     }, AUTO_COMPUTE_DEBOUNCE_MS);
     return () => {
       clearTimeout(timer);
     };
-  }, [
-    workspace,
-    draft,
-    structureInput,
-    operation,
-    outOfDate,
-    reviewed,
-    failureOperation,
-  ]);
+  }, [workspace, sendExplain, revision]);
 
-  /** Same idea, one step further: there is no "generate input files"
-   * action either -- the generated-input preview should always match
-   * the current recommendation, so once `review.compute` lands a fresh
-   * (non-stale) result, fetch the archive that backs the live preview
-   * automatically too. The "Download" button then just saves whatever
-   * is already sitting in `lastDownload`, instead of fetching on click. */
   useEffect(() => {
-    if (operation !== null) return;
-    if (failureOperation === "download") return;
-    if (reviewed === null || outOfDate) return;
-    if (lastDownload !== null) return;
-
+    if (!sendPreview) return;
     const timer = setTimeout(() => {
       void workspace.dispatch({ type: "review.refreshArchive" });
     }, AUTO_PREVIEW_DEBOUNCE_MS);
     return () => {
       clearTimeout(timer);
     };
-  }, [
-    workspace,
-    operation,
-    outOfDate,
-    reviewed,
-    lastDownload,
-    failureOperation,
-  ]);
+  }, [workspace, sendPreview, revision]);
 }

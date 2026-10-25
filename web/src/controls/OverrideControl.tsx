@@ -1,14 +1,6 @@
 import type { ReactNode } from "react";
 import { useState } from "react";
-import {
-  CloseButton,
-  NativeSelect,
-  NumberInput,
-  Stack,
-  Text,
-  Textarea,
-  TextInput,
-} from "@mantine/core";
+import { NumberInput, Stack, Text, Textarea, TextInput } from "@mantine/core";
 
 import type { Source } from "../api/coreClient";
 import {
@@ -18,6 +10,7 @@ import {
   type OverrideFieldMeta,
   stringifyValue,
 } from "./overrideFieldMeta";
+import { OverrideSelect } from "./OverrideSelect";
 
 /** One human/heuristic override control, generic over the field's
  * declared `type` -- shared by the advisors accordion (settings) and
@@ -28,9 +21,9 @@ import {
  * *this exact* value pre-selected -- and its own description names the
  * tier that produced it -- rather than a separate "Automatic" list entry
  * that revealed nothing about what automatic actually resolved to. A
- * human override still wins once set (`pinned`); `CloseButton` is the
- * only way back to automatic now that the select's own option list holds
- * nothing but genuine values. */
+ * human override still wins once set (`pinned`); the reset button of
+ * `OverrideSelect` is the only way back to automatic now that the
+ * select's own option list holds nothing but genuine values. */
 export function OverrideControl({
   meta,
   value,
@@ -50,19 +43,6 @@ export function OverrideControl({
   const label = fieldLabel(meta);
   const description = describeSource(meta.description, pinned, source);
   const effective = pinned ? value : resolvedValue;
-  const clearButton = pinned ? (
-    <CloseButton
-      aria-label={`Reset ${label} to automatic`}
-      size="sm"
-      disabled={disabled}
-      onMouseDown={(event) => {
-        event.preventDefault();
-      }}
-      onClick={() => {
-        onChange(undefined);
-      }}
-    />
-  ) : undefined;
 
   if (meta.type === "boolean") {
     return (
@@ -70,7 +50,7 @@ export function OverrideControl({
         label={label}
         description={description}
         disabled={disabled}
-        clearButton={clearButton}
+        pinned={pinned}
         value={effective}
         onChange={onChange}
       />
@@ -83,7 +63,7 @@ export function OverrideControl({
         label={label}
         description={description}
         disabled={disabled}
-        clearButton={clearButton}
+        pinned={pinned}
         options={meta.enum}
         value={effective}
         onChange={onChange}
@@ -142,25 +122,25 @@ function BooleanOverrideControl({
   label,
   description,
   disabled,
-  clearButton,
+  pinned,
   value,
   onChange,
 }: {
   readonly label: string;
   readonly description: ReactNode;
   readonly disabled: boolean;
-  readonly clearButton: ReactNode;
+  readonly pinned: boolean;
   readonly value: unknown;
   readonly onChange: (value: unknown) => void;
 }) {
   const effectiveString =
     typeof value === "boolean" ? stringifyValue(value) : "";
   return (
-    <NativeSelect
+    <OverrideSelect
       label={label}
       description={description}
       disabled={disabled}
-      rightSection={clearButton}
+      pinned={pinned}
       value={effectiveString}
       data={[
         ...(effectiveString === ""
@@ -169,8 +149,11 @@ function BooleanOverrideControl({
         { value: "true", label: "On" },
         { value: "false", label: "Off" },
       ]}
-      onChange={(event) => {
-        onChange(event.currentTarget.value === "true");
+      onReset={() => {
+        onChange(undefined);
+      }}
+      onChange={(raw) => {
+        onChange(raw === "true");
       }}
     />
   );
@@ -180,7 +163,7 @@ function EnumOverrideControl({
   label,
   description,
   disabled,
-  clearButton,
+  pinned,
   options,
   value,
   onChange,
@@ -188,7 +171,7 @@ function EnumOverrideControl({
   readonly label: string;
   readonly description: ReactNode;
   readonly disabled: boolean;
-  readonly clearButton: ReactNode;
+  readonly pinned: boolean;
   readonly options: readonly string[];
   readonly value: unknown;
   readonly onChange: (value: unknown) => void;
@@ -197,11 +180,11 @@ function EnumOverrideControl({
   const needsPlaceholder =
     effectiveString === "" || !options.includes(effectiveString);
   return (
-    <NativeSelect
+    <OverrideSelect
       label={label}
       description={description}
       disabled={disabled}
-      rightSection={clearButton}
+      pinned={pinned}
       value={effectiveString}
       data={[
         ...(needsPlaceholder
@@ -209,9 +192,10 @@ function EnumOverrideControl({
           : []),
         ...options.map((option) => ({ value: option, label: option })),
       ]}
-      onChange={(event) => {
-        onChange(event.currentTarget.value);
+      onReset={() => {
+        onChange(undefined);
       }}
+      onChange={onChange}
     />
   );
 }

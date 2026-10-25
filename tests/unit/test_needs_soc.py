@@ -4,11 +4,7 @@ import pytest
 from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.analysis.composition import composition
-from goldilocks_core.analysis.needs_soc import (
-    NeedsSocHumanInput,
-    NeedsSocLlmInput,
-    needs_soc,
-)
+from goldilocks_core.analysis.needs_soc import NeedsSocLlmInput, needs_soc
 from goldilocks_core.resolution import Blocked
 
 
@@ -56,17 +52,7 @@ def test_blocked_composition_propagates_as_blocked_not_a_silent_default() -> Non
     assert state.root_cause() == "synthetic failure"
 
 
-def test_human_override_wins_without_even_looking_at_composition() -> None:
-    blocked_composition = Blocked(by="synthetic failure")
-
-    state = needs_soc(blocked_composition, human=NeedsSocHumanInput(needs_soc=True))
-
-    assert state.ok
-    assert state.value is True
-    assert state.source == "human"
-
-
-def test_llm_override_is_used_when_no_human_override_is_given() -> None:
+def test_an_llm_value_wins_over_the_heuristic() -> None:
     state = needs_soc(_composition_for("Si"), llm=NeedsSocLlmInput(needs_soc=True))
 
     assert state.value is True

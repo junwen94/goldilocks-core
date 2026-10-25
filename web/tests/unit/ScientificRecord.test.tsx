@@ -71,21 +71,32 @@ describe("ScientificRecord", () => {
   });
 });
 
+/** What the Bundle card passes while an archive is on its way. */
+const PENDING = "Generating the input files for the current settings…";
+
 describe("GeneratedInputReview", () => {
-  it("shows a placeholder before any archive has been generated", () => {
-    render(<GeneratedInputReview archive={null} />, {
-      wrapper: MantineProvider,
-    });
+  it("says why there are no files while it has no archive", () => {
+    // #150: the placeholder promised files even after generation failed;
+    // the card now passes what its status says.
+    render(
+      <GeneratedInputReview
+        archive={null}
+        placeholder="No input files were generated: generation failed for the current settings."
+      />,
+      { wrapper: MantineProvider },
+    );
 
     expect(
-      screen.getByText(/will appear here automatically/),
+      screen.getByText(
+        "No input files were generated: generation failed for the current settings.",
+      ),
     ).toBeInTheDocument();
   });
 
   it("unzips a real archive and previews each file with its manifest digest", async () => {
     const user = userEvent.setup();
     const archive = buildArchive();
-    render(<GeneratedInputReview archive={archive} />, {
+    render(<GeneratedInputReview archive={archive} placeholder={PENDING} />, {
       wrapper: MantineProvider,
     });
 
@@ -108,7 +119,7 @@ describe("GeneratedInputReview", () => {
   it("lists the table's licence right after the pseudopotentials and shows its text", async () => {
     const user = userEvent.setup();
     const archive = buildArchive();
-    render(<GeneratedInputReview archive={archive} />, {
+    render(<GeneratedInputReview archive={archive} placeholder={PENDING} />, {
       wrapper: MantineProvider,
     });
 
@@ -137,7 +148,7 @@ describe("GeneratedInputReview", () => {
   it("shows a pseudopotential's entries instead of its raw file content", async () => {
     const user = userEvent.setup();
     const archive = buildArchive();
-    render(<GeneratedInputReview archive={archive} />, {
+    render(<GeneratedInputReview archive={archive} placeholder={PENDING} />, {
       wrapper: MantineProvider,
     });
 

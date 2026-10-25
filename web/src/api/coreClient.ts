@@ -72,10 +72,26 @@ export interface RecordWarning extends AdvisorWarning {
 // and the Setting/Fact projections `_settings()`/`_facts()` build.
 // ---------------------------------------------------------------------
 
+/** Where a setting's resolved value is published (#187): `record` names
+ * the record of the decision the setting feeds, `path` the keys leading to
+ * the setting's own value inside that record's `value` -- `[]` for the
+ * value itself, `null` where the record holds no value of the setting (an
+ * input-only knob such as `extra_bands`, which only shifts `nbnd`). */
+export interface ResolvedIn {
+  readonly record: string;
+  readonly path: readonly string[] | null;
+}
+
 /** `tasks` are the tasks a setting applies to; a request for any other
  * task is refused. `steps`/`programs` are the steps (the names
  * `steps.<step>.<key>` takes) and programs a `per_step` setting applies to,
- * `null` for a `system` or `task` setting, which is set once per task. */
+ * `null` for a `system` or `task` setting, which is set once per task.
+ * `structure_specific` says whether a value is a judgement about the
+ * structure it was set for (its elements, magnetism, geometry, size or
+ * k-mesh) rather than a method, accuracy or job choice; opening another
+ * structure clears it from the draft (#188). `resolved_in` is the only way
+ * to its resolved value: a setting's key need not name its record or the
+ * record's field (#187). */
 export interface Setting {
   readonly key: string;
   readonly group: string;
@@ -89,6 +105,8 @@ export interface Setting {
   readonly steps: readonly string[] | null;
   readonly programs: readonly string[] | null;
   readonly scope: "system" | "task" | "per_step";
+  readonly structure_specific: boolean;
+  readonly resolved_in: ResolvedIn;
   readonly ml_target: string | null;
   readonly approaches: readonly Source[];
   readonly description: string;
@@ -224,19 +242,53 @@ export interface StructureInspection {
 // .inspection`) has ever set one.
 // ---------------------------------------------------------------------
 
+/** One step of a `RecordLayout`: its purpose (`scf`, `nscf`, `dos`,
+ * `relax`, `vc-relax`) and its records. */
+export interface StepLayout {
+  readonly name: string;
+  readonly records: readonly string[];
+}
+
+/** Mirrors `service.RecordLayout`: the tier and step of each record of a
+ * response, by name (#187). `analysis` holds what the structure alone
+ * decides, `system` what every step of the task shares, then each step's
+ * own records in run order -- the task's one `job` with its first step, a
+ * `dos` task's nscf decisions under their `nscf_` names. Every record is
+ * in exactly one list. */
+export interface RecordLayout {
+  readonly analysis: readonly string[];
+  readonly system: readonly string[];
+  readonly steps: readonly StepLayout[];
+}
+
+/** One reason `/run` refuses a draft (`checks.Finding` on the wire, #151):
+ * a stable `code`, the setting or fact keys it concerns (`fields`, as
+ * `/capabilities` names them), the `message` to show, and `remedies`, each a
+ * complete override patch that resolves it, where `null` clears that
+ * override. An `advice.blocked` finding names a decision that could not be
+ * made, its root cause the message; it has no fields and no remedy. */
+export interface BlockingFinding {
+  readonly code: string;
+  readonly fields: readonly string[];
+  readonly message: string;
+  readonly remedies: readonly Readonly<Record<string, unknown>>[];
+}
+
 export interface ExplainResult {
   readonly records: Readonly<Record<string, ResolvedField>>;
   readonly warnings: readonly RecordWarning[];
-  /** The distinct reasons `/run` would refuse to generate input files
-   * for (the task's `check()` verdict, in first-seen order); empty when
-   * those checks pass. */
-  readonly blocking: readonly string[];
+  /** The findings `/run` would refuse to generate input files for (the
+   * task's `check()` verdict, one per root cause in first-seen order);
+   * empty when those checks pass. */
+  readonly blocking: readonly BlockingFinding[];
+  readonly layout: RecordLayout;
 }
 
 export interface RunResult {
   readonly files: readonly string[];
   readonly records: Readonly<Record<string, ResolvedField>>;
   readonly warnings: readonly RecordWarning[];
+  readonly layout: RecordLayout;
 }
 
 // ---------------------------------------------------------------------
@@ -273,7 +325,6 @@ export class CoreFailure extends Error {
   constructor(
     readonly kind: string,
     message: string,
-    readonly retryable: boolean,
     readonly details: Readonly<Record<string, unknown>> = {},
     readonly status: number | null = null,
     readonly rawResponse?: unknown,
@@ -289,12 +340,16 @@ export interface CoreClient {
   /** Advice-only preview: never generates files, and still succeeds when
    * `run` would refuse with `advice_incomplete` (the tri-state
    * "diagnosis is always available" promise) -- `blocking` then lists
-   * the reasons `run` would give. */
+   * the findings `run` would refuse with. */
   explain(request: ComputeRequest): Promise<ExplainResult>;
   /** Lists candidate magnetic orderings (FM plus any AFM candidates),
-   * optionally mMACE-ranked by relaxed energy per atom. */
+   * optionally mMACE-ranked by relaxed energy per atom. Aborting `signal`
+   * abandons the request: the promise then rejects with the abort reason
+   * (fetch's `AbortError`), not a `CoreFailure`. The server still finishes
+   * the enumeration or ranking it started. */
   magneticOrderings(
     request: MagneticOrderingsRequest,
+    signal?: AbortSignal,
   ): Promise<MagneticOrderingsResult>;
   /** Executes the pipeline and returns the JSON summary (file list +
    * records + warnings), not the files themselves. */
@@ -331,7 +386,6 @@ export class HttpCoreClient implements CoreClient {
           `but this Workbench build expects ${SUPPORTED_VOCABULARY_VERSION}. ` +
           "The frontend and backend were built against different contracts -- " +
           "regenerate the Workbench's API types against this server.",
-        false,
         { serverVocabularyVersion: capabilities.vocabulary_version },
       );
     }
@@ -364,6 +418,7 @@ export class HttpCoreClient implements CoreClient {
 
   async magneticOrderings(
     request: MagneticOrderingsRequest,
+    signal?: AbortSignal,
   ): Promise<MagneticOrderingsResult> {
     const response = await this.request("/magnetic-orderings", {
       body: JSON.stringify(request),
@@ -372,6 +427,7 @@ export class HttpCoreClient implements CoreClient {
         "Content-Type": "application/json",
       },
       method: "POST",
+      signal: signal ?? null,
     });
     return parseJson<MagneticOrderingsResult>(response);
   }
@@ -405,12 +461,14 @@ export class HttpCoreClient implements CoreClient {
     try {
       response = await this.fetcher(`${this.baseUrl}${path}`, init);
     } catch (error) {
+      // The caller aborted it: neither a failure to reach Core nor one to
+      // retry, so the abort reason propagates as fetch raised it.
+      if (init.signal?.aborted) throw error;
       throw new CoreFailure(
         "network_error",
         error instanceof Error
           ? `Cannot reach Goldilocks Core: ${error.message}`
           : "Cannot reach Goldilocks Core.",
-        true,
       );
     }
     await ensureSuccess(response);
@@ -464,7 +522,6 @@ async function ensureSuccess(response: Response): Promise<void> {
     throw new CoreFailure(
       error.kind,
       error.message,
-      response.status >= 500,
       error.details ?? {},
       response.status,
       rawResponse,
@@ -473,7 +530,6 @@ async function ensureSuccess(response: Response): Promise<void> {
   throw new CoreFailure(
     "http_error",
     `The Goldilocks Core server rejected the request (${String(response.status)}).`,
-    response.status >= 500,
     { status: response.status },
     response.status,
     rawResponse,
@@ -489,13 +545,43 @@ async function decodeResponse(response: Response): Promise<unknown> {
   }
 }
 
-// The wire error envelope (server/documents.py's `ErrorResponseDocument`)
-// no longer carries `retryable` -- v1's error taxonomy did, v2's
-// `ExpectedFailure.public_error()` deliberately only returns
-// `{kind, message}` (`details` is additive, added ad hoc by validation/
-// readiness handlers). `CoreFailure.retryable` above is now always
-// derived from the HTTP status/network condition, never read off the
-// wire.
+/** The findings a refused `/run` (`advice_incomplete`) carries in its error
+ * envelope's `details.findings` (#151): the same findings `/explain`
+ * returns as its verdict. An entry that is not a finding is left out, and
+ * any other failure has none. */
+export function findingsOf(failure: CoreFailure): readonly BlockingFinding[] {
+  const findings = failure.details.findings;
+  return Array.isArray(findings) ? findings.filter(isBlockingFinding) : [];
+}
+
+function isBlockingFinding(value: unknown): value is BlockingFinding {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "code" in value &&
+    typeof value.code === "string" &&
+    "message" in value &&
+    typeof value.message === "string" &&
+    "fields" in value &&
+    Array.isArray(value.fields) &&
+    value.fields.every((field) => typeof field === "string") &&
+    "remedies" in value &&
+    Array.isArray(value.remedies) &&
+    value.remedies.every(isOverridePatch)
+  );
+}
+
+function isOverridePatch(
+  value: unknown,
+): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+// The wire error envelope, `{"error": ...}` (server/http.py's
+// `expected_failure_handler`): `ExpectedFailure.public_error()`'s
+// `{kind, message}`, plus `details` where a failure has structured data
+// (`AdviceIncomplete.public_error()`'s findings, which `findingsOf` reads;
+// the validation and readiness handlers add their own).
 function isErrorEnvelope(value: unknown): value is {
   readonly error: {
     readonly kind: string;
@@ -554,7 +640,6 @@ function invalidResponse(
   return new CoreFailure(
     "invalid_response",
     `Goldilocks Core ${reason}.`,
-    false,
     {},
     status,
     rawResponse,

@@ -1013,7 +1013,7 @@ def test_an_unknown_key_is_refused_naming_the_labels_and_element_keys() -> None:
 
     assert isinstance(state, Blocked)
     assert state.root_cause() == (
-        "starting_magnetization has unknown key(s) ['Fe2']; it takes this "
+        "starting_magnetization has unknown key(s) Fe2; it takes this "
         "cell's site labels (Fe0, Fe1) or an element symbol for all of that "
         "element's sites (Fe)"
     )
@@ -1523,7 +1523,7 @@ def test_explicit_spin_polarized_false_keeps_an_afm_request_off_and_warns(
     assert state.value.spin_polarized is False
     assert state.source == "human"
     assert state.value.structure == _BCC_CHROMIUM
-    assert state.value.ordering == OrderingRecord(requested="afm", applied="fm")
+    assert state.value.ordering == OrderingRecord(requested="afm", applied=None)
     assert sorted(warning.code for warning in state.value.warnings) == codes
     (ignored,) = (
         warning
@@ -1571,6 +1571,17 @@ def test_an_unset_ordering_leaves_spin_polarization_to_the_classifier() -> None:
     assert state.value.spin_polarized is False
     assert state.source == "heuristic"
     assert state.value.warnings == ()
+
+
+def test_a_run_without_spin_polarization_applies_no_ordering() -> None:
+    """#187: magnetic_ordering resolves in ``ordering.applied``. A run without
+    spin polarization recorded "fm" there, a value that as a setting asks for
+    spin polarization, so the Workbench showed it next to spin polarized
+    off."""
+    state = magnetic_cell(_BCC_CHROMIUM, _CLASSIFIED_NON_MAGNETIC)
+
+    assert state.value.spin_polarized is False
+    assert state.value.ordering == OrderingRecord(requested=None, applied=None)
 
 
 _TENORITE_CUO = Structure.from_spacegroup(

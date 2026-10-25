@@ -22,6 +22,12 @@ from goldilocks_core.service import (
 from goldilocks_core.set_overrides import build_overrides
 
 
+def _findings(report, code: str) -> list:
+    """The findings of ``report`` with ``code``; these tests have no table
+    installed, which the report names too."""
+    return [finding for finding in report.blocking if finding.code == code]
+
+
 def _hpc() -> HpcProfile:
     hardware = Hardware(
         cores_per_node=64, mem_per_node_gb=250, max_nodes=100, max_walltime_h=168
@@ -102,7 +108,7 @@ class TestAdviseRelaxDegradation:
         assert isinstance(advice.advice.system.pseudo.metadata, Blocked)
         report = check_relax(advice)
         assert not report.ok
-        assert any("does-not-exist" in reason for reason in report.blocking)
+        assert any("does-not-exist" in finding.message for finding in report.blocking)
 
     def test_vc_relax_with_non_bfgs_ion_dynamics_is_blocked_end_to_end(self) -> None:
         overrides = build_overrides({"ion_dynamics": "damp"}, task="vc-relax")
@@ -112,8 +118,8 @@ class TestAdviseRelaxDegradation:
         )
         report = check_relax(advice)
 
-        assert not report.ok
-        assert any("ion_dynamics='bfgs'" in reason for reason in report.blocking)
+        (finding,) = _findings(report, "relax.vc_relax_needs_bfgs")
+        assert finding.remedies == ({"ion_dynamics": "bfgs"},)
 
     def test_set_style_override_reaches_fix_bottom_layers(self) -> None:
         """No registry entry was added for this: capabilities.py reflects
@@ -135,12 +141,8 @@ class TestAdviseRelaxDegradation:
         )
         report = check_relax(advice)
 
-        assert not report.ok
-        assert any(
-            reason.startswith("relax.fix_bottom_layers requires a slab")
-            and "the cell to be written has no vacuum" in reason
-            for reason in report.blocking
-        )
+        (finding,) = _findings(report, "relax.fix_bottom_layers_needs_slab")
+        assert "The cell to be written has no vacuum." in finding.message
 
     def test_fix_bottom_layers_beyond_the_slab_layers_is_blocked_end_to_end(
         self,
@@ -155,10 +157,11 @@ class TestAdviseRelaxDegradation:
         )
         report = check_relax(advice)
 
-        assert (
-            "relax.fix_bottom_layers=9 exceeds the 8 atomic layers of the slab to "
-            "be written. Set fix_bottom_layers to at most 8, or unset it."
-        ) in report.blocking
+        (finding,) = _findings(report, "relax.fix_bottom_layers_exceeds_layers")
+        assert finding.message == (
+            "fix_bottom_layers=9 exceeds the 8 atomic layers of the slab to be "
+            "written. Set fix_bottom_layers to at most 8, or unset it."
+        )
 
 
 class TestRelaxWarnings:

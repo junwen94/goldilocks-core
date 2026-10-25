@@ -241,8 +241,8 @@ def job_resources(
     if requested_partition is not None and requested_partition not in hpc.partitions:
         available = ", ".join(sorted(hpc.partitions))
         return Unavailable(
-            reason=f"hpc profile {hpc.name!r} has no partition "
-            f"{requested_partition!r}; available: {available}"
+            reason=f"HPC profile {hpc.name} has no partition "
+            f"{requested_partition}; available: {available}"
         )
 
     partition, fitting_nodes, warnings = _pick_partition(steps, hpc, human, llm)
@@ -271,8 +271,8 @@ def job_resources(
                 level="warning",
                 category="job",
                 message=(
-                    f"nodes={nodes} exceeds partition {partition.name!r}'s own "
-                    f"ceiling ({hardware.max_nodes}); the scheduler "
+                    f"nodes={nodes} exceeds the ceiling of partition "
+                    f"{partition.name} ({hardware.max_nodes} nodes); the scheduler "
                     "will likely refuse this request."
                 ),
             )
@@ -289,10 +289,9 @@ def job_resources(
                 level="warning",
                 category="job",
                 message=(
-                    f"walltime_h={walltime_h} exceeds partition "
-                    f"{partition.name!r}'s own ceiling "
-                    f"({hardware.max_walltime_h}h); the scheduler "
-                    "will likely refuse this request."
+                    f"walltime_h={walltime_h:g} exceeds the ceiling of partition "
+                    f"{partition.name} ({hardware.max_walltime_h:g}h); the "
+                    "scheduler will likely refuse this request."
                 ),
             )
         )
@@ -468,9 +467,9 @@ def _pick_walltime(
             level="warning",
             category="job",
             message=(
-                f"walltime not specified; requesting partition {partition.name!r}'s "
-                f"ceiling ({partition.hardware.max_walltime_h}h). This slows "
-                "queueing -- schedulers favour short jobs -- but guessing short "
+                "walltime not specified; requesting the ceiling of partition "
+                f"{partition.name} ({partition.hardware.max_walltime_h:g}h). This "
+                "slows queueing -- schedulers favour short jobs -- but guessing short "
                 "risks the job being killed before it finishes, wasting the "
                 "entire run. If you know roughly how long this will take, set "
                 "walltime_h explicitly."

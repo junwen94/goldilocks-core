@@ -150,7 +150,8 @@ def test_a_slab_is_sampled_once_along_its_vacuum(store: AssetStore) -> None:
 
 def test_vc_relax_of_an_isolated_molecule_is_refused(store: AssetStore) -> None:
     """Under MT, pw.x computes no stress, so a vc-relax would report the
-    input cell as converged (#126)."""
+    input cell as converged (#126). The finding offers no remedy: the fix is
+    the relax task, and isolation=periodic would move the vacuum box."""
     advice = advise_relax(
         silicon_dimer_in_a_box(),
         calculation="vc-relax",
@@ -160,9 +161,10 @@ def test_vc_relax_of_an_isolated_molecule_is_refused(store: AssetStore) -> None:
 
     report = check_relax(advice)
 
-    assert len(report.blocking) == 1
-    assert "isolation='isolated'" in report.blocking[0]
-    assert "task='relax'" in report.blocking[0]
+    (finding,) = report.blocking
+    assert finding.code == "boundary.isolated_forbids_vc_relax"
+    assert finding.remedies == ()
+    assert "Use the relax task" in finding.message
 
 
 def test_vc_relax_of_a_bulk_crystal_computes_the_stress(store: AssetStore) -> None:
@@ -258,9 +260,32 @@ def test_vc_relax_of_a_slab_with_its_vacuum_along_a_is_refused(
 
     report = check_relax(advice)
 
-    assert len(report.blocking) == 1
-    assert "cell_dofree" in report.blocking[0]
-    assert "its vacuum along a" in report.blocking[0]
+    (finding,) = report.blocking
+    assert finding.code == "advice.blocked"
+    assert "cell_dofree" in finding.message
+    assert "its vacuum along a" in finding.message
+
+
+def test_a_2d_cell_constraint_on_a_slab_with_its_vacuum_along_a_offers_no_remedy(
+    store: AssetStore,
+) -> None:
+    """Setting the '2Dxy' the refusal above names is refused too, and
+    cell_dofree=all, the remedy for a bulk cell, would relax a, the vacuum
+    vector, so the finding offers none (#151)."""
+    advice = advise_relax(
+        with_vacuum_along(silicon_001_slab(), "a"),
+        calculation="vc-relax",
+        hpc=load_hpc_profile("scarf"),
+        overrides=build_overrides({"cell_dofree": "2Dxy"}, task="vc-relax"),
+        store=store,
+    )
+
+    report = check_relax(advice)
+
+    (finding,) = report.blocking
+    assert finding.code == "relax.two_d_cell_dofree_needs_xy_frame"
+    assert "vacuum along a." in finding.message
+    assert finding.remedies == ()
 
 
 def test_a_2d_cell_constraint_on_a_tilted_bulk_cell_is_refused(
@@ -280,9 +305,10 @@ def test_a_2d_cell_constraint_on_a_tilted_bulk_cell_is_refused(
     report = check_relax(advice)
 
     assert advice.relax.value.cell_dofree == "2Dxy"
-    assert len(report.blocking) == 1
-    assert "cell_dofree='2Dxy'" in report.blocking[0]
-    assert "xy plane" in report.blocking[0]
+    (finding,) = report.blocking
+    assert finding.code == "relax.two_d_cell_dofree_needs_xy_frame"
+    assert finding.remedies == ({"cell_dofree": "all"},)
+    assert "xy plane" in finding.message
 
 
 def test_a_slab_override_writes_the_2d_coulomb_truncation(store: AssetStore) -> None:
@@ -343,10 +369,13 @@ def test_vc_relax_of_a_slab_under_the_2d_truncation_refuses_cell_dofree_all(
 
     report = check_relax(advice)
 
-    assert len(report.blocking) == 1
-    assert "cell_dofree='all'" in report.blocking[0]
-    assert "cell_dofree='2Dxy'" in report.blocking[0]
-    assert "isolation='periodic'" in report.blocking[0]
+    (finding,) = report.blocking
+    assert finding.code == "relax.slab_vc_relax_needs_2d_cell_dofree"
+    assert finding.remedies == (
+        {"cell_dofree": "2Dxy"},
+        {"isolation": "periodic", "cell_dofree": None},
+    )
+    assert "cannot use cell_dofree=all:" in finding.message
 
 
 def test_a_slab_override_on_a_thick_slab_in_a_short_cell_is_refused(
@@ -365,9 +394,10 @@ def test_a_slab_override_on_a_thick_slab_in_a_short_cell_is_refused(
 
     report = check(advice)
 
-    assert len(report.blocking) == 1
-    assert "17.65 Å of vacuum around a slab 9.51 Å thick" in report.blocking[0]
-    assert "isolation='periodic'" in report.blocking[0]
+    (finding,) = report.blocking
+    assert finding.code == "boundary.slab_unsuited_to_2d_truncation"
+    assert "17.65 Å of vacuum around a slab 9.51 Å thick" in finding.message
+    assert finding.remedies == ({"isolation": "periodic"},)
 
 
 def test_a_slab_override_on_a_monolayer_passes_the_isolation_gate() -> None:
@@ -384,7 +414,7 @@ def test_a_slab_override_on_a_monolayer_passes_the_isolation_gate() -> None:
     assert advice.system.magnetic.ok
     assert advice.system.boundary.source == "human"
     assert advice.system.boundary.value.isolation == "slab"
-    assert not any("isolation" in reason for reason in report.blocking)
+    assert not any("isolation" in finding.message for finding in report.blocking)
 
 
 def test_a_slab_override_on_bulk_graphite_is_refused() -> None:
@@ -398,11 +428,13 @@ def test_a_slab_override_on_bulk_graphite_is_refused() -> None:
 
     report = check(advice)
 
-    isolation = [reason for reason in report.blocking if "isolation=" in reason]
-    assert len(isolation) == 1
-    assert "isolation='slab'" in isolation[0]
-    assert "the cell to be written has no vacuum" in isolation[0]
-    assert "Set isolation='periodic'" in isolation[0]
+    (isolation,) = (
+        finding
+        for finding in report.blocking
+        if finding.code == "boundary.slab_unsuited_to_2d_truncation"
+    )
+    assert isolation.message.startswith("isolation=slab writes")
+    assert "the cell to be written has no vacuum" in isolation.message
 
 
 def _dipole_notices(advice) -> list[str]:
@@ -452,10 +484,12 @@ def test_fix_bottom_layers_on_bulk_graphite_is_refused() -> None:
 
     report = check_relax(advice)
 
-    layers = [reason for reason in report.blocking if "fix_bottom_layers" in reason]
-    assert len(layers) == 1
-    assert "requires a slab" in layers[0]
-    assert "the cell to be written has no vacuum" in layers[0]
+    (layers,) = (
+        finding
+        for finding in report.blocking
+        if finding.code == "relax.fix_bottom_layers_needs_slab"
+    )
+    assert "The cell to be written has no vacuum." in layers.message
 
 
 def test_a_relax_of_a_slab_fixes_its_bottom_layers(store: AssetStore) -> None:
@@ -503,7 +537,7 @@ def test_lda_graphite_gets_no_d3_dispersion_and_a_warning() -> None:
     assert lda.system.vdw.value.use_vdw is False
     codes = {warning["code"] for warning in lda.warnings()}
     assert "vdw.d3bj_unavailable_for_functional" in codes
-    assert not any("use_vdw" in reason for reason in check(lda).blocking)
+    assert not any("use_vdw" in finding.message for finding in check(lda).blocking)
 
 
 def test_d3_dispersion_with_lda_is_refused_before_generation() -> None:
@@ -519,6 +553,9 @@ def test_d3_dispersion_with_lda_is_refused_before_generation() -> None:
     report = check(advice)
 
     assert advice.system.vdw.source == "human"
-    dispersion = [reason for reason in report.blocking if "use_vdw=false" in reason]
-    assert len(dispersion) == 1
-    assert "'LDA'" in dispersion[0]
+    (dispersion,) = (
+        finding
+        for finding in report.blocking
+        if finding.code == "vdw.use_vdw_without_d3bj_parameters"
+    )
+    assert "no parameters for functional LDA," in dispersion.message

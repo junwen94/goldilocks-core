@@ -20,21 +20,48 @@ import "@mantine/core/styles.layer.css";
 
 export { MantineProvider } from "@mantine/core";
 export { App } from "./App";
+// WorkbenchContent fills the height of its container: the failure banner,
+// when shown, above the card grid, which takes the rest while each card
+// scrolls its own body. Give it a container of definite height, such as the
+// space below the embedder's own header in a 100dvh flex column; in an
+// auto-height container the cards grow with their content instead. At
+// widths up to 47.5rem the cards stack at their own height, so the
+// container (or the page) scrolls.
 export { WorkbenchContent } from "./App";
 export { colorSchemeManager, workbenchTheme } from "./theme";
 export type { Theme } from "./theme";
 export { WorkspaceProvider } from "./workspace/WorkspaceProvider";
-export { createWorkspace } from "./workspace/workspace";
+export { createWorkspace, currentOrderings } from "./workspace/workspace";
 export type {
   CalculationDraft,
+  InspectFailure,
+  MagneticOrderingsListing,
+  PipelineKey,
+  PipelineOutcome,
   Workspace,
   WorkspaceAction,
   WorkspaceOperation,
   WorkspaceSnapshot,
 } from "./workspace/workspace";
+// The snapshot keeps the latest /explain and preview outcome with the
+// structure and revision it belongs to; these read the current draft's.
+// `currentFindings` are the current draft's blocking findings, from its
+// /explain verdict or its refused preview /run, each with its remedies.
+export {
+  bannerFailure,
+  currentArchive,
+  currentExplain,
+  currentFindings,
+  currentPreview,
+} from "./workspace/pipelineStatus";
+export type { WorkspaceFailure } from "./workspace/pipelineStatus";
 export { useWorkspace, useWorkspaceSnapshot } from "./workspace/useWorkspace";
-export { HttpCoreClient } from "./api/coreClient";
-export type { CoreClient, StructureInput } from "./api/coreClient";
+export { HttpCoreClient, findingsOf } from "./api/coreClient";
+export type {
+  BlockingFinding,
+  CoreClient,
+  StructureInput,
+} from "./api/coreClient";
 // Code/Task/HPC-profile pickers, self-contained (reads useWorkspace/
 // useWorkspaceSnapshot itself, no props) -- re-exported so an embedder can
 // build a custom Structure Setup surface (e.g. swapping out

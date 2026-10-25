@@ -85,11 +85,13 @@ class Warning(BaseModel):
     name used throughout ``Advice.records()``/``capabilities()``
     (``"job"``, ``"hubbard"``, ...): reusing that existing, already
     -stable vocabulary instead of inventing a second one a frontend
-    would need a separate legend for. ``message`` is the human-readable
-    text, with any per-occurrence values (an element, a number) already
-    interpolated in -- the whole reason this array exists is so a
-    caller never has to parse it to know what happened, but the text is
-    still there for direct display."""
+    would need a separate legend for. ``message`` is the text a user
+    reads, verbatim (the Workbench, the CLI and the MCP tools show it
+    as is), with any per-occurrence values (an element, a number)
+    already interpolated in: it names settings by their keys and values,
+    with no module names, internal literals or design-document ids
+    (#151). The whole reason this array exists is so a caller never has
+    to parse the text to know what happened."""
 
     code: str
     level: WarningLevel

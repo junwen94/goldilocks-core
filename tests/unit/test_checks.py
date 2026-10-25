@@ -16,6 +16,7 @@ from support import (
     molybdenum_disulfide_monolayer,
     rhombohedral_bismuth_selenide,
     rotated_about_x,
+    with_vacuum_along,
     written_cell,
 )
 
@@ -31,11 +32,34 @@ from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.parallelisation import ParallelisationDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.advisors.vdw_method import VdwFacts
-from goldilocks_core.checks import check_all, collect_blocked
+from goldilocks_core.capabilities import capabilities
+from goldilocks_core.checks import (
+    FINDING_CATALOGUE,
+    CheckReport,
+    Finding,
+    check_all,
+    collect_blocked,
+)
 from goldilocks_core.pw_symmetry import pw_frame
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
+from goldilocks_core.set_overrides import build_overrides
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
+
+
+def _only(report: CheckReport) -> Finding:
+    """The one finding of ``report``."""
+    (finding,) = report.blocking
+    return finding
+
+
+def _blocked(*causes: str) -> tuple[Finding, ...]:
+    """The findings ``collect_blocked`` gives for root causes ``causes``."""
+    return tuple(Finding(code="advice.blocked", message=cause) for cause in causes)
+
+
+def _messages(report: CheckReport) -> list[str]:
+    return [finding.message for finding in report.blocking]
 
 
 def _fixed(tot_magnetization: float | None = None):
@@ -73,7 +97,9 @@ def _magnetic(
     angles = {"Fe": 0.0} if spin_polarized and spin_orbit_enabled else None
     facts = MagneticConfigFacts(
         cell=structure,
-        ordering=OrderingRecord(requested="fm", applied="fm"),
+        ordering=OrderingRecord(
+            requested=None, applied="fm" if spin_polarized else None
+        ),
         spin_polarized=spin_polarized,
         magnetic_elements=("Fe",) if spin_polarized else (),
         starting_magnetization={"Fe": 0.1} if spin_polarized else None,
@@ -87,13 +113,17 @@ def _magnetic(
 
 
 def test_collect_blocked_returns_only_blocked_root_causes() -> None:
-    causes = collect_blocked(
+    """A blocked chain reaches the gate as 'advice.blocked', its root cause
+    the message, with no setting to point at and no remedy (#151)."""
+    findings = collect_blocked(
         Resolved(1, Provenance(source="heuristic")),
         Unavailable(reason="could not tell"),
-        Blocked(by="upstream failure"),
+        Blocked(by=Blocked(by="upstream failure")),
     )
 
-    assert causes == ("upstream failure",)
+    assert findings == _blocked("upstream failure")
+    assert findings[0].fields == ()
+    assert findings[0].remedies == ()
 
 
 def test_check_all_with_nothing_given_is_ok() -> None:
@@ -107,23 +137,60 @@ def test_check_all_surfaces_a_blocked_field_state() -> None:
     report = check_all(Blocked(by="pseudopotential selection failed"))
 
     assert not report.ok
-    assert report.blocking == ("pseudopotential selection failed",)
+    assert report.blocking == _blocked("pseudopotential selection failed")
+
+
+def test_a_report_holds_one_finding_per_root_cause() -> None:
+    """#151: every field a missing table blocks repeats its root cause, and
+    the gate reports it once, in first-seen order, whoever builds the
+    report."""
+    report = check_all(
+        Blocked(by="table missing"),
+        Blocked(by=Blocked(by="table missing")),
+        Blocked(by="job undecided"),
+        Blocked(by="table missing"),
+    )
+    merged = CheckReport(blocking=report.blocking + report.blocking)
+
+    assert report.blocking == _blocked("table missing", "job undecided")
+    assert merged.blocking == report.blocking
+
+
+def test_findings_with_one_code_and_different_messages_are_kept() -> None:
+    first, second = _blocked("table missing", "job undecided")
+
+    assert CheckReport(blocking=(first, second, first)).blocking == (first, second)
 
 
 def test_fixed_occupations_with_non_integer_moment_blocks() -> None:
     report = check_all(occupations=_fixed(2.5), magnetic=_magnetic(True), purpose="scf")
 
-    assert not report.ok
-    assert "integer tot_magnetization" in report.blocking[0]
-    assert "2.5" in report.blocking[0]
+    finding = _only(report)
+    assert finding.code == "occupations.fixed_needs_integer_tot_magnetization"
+    assert finding.fields == ("occupations", "tot_magnetization")
+    assert finding.remedies == ({"occupations": "smearing"},)
+    assert "integer tot_magnetization, not 2.5." in finding.message
 
 
 def test_fixed_occupations_with_missing_moment_blocks() -> None:
+    """The LiFePO4 refusal of #151: the remedy is occupations=smearing;
+    a tot_magnetization needs a value only the user can choose, so the
+    message names it and no remedy guesses one."""
     report = check_all(occupations=_FIXED, magnetic=_magnetic(True), purpose="scf")
 
-    assert not report.ok
-    assert "none was set" in report.blocking[0]
-    assert "occupations='smearing'" in report.blocking[0]
+    assert report.blocking == (
+        Finding(
+            code="occupations.fixed_needs_tot_magnetization",
+            message=(
+                "occupations=fixed on a collinear spin-polarized run needs an "
+                "integer tot_magnetization of the electron count's parity, and "
+                "none was set or derived. Set occupations=smearing, or set "
+                "tot_magnetization."
+            ),
+            fields=("occupations", "tot_magnetization"),
+            remedies=({"occupations": "smearing"},),
+        ),
+    )
 
 
 def test_fixed_occupations_with_integer_moment_is_ok() -> None:
@@ -143,7 +210,7 @@ def test_the_moment_rule_reads_the_occupations_decision_not_the_request() -> Non
         purpose="scf",
     )
 
-    assert derived.ok, derived.blocking
+    assert derived.ok, _messages(derived)
 
 
 def test_smearing_occupations_never_triggers_the_moment_check() -> None:
@@ -176,13 +243,15 @@ def test_the_moment_check_also_applies_to_relax_and_vc_relax() -> None:
         )
 
         assert not report.ok, purpose
-        assert "integer tot_magnetization" in report.blocking[0]
+        assert _only(report).code == (
+            "occupations.fixed_needs_integer_tot_magnetization"
+        )
 
 
 def test_blocked_occupations_surfaces_once_via_the_generic_scan() -> None:
     report = check_all(occupations=Blocked(by="functional undecided"), purpose="scf")
 
-    assert report.blocking == ("functional undecided",)
+    assert report.blocking == _blocked("functional undecided")
 
 
 def _electron_count(nelec: float):
@@ -203,9 +272,22 @@ def test_fixed_occupations_non_spin_polarized_odd_electron_count_blocks() -> Non
         purpose="scf",
     )
 
-    assert not report.ok
-    assert "even electron count" in report.blocking[0]
-    assert "3.0" in report.blocking[0]
+    assert report.blocking == (
+        Finding(
+            code="occupations.fixed_needs_even_electron_count",
+            message=(
+                "occupations=fixed without spin polarization needs an even "
+                "electron count, but nelec=3 is odd, which leaves one band half "
+                "filled. Set occupations=smearing, or spin_polarized=true with "
+                "occupations=smearing for an unpaired electron."
+            ),
+            fields=("occupations", "spin_polarized"),
+            remedies=(
+                {"occupations": "smearing"},
+                {"spin_polarized": True, "occupations": "smearing"},
+            ),
+        ),
+    )
 
 
 def test_fixed_occupations_non_spin_polarized_even_electron_count_is_ok() -> None:
@@ -264,7 +346,7 @@ def test_the_electron_count_check_also_applies_to_relax_and_vc_relax() -> None:
         )
 
         assert not report.ok, purpose
-        assert "even electron count" in report.blocking[0]
+        assert _only(report).code == "occupations.fixed_needs_even_electron_count"
 
 
 def test_moment_and_electron_count_must_share_parity() -> None:
@@ -279,8 +361,11 @@ def test_moment_and_electron_count_must_share_parity() -> None:
         purpose="scf",
     )
 
-    assert not report.ok
-    assert "share parity" in report.blocking[0]
+    finding = _only(report)
+    assert finding.code == "occupations.fixed_tot_magnetization_parity"
+    assert finding.fields == ("occupations", "tot_magnetization")
+    assert finding.remedies == ({"occupations": "smearing"},)
+    assert "tot_magnetization=2 and nelec=3 do not." in finding.message
 
 
 def test_moment_and_electron_count_with_matching_parity_is_ok() -> None:
@@ -309,7 +394,7 @@ def test_a_magnetic_spin_orbit_run_needs_no_moment_or_even_count() -> None:
         purpose="scf",
     )
 
-    assert report.ok, report.blocking
+    assert report.ok, _messages(report)
 
 
 def test_a_non_magnetic_spin_orbit_run_needs_an_even_count() -> None:
@@ -331,13 +416,9 @@ def test_a_non_magnetic_spin_orbit_run_needs_an_even_count() -> None:
         purpose="scf",
     )
 
-    assert odd.blocking == (
-        "occupations='fixed' with a non-spin-polarized system requires an "
-        "even electron count; got nelec=9.0, which likely means an unpaired "
-        "electron -- set spin_polarized=true, or "
-        "occupations=smearing/tetrahedra_opt if this is genuinely metallic.",
-    )
-    assert even.ok, even.blocking
+    assert _only(odd).code == "occupations.fixed_needs_even_electron_count"
+    assert "but nelec=9 is odd" in _only(odd).message
+    assert even.ok, _messages(even)
 
 
 def test_moment_parity_check_is_unaffected_when_electron_count_is_missing() -> None:
@@ -370,9 +451,13 @@ def test_vc_relax_with_bfgs_ion_dynamics_is_ok() -> None:
 def test_vc_relax_with_non_bfgs_ion_dynamics_blocks() -> None:
     report = check_all(relax=_vc_relax("damp"), purpose="vc-relax")
 
-    assert not report.ok
-    assert "ion_dynamics='bfgs'" in report.blocking[0]
-    assert "'damp'" in report.blocking[0]
+    finding = _only(report)
+    assert finding.code == "relax.vc_relax_needs_bfgs"
+    assert finding.fields == ("ion_dynamics",)
+    assert finding.remedies == ({"ion_dynamics": "bfgs"},)
+    assert finding.message.startswith(
+        "vc-relax is generated only with ion_dynamics=bfgs, not damp:"
+    )
 
 
 def test_plain_relax_with_non_bfgs_ion_dynamics_is_unaffected() -> None:
@@ -386,7 +471,7 @@ def test_plain_relax_with_non_bfgs_ion_dynamics_is_unaffected() -> None:
 def test_relax_blocked_field_state_surfaces_via_the_generic_scan() -> None:
     report = check_all(relax=Blocked(by="convergence undecided"), purpose="vc-relax")
 
-    assert report.blocking == ("convergence undecided",)
+    assert report.blocking == _blocked("convergence undecided")
 
 
 def _boundary(isolation: str, source: str = "heuristic"):
@@ -399,11 +484,12 @@ def test_vc_relax_of_an_isolated_system_blocks() -> None:
     reports the input cell as converged."""
     report = check_all(boundary=_boundary("isolated"), purpose="vc-relax")
 
-    assert not report.ok
-    assert len(report.blocking) == 1
-    assert "isolation='isolated'" in report.blocking[0]
-    assert "task='relax'" in report.blocking[0]
-    assert "isolation='periodic'" in report.blocking[0]
+    finding = _only(report)
+    assert finding.code == "boundary.isolated_forbids_vc_relax"
+    assert finding.fields == ("isolation",)
+    assert finding.remedies == ()
+    assert "with isolation=isolated (Martyna-Tuckerman)" in finding.message
+    assert "Use the relax task" in finding.message
 
 
 def test_a_human_isolated_override_on_vc_relax_blocks_too() -> None:
@@ -411,8 +497,7 @@ def test_a_human_isolated_override_on_vc_relax_blocks_too() -> None:
         boundary=_boundary("isolated", source="human"), purpose="vc-relax"
     )
 
-    assert not report.ok
-    assert "task='relax'" in report.blocking[0]
+    assert _only(report).code == "boundary.isolated_forbids_vc_relax"
 
 
 def test_an_isolated_system_without_a_cell_relaxation_passes() -> None:
@@ -432,14 +517,14 @@ def test_vc_relax_with_a_boundary_that_computes_stress_passes(isolation: str) ->
 def test_blocked_boundary_surfaces_once_via_the_generic_scan() -> None:
     report = check_all(boundary=Blocked(by="geometry undecided"), purpose="vc-relax")
 
-    assert report.blocking == ("geometry undecided",)
+    assert report.blocking == _blocked("geometry undecided")
 
 
 def _vc_relax_with_cell_dofree(cell_dofree: str):
     return Resolved(VcRelaxOptions(cell_dofree=cell_dofree), Provenance(source="human"))
 
 
-def _isolation_reasons(isolation: str, structure: Structure) -> tuple[str, ...]:
+def _isolation_findings(isolation: str, structure: Structure) -> tuple[Finding, ...]:
     return check_all(
         boundary=_boundary(isolation, source="human"),
         magnetic=written_cell(structure),
@@ -457,7 +542,7 @@ def test_a_slab_in_the_xy_frame_with_room_for_the_2d_truncation_passes(
     """#161: QE's assume_isolated='2D' truncates the Coulomb interaction
     beyond half the cell height along z (QE 7.3 PW/src/Coul_cut_2D.f90:77).
     A sheet in a 20 A cell meets every precondition."""
-    assert _isolation_reasons("slab", build()) == ()
+    assert _isolation_findings("slab", build()) == ()
 
 
 @pytest.mark.parametrize(
@@ -502,31 +587,33 @@ def test_a_slab_isolation_without_qe_2d_preconditions_blocks(build, found: str) 
     (PW/src/init_vloc.f90:62-65), and vacuum 20 bohr wider than the slab
     (PW/Doc/INPUT_PW.def:1668-1675). A 11.00 A cell is below 21 bohr
     (11.11 A); the 3.17 A MoS2 sheet needs 13.75 A of vacuum."""
-    reasons = _isolation_reasons("slab", build())
+    (finding,) = _isolation_findings("slab", build())
 
-    assert len(reasons) == 1
-    assert "isolation='slab'" in reasons[0]
-    assert f"the cell to be written has {found}." in reasons[0]
-    assert reasons[0].endswith("Set isolation='periodic'.")
+    assert finding.code == "boundary.slab_unsuited_to_2d_truncation"
+    assert finding.fields == ("isolation",)
+    assert finding.remedies == ({"isolation": "periodic"},)
+    assert finding.message.startswith("isolation=slab writes")
+    assert f"the cell to be written has {found}." in finding.message
+    assert finding.message.endswith("Set isolation=periodic.")
 
 
 def test_the_2d_height_floor_is_21_bohr() -> None:
     """Graphene has no thickness, so 11.12 A of vacuum clears the 20 bohr
     (10.58 A) margin and isolates the height floor: 21 bohr is 11.113 A."""
-    assert _isolation_reasons("slab", graphene_monolayer(c=11.12)) == ()
-    assert len(_isolation_reasons("slab", graphene_monolayer(c=11.1))) == 1
+    assert _isolation_findings("slab", graphene_monolayer(c=11.12)) == ()
+    assert len(_isolation_findings("slab", graphene_monolayer(c=11.1))) == 1
 
 
 def test_the_2d_vacuum_margin_is_20_bohr_beyond_the_slab() -> None:
     """The 3.17 A MoS2 sheet needs 3.17 + 10.58 = 13.75 A of vacuum: a
     16.93 A cell leaves 13.76 A, a 16.91 A cell 13.74 A."""
-    assert _isolation_reasons("slab", molybdenum_disulfide_monolayer(c=16.93)) == ()
-    reasons = _isolation_reasons("slab", molybdenum_disulfide_monolayer(c=16.91))
-    assert "13.74 Å of vacuum around a slab 3.17 Å thick" in reasons[0]
+    assert _isolation_findings("slab", molybdenum_disulfide_monolayer(c=16.93)) == ()
+    (finding,) = _isolation_findings("slab", molybdenum_disulfide_monolayer(c=16.91))
+    assert "13.74 Å of vacuum around a slab 3.17 Å thick" in finding.message
 
 
 def test_an_isolated_system_in_a_box_passes() -> None:
-    assert _isolation_reasons("isolated", carbon_pair_in_a_box()) == ()
+    assert _isolation_findings("isolated", carbon_pair_in_a_box()) == ()
 
 
 @pytest.mark.parametrize(
@@ -542,19 +629,21 @@ def test_an_isolated_boundary_on_a_periodic_cell_blocks(build, found: str) -> No
     """#161: Martyna-Tuckerman is a correction for a molecule or cluster in
     a 3D supercell (QE 7.3 PW/Doc/INPUT_PW.def:1593-1594), and pw.x has no
     1D truncation, so a wire must stay periodic."""
-    reasons = _isolation_reasons("isolated", build())
+    (finding,) = _isolation_findings("isolated", build())
 
-    assert len(reasons) == 1
-    assert "isolation='isolated'" in reasons[0]
-    assert f"the cell to be written has {found}." in reasons[0]
-    assert reasons[0].endswith("Set isolation='periodic'.")
+    assert finding.code == "boundary.isolated_needs_vacuum"
+    assert finding.fields == ("isolation",)
+    assert finding.remedies == ({"isolation": "periodic"},)
+    assert finding.message.startswith("isolation=isolated writes Martyna-Tuckerman")
+    assert f"the cell to be written has {found}." in finding.message
+    assert finding.message.endswith("Set isolation=periodic.")
 
 
 @pytest.mark.parametrize(
     "build", [graphite, carbon_chain, carbon_pair_in_a_box], ids=lambda b: b.__name__
 )
 def test_a_periodic_boundary_suits_every_cell(build) -> None:
-    assert _isolation_reasons("periodic", build()) == ()
+    assert _isolation_findings("periodic", build()) == ()
 
 
 @pytest.mark.parametrize("isolation", ["slab", "isolated"])
@@ -572,8 +661,7 @@ def test_the_isolation_gate_reads_the_written_cell_whatever_the_source() -> None
         magnetic=written_cell(graphite()),
     )
 
-    assert len(report.blocking) == 1
-    assert "isolation='isolated'" in report.blocking[0]
+    assert _only(report).code == "boundary.isolated_needs_vacuum"
 
 
 @pytest.mark.parametrize("cell_dofree", ["all", "shape", "z", "fixc", "epitaxial_ab"])
@@ -582,7 +670,8 @@ def test_vc_relax_under_the_2d_truncation_needs_a_2d_cell_constraint(
 ) -> None:
     """Under '2D' only in-plane stresses make sense, and QE asks for
     cell_dofree='2Dxy' (QE 7.3 PW/Doc/INPUT_PW.def:1677-1678); pw.x itself
-    does not check it."""
+    does not check it. The periodic remedy also unsets cell_dofree: kept, an
+    explicit 'all' would pass under isolation=periodic and relax the vacuum."""
     report = check_all(
         boundary=_boundary("slab", source="human"),
         relax=_vc_relax_with_cell_dofree(cell_dofree),
@@ -590,10 +679,75 @@ def test_vc_relax_under_the_2d_truncation_needs_a_2d_cell_constraint(
         purpose="vc-relax",
     )
 
-    assert len(report.blocking) == 1
-    assert f"cell_dofree={cell_dofree!r}" in report.blocking[0]
-    assert "cell_dofree='2Dxy'" in report.blocking[0]
-    assert "isolation='periodic'" in report.blocking[0]
+    finding = _only(report)
+    assert finding.code == "relax.slab_vc_relax_needs_2d_cell_dofree"
+    assert finding.fields == ("cell_dofree", "isolation")
+    assert finding.remedies == (
+        {"cell_dofree": "2Dxy"},
+        {"isolation": "periodic", "cell_dofree": None},
+    )
+    assert f"cannot use cell_dofree={cell_dofree}:" in finding.message
+    assert finding.message.endswith(
+        "Set cell_dofree=2Dxy (or 2Dshape), or isolation=periodic with "
+        "cell_dofree unset."
+    )
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        graphene_with_vacuum_along_x,
+        carbon_chain,
+        carbon_pair_in_a_box,
+        rhombohedral_bismuth_selenide,
+        graphite,
+    ],
+    ids=lambda build: build.__name__,
+)
+def test_isolation_slab_outside_a_slab_in_the_xy_frame_is_left_to_the_boundary_rule(
+    build,
+) -> None:
+    """The 2D cell constraint's remedies need a slab with its vacuum along c
+    in the xy frame. Elsewhere the request needs isolation=periodic anyway,
+    '2Dxy' fails the 2D-frame rule on a wire, a box or a cell out of the xy
+    frame, and an unset cell_dofree gives a box 'all' and blocks a wire, so
+    the boundary rule alone refuses isolation=slab, with isolation=periodic
+    as its remedy."""
+    report = check_all(
+        boundary=_boundary("slab", source="human"),
+        relax=_vc_relax_with_cell_dofree("all"),
+        magnetic=written_cell(build()),
+        purpose="vc-relax",
+    )
+
+    assert _only(report).code == "boundary.slab_unsuited_to_2d_truncation"
+
+
+@pytest.mark.parametrize(
+    "build",
+    [lambda: molybdenum_disulfide_monolayer(c=12.0), graphene_with_c_tilted],
+    ids=["MoS2 with too little vacuum", "graphene with c tilted"],
+)
+def test_a_slab_in_the_xy_frame_without_room_for_the_truncation_gets_both_findings(
+    build,
+) -> None:
+    """Such a slab's default is '2Dxy', so isolation=periodic with
+    cell_dofree unset resolves both findings and holds the vacuum fixed."""
+    report = check_all(
+        boundary=_boundary("slab", source="human"),
+        relax=_vc_relax_with_cell_dofree("all"),
+        magnetic=written_cell(build()),
+        purpose="vc-relax",
+    )
+
+    assert [finding.code for finding in report.blocking] == [
+        "boundary.slab_unsuited_to_2d_truncation",
+        "relax.slab_vc_relax_needs_2d_cell_dofree",
+    ]
+    assert report.blocking[1].remedies == (
+        {"cell_dofree": "2Dxy"},
+        {"isolation": "periodic", "cell_dofree": None},
+    )
 
 
 @pytest.mark.parametrize("cell_dofree", ["2Dxy", "2Dshape"])
@@ -632,26 +786,84 @@ def test_a_periodic_slab_may_relax_its_whole_cell() -> None:
     assert report.ok
 
 
-@pytest.mark.parametrize(
-    "build",
-    [graphene_with_vacuum_along_x, rhombohedral_bismuth_selenide],
-    ids=lambda build: build.__name__,
-)
-def test_a_2d_cell_constraint_outside_the_xy_frame_blocks(build) -> None:
+def test_a_2d_cell_constraint_on_a_tilted_bulk_cell_blocks() -> None:
     """#132: '2Dxy' moves only the x and y components of a and b (QE 7.3
-    Modules/cell_base.f90:803-808). With the vacuum along a it frees the
-    vacuum vector; with a and b out of the xy plane (rhombohedral Bi2Se3) it
-    distorts the cell."""
+    Modules/cell_base.f90:803-808), so with a and b out of the xy plane
+    (rhombohedral Bi2Se3) it distorts the cell. Without vacuum, 'all' is
+    the remedy."""
+    report = check_all(
+        relax=_vc_relax_with_cell_dofree("2Dxy"),
+        magnetic=written_cell(rhombohedral_bismuth_selenide()),
+        purpose="vc-relax",
+    )
+
+    finding = _only(report)
+    assert finding.code == "relax.two_d_cell_dofree_needs_xy_frame"
+    assert finding.fields == ("cell_dofree",)
+    assert finding.remedies == ({"cell_dofree": "all"},)
+    assert finding.message.startswith("cell_dofree=2Dxy moves only")
+    assert finding.message.endswith("Set cell_dofree=all, or reorient the cell.")
+
+
+@pytest.mark.parametrize(
+    ("build", "advice"),
+    [
+        (
+            graphene_with_vacuum_along_x,
+            "has vacuum along a. Reorient the cell, or set a cell_dofree that "
+            "holds the vacuum fixed: cell_dofree=all would relax the vacuum too.",
+        ),
+        (
+            carbon_chain,
+            "has vacuum along a and b. Set a cell_dofree that holds the vacuum "
+            "fixed: cell_dofree=epitaxial_ab holds a and b fixed and relaxes only "
+            "c, the wire's period, while cell_dofree=all would relax the vacuum "
+            "too.",
+        ),
+        # The chain's period permuted onto a, then b: it still lies along z,
+        # where 'x' or 'y' would move a component of it that is zero.
+        pytest.param(
+            lambda: with_vacuum_along(carbon_chain(), "a"),
+            "vacuum along b and c. Set a cell_dofree that holds the vacuum fixed: "
+            "cell_dofree=epitaxial_bc holds b and c fixed and relaxes only a, the "
+            "wire's period, while cell_dofree=all would relax the vacuum too.",
+            id="carbon_chain_with_its_period_along_a",
+        ),
+        pytest.param(
+            lambda: with_vacuum_along(carbon_chain(), "b"),
+            "vacuum along a and c. Set a cell_dofree that holds the vacuum fixed: "
+            "cell_dofree=epitaxial_ac holds a and c fixed and relaxes only b, the "
+            "wire's period, while cell_dofree=all would relax the vacuum too.",
+            id="carbon_chain_with_its_period_along_b",
+        ),
+        (
+            carbon_pair_in_a_box,
+            "has vacuum along a, b and c. Use the relax task for a molecule or "
+            "cluster in a box: every lattice vector is a vacuum vector, so a "
+            "vc-relax would relax the vacuum.",
+        ),
+    ],
+    ids=lambda value: value.__name__ if callable(value) else None,
+)
+def test_a_2d_cell_constraint_on_a_cell_with_vacuum_offers_no_remedy(
+    build, advice: str
+) -> None:
+    """#132: with the vacuum along a, '2Dxy' frees the vacuum vector. 'all'
+    would free every vacuum vector, which is why the relax advisor gives a
+    wire or a slab outside the xy frame no default: the finding names no
+    remedy, and says what holds the vacuum fixed. Only a slab can be
+    reoriented to suit '2Dxy'; a wire relaxes its period alone, and a
+    molecule in a box needs the relax task."""
     report = check_all(
         relax=_vc_relax_with_cell_dofree("2Dxy"),
         magnetic=written_cell(build()),
         purpose="vc-relax",
     )
 
-    assert not report.ok
-    assert len(report.blocking) == 1
-    assert "cell_dofree='2Dxy'" in report.blocking[0]
-    assert "cell_dofree='all'" in report.blocking[0]
+    finding = _only(report)
+    assert finding.code == "relax.two_d_cell_dofree_needs_xy_frame"
+    assert finding.remedies == ()
+    assert finding.message.endswith(advice)
 
 
 @pytest.mark.parametrize(
@@ -671,7 +883,7 @@ def test_the_frame_reason_names_what_is_out_of_place(build, found: str) -> None:
         purpose="vc-relax",
     )
 
-    assert f"the cell to be written has {found}." in report.blocking[0]
+    assert f"the cell to be written has {found}." in _only(report).message
 
 
 @pytest.mark.parametrize("cell_dofree", ["2Dxy", "2Dshape"])
@@ -684,8 +896,7 @@ def test_every_2d_cell_constraint_is_checked_against_the_frame(
         purpose="vc-relax",
     )
 
-    assert len(report.blocking) == 1
-    assert f"cell_dofree={cell_dofree!r}" in report.blocking[0]
+    assert _only(report).message.startswith(f"cell_dofree={cell_dofree} moves only")
 
 
 @pytest.mark.parametrize(
@@ -746,12 +957,18 @@ def test_a_cartesian_cell_constraint_on_a_turned_cell_blocks(cell_dofree: str) -
         purpose="vc-relax",
     )
 
-    assert len(report.blocking) == 1
-    (reason,) = report.blocking
-    assert f"cell_dofree={cell_dofree!r}" in reason
-    assert "rotated by 56.6003 degrees about [-0.7693, -0.2445, -0.5903]" in reason
-    assert "cell_dofree='all' or 'shape'" in reason
-    assert "'fixa', 'fixb' or 'fixc'" in reason
+    finding = _only(report)
+    assert finding.code == "relax.cartesian_cell_dofree_on_rotated_cell"
+    assert finding.fields == ("cell_dofree",)
+    assert finding.remedies == ({"cell_dofree": None},)
+    assert finding.message.startswith(f"cell_dofree={cell_dofree} holds or frees")
+    assert "rotated by 56.6003 degrees about [-0.7693, -0.2445, -0.5903]" in (
+        finding.message
+    )
+    assert finding.message.endswith(
+        "Unset cell_dofree for the default, or use cell_dofree=all or shape, or "
+        "fixa, fixb or fixc to fix whole lattice vectors."
+    )
 
 
 @pytest.mark.parametrize("cell_dofree", ["all", "shape", "fixc", "epitaxial_ab"])
@@ -797,17 +1014,25 @@ def test_d3_dispersion_with_lda_blocks() -> None:
     entry, so pw.x would stop with 'functional name unknown'."""
     report = check_all(vdw=_vdw(True, source="human"), functional=_functional("LDA"))
 
-    assert not report.ok
-    assert len(report.blocking) == 1
-    assert "'LDA'" in report.blocking[0]
-    assert "use_vdw=false" in report.blocking[0]
+    assert report.blocking == (
+        Finding(
+            code="vdw.use_vdw_without_d3bj_parameters",
+            message=(
+                "use_vdw=true adds D3(BJ) dispersion, but Quantum ESPRESSO's "
+                "DFT-D3 has no parameters for functional LDA, so pw.x would stop "
+                "with 'functional name unknown'. Set use_vdw=false, or choose a "
+                "functional with D3(BJ) parameters (PBE, PBEsol)."
+            ),
+            fields=("use_vdw", "functional"),
+            remedies=({"use_vdw": False},),
+        ),
+    )
 
 
 def test_d3_dispersion_with_an_unrecognised_functional_blocks() -> None:
     report = check_all(vdw=_vdw(True, source="llm"), functional=_functional("revPBE"))
 
-    assert not report.ok
-    assert "'revPBE'" in report.blocking[0]
+    assert "parameters for functional revPBE," in _only(report).message
 
 
 def test_d3_dispersion_with_pbe_or_pbesol_passes() -> None:
@@ -833,14 +1058,14 @@ def test_blocked_vdw_surfaces_once_via_the_generic_scan() -> None:
         vdw=Blocked(by="geometry undecided"), functional=_functional("LDA")
     )
 
-    assert report.blocking == ("geometry undecided",)
+    assert report.blocking == _blocked("geometry undecided")
 
 
 def _relax_with_fix_bottom_layers(count: int | None):
     return Resolved(RelaxOptions(fix_bottom_layers=count), Provenance(source="human"))
 
 
-def _fix_bottom_layers_reasons(count: int | None, structure: Structure):
+def _fix_bottom_layers_findings(count: int | None, structure: Structure):
     return check_all(
         relax=_relax_with_fix_bottom_layers(count),
         magnetic=written_cell(structure),
@@ -856,7 +1081,7 @@ def test_fix_bottom_layers_on_a_slab_passes(build) -> None:
     """A slab is any cell with vacuum along exactly one lattice vector, in
     whatever orientation: if_pos flags do not depend on the Cartesian
     frame."""
-    assert _fix_bottom_layers_reasons(1, build()) == ()
+    assert _fix_bottom_layers_findings(1, build()) == ()
 
 
 @pytest.mark.parametrize(
@@ -875,12 +1100,14 @@ def test_fix_bottom_layers_without_exactly_one_vacuum_axis_blocks(
     to count layers up from; with fix_bottom_layers=1 the rank-keyed gate
     passed and relax.in froze its z = 1/4 sheet. The gate reads the cell the
     writer renders, not the rank."""
-    reasons = _fix_bottom_layers_reasons(1, build())
+    (finding,) = _fix_bottom_layers_findings(1, build())
 
-    assert len(reasons) == 1
-    assert reasons[0].startswith("relax.fix_bottom_layers requires a slab")
-    assert f"the cell to be written has {found}." in reasons[0]
-    assert reasons[0].endswith("Unset fix_bottom_layers.")
+    assert finding.code == "relax.fix_bottom_layers_needs_slab"
+    assert finding.fields == ("fix_bottom_layers",)
+    assert finding.remedies == ({"fix_bottom_layers": None},)
+    assert finding.message.startswith("fix_bottom_layers freezes the bottom")
+    assert f"The cell to be written has {found}." in finding.message
+    assert finding.message.endswith("Unset fix_bottom_layers.")
 
 
 def test_fix_bottom_layers_on_a_cell_holding_two_slabs_blocks() -> None:
@@ -888,16 +1115,15 @@ def test_fix_bottom_layers_on_a_cell_holding_two_slabs_blocks() -> None:
     normal, putting two sheets and two vacuum gaps along c in the written
     cell. Counted up from one gap, the layers would run through one sheet
     and on into the other, so the gate refuses the cell."""
-    reasons = _fix_bottom_layers_reasons(
+    (finding,) = _fix_bottom_layers_findings(
         1, molybdenum_disulfide_monolayer() * (1, 1, 2)
     )
 
-    assert reasons == (
-        "relax.fix_bottom_layers requires a slab: it freezes the bottom atomic "
-        "layers counted up from the vacuum, so the cell needs one vacuum gap, "
-        "along exactly one lattice vector, but the cell to be written has more "
-        "than one vacuum gap along c, so more than one slab. Unset "
-        "fix_bottom_layers.",
+    assert finding.message == (
+        "fix_bottom_layers freezes the bottom atomic layers counted up from the "
+        "vacuum, so it needs a slab: one vacuum gap, along exactly one lattice "
+        "vector. The cell to be written has more than one vacuum gap along c, so "
+        "more than one slab. Unset fix_bottom_layers."
     )
 
 
@@ -907,15 +1133,22 @@ def test_fix_bottom_layers_may_fix_every_layer_of_the_slab_but_no_more() -> None
     instead of passing a count the writer cannot apply."""
     sheet = molybdenum_disulfide_monolayer()
 
-    assert _fix_bottom_layers_reasons(3, sheet) == ()
-    assert _fix_bottom_layers_reasons(4, sheet) == (
-        "relax.fix_bottom_layers=4 exceeds the 3 atomic layers of the slab to be "
-        "written. Set fix_bottom_layers to at most 3, or unset it.",
+    assert _fix_bottom_layers_findings(3, sheet) == ()
+    assert _fix_bottom_layers_findings(4, sheet) == (
+        Finding(
+            code="relax.fix_bottom_layers_exceeds_layers",
+            message=(
+                "fix_bottom_layers=4 exceeds the 3 atomic layers of the slab to "
+                "be written. Set fix_bottom_layers to at most 3, or unset it."
+            ),
+            fields=("fix_bottom_layers",),
+            remedies=({"fix_bottom_layers": None},),
+        ),
     )
 
 
 def test_fix_bottom_layers_unset_is_never_checked() -> None:
-    assert _fix_bottom_layers_reasons(None, graphite()) == ()
+    assert _fix_bottom_layers_findings(None, graphite()) == ()
 
 
 def test_the_fix_bottom_layers_gate_is_skipped_without_the_written_cell() -> None:
@@ -928,7 +1161,7 @@ def test_a_blocked_written_cell_surfaces_once_via_the_generic_scan() -> None:
         magnetic=Blocked(by="magnetic ordering undecided"),
     )
 
-    assert report.blocking == ("magnetic ordering undecided",)
+    assert report.blocking == _blocked("magnetic ordering undecided")
 
 
 def _job(ntasks: int) -> Resolved[JobDecision]:
@@ -965,9 +1198,17 @@ def test_npool_not_dividing_ntasks_blocks() -> None:
     already allocated and running."""
     report = check_all(job=_job(64), parallel=_parallel(7))
 
-    assert not report.ok
-    assert "npool=7" in report.blocking[0]
-    assert "ntasks=64" in report.blocking[0]
+    assert report.blocking == (
+        Finding(
+            code="parallelisation.npool_does_not_divide_ntasks",
+            message=(
+                "npool=7 does not divide ntasks=64, and pw.x refuses that layout. "
+                "Unset npool for the default, or set npool to a divisor of ntasks."
+            ),
+            fields=("npool", "ntasks"),
+            remedies=({"npool": None},),
+        ),
+    )
 
 
 def test_npool_check_is_unaffected_when_either_side_is_missing() -> None:
@@ -979,7 +1220,7 @@ def test_npool_check_is_unaffected_when_either_side_is_missing() -> None:
 def test_npool_blocked_field_state_surfaces_via_the_generic_scan() -> None:
     report = check_all(parallel=Blocked(by="job resources undecided"))
 
-    assert report.blocking == ("job resources undecided",)
+    assert report.blocking == _blocked("job resources undecided")
 
 
 def _bands(nbnd: int) -> Resolved[NbndDecision]:
@@ -1010,7 +1251,7 @@ def test_user_ndiag_whose_grid_cannot_distribute_the_bands_blocks(
         job=_job(64), parallel=_parallel(npool, ndiag), nbnd=_bands(nbnd)
     )
 
-    (reason,) = report.blocking
+    reason = _only(report).message
     assert f"ndiag={ndiag}" in reason
     assert f"{side}x{side}" in reason
     assert f"nbnd={nbnd}" in reason
@@ -1022,10 +1263,17 @@ def test_ndiag_reason_states_the_grid_the_bound_and_the_remedy() -> None:
     report = check_all(job=_job(64), parallel=_parallel(4, 16), nbnd=_bands(8))
 
     assert report.blocking == (
-        "ndiag=16 gives a 4x4 diagonalization grid, which cannot distribute "
-        "nbnd=8 bands (it needs nbnd > 9); pw.x would abort at startup or "
-        "fail in the parallel eigensolver. Unset ndiag so pw.x chooses it "
-        "from nbnd, or use ndiag <= 9.",
+        Finding(
+            code="parallelisation.ndiag_grid_too_large",
+            message=(
+                "ndiag=16 gives a 4x4 diagonalization grid, which cannot "
+                "distribute nbnd=8 bands (it needs nbnd > 9); pw.x would abort "
+                "at startup or fail in the parallel eigensolver. Unset ndiag so "
+                "pw.x chooses it from nbnd, or use ndiag <= 9."
+            ),
+            fields=("ndiag", "nbnd"),
+            remedies=({"ndiag": None},),
+        ),
     )
 
 
@@ -1047,7 +1295,7 @@ def test_user_ndiag_whose_grid_distributes_the_bands_is_ok(
         job=_job(64), parallel=_parallel(npool, ndiag), nbnd=_bands(nbnd)
     )
 
-    assert report.ok, report.blocking
+    assert report.ok, _messages(report)
 
 
 def test_unset_ndiag_never_blocks() -> None:
@@ -1074,7 +1322,7 @@ def test_unresolved_bands_never_add_the_ndiag_reason() -> None:
         nbnd=Unavailable(reason="no valid band count"),
     )
 
-    assert blocked.blocking == ("electron count undecided",)
+    assert blocked.blocking == _blocked("electron count undecided")
     assert unavailable.ok
 
 
@@ -1114,9 +1362,16 @@ def test_too_few_spin_up_bands_for_the_pinned_moment_blocks() -> None:
     report = _band_check(96, 192.0, _fixed(16.0), spin_polarized=True)
 
     assert report.blocking == (
-        "nbnd=96 cannot hold 104 spin-up electrons: pw.x stops in setup with "
-        "'too few spin up bands'. Set nbnd to at least 104, or unset nbnd and "
-        "extra_bands for the default.",
+        Finding(
+            code="nbnd.too_few_bands",
+            message=(
+                "nbnd=96 cannot hold 104 spin-up electrons: pw.x stops in setup "
+                "with 'too few spin up bands'. Unset nbnd and extra_bands for the "
+                "default, or set nbnd to at least 104."
+            ),
+            fields=("nbnd", "extra_bands"),
+            remedies=({"nbnd": None, "extra_bands": None},),
+        ),
     )
 
 
@@ -1129,7 +1384,7 @@ def test_the_band_reason_names_pw_x_first_error_and_the_count_that_passes() -> N
     pass the spin-up one too."""
     report = _band_check(90, 192.0, _fixed(16.0), spin_polarized=True)
 
-    (reason,) = report.blocking
+    reason = _only(report).message
     assert reason.startswith("nbnd=90 cannot hold 192 electrons, two per band")
     assert "'too few bands'" in reason
     assert "at least 104" in reason
@@ -1138,7 +1393,7 @@ def test_the_band_reason_names_pw_x_first_error_and_the_count_that_passes() -> N
 def test_too_few_spin_down_bands_for_a_negative_moment_blocks() -> None:
     report = _band_check(6, 12.0, _fixed(-2.0), spin_polarized=True)
 
-    (reason,) = report.blocking
+    reason = _only(report).message
     assert "'too few spin dw bands'" in reason
     assert "at least 7" in reason
 
@@ -1148,7 +1403,7 @@ def test_too_few_bands_for_the_electron_count_blocks() -> None:
     bands'."""
     report = _band_check(2, 8.0)
 
-    (reason,) = report.blocking
+    reason = _only(report).message
     assert reason.startswith("nbnd=2 cannot hold")
     assert "'too few bands'" in reason
     assert "at least 4" in reason
@@ -1159,7 +1414,7 @@ def test_a_noncollinear_run_needs_a_band_per_electron() -> None:
     blocked = _band_check(13, 14.0, _SMEARING, spin_orbit_enabled=True)
     passed = _band_check(14, 14.0, _SMEARING, spin_orbit_enabled=True)
 
-    (reason,) = blocked.blocking
+    reason = _only(blocked).message
     assert "'too few bands'" in reason
     assert "at least 14" in reason
     assert passed.ok
@@ -1171,7 +1426,8 @@ def test_the_band_rule_holds_for_every_purpose(purpose: str) -> None:
     level."""
     report = _band_check(2, 8.0, purpose=purpose)
 
-    assert any("'too few bands'" in reason for reason in report.blocking)
+    assert _only(report).code == "nbnd.too_few_bands"
+    assert "'too few bands'" in _only(report).message
 
 
 def test_a_blocked_nbnd_is_reported_once() -> None:
@@ -1182,9 +1438,71 @@ def test_a_blocked_nbnd_is_reported_once() -> None:
         nbnd=Blocked(by="electron count undecided"),
     )
 
-    assert report.blocking == ("electron count undecided",)
+    assert report.blocking == _blocked("electron count undecided")
 
 
 def test_the_band_rule_needs_occupations_and_the_electron_count() -> None:
     assert check_all(nbnd=_bands(2), electron_count=_electron_count(8.0)).ok
     assert check_all(nbnd=_bands(2), occupations=_FIXED).ok
+
+
+def test_every_finding_code_is_catalogued_once() -> None:
+    codes = [finding.code for finding in FINDING_CATALOGUE]
+
+    assert len(codes) == len(set(codes))
+    assert "advice.blocked" in codes
+
+
+@pytest.mark.parametrize("finding", FINDING_CATALOGUE, ids=lambda f: f.code)
+def test_every_remedy_is_an_override_the_request_accepts(finding: Finding) -> None:
+    """#151: a remedy is a complete override patch; a None value clears that
+    override. Every key is a setting the vc-relax task reads (the task every
+    remedied setting applies to), and every value fits its setting."""
+    for remedy in finding.remedies:
+        build_overrides(remedy, task="vc-relax")
+
+
+@pytest.mark.parametrize("finding", FINDING_CATALOGUE, ids=lambda f: f.code)
+def test_a_finding_names_settings_and_remedies_only_change_them(
+    finding: Finding,
+) -> None:
+    """``fields`` are capabilities keys, so the Workbench can show the finding
+    at each control it concerns, and a remedy changes only those."""
+    document = capabilities()
+    keys = {setting["key"] for setting in document["settings"]} | {
+        fact["key"] for fact in document["facts"]
+    }
+
+    assert set(finding.fields) <= keys
+    for remedy in finding.remedies:
+        assert set(remedy) <= set(finding.fields)
+    assert bool(finding.fields) == (finding.code != "advice.blocked")
+
+
+def test_a_finding_document_is_the_json_every_transport_returns() -> None:
+    report = _band_check(2, 8.0)
+
+    assert _only(report).to_document() == {
+        "code": "nbnd.too_few_bands",
+        "fields": ["nbnd", "extra_bands"],
+        "message": _only(report).message,
+        "remedies": [{"nbnd": None, "extra_bands": None}],
+    }
+
+
+def test_a_cartesian_cell_constraint_on_a_turned_slab_is_cleared_not_set() -> None:
+    """A slab turned into pw.x's frame under isolation=slab: cell_dofree=all
+    would leave the 2D-truncation finding in place, so the remedy clears the
+    override and the default ('2Dxy' for a slab) resolves both."""
+    report = check_all(
+        boundary=_boundary("slab", source="human"),
+        relax=_vc_relax_with_cell_dofree("z"),
+        magnetic=_framed(rotated_about_x(graphene_monolayer(), 30.0)),
+        purpose="vc-relax",
+    )
+
+    assert [finding.code for finding in report.blocking] == [
+        "relax.slab_vc_relax_needs_2d_cell_dofree",
+        "relax.cartesian_cell_dofree_on_rotated_cell",
+    ]
+    assert report.blocking[1].remedies == ({"cell_dofree": None},)

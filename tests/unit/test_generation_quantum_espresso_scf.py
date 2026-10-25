@@ -45,7 +45,9 @@ def _magnetic(
 ) -> MagneticConfigFacts:
     return MagneticConfigFacts(
         cell=structure,
-        ordering=OrderingRecord(requested="fm", applied="fm"),
+        ordering=OrderingRecord(
+            requested=None, applied="fm" if spin_polarized else None
+        ),
         spin_polarized=spin_polarized,
         magnetic_elements=(),
         starting_magnetization=starting_magnetization,

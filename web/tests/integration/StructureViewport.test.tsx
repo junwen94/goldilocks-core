@@ -10,7 +10,7 @@ import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { inspection } from "../support/workbenchFixtures";
+import { inspection, monoclinicInspection } from "../support/workbenchFixtures";
 import { StructureViewport } from "../../src/viewer/StructureViewport";
 import type {
   StructureViewer,
@@ -105,6 +105,73 @@ describe("StructureViewport", () => {
     expect(createViewer).toHaveBeenCalledTimes(2);
     expect(show).toHaveBeenCalledWith("data_Si");
     expect(fallback).not.toBeVisible();
+  });
+
+  it("counts a one-site cell's atomic sites in the singular", () => {
+    const createViewer: StructureViewerFactory = () => ({
+      show: vi.fn(),
+      refreshTheme: vi.fn(),
+      dispose: vi.fn(),
+    });
+    const { rerender } = render(
+      <StructureViewport inspection={inspection} createViewer={createViewer} />,
+    );
+    expect(
+      screen.getByText("1 atomic site", { exact: true }),
+    ).toBeInTheDocument();
+
+    rerender(
+      <StructureViewport
+        inspection={{
+          ...inspection,
+          structure: { ...inspection.structure, site_count: 2 },
+        }}
+        createViewer={createViewer}
+      />,
+    );
+    expect(
+      screen.getByText("2 atomic sites", { exact: true }),
+    ).toBeInTheDocument();
+  });
+
+  it("lists all six cell parameters and the volume of a monoclinic cell", async () => {
+    const user = userEvent.setup();
+    render(
+      <StructureViewport
+        inspection={monoclinicInspection}
+        createViewer={() => ({
+          show: vi.fn(),
+          refreshTheme: vi.fn(),
+          dispose: vi.fn(),
+        })}
+      />,
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "Inspect lattice, sites and occupancies",
+      }),
+    );
+    const lattice = within(
+      screen.getByRole("dialog", { name: "Lattice, sites and occupancies" }),
+    ).getByRole("region", { name: "Lattice parameters" });
+    expect(
+      within(lattice)
+        .getAllByRole("term")
+        .map((term) => term.textContent),
+    ).toEqual(["a", "b", "c", "α", "β", "γ", "V"]);
+    expect(
+      within(lattice)
+        .getAllByRole("definition")
+        .map((definition) => definition.textContent),
+    ).toEqual([
+      "5.126 Å",
+      "5.208 Å",
+      "5.294 Å",
+      "90.000°",
+      "99.597°",
+      "90.000°",
+      "139.35 Å³",
+    ]);
   });
 
   it("exposes canonical mixed and partial occupancies before computation", async () => {

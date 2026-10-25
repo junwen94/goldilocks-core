@@ -36,8 +36,8 @@ from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.bundle import BundleInput, StructureIdentity
 from goldilocks_core.checks import CheckReport
 from goldilocks_core.inputs.hpc import HpcProfile
-from goldilocks_core.resolution import FieldState, collect_warnings
-from goldilocks_core.service._advice import Advice, RunOverrides
+from goldilocks_core.resolution import FieldState
+from goldilocks_core.service._advice import Advice, RecordTiers, RunOverrides
 from goldilocks_core.service._bundle import (
     assemble_bundle_input,
     render_submission,
@@ -58,13 +58,18 @@ class RelaxAdvice:
     def field_states(self) -> tuple[FieldState[object], ...]:
         return (*self.advice.field_states(), self.relax)
 
+    def tiers(self) -> RecordTiers:
+        """``advice``'s records by tier, its one step named by
+        ``calculation`` and holding ``relax`` too."""
+        return self.advice.tiers(self.calculation).with_records(
+            self.calculation, {"relax": self.relax}
+        )
+
     def records(self) -> dict[str, FieldState[object]]:
-        merged = dict(self.advice.records())
-        merged["relax"] = self.relax
-        return merged
+        return self.tiers().records()
 
     def warnings(self) -> list[dict[str, object]]:
-        return collect_warnings(self.records())
+        return self.tiers().warnings()
 
 
 def advise_relax(
