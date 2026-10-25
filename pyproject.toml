@@ -207,7 +207,7 @@ skip_covered = true
 # fork/reap through one dedicated forkserver child, instead of the default
 # ForkRunner's os.wait() in the main process -- which reaps *any* child, so an
 # untracked pid (e.g. a leftover from the stats/generation phase) causes a
-# bare `self._running.pop(pid)` KeyError (stfc/goldilocks-core#76). The
+# bare `self._running.pop(pid)` KeyError (#76). The
 # forkserver's own reap loop explicitly ignores unknown pids instead of
 # crashing. Lowering --max-children (ci.yml, #77) only reduced how often the
 # race was hit; it could not fix a race that isn't about mutmut's own worker
@@ -232,6 +232,9 @@ only_mutate = [
 ]
 mutate_only_covered_lines = false
 pytest_add_cli_args = ["-q"]
+# Mutants are tested by tests/unit only: with the whole suite the CI step
+# would take ~90 minutes, twice the job's 45-minute limit (#196).
+pytest_add_cli_args_test_selection = ["tests/unit"]
 
 [tool.ruff]
 target-version = "py312"
