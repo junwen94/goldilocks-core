@@ -37,11 +37,14 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from pymatgen.core import Lattice, Structure
+from pymatgen.core.surface import Slab, SlabGenerator
 
 from goldilocks_core.advisors.magnetic_config import (
+    MagneticCell,
     MagneticConfigFacts,
     MagneticConfigHumanInput,
     OrderingRecord,
+    framed_cell,
     magnetic_cell,
     magnetic_config,
 )
@@ -122,6 +125,21 @@ def magnetic_decision(
     decision (#128)."""
     cell = magnetic_cell(structure, is_magnetic, human)
     return magnetic_config(cell, needs_soc, soc_table, z_valences)
+
+
+def framed_magnetic_cell(
+    structure: Structure, magnetism: Magnetism = "non_magnetic", **settings: Any
+) -> Resolved[MagneticCell]:
+    """``magnetic_cell`` then ``framed_cell``, as ``service/_magnetic.py``
+    runs them, with ``magnetism`` as the ``is_magnetic`` answer and
+    ``settings`` as the human magnetic overrides: the cell the writer renders
+    and the band path is read from (#118)."""
+    cell = magnetic_cell(
+        structure,
+        Resolved(magnetism, Provenance(source="heuristic")),
+        MagneticConfigHumanInput(**settings),
+    )
+    return Resolved(framed_cell(cell.value), cell.provenance)
 
 
 def strict_json(document: str | bytes) -> Any:
@@ -765,6 +783,243 @@ def fcc_lead() -> Structure:
     (a = 4.919 A)."""
     return Structure.from_spacegroup(
         "Fm-3m", Lattice.cubic(4.919), ["Pb"], [[0.0, 0.0, 0.0]]
+    )
+
+
+def fcc_copper() -> Structure:
+    """fcc Cu (Fm-3m, a = 3.61 A) in its 4-atom conventional cell."""
+    return Structure.from_spacegroup("Fm-3m", Lattice.cubic(3.61), ["Cu"], [[0, 0, 0]])
+
+
+def rutile_titanium_dioxide() -> Structure:
+    """Rutile TiO2 (P4_2/mnm, a = 4.594 A, c = 2.959 A, O at u = 0.3053)."""
+    return Structure.from_spacegroup(
+        "P4_2/mnm",
+        Lattice.tetragonal(4.594, 2.959),
+        ["Ti", "O"],
+        [[0, 0, 0], [0.3053, 0.3053, 0]],
+    )
+
+
+def generated_slab(bulk: Structure, miller: tuple[int, int, int]) -> Slab:
+    """pymatgen's ``SlabGenerator`` slab of ``bulk`` with Miller index
+    ``miller``, at least 6 A thick under 12 A of vacuum along c, centred in
+    the cell. SlabGenerator keeps c along a bulk lattice vector, so c is
+    usually tilted off the slab normal; ``Slab.get_orthogonal_c_slab`` gives
+    the same slab with c along the normal."""
+    return SlabGenerator(
+        bulk, miller, min_slab_size=6, min_vacuum_size=12, center_slab=True
+    ).get_slab()
+
+
+def rutile_ruthenium_dioxide() -> Structure:
+    """Rutile RuO2 (P4_2/mnm, a = 4.49 A, c = 3.11 A, O at u = 0.306) with
+    its two Ru sites labelled Ru1 and Ru2, the sublattices its
+    antiferromagnetic order sets apart."""
+    u = 0.306
+    return Structure(
+        Lattice.tetragonal(4.49, 3.11),
+        ["Ru", "Ru", "O", "O", "O", "O"],
+        [
+            [0, 0, 0],
+            [0.5, 0.5, 0.5],
+            [u, u, 0],
+            [-u, -u, 0],
+            [0.5 + u, 0.5 - u, 0.5],
+            [0.5 - u, 0.5 + u, 0.5],
+        ],
+        labels=["Ru1", "Ru2", "O", "O", "O", "O"],
+    )
+
+
+def antiferromagnetic_nickel_oxide() -> Structure:
+    """NiO's AFM-II order on rock salt (a = 4.17 A): ferromagnetic (111) Ni
+    planes alternating between Ni1 and Ni2, in the 4-atom rhombohedral cell
+    a (1/2, 1/2, 1), a (1/2, 1, 1/2), a (1, 1/2, 1/2) (rhombohedral angle
+    33.56 degrees)."""
+    a = 4.17
+    return Structure(
+        Lattice(a * np.array([[0.5, 0.5, 1.0], [0.5, 1.0, 0.5], [1.0, 0.5, 0.5]])),
+        ["Ni", "Ni", "O", "O"],
+        a * np.array([[0, 0, 0], [0, 0.5, 0.5], [0.5, 0, 0], [0.5, 0.5, 0.5]]),
+        coords_are_cartesian=True,
+        labels=["Ni1", "Ni2", "O", "O"],
+    )
+
+
+def ilmenite() -> Structure:
+    """FeTiO3 ilmenite (R-3, hexagonal a = 5.088 A, c = 14.085 A) in its
+    10-atom rhombohedral primitive cell, rhombohedral angle 54.7 degrees."""
+    return Structure.from_spacegroup(
+        "R-3",
+        Lattice.hexagonal(5.088, 14.085),
+        ["Fe", "Ti", "O"],
+        [[0, 0, 0.3554], [0, 0, 0.1464], [0.317, 0.020, 0.245]],
+    ).get_primitive_structure()
+
+
+def flattened_rhombohedral_silicon() -> Structure:
+    """Six Si atoms on a general position of R-3 in a flattened rhombohedral
+    cell (hexagonal a = 7 A, c = 5 A, rhombohedral angle above 90 degrees),
+    Si-Si 2.01 A and up."""
+    return Structure.from_spacegroup(
+        "R-3", Lattice.hexagonal(7.0, 5.0), ["Si"], [[0.13, 0.31, 0.07]]
+    ).get_primitive_structure()
+
+
+def _zirconia_sites_on(lattice: Lattice) -> Structure:
+    """The 12 sites of monoclinic ZrO2 (P2_1/c, a = 5.15, b = 5.21,
+    c = 5.31 A, beta = 99.23 degrees), in fractional coordinates, on
+    ``lattice``."""
+    zirconia = Structure.from_spacegroup(
+        "P2_1/c",
+        Lattice.monoclinic(5.15, 5.21, 5.31, 99.23),
+        ["Zr", "O", "O"],
+        [[0.2754, 0.0395, 0.2083], [0.0700, 0.3317, 0.3447], [0.4496, 0.7569, 0.4792]],
+    )
+    return Structure(lattice, zirconia.species, zirconia.frac_coords)
+
+
+def right_angled_monoclinic_zirconia() -> Structure:
+    """The sites of monoclinic ZrO2 (P2_1/c) on a lattice whose angles are
+    all exactly 90 degrees (a = 5.15, b = 5.21, c = 5.31 A): monoclinic
+    symmetry on an orthorhombic metric."""
+    return _zirconia_sites_on(Lattice.orthorhombic(5.15, 5.21, 5.31))
+
+
+def monoclinic_zirconia_on_a_rhombic_lattice() -> Structure:
+    """The sites of monoclinic ZrO2 (P2_1/c) on a lattice with a = c =
+    5.20 A, b = 5.21 A and beta = 99.23 degrees: monoclinic symmetry on a
+    C-centred orthorhombic metric, the two lattice vectors normal to the
+    unique axis b equal in length."""
+    return _zirconia_sites_on(Lattice.monoclinic(5.20, 5.21, 5.20, 99.23))
+
+
+def monoclinic_zirconia_on_a_hexagonal_lattice() -> Structure:
+    """The sites of monoclinic ZrO2 (P2_1/c) on a lattice with a = c =
+    6.00 A at beta = 120 degrees and b = 5.21 A: monoclinic symmetry on a
+    hexagonal metric, Zr-O 2.01 A and up."""
+    return _zirconia_sites_on(Lattice.monoclinic(6.00, 5.21, 6.00, 120))
+
+
+def sulfur_substituted_monoclinic_zirconia() -> Structure:
+    """Monoclinic ZrO2 (P2_1/c, a = 5.15, b = 5.21, c = 5.31 A, beta = 99.23
+    degrees) with one of its eight O replaced by S: a P1 defect cell on a
+    monoclinic lattice, with reciprocal angles of 90, about 81 and 90
+    degrees."""
+    zirconia = _zirconia_sites_on(Lattice.monoclinic(5.15, 5.21, 5.31, 99.23))
+    zirconia.replace(zirconia.indices_from_symbol("O")[0], "S")
+    return zirconia
+
+
+def sulfur_substituted_right_angled_zirconia() -> Structure:
+    """``right_angled_monoclinic_zirconia`` with one of its eight O replaced
+    by S: a P1 defect cell on an orthorhombic metric, every reciprocal
+    angle 90 degrees."""
+    zirconia = right_angled_monoclinic_zirconia()
+    zirconia.replace(zirconia.indices_from_symbol("O")[0], "S")
+    return zirconia
+
+
+def sheared_sulfur_substituted_zirconia() -> Structure:
+    """``sulfur_substituted_monoclinic_zirconia``'s sites on a 5.15 x 5.21 x
+    5.31 A lattice with angles of 94, 99 and 103 degrees: a P1 cell whose
+    standard primitive cell has reciprocal angles of about 84, 80 and 76
+    degrees, all acute (Setyawan and Curtarolo's TRI1b)."""
+    zirconia = sulfur_substituted_monoclinic_zirconia()
+    return Structure(
+        Lattice.from_parameters(5.15, 5.21, 5.31, 94, 99, 103),
+        zirconia.species,
+        zirconia.frac_coords,
+    )
+
+
+def displaced_hcp_gadolinium() -> Structure:
+    """``hcp_gadolinium`` with its second atom moved (0.11, 0.07, 0.05) A
+    off its site: P-1 on a hexagonal metric, with reciprocal angles of 90,
+    90 and 60 degrees."""
+    gadolinium = hcp_gadolinium()
+    gadolinium.translate_sites([1], [0.11, 0.07, 0.05], frac_coords=False)
+    return gadolinium
+
+
+def layered_antiferromagnetic_nickel() -> Structure:
+    """fcc Ni (a = 3.52 A) with the AFM-I order of CuAu-type layering --
+    (100) planes alternating between Ni1 and Ni2, so the layering runs along
+    a -- in its 4-atom cubic cell: a tetragonal crystal on a cubic
+    lattice."""
+    return Structure(
+        Lattice.cubic(3.52),
+        ["Ni"] * 4,
+        [[0, 0, 0], [0, 0.5, 0.5], [0.5, 0.5, 0], [0.5, 0, 0.5]],
+        labels=["Ni1", "Ni1", "Ni2", "Ni2"],
+    )
+
+
+def graphene_with_a_60_degree_cell() -> Structure:
+    """``graphene_monolayer`` with b at 60 degrees from a instead of 120."""
+    return Structure(
+        Lattice([[2.46, 0, 0], [1.23, 1.23 * math.sqrt(3), 0], [0, 0, 20.0]]),
+        ["C", "C"],
+        [[1 / 3, 1 / 3, 0.5], [2 / 3, 2 / 3, 0.5]],
+    )
+
+
+def oblique_carbon_sheet(*, obtuse: bool = False) -> Structure:
+    """Two C atoms 1.67 A apart in a planar sheet on an oblique lattice,
+    a = 3.0 A and b = 3.4 A at 70 degrees, 20 A high along z. ``obtuse``
+    gives the same sheet in the basis (b, -a): 3.4 A and 3.0 A at 110
+    degrees."""
+    if obtuse:
+        lattice, second = (
+            Lattice.from_parameters(3.4, 3.0, 20.0, 90, 90, 110),
+            [0.35, 0.55, 0.5],
+        )
+    else:
+        lattice, second = (
+            Lattice.from_parameters(3.0, 3.4, 20.0, 90, 90, 70),
+            [0.45, 0.35, 0.5],
+        )
+    return Structure(lattice, ["C", "C"], [[0, 0, 0.5], second])
+
+
+def rectangular_graphene() -> Structure:
+    """``graphene_monolayer`` (C-C 1.42 A) in its 4-atom rectangular cell,
+    a = 2.46 A and b = 2.46 sqrt(3) A, 20 A high along z."""
+    return Structure(
+        Lattice.orthorhombic(2.46, 2.46 * math.sqrt(3), 20.0),
+        ["C"] * 4,
+        [[0, 1 / 6, 0.5], [0.5, 1 / 3, 0.5], [0.5, 2 / 3, 0.5], [0, 5 / 6, 0.5]],
+    )
+
+
+def distorted_tungsten_ditelluride_sheet() -> Structure:
+    """A 1T'-WTe2-like sheet: W and two Te sites of P2_1/m on a 6.25 x
+    3.48 A rectangular lattice, 20 A high along z, whose monoclinic axis b
+    lies in the sheet."""
+    return Structure.from_spacegroup(
+        "P2_1/m",
+        Lattice.orthorhombic(6.25, 3.48, 20.0),
+        ["W", "Te", "Te"],
+        [[0.10, 0.25, 0.010], [0.36, 0.25, 0.085], [0.62, 0.25, -0.080]],
+    )
+
+
+def tilted_straddling_molybdenum_disulfide() -> Structure:
+    """The S-Mo-S sheet of ``molybdenum_disulfide_monolayer`` with c leaning
+    (1.58, 0.912) A off the normal and Mo on the cell boundary, so that the
+    sheet straddles it."""
+    lattice = Lattice.hexagonal(3.16, 20.0).matrix
+    cartesian = Lattice(lattice).get_cartesian_coords(
+        [[1 / 3, 2 / 3, 0], [2 / 3, 1 / 3, 0], [2 / 3, 1 / 3, 0]]
+    )
+    cartesian[:, 2] = [0.0, 1.585, -1.585]
+    return Structure(
+        Lattice([lattice[0], lattice[1], [1.58, 0.912, 20.0]]),
+        ["Mo", "S", "S"],
+        cartesian,
+        coords_are_cartesian=True,
+        to_unit_cell=True,
     )
 
 

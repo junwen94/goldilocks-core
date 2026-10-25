@@ -21,6 +21,7 @@ from goldilocks_core.advisors.convergence import WARNING_CATALOGUE as _CONVERGEN
 from goldilocks_core.advisors.cutoffs import WARNING_CATALOGUE as _CUTOFFS
 from goldilocks_core.advisors.hubbard_u import WARNING_CATALOGUE as _HUBBARD
 from goldilocks_core.advisors.job_resources import WARNING_CATALOGUE as _JOB
+from goldilocks_core.advisors.k_path import WARNING_CATALOGUE as _K_PATH
 from goldilocks_core.advisors.k_sampling import WARNING_CATALOGUE as _K_SAMPLING
 from goldilocks_core.advisors.magnetic_config import WARNING_CATALOGUE as _MAGNETIC
 from goldilocks_core.advisors.nbnd import WARNING_CATALOGUE as _NBND
@@ -37,6 +38,7 @@ WARNING_CATALOGUE = (
     + _CUTOFFS
     + _HUBBARD
     + _JOB
+    + _K_PATH
     + _K_SAMPLING
     + _MAGNETIC
     + _MODEL

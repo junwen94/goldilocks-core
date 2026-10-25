@@ -227,6 +227,21 @@ class TestTopLevelShape:
         entry = by_code["convergence.mixing_fixed_ns_freezes_hubbard_occupations"]
         assert (entry["level"], entry["category"]) == ("warning", "convergence")
 
+    def test_warnings_catalogue_lists_the_band_path_notices(self) -> None:
+        """#118: the band path's three notices are published, so a frontend
+        can filter on them before any run has emitted them."""
+        by_code = {entry["code"]: entry for entry in capabilities()["warnings"]}
+
+        for code, level in (
+            ("k_path.folded_bands", "info"),
+            ("k_path.magnetic_noncollinear_symmetry", "warning"),
+            ("k_path.non_special_vertices", "info"),
+        ):
+            assert (by_code[code]["level"], by_code[code]["category"]) == (
+                level,
+                "k_path",
+            )
+
     def test_codes_and_tasks_reflect_only_what_actually_runs(self) -> None:
         """v2 epic 9 (#9, #28): ``dos`` joined ``scf_single_point`` once
         the delivery layers actually routed it, not before -- this list
