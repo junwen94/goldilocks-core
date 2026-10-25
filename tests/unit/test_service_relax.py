@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 
+import pytest
 from pymatgen.core import Lattice, Structure
 from support import sssp_fixture_table_spec
 
@@ -110,16 +111,46 @@ class TestAdviseRelaxDegradation:
         assert not report.ok
         assert any("does-not-exist" in finding.message for finding in report.blocking)
 
-    def test_vc_relax_with_non_bfgs_ion_dynamics_is_blocked_end_to_end(self) -> None:
-        overrides = build_overrides({"ion_dynamics": "damp"}, task="vc-relax")
+    @pytest.mark.parametrize(
+        ("task", "settings", "code", "remedies"),
+        [
+            pytest.param(
+                "vc-relax",
+                {"ion_dynamics": "damp"},
+                "relax.vc_relax_needs_bfgs",
+                ({"ion_dynamics": "bfgs"},),
+                id="vc-relax-needs-bfgs",
+            ),
+            pytest.param(
+                "vc-relax",
+                {"isolation": "isolated"},
+                "boundary.isolated_forbids_vc_relax",
+                (),
+                id="isolated-forbids-vc-relax",
+            ),
+            pytest.param(
+                "relax",
+                {"functional": "LDA", "use_vdw": True},
+                "vdw.use_vdw_without_d3bj_parameters",
+                ({"use_vdw": False},),
+                id="vdw-needs-d3bj-functional",
+            ),
+        ],
+    )
+    def test_a_cross_field_refusal_is_blocked_end_to_end(
+        self, task, settings, code, remedies
+    ) -> None:
+        """check_relax reads the relax, boundary, vdw and functional records
+        off the advice, so each cross-field rule refuses its request."""
+        overrides = build_overrides(settings, task=task)
 
         advice = advise_relax(
-            _silicon(), calculation="vc-relax", hpc=_hpc(), overrides=overrides
+            _silicon(), calculation=task, hpc=_hpc(), overrides=overrides
         )
         report = check_relax(advice)
 
-        (finding,) = _findings(report, "relax.vc_relax_needs_bfgs")
-        assert finding.remedies == ({"ion_dynamics": "bfgs"},)
+        (finding,) = _findings(report, code)
+        assert finding.remedies == remedies
 
     def test_set_style_override_reaches_fix_bottom_layers(self) -> None:
         """No registry entry was added for this: capabilities.py reflects
