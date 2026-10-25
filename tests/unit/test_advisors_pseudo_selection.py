@@ -177,17 +177,25 @@ def test_automatic_selection_picks_the_only_compatible_table() -> None:
     assert state.value.id == "fixture"
 
 
-def test_automatic_selection_prefers_sssp_for_lanthanides() -> None:
+@pytest.mark.parametrize(
+    ("element", "provider"), [("La", "sssp"), ("Si", "pseudodojo")]
+)
+def test_automatic_selection_picks_sssp_for_lanthanides_and_pseudodojo_otherwise(
+    element: str, provider: str
+) -> None:
+    """The provider rule, not table-id order, picks PseudoDojo for Si: an
+    operator registry may name its tables freely, and here the SSSP table
+    sorts first."""
     tables = {
-        "dojo": _table("dojo", provider="pseudodojo", elements=("La",)),
-        "sssp": _table("sssp", provider="sssp", elements=("La",)),
+        "a-sssp": _table("a-sssp", provider="sssp", elements=("La", "Si")),
+        "dojo": _table("dojo", provider="pseudodojo", elements=("La", "Si")),
     }
 
     state = select_pseudopotential_table(
-        tables, table_id=None, elements={"La"}, requirements=_requirements()
+        tables, table_id=None, elements={element}, requirements=_requirements()
     )
 
-    assert state.value.provider == "sssp"
+    assert state.value.provider == provider
 
 
 def test_automatic_selection_excludes_dojo_tables_missing_lanthanide_coverage() -> None:
@@ -303,19 +311,19 @@ class TestExplicitRefusalAgainstTheRegistry:
             "SSSP table; matching tables: none"
         )
 
-    def test_pinned_table_with_two_problems_lists_both_and_the_match(self) -> None:
+    def test_pinned_table_with_two_problems_lists_both_and_the_matches(self) -> None:
         state = select_pseudopotential_table(
             load_tables(),
-            table_id="pseudodojo-pbe-efficiency-sr",
+            table_id="pseudodojo-pbe-efficiency-fr",
             elements={"Pb"},
-            requirements=_requirements(relativistic="full"),
+            requirements=_requirements(),
         )
 
         assert state.reason == (
-            "pseudopotential table 'pseudodojo-pbe-efficiency-sr' does not satisfy "
+            "pseudopotential table 'pseudodojo-pbe-efficiency-fr' does not satisfy "
             "the request: functional is PBE, requested PBEsol; relativistic "
-            "treatment is scalar, requested full; "
-            "matching tables: pseudodojo-pbesol-efficiency-fr"
+            "treatment is full, requested scalar; matching tables: "
+            "pseudodojo-pbesol-efficiency-sr, sssp-pbesol-efficiency-sr"
         )
 
 

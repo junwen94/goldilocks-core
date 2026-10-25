@@ -74,18 +74,20 @@ jobs:
           --cov-report=xml
 
       - name: Mutation testing
-        # Paused on pushes and PRs while the e2e bug-fix round lands (#195);
-        # run on demand with `gh workflow run ci.yml --ref v2`. Re-enable: #196.
-        if: github.event_name == 'workflow_dispatch'
+        # `shell: bash` adds -o pipefail to the default `bash -e`, so a score
+        # below --minimum fails the step despite the pipe into tee.
+        shell: bash
         run: |
-          # --max-children 2: commit aabcefd lowered this from 4 to fix a mutmut
-          # internal PID-tracking race (KeyError in read_one_child_exit_status)
-          # that was crashing runs on 2-core ubuntu-latest runners. Do not raise
-          # this back up without confirming the race is actually fixed upstream.
-          uv run mutmut run --max-children 2
+          # --max-children 4: the public ubuntu-latest runner has 4 vCPUs.
+          # Commit aabcefd had lowered it to 2 for a pid-tracking race
+          # (KeyError in read_one_child_exit_status, #76). The forkserver
+          # process isolation in pyproject.toml is what makes more than 2
+          # children safe: its reap loop ignores pids it did not start (#104).
+          # If the KeyError returns, go back to --max-children 2.
+          uv run mutmut run --max-children 4
           uv run mutmut export-cicd-stats
           uv run python scripts/check_mutation_score.py \
-            mutants/mutmut-cicd-stats.json --minimum 0.74 \
+            mutants/mutmut-cicd-stats.json --minimum 0.86 \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
   workbench:
