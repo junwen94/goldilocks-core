@@ -40,8 +40,8 @@ class RunOverrides:
     generic key/value bag -- each advisor's override class is separate.
 
     ``warnings`` holds the routing notices (a setting given without a step
-    that landed on several); only a task with two pw.x steps, ``dos``, can
-    raise one, so ``DosAdvice`` alone publishes them."""
+    that landed on several); only a task with more than one pw.x step can
+    raise one, and that task's own advice publishes them."""
 
     analysis: AnalysisOverrides = field(default_factory=AnalysisOverrides)
     system: SystemOverrides = field(default_factory=SystemOverrides)
@@ -127,7 +127,10 @@ class RecordTiers:
 
 @dataclass(frozen=True, slots=True)
 class Advice:
-    """Every ``FieldState`` produced for one structure/code/task request.
+    """Every ``FieldState`` produced for one structure/code/task request,
+    for one of its pw.x steps (``advise_steps``): ``step`` is that step's
+    own advice, on a k-mesh or, for a bands step, along the band path
+    (``StepAdvice``, #118).
     ``checks.check_all(*advice.field_states(), ...)`` decides whether
     ``generate()`` may proceed; ``advice.records()`` is what
     ``BundleInput.records`` should carry unchanged -- tri-state, not the

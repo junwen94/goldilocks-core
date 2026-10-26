@@ -34,6 +34,9 @@ module into one file. Split by pipeline phase instead, matching
 - ``_step.py`` -- per-step advisors (epics 6-7), mirrors
   ``step_settings.PwSettings``'s own field list one layer up, and one
   step's request overrides (``StepOverrides``, routed per step, #154)
+- ``_step_kpath.py`` -- a ``pw.x`` bands step's advice
+  (``PathStepAdvice``): the written cell's band path in place of a k-mesh,
+  and the scf step's occupations (#118)
 - ``_step_protocol.py`` -- ``StepProtocol``, a task's own defaults for one
   of its steps, a tier below the request (the dos nscf protocol, #174; the
   band task's scf and bands protocols, #118)
@@ -105,11 +108,13 @@ from goldilocks_core.service._relax import (
 from goldilocks_core.service._step import (
     OVERRIDES_WARNING_CATALOGUE,
     DosOverrides,
+    KPathOverrides,
     RelaxOverrides,
     StepAdvice,
     StepOverrides,
     applies_to_multiple_steps,
 )
+from goldilocks_core.service._step_kpath import PathStepAdvice
 from goldilocks_core.service._step_kpoints import ElectronicStepAdvice, KpointsOverrides
 from goldilocks_core.service._step_resources import (
     JobOverrides,
@@ -130,9 +135,11 @@ __all__ = [
     "DosOverrides",
     "ElectronicStepAdvice",
     "JobOverrides",
+    "KPathOverrides",
     "KpointsOverrides",
     "MagneticOrderingCandidate",
     "MagneticOrderingsReport",
+    "PathStepAdvice",
     "PseudoAdvice",
     "RecordLayout",
     "RecordTiers",

@@ -11,9 +11,11 @@ from typing import Any, Literal
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.checks import CheckReport, Finding
 from goldilocks_core.failures import ExpectedFailure
+from goldilocks_core.generation.quantum_espresso.bands import write_qe_bands
 from goldilocks_core.generation.quantum_espresso.relax import write_qe_relax
 from goldilocks_core.generation.quantum_espresso.scf import write_qe_scf
 from goldilocks_core.service._advice import Advice
+from goldilocks_core.service._step_kpath import PathStepAdvice
 from goldilocks_core.step_settings import PwSettings
 from goldilocks_core.steps import SharedContext, Step, default_shared_context
 from goldilocks_core.system_settings import SystemSettings
@@ -58,7 +60,7 @@ def generate(
     report: CheckReport,
     *,
     ctx: SharedContext | None = None,
-    purpose: Literal["scf", "nscf", "relax", "vc-relax"] = "scf",
+    purpose: Literal["scf", "nscf", "bands", "relax", "vc-relax"] = "scf",
     relax: RelaxOptions | VcRelaxOptions | None = None,
 ) -> tuple[Step, ...]:
     """Delivery: raises ``AdviceIncomplete`` if ``report`` is not ``ok``,
@@ -69,10 +71,13 @@ def generate(
     primary way a caller learns what is missing.
 
     ``purpose`` (v2 epic 9, #9): selects the writer and QE's own
-    ``calculation`` value -- see ``write_qe_scf``/``write_qe_relax``'s
-    own docstrings. ``service/_dos.py``'s nscf pass is the first to pass
-    ``purpose="nscf"``. ``max_seconds`` is the advised step's own share
-    of the task's walltime (``ResourceStepAdvice.max_seconds``, #169).
+    ``calculation`` value -- see ``write_qe_scf``/``write_qe_relax``/
+    ``write_qe_bands``' own docstrings. ``service/_dos.py``'s nscf pass is
+    the first to pass ``purpose="nscf"``. A ``"bands"`` step (#118) is
+    written along its band path (``PathStepAdvice``), every other step on
+    its k-mesh; each writer refuses settings without the k-points it
+    renders. ``max_seconds`` is the advised step's own share of the task's
+    walltime (``ResourceStepAdvice.max_seconds``, #169).
 
     ``relax`` (v2 epic 10, #10): only ``service/_relax.py`` ever passes
     this -- it is threaded onto ``PwSettings.relax`` and dispatches to
@@ -96,9 +101,11 @@ def generate(
         boundary=advice.system.boundary.value,
     )
     kpoints = advice.step.kpoints
+    on_path = isinstance(kpoints, PathStepAdvice)
     step_settings = PwSettings(
         occupations=kpoints.occupations.value,
-        k_sampling=kpoints.k_sampling.value,
+        k_sampling=None if on_path else kpoints.k_sampling.value,
+        k_path=kpoints.k_path.value if on_path else None,
         n_irr_k=kpoints.n_irr_k.value if kpoints.n_irr_k.ok else None,
         nbnd=kpoints.nbnd.value,
         convergence=kpoints.convergence.value,
@@ -106,7 +113,8 @@ def generate(
         max_seconds=advice.step.resources.max_seconds,
         relax=relax,
     )
+    shared_ctx = ctx or default_shared_context()
+    if purpose == "bands":
+        return tuple(write_qe_bands(system, step_settings, shared_ctx))
     writer = write_qe_relax if purpose in ("relax", "vc-relax") else write_qe_scf
-    return tuple(
-        writer(system, step_settings, ctx or default_shared_context(), purpose)
-    )
+    return tuple(writer(system, step_settings, shared_ctx, purpose))

@@ -1,7 +1,8 @@
 """``StepAdvice``/``StepOverrides``: composes the two per-step-advisor
-phases -- ``_step_kpoints.py`` (occupations/k-mesh/bands/convergence)
-and ``_step_resources.py`` (job/parallelisation) -- one level up,
-mirroring ``_advice.Advice``'s own composition of
+phases -- ``_step_kpoints.py`` (occupations/k-mesh/bands/convergence),
+or ``_step_kpath.py`` for a bands step (occupations/band path/bands/
+convergence, #118), and ``_step_resources.py`` (job/parallelisation) --
+one level up, mirroring ``_advice.Advice``'s own composition of
 ``AnalysisFacts``/``SystemAdvice``/``StepAdvice`` (v2 epic 8, #8).
 
 Split into two advisor phases, and this composing file kept separate
@@ -10,17 +11,20 @@ modules' types directly (needed just for its own field annotations)
 would exceed this project's import-surface ceiling
 (``scripts/check_complexity.py``, default 12 origins/24 symbols) on its
 own, the same problem ``_advice.py`` solves for the top-level ``Advice``.
-Composing two already-typed sub-objects costs this module only two
-local origins.
+Composing already-typed sub-objects -- a mesh or bands step's electronic
+advice, and its resources -- costs this module one local origin each.
 
 ``steps_advice`` builds every pw.x step of one task together (#169):
 each step's electronic advice first, then the task's resources over all
-of them, since the steps share one job (``_step_resources.py``).
+of them, since the steps share one job (``_step_resources.py``). A
+``bands`` step follows the written cell's band path instead of a mesh,
+with the occupations of the task's ``scf`` step, which runs before it.
 
 ``StepOverrides`` is one step's request overrides (#154). A request is
 routed per step by ``set_overrides.build_overrides``, so each field holds
 only settings that apply to its step: ``kpoints``/``resources`` on a pw.x
-step, ``relax`` on a relax or vc-relax step, ``dos`` on the dos.x step.
+step, ``relax`` on a relax or vc-relax step, ``k_path`` on a bands step,
+``dos`` on the dos.x step.
 A setting given without a step that lands on more than one step raises
 ``applies_to_multiple_steps``, declared here beside the bags it fills.
 """
@@ -32,10 +36,12 @@ from dataclasses import dataclass, field
 
 from goldilocks_core.advisors.dos import DosHumanInput, DosLlmInput
 from goldilocks_core.advisors.job_resources import JobHumanInput, JobLlmInput
+from goldilocks_core.advisors.k_path import KPathHumanInput
 from goldilocks_core.advisors.relax import RelaxHumanInput, RelaxLlmInput
 from goldilocks_core.inputs.hpc import HpcProfile
 from goldilocks_core.resolution import FieldState, Warning
 from goldilocks_core.service._analysis import AnalysisFacts
+from goldilocks_core.service._step_kpath import PathStepAdvice, path_step_advice
 from goldilocks_core.service._step_kpoints import (
     ElectronicStepAdvice,
     KpointsOverrides,
@@ -100,6 +106,14 @@ class DosOverrides:
 
 
 @dataclass(frozen=True, slots=True)
+class KPathOverrides:
+    """A bands step's own setting: the spacing of its band path
+    (``advisors/k_path.py``, #118)."""
+
+    k_path: KPathHumanInput | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class StepOverrides:
     """One step's request overrides (module docstring)."""
 
@@ -107,11 +121,16 @@ class StepOverrides:
     resources: ResourceOverrides = field(default_factory=ResourceOverrides)
     relax: RelaxOverrides = field(default_factory=RelaxOverrides)
     dos: DosOverrides = field(default_factory=DosOverrides)
+    k_path: KPathOverrides = field(default_factory=KPathOverrides)
 
 
 @dataclass(frozen=True, slots=True)
 class StepAdvice:
-    kpoints: ElectronicStepAdvice
+    """One pw.x step's advice: its electronic advice, a mesh step's
+    (``ElectronicStepAdvice``) or a bands step's (``PathStepAdvice``), and
+    its resources."""
+
+    kpoints: ElectronicStepAdvice | PathStepAdvice
     resources: ResourceStepAdvice
 
     def field_states(self) -> tuple[FieldState[object], ...]:
@@ -140,17 +159,26 @@ def steps_advice(
     ``job_human``/``job_llm``; each step's own overrides give its
     k-point/band advice and npool/ndiag, over its task's protocol for it
     in ``protocols`` (by purpose; a step without one has none, #174), and
-    its purpose words its band count's moment warning (#118)."""
-    electronic = {
-        purpose: electronic_step_advice(
-            analysis,
-            system,
-            step.kpoints,
-            protocols.get(purpose, StepProtocol()),
-            purpose,
+    its purpose words its band count's moment warning (#118). A ``bands``
+    step gets its band path and the ``scf`` step's occupations, so an
+    ``scf`` entry must precede it (``_step_kpath.py``)."""
+    electronic: dict[str, ElectronicStepAdvice | PathStepAdvice] = {}
+    for purpose, step in steps.items():
+        protocol = protocols.get(purpose, StepProtocol())
+        electronic[purpose] = (
+            path_step_advice(
+                analysis,
+                system,
+                electronic["scf"].occupations,
+                step.kpoints,
+                step.k_path.k_path,
+                protocol,
+            )
+            if purpose == "bands"
+            else electronic_step_advice(
+                analysis, system, step.kpoints, protocol, purpose
+            )
         )
-        for purpose, step in steps.items()
-    }
     resources = task_resources(
         system,
         electronic,

@@ -1,7 +1,7 @@
 """Phase 3b of the v2 orchestrator (v2 epic 8, #8): resource sizing for
-a task, the other of the two ``_step*`` files ``_step.py`` composes into
-``StepAdvice`` -- see that module's own docstring on why the per-step
-advisor set is split across two files.
+a task, the resources half of each ``StepAdvice`` ``_step.py`` composes
+-- see that module's own docstring on why the per-step advisor set is
+split across files.
 
 **One job per task, parallelisation per step.** A task's pw.x steps run
 one after another in one allocation, so ``task_resources`` makes one
@@ -10,8 +10,9 @@ on pw.x's memory per process for the layout each step will run (#148)
 and gives each step its own ``max_seconds`` share of the walltime, which
 the step's ``ResourceStepAdvice`` carries for ``generate()``. Each
 step's ``parallelisation`` then reads that job's ``ntasks`` and the
-step's own k-point/spin pairs (``n_irr_k`` and the magnetic decision's
-spin layout) -- ``job_resources`` evaluates that same function for each
+step's own k-point/spin pairs (``n_irr_k`` -- a bands step's is every
+point of its band path, #118 -- and the magnetic decision's spin
+layout) -- ``job_resources`` evaluates that same function for each
 candidate ``ntasks`` rather than reading its output (see
 ``advisors/job_resources.py``'s own module note on false circularity).
 ``JobOverrides`` (partition, nodes, ntasks, walltime, account) are
@@ -24,7 +25,9 @@ from the input, #128), one species per site label -- the species the
 magnetic step split the cell into and the writer renders (#170) -- each
 species' projector counts from its pseudopotential's PP_HEADER
 (``_pseudo.upf_projectors``), the +U manifolds the writer renders, and
-each step's mixing mode.
+each step's mixing mode. A step without an SCF loop of its own (an nscf
+or bands step, ``plan.SCF_LIKE_PURPOSES``) is estimated as one pass over
+its k-points.
 
 The estimate needs ``cutoffs``, the pseudopotentials, ``magnetic`` and
 ``hubbard``, and each step's ``nbnd``/``n_irr_k``/``convergence``
@@ -58,6 +61,7 @@ from goldilocks_core.inputs.hpc import HpcProfile
 from goldilocks_core.plan import SCF_LIKE_PURPOSES
 from goldilocks_core.resolution import Blocked, FieldState, Unavailable, blocked_by
 from goldilocks_core.service._pseudo import upf_projectors
+from goldilocks_core.service._step_kpath import PathStepAdvice
 from goldilocks_core.service._step_kpoints import ElectronicStepAdvice
 from goldilocks_core.service._system import SystemAdvice
 
@@ -101,15 +105,16 @@ class ResourceStepAdvice:
 
 def task_resources(
     system: SystemAdvice,
-    electronic: Mapping[str, ElectronicStepAdvice],
+    electronic: Mapping[str, ElectronicStepAdvice | PathStepAdvice],
     hpc: HpcProfile,
     job_human: JobHumanInput | None,
     job_llm: JobLlmInput | None,
     parallelisation_human: Mapping[str, ParallelisationHumanInput | None],
 ) -> dict[str, ResourceStepAdvice]:
     """Each step's resources, keyed like ``electronic`` (purpose -> the
-    step's electronic advice): one job from ``job_human``/``job_llm``,
-    and each step's npool/ndiag from ``parallelisation_human[purpose]``."""
+    step's electronic advice, a mesh step's or a bands step's): one job
+    from ``job_human``/``job_llm``, and each step's npool/ndiag from
+    ``parallelisation_human[purpose]``."""
     unresolved = next(
         (
             state
@@ -153,7 +158,8 @@ def task_resources(
 
 
 def _without_job(
-    electronic: Mapping[str, ElectronicStepAdvice], job: Blocked | Unavailable
+    electronic: Mapping[str, ElectronicStepAdvice | PathStepAdvice],
+    job: Blocked | Unavailable,
 ) -> dict[str, ResourceStepAdvice]:
     return {
         purpose: ResourceStepAdvice(
@@ -207,7 +213,7 @@ def _hubbard_angular_momenta(system: SystemAdvice) -> dict[str, int]:
 def _job_step(
     system: SystemAdvice,
     species: tuple[Species, ...],
-    step: ElectronicStepAdvice,
+    step: ElectronicStepAdvice | PathStepAdvice,
     n_kpoint_spin: int,
     purpose: str,
     parallelisation_human: Mapping[str, ParallelisationHumanInput | None],

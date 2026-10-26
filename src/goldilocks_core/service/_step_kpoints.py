@@ -1,9 +1,10 @@
 """Phase 3a of the v2 orchestrator (v2 epic 8, #8): the per-step
-electronic-structure advisors (occupations/k-mesh/bands/convergence),
-one of two ``_step*`` files ``_step.py`` composes into ``StepAdvice`` --
-see that module's own docstring on why the per-step advisor set is
-split across two files (the same import-surface ceiling reason
-``_pseudo.py`` was split out of ``_system.py`` for).
+electronic-structure advisors (occupations/k-mesh/bands/convergence) of a
+step on a k-mesh, one of the ``_step*`` files ``_step.py`` composes into
+``StepAdvice`` (a bands step's are ``_step_kpath.py``'s, #118) -- see
+that module's own docstring on why the per-step advisor set is split
+across files (the same import-surface ceiling reason ``_pseudo.py`` was
+split out of ``_system.py`` for).
 
 Ordering follows the real dependency chain (each function's own
 signature, not a convention invented here): ``occupations`` before
@@ -65,6 +66,10 @@ from goldilocks_core.service._system import SystemAdvice
 
 @dataclass(frozen=True, slots=True)
 class KpointsOverrides:
+    """One pw.x step's occupations, k-point, band and convergence settings;
+    a bands step reads only its band and convergence settings
+    (``_step_kpath.py``)."""
+
     occupations: OccupationsHumanInput | None = None
     occupations_llm: OccupationsLlmInput | None = None
     k_sampling: KSamplingHumanInput | None = None
