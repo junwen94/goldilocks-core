@@ -165,6 +165,33 @@ class TestToolCalls:
         assert "nscf.in" in files
         assert "dos.in" in files
 
+    def test_run_tool_band_task_generates_every_step(
+        self, silicon_fixture_table, silicon_cif: str
+    ) -> None:
+        """#118: task='band' reaches the shared handler through the real MCP
+        transport, which publishes the bands step's decisions under bands_
+        names."""
+        server = create_server()
+
+        result = asyncio.run(
+            server.call_tool(
+                "run",
+                {
+                    "document": {
+                        "structure_content": silicon_cif,
+                        "hpc": "scarf",
+                        "task": "band",
+                    }
+                },
+            )
+        )
+
+        assert result.is_error is False
+        files = result.structured_content["files"]
+        for name in ("scf.in", "bands.in", "bands_x.in", "submit.sh"):
+            assert name in files, name
+        assert "bands_k_path" in result.structured_content["records"]
+
     def test_run_tool_relax_task_generates_relax_in(
         self, real_assets, silicon_cif: str
     ) -> None:

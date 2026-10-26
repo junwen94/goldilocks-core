@@ -7,7 +7,7 @@ contains ``licences/<table-id>.txt``: byte for byte the installed table's
 licence and references, or the importer's CC BY 4.0 notice for PseudoDojo),
 listed in ``goldilocks.json``'s ``files`` with role ``licence`` and named by
 ``CITATIONS.md``. A port of v1's ``test_input_data_publication.py``
-assertion, for scf, dos and relax, published as a directory and as an
+assertion, for scf, dos, band and relax, published as a directory and as an
 archive, on offline SSSP- and PseudoDojo-shaped tables.
 """
 
@@ -96,7 +96,7 @@ def _assert_ships_licence(
     assert f"\n- `{path}`\n" in files["README.md"].decode("utf-8")
 
 
-@pytest.mark.parametrize("task", ["scf_single_point", "dos", "relax"])
+@pytest.mark.parametrize("task", ["scf_single_point", "dos", "band", "relax"])
 def test_every_published_bundle_ships_its_table_licence(
     installed_licence, task, tmp_path
 ) -> None:

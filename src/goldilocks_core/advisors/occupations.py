@@ -81,11 +81,26 @@ preview) never blocks this decision -- ``nbnd`` and generation block on
 it already -- it only skips the parity test, and the derived 0 then
 waits for the count. A magnetic decision that is not resolved blocks the
 input on its own; this module then reads no spin.
+
+**The band task pins no derived moment (#118).** bands.x stops on the two
+Fermi energies any ``tot_magnetization`` writes (QE 7.3
+``PP/src/bands.f90:114-116``), so the band task's scf step gets an
+``UnpinnedMomentProtocol``. Under it the 0 of a compensated ordering is not
+pinned: a compensated antiferromagnetic non-metal takes the smearing
+fallback above, and an explicit ``fixed`` keeps no moment, which the gate
+refuses. Where that changed the decision, the protocol's note is the
+record's ``source_note``; a human moment is carried as before. The bands
+step takes the scf step's decision (``bands_occupations``): a bands run
+only weights its bands at the scf's Fermi energy
+(``PW/src/non_scf.f90:104-105``), and fixed occupations need no moment
+outside an SCF run (``PW/src/input.f90:764``), but pw.x stops on
+tetrahedra without an automatic k-point grid (``PW/src/setup.f90:598``),
+so a ``tetrahedra_opt`` scf gives a bands step on cold smearing at 0.01 Ry.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from pydantic import Field
@@ -162,8 +177,10 @@ class _Spin:
     """What the occupations choice reads of the run's spin: its mode,
     whether it is spin-polarized, the admitted human moment, whether the
     applied ordering is compensated by symmetry, the electron count when
-    known, and whether these spin facts are a resolved magnetic record's
-    (``from_magnetic``; without one the run reads as spin-unpolarized)."""
+    known, whether these spin facts are a resolved magnetic record's
+    (``from_magnetic``; without one the run reads as spin-unpolarized), and
+    whether a task protocol withholds a compensated ordering's 0
+    (``unpinned``, #118)."""
 
     mode: SpinMode
     polarized: bool
@@ -171,17 +188,19 @@ class _Spin:
     compensated: bool
     nelec: float | None
     from_magnetic: bool
+    unpinned: bool = False
 
     @property
     def fixed_moment(self) -> float | None:
         """The ``tot_magnetization`` fixed occupations pin on a collinear
-        run: the human request, else 0 for a compensated ordering with a
-        known even electron count, else ``None``."""
+        run: the human request, else, unless ``unpinned``, 0 for a
+        compensated ordering with a known even electron count, else
+        ``None``."""
         if self.mode != "collinear":
             return None
         if self.requested is not None:
             return self.requested
-        if self.compensated and self.nelec is not None:
+        if self.compensated and not self.unpinned and self.nelec is not None:
             return 0.0 if whole_spin_channels(self.nelec, 0.0) else None
         return None
 
@@ -208,15 +227,15 @@ class _Spin:
     def counts_parity(self) -> bool:
         """Whether ``fixed_runs`` tests a known electron count's parity:
         against 0 without spin polarization, a requested integer moment, or
-        the 0 of a compensated collinear ordering. A spin-polarized
-        noncollinear run needs no count, and a collinear one with no such
-        moment cannot run fixed whatever the count."""
+        the 0 of a compensated collinear ordering that is not ``unpinned``.
+        A spin-polarized noncollinear run needs no count, and a collinear one
+        with no such moment cannot run fixed whatever the count."""
         if self.nelec is None or (self.polarized and self.mode == "noncollinear"):
             return False
         if not self.polarized:
             return True
         if self.requested is None:
-            return self.compensated
+            return self.compensated and not self.unpinned
         return self.requested == int(self.requested)
 
 
@@ -282,6 +301,19 @@ class OccupationsProtocol:
     note: str
 
 
+@dataclass(frozen=True, slots=True)
+class UnpinnedMomentProtocol:
+    """A task protocol under which a step pins no derived moment (#118),
+    the band task's scf step: a compensated ordering's 0 is withheld
+    (module docstring). ``note`` says why; it is the record's
+    ``source_note`` where withholding the 0 changed the decision, which is
+    then smearing for a non-metal the rule would have put on fixed
+    occupations, or an explicit ``fixed`` left with no moment, which the
+    gate refuses. So it names the reason, not the outcome."""
+
+    note: str
+
+
 def occupations(
     is_metal: FieldState[Metallicity],
     magnetic: FieldState[MagneticConfigFacts] | None = None,
@@ -289,6 +321,7 @@ def occupations(
     human: OccupationsHumanInput | None = None,
     llm: OccupationsLlmInput | None = None,
     protocol: OccupationsProtocol | None = None,
+    unpinned: UnpinnedMomentProtocol | None = None,
 ) -> FieldState[OccupationsDecision]:
     """The occupations scheme and the moment it pins (module docstring):
     a human choice, else the step's ``protocol``, else an llm choice, else
@@ -300,11 +333,33 @@ def occupations(
     decided whether fixed occupations can run (``_Spin.fixed_runs_records``);
     on every branch, the records a pinned moment came from (``_provenance``,
     #173). A protocol's choice reads ``heuristic`` with the protocol's note
-    (#174)."""
+    (#174). Under ``unpinned`` the 0 of a compensated ordering is not pinned
+    (#118); where that changes the decision, ``unpinned``'s note joins the
+    record's ``source_note``."""
     human = human or OccupationsHumanInput()
     llm = llm or OccupationsLlmInput()
     spin = _spin(magnetic, electron_count)
+    pinned = _decided(is_metal, spin, human, llm, protocol)
+    if unpinned is None:
+        return pinned
+    state = _decided(is_metal, replace(spin, unpinned=True), human, llm, protocol)
+    if not isinstance(state, Resolved) or state.value == pinned.value:
+        return state
+    notes = (state.provenance.source_note, unpinned.note)
+    note = " ".join(note for note in notes if note)
+    return Resolved(
+        state.value, state.provenance.model_copy(update={"source_note": note})
+    )
 
+
+def _decided(
+    is_metal: FieldState[Metallicity],
+    spin: _Spin,
+    human: OccupationsHumanInput,
+    llm: OccupationsLlmInput,
+    protocol: OccupationsProtocol | None,
+) -> FieldState[OccupationsDecision]:
+    """``occupations``' choice and provenance for the spin facts ``spin``."""
     if human.occupations is not None:
         decision = _decision_for(
             human.occupations, human.smearing_type, human.degauss, spin
@@ -359,11 +414,7 @@ def _provenance(
     the 0 of its compensated ordering -- and ``electron_count`` where that 0
     needed an even count. ``source_note`` names the protocol that chose
     (#174)."""
-    applied = (
-        ("occupations", "smearing_type", "degauss")
-        if decision.occupations == "smearing"
-        else ("occupations",)
-    )
+    applied = _applied(decision)
     derived = list(rule)
     if decision.tot_magnetization is not None:
         derived.append("magnetic")
@@ -374,6 +425,14 @@ def _provenance(
         derived_from=tuple(dict.fromkeys(derived)),
         source_note=source_note,
     )
+
+
+def _applied(decision: OccupationsDecision) -> tuple[str, ...]:
+    """The settings ``decision`` applies: ``occupations``, and the smearing
+    function and width only under smearing."""
+    if decision.occupations == "smearing":
+        return ("occupations", "smearing_type", "degauss")
+    return ("occupations",)
 
 
 def _decision_for(
@@ -427,4 +486,44 @@ def _smearing_decision(
         smearing_type=smearing_type or "cold",
         degauss=degauss if degauss is not None else _METALLIC_DEGAUSS,
         tot_magnetization=spin.requested,
+    )
+
+
+_BANDS_TETRAHEDRA_NOTE = (
+    "The scf step's tetrahedra_opt is written as cold smearing at 0.01 Ry in "
+    "the bands step: pw.x stops on tetrahedra without an automatic k-point "
+    "grid (QE 7.3 PW/src/setup.f90:598), while a bands run only weights its "
+    "bands at the scf's Fermi energy (PW/src/non_scf.f90:104-105), so the "
+    "bands do not change."
+)
+
+
+def bands_occupations(
+    scf: FieldState[OccupationsDecision],
+) -> FieldState[OccupationsDecision]:
+    """The band task's bands-step occupations (#118, module docstring): the
+    scf step's decision without its warnings, which the scf record carries,
+    a ``tetrahedra_opt`` written as cold smearing at 0.01 Ry with the moment
+    carried. Derived from the ``occupations`` record, so every applied
+    setting reads ``heuristic``. An scf decision that is not resolved is
+    returned as it is."""
+    if not scf.ok:
+        return scf
+    decision = replace(scf.value, warnings=())
+    note = None
+    if decision.occupations == "tetrahedra_opt":
+        decision = replace(
+            decision,
+            occupations="smearing",
+            smearing_type="cold",
+            degauss=_METALLIC_DEGAUSS,
+        )
+        note = _BANDS_TETRAHEDRA_NOTE
+    return Resolved(
+        decision,
+        Provenance.from_field_sources(
+            field_sources_from(None, fields=_applied(decision)),
+            derived_from=("occupations",),
+            source_note=note,
+        ),
     )

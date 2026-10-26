@@ -51,6 +51,12 @@ def test_pw_settings_has_no_producer_fields_default_to_none() -> None:
     assert settings.relax is None
 
 
+def test_a_step_sampled_on_a_mesh_carries_no_band_path() -> None:
+    """``k_path`` is the bands step's path, written as K_POINTS crystal_b
+    (#118); it defaults to None."""
+    assert _pw_settings().k_path is None
+
+
 @pytest.mark.parametrize("settings", [PwSettings, DosSettings, PhSettings])
 @pytest.mark.parametrize("field", ["size", "mem_per_proc"])
 def test_no_step_settings_carry_a_memory_estimate(settings: type, field: str) -> None:

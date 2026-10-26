@@ -12,7 +12,8 @@ which pw.x writes only after a finished run, and passed on JOB DONE.
 Before #169 the dos task's scf and nscf each got max_seconds = 0.95 x
 the whole walltime, although pw.x counts it from its own start. Before
 #148 the job record carried no memory figure, and nodes were sized on
-one pool's single copy of the wavefunctions and density.
+one pool's single copy of the wavefunctions and density. The band task
+(#118) runs bands.x like dos.x, once per spin channel.
 """
 
 from __future__ import annotations
@@ -30,12 +31,16 @@ from goldilocks_core.bundle import DirectoryOutput, publish
 from goldilocks_core.inputs.hpc import load_hpc_profile
 from goldilocks_core.service import (
     advise,
+    advise_band,
     advise_dos,
     check,
+    check_band,
     check_dos,
     generate,
+    generate_band,
     generate_dos,
     render_submission,
+    render_submission_band,
     render_submission_dos,
     to_bundle_input,
 )
@@ -134,6 +139,58 @@ def test_dos_task_runs_dos_x_on_one_task(tmp_path, monkeypatch) -> None:
     pw_lines = [line for line in lines if " pw.x " in line]
     assert len(pw_lines) == 2
     assert all(line.startswith("srun pw.x -npool ") for line in pw_lines)
+
+
+def test_band_task_runs_bands_x_on_one_task_per_spin_channel(
+    tmp_path, monkeypatch
+) -> None:
+    """A collinear run's two bands.x channels run one after the other, after
+    both pw.x steps, each on one task and passed by JOB DONE in its own
+    stdout. bands.x has no max_seconds share and runs in the rest of the
+    walltime. The run is diamond Si with opposite seeds on its two sites."""
+    store = _installed_store(tmp_path, monkeypatch)
+    hpc = load_hpc_profile("scarf")
+    silicon = _diamond_silicon()
+    structure = Structure(
+        silicon.lattice, silicon.species, silicon.frac_coords, labels=["Si0", "Si1"]
+    )
+    overrides = build_overrides(
+        {
+            "spin_polarized": True,
+            "starting_magnetization": {"Si0": 0.5, "Si1": -0.5},
+            "occupations": "smearing",
+        },
+        task="band",
+    )
+    advice = advise_band(structure, hpc=hpc, overrides=overrides, store=store)
+    report = check_band(advice)
+    assert report.ok, report.blocking
+    steps = generate_band(advice, report, ctx=default_shared_context())
+
+    script = render_submission_band(advice, hpc, "quantum_espresso", steps)
+
+    lines = script.splitlines()
+    assert "#SBATCH --ntasks=64" in lines
+    assert [line for line in lines if line.startswith("# ")] == [
+        "# scf",
+        "# bands",
+        "# bands_x_up",
+        "# bands_x_down",
+    ]
+    pw_lines = [line for line in lines if " pw.x " in line]
+    assert [line.split(" > ")[1] for line in pw_lines] == ["scf.out", "bands.out"]
+    assert all(line.startswith("srun pw.x -npool ") for line in pw_lines)
+    for name in ("bands_x_up", "bands_x_down"):
+        launch = lines.index(
+            f"srun --nodes=1 --ntasks=1 bands.x -in {name}.in > {name}.out"
+        )
+        assert lines[launch + 1] == (
+            f'goldilocks_check_stdout_marker "{name}" "{name}.out" "JOB DONE"'
+        )
+    for step in steps[2:]:
+        assert "max_seconds" not in step.files[f"{step.name}.in"]
+    job = advice.records()["job"].value
+    assert job.max_seconds_by_step.keys() == {"scf", "bands"}
 
 
 def test_scf_script_checks_the_status_pw_x_always_writes(tmp_path, monkeypatch) -> None:

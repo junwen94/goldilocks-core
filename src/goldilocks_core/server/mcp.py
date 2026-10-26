@@ -129,12 +129,15 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
             "by every step) or step. task='dos' explains all three "
             "of the density-of-states task's steps (scf, nscf, dos.x); "
             "its nscf-step decisions are returned under nscf_-prefixed keys. "
+            "task='band' explains scf, the pw.x bands step along the written "
+            "cell's high-symmetry path, and bands.x; its bands-step decisions "
+            "are returned under bands_-prefixed keys. "
             "task='relax'/'vc-relax' explains one pw.x step with ionic (and, "
             "for vc-relax, cell) relaxation parameters resolved under the "
             "'relax' key. An overrides key reaches every step of the task it "
             "applies to; 'steps.<step>.<key>' (steps: scf; relax; vc-relax; "
-            "scf, nscf, dos) sets one step only, and a key no step of the task "
-            "reads is an error."
+            "scf, nscf, dos; scf, bands, bands_x) sets one step only, and a "
+            "key no step of the task reads is an error."
         )
     )
     async def explain(document: ComputeRequestDocument) -> dict[str, Any]:
@@ -148,9 +151,11 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
             "each followed by its remedy overrides, if run's checks refuse "
             "the request. task='dos' generates all three steps "
             "(scf, nscf, dos.x) sharing one submission script, not just a "
-            "single scf. task='relax'/'vc-relax' generates one pw.x input with "
-            "calculation='relax'/'vc-relax' set accordingly. Overrides are "
-            "routed to the task's steps as in explain."
+            "single scf. task='band' generates scf.in, bands.in and a bands.x "
+            "input (one per spin channel of a collinear run), sharing one "
+            "submission script. task='relax'/'vc-relax' generates one pw.x "
+            "input with calculation='relax'/'vc-relax' set accordingly. "
+            "Overrides are routed to the task's steps as in explain."
         )
     )
     async def run(document: ComputeRequestDocument) -> dict[str, Any]:

@@ -1,12 +1,14 @@
 ---
 name: use-goldilocks
-description: Use goldilocks-core quickly for DFT input recommendation workflows. Trigger when running or scripting recommendations, extracting parameters from structures, generating or publishing Quantum ESPRESSO SCF inputs, or manually writing inputs from Goldilocks-selected Records.
+description: Use goldilocks-core quickly for DFT input recommendation workflows. Trigger when running or scripting recommendations, extracting parameters from structures, generating or publishing Quantum ESPRESSO inputs (SCF, DOS, band structure, relaxation), or manually writing inputs from Goldilocks-selected Records.
 ---
 
 # Use Goldilocks
 
-Use the canonical Capabilities, Structure Inspection, and Compute operations.
-Core currently supports Quantum ESPRESSO single-point SCF input preparation.
+Use the canonical capabilities, structure inspection, explain and run
+operations. Core prepares Quantum ESPRESSO inputs for five tasks:
+`scf_single_point` (scf), `dos` (scf, nscf, `dos.x`), `band` (scf, `pw.x`
+along a high-symmetry path, `bands.x`), `relax` and `vc-relax`.
 
 Fresh installations must install the runtime assets first: run
 `goldilocks assets install default` once, or pass `--fetch-missing`, before any
@@ -30,9 +32,10 @@ Load + Advice + Select + Kmesh -> Generate
 Analysis + Advice + Kmesh + Select + Generate -> DFT Input Data
 ```
 
-Use one `ComputeRequest` with either `PresetSelection` or `RecordSelection`.
-`recommend` and `generate` are Preset IDs. Keep one `Service` open for repeated
-work; use top-level `compute()` for one call.
+Each task has five service functions, `advise`, `check`, `generate`,
+`render_submission` and `to_bundle_input`, suffixed `_dos`, `_band` or
+`_relax` for those tasks; `goldilocks_core.service.TASK_PHASES[task]` holds
+them by task name.
 
 ## Inputs to identify
 
@@ -63,12 +66,13 @@ if report.ok:
 ```bash
 uv run goldilocks capabilities --json
 uv run goldilocks inspect STRUCTURE --json
-uv run goldilocks compute STRUCTURE --preset recommend --no-out --json
-uv run goldilocks compute STRUCTURE --preset generate --out RUN_DIR --json
+uv run goldilocks explain STRUCTURE --task band --json
+uv run goldilocks run STRUCTURE --task band --out RUN_DIR --json
 ```
 
-HTTP exposes `/capabilities`, `/inspect`, and `/compute`; local stdio MCP exposes
-`capabilities`, `inspect_structure`, and `compute`. Send inline structure content
+HTTP exposes `/capabilities`, `/inspect`, `/explain` and `/run`; local stdio
+MCP exposes `capabilities`, `inspect_structure`, `explain` and `run`, each
+request naming its `task`. Send inline structure content
 and, when needed, a registered Pseudopotential Set ID. HTTP and MCP do not
 accept structure paths, local pseudopotential sources, model locations, or
 publication paths.
@@ -77,5 +81,7 @@ publication paths.
 
 For prepared input data, report the Structure Source, functional, target
 code/Task, k-grid and shift, pseudopotentials and cutoffs, smearing, spin/SOC,
-convergence controls, factual warnings, generated paths, and publication path.
+convergence controls, for a `band` task the path (`bands_k_path`: its
+`lattice_type`, `n_kpoints` and `primitive_cells`, above 1 for folded bands),
+factual warnings, generated paths, and publication path.
 Core prepares inputs; it does not run DFT.

@@ -19,13 +19,13 @@ the type-level split and a real multi-step path actually work end to
 end, not full DOS science. ``expand_task`` only decides *how many steps,
 in what order, running what program* -- never a scientific value (that
 stays ``advisors/``'s job, per every other module in this codebase).
-``CalcTask`` being an exhaustive ``Literal`` (``types.py``, this epic)
-means the two branches below are provably complete -- no fallback/raise
-branch is needed or added speculatively for a task that cannot exist.
+Its table holds one row per ``types.CalcTask`` (#118), so a task without
+a row raises ``KeyError`` instead of running another task's steps.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -34,7 +34,7 @@ from goldilocks_core.types import CalcTask
 SCF_LIKE_PURPOSES = frozenset({"scf", "relax", "vc-relax"})
 """``PlannedStep.purpose``s whose ``pw.x`` run has its own SCF loop:
 ``relax``/``vc-relax`` re-run it at every ionic step, while ``nscf``
-reads an already-converged density. ``checks.py`` scopes its
+and ``bands`` read an already-converged density. ``checks.py`` scopes its
 fixed-occupations rules to these, and ``advisors/size.py`` counts
 several passes over their k-points in a step's workload."""
 
@@ -47,26 +47,36 @@ class PlannedStep:
     like ``dos`` has steps with purposes (``"scf"``, ``"nscf"``) that are
     not tasks in their own right, only ever ingredients of one. ``relax``/
     ``vc-relax`` (v2 epic 10, #10) *are* both a task and their own single
-    step's purpose -- one ``pw.x`` run does the whole task."""
+    step's purpose -- one ``pw.x`` run does the whole task. A ``bands``
+    step is ``pw.x`` with ``calculation='bands'`` and ``bands_x`` the
+    ``bands.x`` run after it (#118)."""
 
-    purpose: Literal["scf", "nscf", "dos", "relax", "vc-relax"]
-    program: Literal["pw.x", "dos.x"]
+    purpose: Literal["scf", "nscf", "dos", "bands", "bands_x", "relax", "vc-relax"]
+    program: Literal["pw.x", "dos.x", "bands.x"]
 
 
-def expand_task(task: CalcTask) -> tuple[PlannedStep, ...]:
-    """The steps ``task`` runs, in order. Their purposes are also the step
-    names a request scopes a setting to (``steps.<purpose>.<key>``,
-    ``set_overrides``, #154). ``CalcTask`` is an exhaustive ``Literal``
-    (``types.py``), so these branches cover every task; a task from a
-    request is checked against it before it gets here
-    (``set_overrides.build_overrides`` refuses any other), so no
-    fallback/raise branch is added for a task that cannot exist."""
-    if task == "scf_single_point":
-        return (PlannedStep(purpose="scf", program="pw.x"),)
-    if task in ("relax", "vc-relax"):
-        return (PlannedStep(purpose=task, program="pw.x"),)
-    return (
+_TASK_STEPS: Mapping[CalcTask, tuple[PlannedStep, ...]] = {
+    "scf_single_point": (PlannedStep(purpose="scf", program="pw.x"),),
+    "dos": (
         PlannedStep(purpose="scf", program="pw.x"),
         PlannedStep(purpose="nscf", program="pw.x"),
         PlannedStep(purpose="dos", program="dos.x"),
-    )
+    ),
+    "band": (
+        PlannedStep(purpose="scf", program="pw.x"),
+        PlannedStep(purpose="bands", program="pw.x"),
+        PlannedStep(purpose="bands_x", program="bands.x"),
+    ),
+    "relax": (PlannedStep(purpose="relax", program="pw.x"),),
+    "vc-relax": (PlannedStep(purpose="vc-relax", program="pw.x"),),
+}
+
+
+def expand_task(task: CalcTask) -> tuple[PlannedStep, ...]:
+    """The steps ``task`` runs, in order: its row of the table above. Their
+    purposes are also the step names a request scopes a setting to
+    (``steps.<purpose>.<key>``, ``set_overrides``, #154). A task from a
+    request is checked against ``types.CalcTask`` before it gets here
+    (``set_overrides.build_overrides`` refuses any other); a task without
+    a row raises ``KeyError``."""
+    return _TASK_STEPS[task]

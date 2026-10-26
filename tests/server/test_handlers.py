@@ -136,6 +136,7 @@ class TestExplain:
         [
             pytest.param("scf_single_point", {}, ["is not installed"], id="scf"),
             pytest.param("dos", {}, ["is not installed"], id="dos"),
+            pytest.param("band", {}, ["is not installed"], id="band"),
             pytest.param(
                 "relax",
                 {"fix_bottom_layers": 2},
@@ -193,6 +194,7 @@ class TestExplain:
         [
             ("scf_single_point", ["scf"]),
             ("dos", ["scf", "nscf", "dos"]),
+            ("band", ["scf", "bands"]),
             ("relax", ["relax"]),
             ("vc-relax", ["vc-relax"]),
         ],
@@ -232,6 +234,14 @@ class TestExplain:
                 "nscf_parallelisation",
             ]
             assert by_step["dos"] == ["dos"]
+        if task == "band":
+            assert by_step["bands"] == [
+                "bands_occupations",
+                "bands_k_path",
+                "bands_nbnd",
+                "bands_convergence",
+                "bands_parallelisation",
+            ]
         if task in ("relax", "vc-relax"):
             assert by_step[task][-1] == "relax"
 
@@ -298,7 +308,9 @@ class TestRun:
         assert summary["records"]["functional"]["value"] == "PBE"
         assert summary["records"]["functional"]["source"] == "human"
 
-    @pytest.mark.parametrize("task", ["scf_single_point", "dos", "relax", "vc-relax"])
+    @pytest.mark.parametrize(
+        "task", ["scf_single_point", "dos", "band", "relax", "vc-relax"]
+    )
     def test_returns_the_layout_explain_returns(
         self, silicon_fixture_table, silicon_cif, task
     ) -> None:
@@ -318,6 +330,7 @@ class TestRun:
         [
             ("scf_single_point", {"k_distance": 0.2}),
             ("dos", {"k_distance": 0.2, "steps.dos.delta_e": 0.05}),
+            ("band", {"k_path_distance": 0.05, "steps.bands.nbnd": 20}),
             ("relax", {"nstep": 123}),
             ("vc-relax", {"press": 10.0, "steps.vc-relax.nstep": 50}),
         ],

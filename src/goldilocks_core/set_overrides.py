@@ -26,16 +26,17 @@ P1/P5: validate identically, fail the same way, regardless of caller.
 **Routed per task** (#154). ``build_overrides(assignments, task=...)`` is
 the only interpreter of ``steps.<step>.<key>``; the steps of a task are
 ``plan.expand_task``'s purposes (``scf``; ``relax``; ``vc-relax``; ``scf``,
-``nscf``, ``dos``), and each setting declares the steps it applies to
-(``capabilities.SettingBinding.steps``):
+``nscf``, ``dos``; ``scf``, ``bands``, ``bands_x``), and each setting
+declares the steps it applies to (``capabilities.SettingBinding.steps``):
 
 - analysis and system settings describe the system, and job settings the
   task's one allocation: they are set once per task, flat.
 - a step setting given flat lands on every step of the task it applies to,
   with an ``overrides.applies_to_multiple_steps`` notice when that is more
-  than one (a dos task's ``k_grid`` reaches its scf and nscf steps);
-  ``steps.<step>.<key>`` lands on that step only and beats the flat value
-  there.
+  than one (a dos task's ``k_grid`` reaches its scf and nscf steps, a band
+  task's ``nbnd`` its scf and bands steps, and its ``k_grid`` its scf step
+  only); ``steps.<step>.<key>`` lands on that step only and beats the flat
+  value there.
 - a setting that applies to no step of the task (``press`` on an scf), a
   task-level setting given per step, a step the task does not have, a
   setting given without a step that the request also sets by step for every
@@ -59,6 +60,7 @@ from goldilocks_core.service import (
     AnalysisOverrides,
     DosOverrides,
     JobOverrides,
+    KPathOverrides,
     KpointsOverrides,
     RelaxOverrides,
     ResourceOverrides,
@@ -74,6 +76,7 @@ _STEP_CLASSES = {
     "resources": ResourceOverrides,
     "relax": RelaxOverrides,
     "dos": DosOverrides,
+    "k_path": KPathOverrides,
 }
 """``StepOverrides``' fields, by the binding branch whose settings fill them."""
 

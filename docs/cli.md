@@ -31,10 +31,10 @@ for a memory-only preview instead. Use `uv run goldilocks --help` or a
 subcommand's `--help` for full syntax.
 
 `run` and `explain` share the same seven flags: the `structure` path,
-`--code`, `--task {scf_single_point,dos,relax,vc-relax}`, `--hpc`, `--set
+`--code`, `--task {scf_single_point,dos,band,relax,vc-relax}`, `--hpc`, `--set
 KEY=VALUE` (repeatable), `--config FILE.toml`, and `--json`; both also accept
 `--fetch-missing`, and only `run` additionally accepts `-o/--out`. `--task` is
-validated against the four listed choices; `--code` is passed through
+validated against the five listed choices; `--code` is passed through
 unchecked — only `quantum_espresso` is a registered code today, so an
 unrecognised `--code` silently produces a Quantum-ESPRESSO-shaped bundle
 instead of failing.
@@ -97,11 +97,13 @@ patches that each resolve it, where `null` clears that override. `layout` names
 each record's tier and step: `analysis` (what the structure alone decides),
 `system` (what every step shares), then `steps`, one `{"name", "records"}`
 per step of the task in run order -- the task's one `job` with its first step,
-a `dos` task's nscf decisions under their `nscf_` names. Every record is in
+a `dos` task's nscf decisions under their `nscf_` names, a `band` task's
+bands-step decisions under their `bands_` names. Every record is in
 exactly one list. `warnings` holds every record's warnings, for every task,
 each as `{"code", "level", "category", "message", "record"}`, where `record`
 names the record it came from (`nscf_parallelisation` for a `dos` task's nscf
-step), then the request's routing notices under the `record` `overrides`
+step, `bands_parallelisation` for a `band` task's bands step), then the
+request's routing notices under the `record` `overrides`
 (below); `goldilocks.json` carries the same list.
 
 `--json` output and the published `goldilocks.json` are strict JSON: a value
@@ -145,11 +147,13 @@ its type, default, and description; a selection of commonly used keys:
 | `u_by_element`                      | Hubbard U_eff per element in eV, replacing the built-in table, e.g. `--set 'u_by_element={"Ti": 4.0}'` |
 | `hubbard_needs_correlation`         | `false` runs without Hubbard +U; `true` applies the built-in U table  |
 | `delta_e`, `emin`, `emax`, `broadening`, `ngauss` | `dos.x` settings of the `dos` task: energy step and window in eV, broadening in Ry, broadening function (`-99`, `-1`, `0`..`10`; `dos.x` reads it only with a broadening width, so it needs `broadening` unless the nscf step uses smearing) |
+| `k_path_distance`                   | Largest spacing between neighbouring points of a `band` task's high-symmetry path, in 1/Å with 2π included (default 0.025); see [the band structure path](science.md#check-the-band-structure-path) |
 
 Each setting applies to the steps that read it, and `goldilocks settings
 --json` lists them (`tasks`, `steps`, `scope`). A task's steps are named by
-purpose: `scf` (`scf_single_point`), `relax`, `vc-relax`, and `scf`, `nscf`,
-`dos` for `--task dos`.
+purpose: `scf` (`scf_single_point`); `relax`; `vc-relax`; `scf`, `nscf`,
+`dos` (`--task dos`); and `scf`, `bands`, `bands_x` (`--task band`: pw.x
+with `calculation='bands'`, then `bands.x`).
 
 - A step setting given as `KEY=VALUE` reaches every step of the task it
   applies to. On a `dos` task, `k_grid` sets both the scf and the nscf step,
@@ -159,21 +163,31 @@ purpose: `scf` (`scf_single_point`), `relax`, `vc-relax`, and `scf`, `nscf`,
   settings (`mixing_beta`, `mixing_mode`, `mixing_fixed_ns`,
   `electron_maxstep`) set the scf step only: the nscf step runs no SCF loop,
   so pw.x does not use them there.
+- A `band` task's bands step runs its band path with the scf step's
+  occupations and no SCF loop, so the k-mesh settings (`k_grid`,
+  `k_distance`, `k_index`, `shift`, `nosym`), `occupations`,
+  `smearing_type`, `degauss` and the SCF-loop settings set its scf step
+  only, without a notice, and `k_path_distance` sets its bands step only.
+  `nbnd`, `extra_bands`, `conv_thr`, `npool` and `ndiag` reach both pw.x
+  steps, with the notice.
 - `steps.<step>.KEY=VALUE` sets one step only and wins over the plain key for
   that step: `--task dos --set 'k_grid=[10,10,10]' --set
   'steps.nscf.k_grid=[30,30,30]'` gives the scf 10×10×10 and the nscf
-  30×30×30. In `--config`, a `[steps.nscf]` table does the same. A plain key
-  that every step it applies to also sets this way would reach no step, and
-  is refused.
+  30×30×30, and `--task band --set steps.bands.nbnd=40` gives the bands step
+  40 bands and leaves the scf step's default. In `--config`, a `[steps.nscf]`
+  or `[steps.bands]` table does the same. A plain key that every step it
+  applies to also sets this way would reach no step, and is refused.
 - System settings (functional, cutoffs, magnetism, ...) describe the system
   every step runs on, and the job settings (`partition`, `nodes`, `ntasks`,
   `walltime_h`, `account`) the one allocation all of a task's steps run in:
   both are set once per task, and `steps.<step>.` is refused for them.
 - A setting no step of the task reads is refused (exit 2, HTTP 422): `press`
   and `cell_dofree` apply to `vc-relax` only, `nstep` and `etot_conv_thr` to
-  `relax` and `vc-relax`, and the `dos.x` settings to `dos`. So is
-  `steps.<step>.KEY` for a step that does not read it, such as
-  `steps.nscf.mixing_beta`.
+  `relax` and `vc-relax`, the `dos.x` settings to `dos`, and
+  `k_path_distance` to `band`. So is `steps.<step>.KEY` for a step that does
+  not read it, such as `steps.nscf.mixing_beta`, `steps.bands.k_grid` or
+  `steps.bands.occupations`, and any `steps.bands_x.KEY`: `bands.x` takes no
+  setting.
 
 Each setting's `structure_specific` says whether its value is a judgement
 about the structure it was set for — its elements, magnetism, geometry, size
@@ -192,7 +206,8 @@ their group's record under their own name (`conv_thr` in
 `spin_orbit_coupling` in `magnetic.spin_orbit_enabled`, `magnetic_ordering`
 in `magnetic.ordering.applied` (`null` for a run without spin polarization,
 which applies no ordering), `moment_direction` in
-`magnetic.moment_direction.uvw` and `k_grid` in `k_sampling.mesh`. `path` is
+`magnetic.moment_direction.uvw`, `k_grid` in `k_sampling.mesh` and
+`k_path_distance` in `bands_k_path.k_path_distance`. `path` is
 `null` where the record holds no value of the setting: `extra_bands` only
 shifts `nbnd`, `nosym` only changes the `n_irr_k` count, and
 `hubbard_needs_correlation` and `u_by_element` decide which U values the

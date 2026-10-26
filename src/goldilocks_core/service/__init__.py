@@ -34,8 +34,12 @@ module into one file. Split by pipeline phase instead, matching
 - ``_step.py`` -- per-step advisors (epics 6-7), mirrors
   ``step_settings.PwSettings``'s own field list one layer up, and one
   step's request overrides (``StepOverrides``, routed per step, #154)
+- ``_step_kpath.py`` -- a ``pw.x`` bands step's advice
+  (``PathStepAdvice``): the written cell's band path in place of a k-mesh,
+  and the scf step's occupations (#118)
 - ``_step_protocol.py`` -- ``StepProtocol``, a task's own defaults for one
-  of its steps, a tier below the request (the dos nscf protocol, #174)
+  of its steps, a tier below the request (the dos nscf protocol, #174; the
+  band task's scf and bands protocols, #118)
 - ``_advice.py`` -- ``Advice``/``RunOverrides``, composing the three
   phases above; ``RunOverrides`` holds one task's overrides, per step;
   ``RecordTiers``, the records of every advice type's ``tiers()``, and the
@@ -46,8 +50,14 @@ module into one file. Split by pipeline phase instead, matching
 - ``_bundle.py`` -- submission-script rendering + bundle assembly
 - ``_dos.py`` -- ``dos`` task multi-step path (epic 9): ``advise_steps``
   for its scf and nscf steps, rather than a fourth phase of its own
+- ``_band.py`` -- ``band`` task path (#118): ``advise_steps`` for its scf
+  and pw.x bands steps, then ``bands.x``
 - ``_relax.py`` -- ``relax``/``vc-relax`` task path (epic 10):
   ``advise_steps`` for its one step (single-step tasks, unlike ``dos``)
+- ``_tasks.py`` -- ``TASK_PHASES``, each task's ``advise``/``check``/
+  ``generate``/``render_submission``/``to_bundle_input`` by
+  ``types.CalcTask``: the one table every transport's ``explain`` and
+  ``run`` dispatch through (#118)
 - ``_magnetic_orderings.py`` -- ``list_magnetic_orderings`` (#87),
   deliberately outside the ``advise()``/``generate()`` pipeline above: a
   listing capability a caller consults *before* deciding which magnetic
@@ -71,6 +81,14 @@ from goldilocks_core.service._advice import (
     StepLayout,
 )
 from goldilocks_core.service._analysis import AnalysisFacts, AnalysisOverrides
+from goldilocks_core.service._band import (
+    BandAdvice,
+    advise_band,
+    check_band,
+    generate_band,
+    render_submission_band,
+    to_bundle_input_band,
+)
 from goldilocks_core.service._bundle import render_submission, to_bundle_input
 from goldilocks_core.service._dos import (
     DosAdvice,
@@ -100,11 +118,13 @@ from goldilocks_core.service._relax import (
 from goldilocks_core.service._step import (
     OVERRIDES_WARNING_CATALOGUE,
     DosOverrides,
+    KPathOverrides,
     RelaxOverrides,
     StepAdvice,
     StepOverrides,
     applies_to_multiple_steps,
 )
+from goldilocks_core.service._step_kpath import PathStepAdvice
 from goldilocks_core.service._step_kpoints import ElectronicStepAdvice, KpointsOverrides
 from goldilocks_core.service._step_resources import (
     JobOverrides,
@@ -112,20 +132,25 @@ from goldilocks_core.service._step_resources import (
     ResourceStepAdvice,
 )
 from goldilocks_core.service._system import SystemAdvice, SystemOverrides
+from goldilocks_core.service._tasks import TASK_PHASES, TaskPhases
 
 __all__ = [
     "OVERRIDES_WARNING_CATALOGUE",
+    "TASK_PHASES",
     "Advice",
     "AdviceIncomplete",
     "AnalysisFacts",
     "AnalysisOverrides",
+    "BandAdvice",
     "DosAdvice",
     "DosOverrides",
     "ElectronicStepAdvice",
     "JobOverrides",
+    "KPathOverrides",
     "KpointsOverrides",
     "MagneticOrderingCandidate",
     "MagneticOrderingsReport",
+    "PathStepAdvice",
     "PseudoAdvice",
     "RecordLayout",
     "RecordTiers",
@@ -139,22 +164,28 @@ __all__ = [
     "StepOverrides",
     "SystemAdvice",
     "SystemOverrides",
+    "TaskPhases",
     "advise",
+    "advise_band",
     "advise_dos",
     "advise_relax",
     "applies_to_multiple_steps",
     "check",
+    "check_band",
     "check_dos",
     "check_relax",
     "generate",
+    "generate_band",
     "generate_dos",
     "generate_relax",
     "list_magnetic_orderings",
     "render_submission",
+    "render_submission_band",
     "render_submission_dos",
     "render_submission_relax",
     "report_to_json",
     "to_bundle_input",
+    "to_bundle_input_band",
     "to_bundle_input_dos",
     "to_bundle_input_relax",
 ]

@@ -112,6 +112,27 @@ def _check_bash(body: str, label: str) -> None:
                 assert flag in flags, f"{label} shows unknown flag {flag!r}"
 
 
+def test_cli_reference_spells_out_the_task_choices() -> None:
+    """docs/cli.md lists ``--task``'s choices: the ones ``run`` accepts, in
+    its order."""
+    subparsers = next(
+        action
+        for action in build_parser()._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    (task,) = [
+        action
+        for action in subparsers.choices["run"]._actions
+        if "--task" in action.option_strings
+    ]
+    documented = re.search(
+        r"`--task \{([\w,-]+)\}`", (ROOT / "docs" / "cli.md").read_text()
+    )
+
+    assert documented is not None, "docs/cli.md does not list --task's choices"
+    assert documented.group(1).split(",") == list(task.choices)
+
+
 def _section(path: Path, heading: str) -> str:
     """The whitespace-normalized text of the `## heading` section of `path`."""
     text = path.read_text()

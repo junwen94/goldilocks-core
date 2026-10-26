@@ -52,8 +52,8 @@ class ExitStatusCheck:
 @dataclass(frozen=True, slots=True)
 class StdoutMarkerCheck:
     """Passes a step only if its stdout contains ``marker``. For a
-    program that writes no status file (``dos.x``); a non-zero exit code
-    already stops the script."""
+    program that writes no status file (``dos.x``, ``bands.x``); a non-zero
+    exit code already stops the script."""
 
     marker: str = "JOB DONE"
 
@@ -78,7 +78,7 @@ class Step:
     ``ntasks`` is the step's launch shape: how many MPI tasks its program
     runs on, with ``None`` meaning every task the job allocates. A writer
     sets it when its program cannot use the whole allocation (``dos.x``
-    runs on one task).
+    and ``bands.x`` run on one task).
     """
 
     name: str

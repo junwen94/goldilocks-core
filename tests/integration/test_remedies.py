@@ -15,7 +15,7 @@ lead to another refusal. A wire's refusals name the constraint that relaxes
 only its period, in any orientation, and that constraint generates too. It
 also checks the text a user reads: the findings
 and the warnings of real runs with the scarf profile, whose job warnings name
-a partition.
+a partition. Each task runs through its row of ``service.TASK_PHASES``.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from pymatgen.core import Lattice, Structure
 from pymatgen.core.surface import SlabGenerator
 from support import (
     INTERNAL_TEXT,
+    hcp_gadolinium,
     mc3d_42058_silicon,
     rotated_about_x,
     silicon_dimer_in_a_box,
@@ -43,14 +44,7 @@ from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.checks import FINDING_CATALOGUE, CheckReport
 from goldilocks_core.inputs.hpc import load_hpc_profile
-from goldilocks_core.service import (
-    advise,
-    advise_relax,
-    check,
-    check_relax,
-    generate,
-    generate_relax,
-)
+from goldilocks_core.service import TASK_PHASES, advise
 from goldilocks_core.set_overrides import build_overrides
 
 pytestmark = pytest.mark.integration
@@ -160,9 +154,18 @@ _TRIGGERS = {
     "parallelisation.ndiag_grid_too_large": _Trigger(
         "scf", _diamond_silicon, {"npool": 1, "ndiag": 64}
     ),
+    "occupations.bands_x_refuses_tot_magnetization": _Trigger(
+        "band", hcp_gadolinium, {"tot_magnetization": 7}
+    ),
 }
 """A request that blocks with exactly one finding, of that code, per
 catalogued code with remedies."""
+
+_UNREACHABLE = {"k_path.too_many_kpoints"}
+"""Catalogued codes with remedies that no real request reaches: a band path
+needs more than 40000 k-point/spin pairs, which within k_path_distance's
+lower bound only a cell with lattice vectors shorter than about 1.4 Angstrom
+gives. tests/unit/test_checks.py triggers it on the gate directly."""
 
 
 @pytest.fixture
@@ -170,7 +173,7 @@ def store(tmp_path, monkeypatch) -> AssetStore:
     """The default PBEsol table for every element here, and an LDA one for
     Si, the functional without D3(BJ) parameters."""
     scalar = sssp_fixture_table_spec(
-        tmp_path / "scalar", {"Al": 3.0, "Fe": 16.0, "Pt": 10.0, "Si": 4.0}
+        tmp_path / "scalar", {"Al": 3.0, "Fe": 16.0, "Gd": 18.0, "Pt": 10.0, "Si": 4.0}
     )
     lda_spec, lda_table = sssp_fixture_table_spec(
         tmp_path / "lda", {"Si": 4.0}, functional="LDA"
@@ -187,27 +190,18 @@ def store(tmp_path, monkeypatch) -> AssetStore:
 
 
 def _run(trigger: _Trigger, overrides: dict[str, object], store: AssetStore):
-    """``check()`` of ``trigger``'s task on its structure with ``overrides``,
-    and the steps ``generate()`` renders when the check passes."""
-    hpc = load_hpc_profile("scarf")
-    structure = trigger.structure()
-    if trigger.task == "scf":
-        built = build_overrides(overrides, task="scf_single_point")
-        advice = advise(structure, hpc=hpc, overrides=built, store=store)
-        report = check(advice)
-        render = generate
-    else:
-        built = build_overrides(overrides, task=trigger.task)
-        advice = advise_relax(
-            structure,
-            calculation=trigger.task,
-            hpc=hpc,
-            overrides=built,
-            store=store,
-        )
-        report = check_relax(advice)
-        render = generate_relax
-    steps = render(advice, report) if report.ok else ()
+    """The check of ``trigger``'s task on its structure with ``overrides``,
+    and the steps the task renders when the check passes."""
+    task = "scf_single_point" if trigger.task == "scf" else trigger.task
+    phases = TASK_PHASES[task]
+    advice = phases.advise(
+        trigger.structure(),
+        hpc=load_hpc_profile("scarf"),
+        overrides=build_overrides(overrides, task=task),
+        store=store,
+    )
+    report = phases.check(advice)
+    steps = phases.generate(advice, report) if report.ok else ()
     return report, steps
 
 
@@ -234,7 +228,7 @@ def _holds_the_vacuum(trigger: _Trigger, steps) -> bool:
 
 
 def test_every_finding_with_remedies_has_a_trigger() -> None:
-    assert set(_TRIGGERS) == {
+    assert set(_TRIGGERS) | _UNREACHABLE == {
         finding.code for finding in FINDING_CATALOGUE if finding.remedies
     }
 
@@ -453,6 +447,27 @@ def test_a_blocked_chain_names_its_root_cause_without_remedies(
     assert named in finding.message
     assert (finding.fields, finding.remedies) == ((), ())
     assert INTERNAL_TEXT.findall(finding.message) == []
+
+
+@pytest.mark.parametrize(("task", "step"), [("dos", "nscf"), ("band", "bands")])
+def test_a_band_count_too_low_for_both_pw_x_steps_is_refused_once(
+    task: str, step: str, store: AssetStore
+) -> None:
+    """A flat nbnd sets a dos or band task's scf and later pw.x step alike,
+    and its refusal came back twice, worded for each step. It is refused
+    once, in the scf step's words, where pw.x stops; set on the later step
+    alone, it is refused in that step's."""
+    trigger = _Trigger(task, _diamond_silicon, {"nbnd": 2})
+
+    flat, _ = _run(trigger, trigger.overrides, store)
+    later, _ = _run(trigger, {f"steps.{step}.nbnd": 2}, store)
+
+    (scf_finding,) = flat.blocking
+    (step_finding,) = later.blocking
+    assert "pw.x stops in setup with 'too few bands'" in scf_finding.message
+    assert f"so this {step} step would leave occupied bands out" in (
+        step_finding.message
+    )
 
 
 @pytest.mark.parametrize("name", ["Si.cif", "Fe_bcc.cif", "Pt_fcc.cif"])

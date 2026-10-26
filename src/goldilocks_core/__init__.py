@@ -8,8 +8,10 @@ public API stays flat" at *that* level, not this one). The real entry
 points are the packages themselves:
 
 - ``goldilocks_core.service`` -- ``advise``/``check``/``generate`` (and
-  the ``dos`` task's ``advise_dos``/``check_dos``/``generate_dos``), the
-  programmatic API
+  the other tasks' own, such as the ``dos`` task's ``advise_dos``/
+  ``check_dos``/``generate_dos`` and the ``band`` task's ``advise_band``/
+  ``check_band``/``generate_band``; ``TASK_PHASES`` holds every task's),
+  the programmatic API
 - ``goldilocks_core.cli`` -- the ``goldilocks`` command-line entry point
 - ``goldilocks_core.server`` -- the HTTP and MCP transports
 """

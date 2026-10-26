@@ -332,7 +332,9 @@ test("shows each setting's recorded value, captioned only by the tier that set i
     name: "tot magnetization",
   });
   await expect(moment).toHaveValue("");
-  await expect(moment).toHaveAccessibleDescription(/smearing otherwise\.$/);
+  await expect(moment).toHaveAccessibleDescription(
+    /bands\.x stops on the two Fermi energies it gives\.$/,
+  );
   await expect(
     magnetic.getByRole("combobox", { name: "spin polarized" }),
   ).toHaveAccessibleDescription(/ · Your override$/);

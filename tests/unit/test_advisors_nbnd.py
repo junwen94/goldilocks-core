@@ -14,6 +14,7 @@ from goldilocks_core.advisors.magnetic_config import (
 from goldilocks_core.advisors.nbnd import (
     NbndHumanInput,
     NbndLlmInput,
+    NbndProtocol,
     band_floors,
     nbnd,
 )
@@ -487,6 +488,64 @@ def test_a_human_nbnd_with_room_for_the_seed_is_not_warned() -> None:
 
 
 @pytest.mark.parametrize(
+    ("purpose", "nelec", "seed", "bands", "fill", "count"),
+    [
+        # hcp Gd: (36 + 10)/2 = 23 electrons in the seeded majority channel.
+        pytest.param("bands", 36.0, 10.0, 22, "23", 23, id="bands-Gd"),
+        # bcc Fe: (16 + 5)/2 = 10.5 electrons need 11 bands.
+        pytest.param("nscf", 16.0, 5.0, 10, "10.5", 11, id="nscf-Fe"),
+    ],
+)
+def test_a_non_scf_step_below_the_seeded_majority_count_says_bands_are_missing(
+    purpose: str, nelec: float, seed: float, bands: int, fill: str, count: int
+) -> None:
+    """An nscf or bands step runs no SCF loop, so too few bands do not cap
+    its moment the way an SCF step's do: they leave occupied bands of the
+    majority channel out if the scf's moment reaches its seed, a maximal
+    target (#118). The warning says so and names the fewest bands that hold
+    them, the seeded majority count rounded up."""
+    magnetic = _spin_facts("collinear")
+    seeded = Resolved(replace(magnetic.value, seeded_moment=seed), magnetic.provenance)
+
+    state = nbnd(
+        nelec,
+        _occupations("smearing"),
+        purpose,
+        seeded,
+        NbndHumanInput(nbnd=bands),
+    )
+
+    (capped,) = state.value.warnings
+    assert capped.code == "nbnd.moment_capped"
+    assert capped.level == "warning"
+    assert capped.message == (
+        f"nbnd={bands} holds fewer than the (nelec + |M|)/2 = {fill} electrons "
+        f"the majority spin channel fills at the {seed:g} Bohr magnetons the "
+        "starting magnetization seeds: if the scf's moment reaches that seed, "
+        f"this {purpose} step leaves occupied majority bands out. Use nbnd >= "
+        f"{count}, or unset nbnd and extra_bands."
+    )
+
+
+@pytest.mark.parametrize("purpose", ["relax", "vc-relax"])
+def test_a_relaxation_step_s_moment_warning_is_the_scf_one(purpose: str) -> None:
+    """relax and vc-relax run an SCF loop at every ionic step, so too few
+    bands cap their moment as they cap an scf step's."""
+    scf, relaxation = (
+        nbnd(
+            _GD_NELEC,
+            _occupations("smearing"),
+            step,
+            _gadolinium(),
+            NbndHumanInput(nbnd=22),
+        )
+        for step in ("scf", purpose)
+    )
+
+    assert relaxation.value.warnings == scf.value.warnings
+
+
+@pytest.mark.parametrize(
     ("nelec", "scheme", "mode", "tot_magnetization", "floors"),
     [
         # setup.f90:349-356: NINT(nelec/2), NINT(nelup), NINT(neldw), in
@@ -580,3 +639,76 @@ def test_band_floors_name_the_electrons_each_one_holds() -> None:
         (104.0, "spin-up electrons"),
         (88.0, "spin-down electrons"),
     ]
+
+
+# #118: a task protocol sizes a step's bands (NbndProtocol): the band task's
+# bands step asks for aiida-quantumespresso's PwBandsWorkChain count, the
+# largest of pw.x's default for the run, int(nelec/epb*factor) and
+# int(nelec/epb) + 4, epb being one electron per band for a noncollinear
+# run and two otherwise.
+_BAND_NOTE = "A band protocol's band count."
+
+
+def _silicon(*, spin_orbit_coupling: bool | None = None):
+    return magnetic_decision(
+        _SI_PRIMITIVE,
+        is_magnetic(_SI_PRIMITIVE),
+        human=MagneticConfigHumanInput(spin_orbit_coupling=spin_orbit_coupling),
+    )
+
+
+@pytest.mark.parametrize(
+    ("nelec", "scheme", "magnetic", "factor", "expected"),
+    [
+        # Si: MAX(pw.x's 4, int(8/2*3) = 12, 4 + 4 = 8) = 12.
+        pytest.param(8.0, "fixed", _silicon, 3.0, 12, id="Si"),
+        # hcp Gd, per spin channel: MAX(the seeded 28, int(36/2*3) = 54,
+        # 18 + 4 = 22) = 54.
+        pytest.param(_GD_NELEC, "smearing", _gadolinium, 3.0, 54, id="Gd"),
+        # Si with spin-orbit coupling, one electron per spinor band:
+        # MAX(2*4 = 8, int(8*3) = 24, 8 + 4 = 12) = 24.
+        pytest.param(
+            8.0,
+            "fixed",
+            lambda: _silicon(spin_orbit_coupling=True),
+            3.0,
+            24,
+            id="Si-soc",
+        ),
+        # pw.x's default wins over a small factor: MAX(28, 18, 22) = 28.
+        pytest.param(_GD_NELEC, "smearing", _gadolinium, 1.0, 28, id="Gd-factor-1"),
+        # Four more than the occupied bands win for few electrons:
+        # MAX(1, int(2/2*3) = 3, 1 + 4 = 5) = 5.
+        pytest.param(2.0, "fixed", lambda: None, 3.0, 5, id="two-electrons"),
+    ],
+)
+def test_a_band_protocol_asks_for_factor_times_the_occupied_bands(
+    nelec: float, scheme: str, magnetic, factor: float, expected: int
+) -> None:
+    protocol = NbndProtocol(factor=factor, note=_BAND_NOTE)
+
+    state = nbnd(nelec, _occupations(scheme), "bands", magnetic(), protocol=protocol)
+
+    assert state.value.nbnd == expected
+    assert state.provenance == Provenance(source="heuristic", source_note=_BAND_NOTE)
+    assert "nbnd.moment_capped" not in [w.code for w in state.value.warnings]
+
+
+def test_extra_bands_add_to_a_band_protocol_and_a_human_nbnd_replaces_it() -> None:
+    protocol = NbndProtocol(factor=3.0, note=_BAND_NOTE)
+    occupations = _occupations("fixed")
+
+    human_extra, llm_extra, chosen = (
+        nbnd(8.0, occupations, "bands", _silicon(), human, llm, protocol=protocol)
+        for human, llm in (
+            (NbndHumanInput(extra_bands=2), None),
+            (None, NbndLlmInput(extra_bands=-2)),
+            (NbndHumanInput(nbnd=6), None),
+        )
+    )
+
+    assert human_extra.value.nbnd == 14
+    assert human_extra.provenance == Provenance(source="human", source_note=_BAND_NOTE)
+    assert (llm_extra.value.nbnd, llm_extra.source) == (10, "llm")
+    assert chosen.value.nbnd == 6
+    assert chosen.provenance == Provenance(source="human")

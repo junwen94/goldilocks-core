@@ -514,6 +514,7 @@ def test_blocked_pipeline_reports_deduplicated_reasons_and_exits_nonzero() -> No
     [
         pytest.param([], [("is not installed", [])], id="scf"),
         pytest.param(["--task", "dos"], [("is not installed", [])], id="dos"),
+        pytest.param(["--task", "band"], [("is not installed", [])], id="band"),
         pytest.param(
             ["--task", "vc-relax", "--set", "ion_dynamics=damp"],
             [
@@ -800,10 +801,57 @@ class TestRunAndExplainAgainstRealAssets:
         content = (destination / "relax.in").read_text()
         assert "nstep            = 123" in content
 
+    def test_explain_band_task_reports_bands_prefixed_records(
+        self, real_assets: None
+    ) -> None:
+        """#118: --task band routes to advise_band: the bands step's
+        decisions are published under bands_ names, and the 8-atom cubic
+        Si.cif gets the fcc path, folded."""
+        silicon = structure("Si.cif")
+
+        completed = _run_cli(
+            "explain", str(silicon), "--hpc", "scarf", "--task", "band", "--json"
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        document = json.loads(completed.stdout)
+        path = document["records"]["bands_k_path"]["value"]
+        assert (path["lattice_type"], path["primitive_cells"]) == ("FCC", 4)
+        assert document["records"]["bands_nbnd"]["status"] == "resolved"
+        assert document["blocking"] == []
+        assert [step["name"] for step in document["layout"]["steps"]] == [
+            "scf",
+            "bands",
+        ]
+
+    def test_run_band_task_publishes_every_step(
+        self, real_assets: None, tmp_path: Path
+    ) -> None:
+        silicon = structure("Si.cif")
+        destination = tmp_path / "out"
+
+        completed = _run_cli(
+            "run",
+            str(silicon),
+            "--hpc",
+            "scarf",
+            "--task",
+            "band",
+            "-o",
+            str(destination),
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        for name in ("scf.in", "bands.in", "bands_x.in", "submit.sh"):
+            assert (destination / name).exists(), name
+        assert "calculation      = 'bands'" in (destination / "bands.in").read_text()
+
     def test_unknown_task_is_an_operator_error_not_a_silent_fallback(self) -> None:
         silicon = structure("Si.cif")
 
-        completed = _run_cli("run", str(silicon), "--hpc", "scarf", "--task", "bands")
+        completed = _run_cli(
+            "run", str(silicon), "--hpc", "scarf", "--task", "no_such_task"
+        )
 
         assert completed.returncode == 2
         assert "Traceback" not in completed.stderr
@@ -1048,6 +1096,55 @@ class TestPerStepOverrides:
         assert records["nscf_k_sampling"]["value"]["mesh"] == [30, 30, 30]
         assert records["k_sampling"]["value"]["mesh"] != [30, 30, 30]
 
+    def test_a_band_task_s_path_spacing_and_bands_step_table(
+        self, tmp_path: Path
+    ) -> None:
+        """#118: k_path_distance spaces the bands step's path, and a
+        [steps.bands] table sets that step only."""
+        config = tmp_path / "band.toml"
+        config.write_text("k_path_distance = 0.05\n\n[steps.bands]\nconv_thr = 1e-11\n")
+        silicon = structure("Si.cif")
+
+        completed = _run_cli(
+            "explain",
+            str(silicon),
+            "--hpc",
+            "scarf",
+            "--task",
+            "band",
+            "--config",
+            str(config),
+            "--json",
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        records = strict_json(completed.stdout)["records"]
+        k_path = records["bands_k_path"]
+        assert k_path["value"]["k_path_distance"] == 0.05
+        assert k_path["field_sources"] == {"k_path_distance": "human"}
+        assert records["bands_convergence"]["value"]["conv_thr"] == 1e-11
+        assert records["convergence"]["value"]["conv_thr"] != 1e-11
+
+    def test_a_band_task_names_both_pw_x_steps_a_plain_nbnd_lands_on(self) -> None:
+        silicon = structure("Si.cif")
+
+        completed = _run_cli(
+            "explain",
+            str(silicon),
+            "--hpc",
+            "scarf",
+            "--task",
+            "band",
+            "--set",
+            "nbnd=40",
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        assert (
+            "notice: nbnd was given without a step, so it applies to the scf and "
+            "bands steps; set steps.<step>.nbnd to set one step only."
+        ) in completed.stdout.splitlines()
+
     @pytest.mark.parametrize(
         ("task", "setting", "message"),
         [
@@ -1061,6 +1158,11 @@ class TestPerStepOverrides:
                 "dos",
                 "steps.nscf.walltime_h=4",
                 "'walltime_h' is set once per task, not per step",
+            ),
+            (
+                "band",
+                "steps.bands.k_grid=[4,4,4]",
+                "'k_grid' does not apply to step 'bands'",
             ),
         ],
     )

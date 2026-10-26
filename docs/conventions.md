@@ -8,6 +8,7 @@ before trusting a recommendation, see [Check your recommendations](science.md).
 | Quantity                  | Unit          | Field                                              |
 | ------------------------- | ------------- | --------------------------------------------------- |
 | k-point spacing           | 1/Å           | setting `k_distance` (group `k_sampling`)          |
+| Band-path point spacing   | 1/Å           | setting `k_path_distance` (group `k_path`)         |
 | Smearing width            | Rydberg (Ry)  | setting `degauss` (group `occupations`)            |
 | Wavefunction cutoff       | Ry            | setting `ecutwfc_ry` (group `cutoffs`)             |
 | Charge-density cutoff     | Ry            | setting `ecutrho_ry` (group `cutoffs`)             |
@@ -22,9 +23,10 @@ k-point or cutoff convergence tolerance.
 Every setting above is listed by `goldilocks settings` (with its group, type,
 and default) and, once resolved for a structure, shown in the matching record
 from `goldilocks explain`/the published `goldilocks.json` (`k_sampling`,
-`occupations`, `cutoffs`, and `convergence` respectively). `k_distance`
-defaults to `0.15` for metals or when metallicity is unknown and `0.30` for a
-confirmed non-metal; `degauss` defaults to
+a `band` task's `bands_k_path`, `occupations`, `cutoffs`, and `convergence`
+respectively). `k_distance` defaults to `0.15` for metals or when
+metallicity is unknown and `0.30` for a confirmed non-metal;
+`k_path_distance` to `0.025`; `degauss` defaults to
 `0.01` Ry for metals; `ecutwfc_ry`/`ecutrho_ry` are decided together by the
 `cutoffs` advisor from the selected pseudopotentials' own published
 recommendations. When the table publishes no charge-density cutoff
@@ -63,6 +65,23 @@ wider than 5 Å (the `geometry` record's `vacuum_axes`), so a slab gets one
 k-point across its vacuum and a molecule in a box the Γ-point alone, for any
 `k_distance` or `k_index`; an explicit `k_grid` is written as given.
 
+## Band path spacing
+
+A `band` task's bands step runs a path of high-symmetry lines instead of a
+mesh (see [Check the band structure path](science.md#check-the-band-structure-path)).
+`k_path_distance` follows `k_distance`'s convention, 2π included. A segment
+of the path of length `L`, measured with the written cell's reciprocal
+vectors (in the plane of a slab), takes
+
+```text
+n = max(1, ceil(round(L / k_path_distance, 5)))
+```
+
+equal steps, so no step is longer than `k_path_distance`. pw.x runs every
+point of the path: the sum over its branches of their steps plus one, per
+spin channel. The default, `0.025` Å⁻¹, is aiida-quantumespresso's
+`bands.yaml` (balanced); the setting's lower bound is `0.001` Å⁻¹.
+
 ## Defaults
 
 | Setting                                       | Default                                                        |
@@ -76,6 +95,7 @@ k-point across its vacuum and a molecule in a box the Γ-point alone, for any
 | Fixed Hubbard occupations (+U)                | `mixing_fixed_ns` unset (QE's 0)                               |
 | Confirmed metal, or metallicity unconfirmed   | `smearing`, `cold`, `degauss` `0.01` Ry                        |
 | Confirmed non-metal                           | `fixed`, no width, where it can run; otherwise `smearing` as above |
+| `band` task's bands step                      | `k_path_distance 0.025` Å⁻¹; `nbnd` three times the occupied bands |
 
 `conv_thr`/`etot_conv_thr` scale with the structure's atom count `nat`, not a
 fixed constant: for Si (`nat=8`) this gives `conv_thr = 1.6e-9` Ry and
@@ -144,6 +164,16 @@ heuristic`; see `goldilocks settings` for each key's actual sources).
   field: a `shift` alone keeps the protocol's k_distance, and a
   `smearing_type`/`degauss` alone keeps `tetrahedra_opt` and is not applied
   to the nscf step.
+- A `band` task's bands step has protocol defaults of its own:
+  `k_path_distance` 0.025 Å⁻¹ and three times the occupied bands
+  (aiida-quantumespresso's `bands.yaml`), read `heuristic` with the protocol
+  named in `source_note`. `nbnd` replaces the band count, and `extra_bands`
+  adds to it. The step takes the scf step's occupations, a `tetrahedra_opt`
+  written as cold smearing at 0.01 Ry, so `occupations`, `smearing_type` and
+  `degauss` set the scf step only. Its scf step derives no
+  `tot_magnetization = 0` for a compensated `magnetic_ordering`, and a
+  collinear band task refuses one you set (see
+  [the band structure path](science.md#check-the-band-structure-path)).
 - `smearing_type` and `degauss` are independent overrides in the
   `occupations` group; `degauss` defaults to `0.01` Ry (the metallic
   cold-smearing default) if smearing is chosen without an explicit value.
@@ -154,9 +184,11 @@ heuristic`; see `goldilocks settings` for each key's actual sources).
   constant. `etot_conv_thr` applies to relax and vc-relax only, the runs
   that compare energies between ionic steps. `mixing_beta`, `mixing_mode`,
   `mixing_fixed_ns` and `electron_maxstep` tune the SCF loop, so they apply
-  to the scf, relax and vc-relax steps and not to a `dos` task's nscf step,
-  which pw.x diagonalizes once in the scf step's density; `conv_thr` also
-  sets that step's diagonalization threshold.
+  to the scf, relax and vc-relax steps and not to a `dos` task's nscf step
+  or a `band` task's bands step, which pw.x diagonalizes once in the scf
+  step's density. `conv_thr` sets their diagonalization threshold instead,
+  `max(1e-13, 0.1 × min(1e-2, conv_thr / nelec))` (Quantum ESPRESSO's
+  setup.f90).
 - The functional comes from the `functional` setting (default `PBEsol`).
   There is currently no setting to choose the pseudopotential accuracy
   tier -- it is hardcoded to `efficiency`; pinning a `precision`-tier
@@ -205,7 +237,8 @@ otherwise spin-polarized advice produces a collinear `nspin = 2` run.
 `tot_magnetization` belongs to the collinear run only, since pw.x stops on
 it without `nspin = 2`: it is refused before generation together with
 `spin_orbit_coupling`, and ignored with a warning when `spin_polarized` is
-explicitly false. A noncollinear run with fixed occupations needs no
+explicitly false. A collinear `band` task refuses it too, since `bands.x`
+stops on it. A noncollinear run with fixed occupations needs no
 `tot_magnetization`; its moments come from `starting_magnetization`. A
 magnetic noncollinear run also writes `angle1`/`angle2` for every species:
 the direction of `moment_direction`, a lattice direction of the uploaded

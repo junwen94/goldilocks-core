@@ -6,7 +6,8 @@ identically by CLI, HTTP, and MCP before dispatch to Service"). The
 CLI's own equivalent (``cli/_run.py``/``cli/_explain.py``) can't share
 this exact code since it resolves structure from a local path, not
 inline content -- but everything past structure resolution is the same
-shape here as there.
+shape here as there: both look the task's service functions up in
+``service.TASK_PHASES`` (#118).
 """
 
 from __future__ import annotations
@@ -25,23 +26,9 @@ from goldilocks_core.server.documents import (
 )
 from goldilocks_core.server.readiness import AssetReadiness
 from goldilocks_core.service import (
-    advise,
-    advise_dos,
-    advise_relax,
-    check,
-    check_dos,
-    check_relax,
-    generate,
-    generate_dos,
-    generate_relax,
+    TASK_PHASES,
     list_magnetic_orderings,
-    render_submission,
-    render_submission_dos,
-    render_submission_relax,
     report_to_json,
-    to_bundle_input,
-    to_bundle_input_dos,
-    to_bundle_input_relax,
 )
 from goldilocks_core.set_overrides import build_overrides
 from goldilocks_core.steps import default_shared_context
@@ -87,34 +74,15 @@ def explain(document: ComputeRequestDocument) -> dict[str, Any]:
     structure = normalize_structure(_structure_source(document)).structure
     hpc = resolve_hpc_profile(document.hpc, field=_HPC_FIELD_NAME)
     overrides = build_overrides(document.overrides, task=document.task)
-    if document.task == "dos":
-        advice = advise_dos(
-            structure,
-            code=document.code,
-            hpc=hpc,
-            overrides=overrides,
-            fetch_missing=document.fetch_missing,
-        )
-        report = check_dos(advice)
-    elif document.task in ("relax", "vc-relax"):
-        advice = advise_relax(
-            structure,
-            calculation=document.task,
-            code=document.code,
-            hpc=hpc,
-            overrides=overrides,
-            fetch_missing=document.fetch_missing,
-        )
-        report = check_relax(advice)
-    else:
-        advice = advise(
-            structure,
-            code=document.code,
-            hpc=hpc,
-            overrides=overrides,
-            fetch_missing=document.fetch_missing,
-        )
-        report = check(advice)
+    phases = TASK_PHASES[document.task]
+    advice = phases.advise(
+        structure,
+        code=document.code,
+        hpc=hpc,
+        overrides=overrides,
+        fetch_missing=document.fetch_missing,
+    )
+    report = phases.check(advice)
     tiers = advice.tiers()
     return {
         "records": records_document(tiers.records()),
@@ -132,82 +100,36 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
     ``overrides`` as sent and the submitted structure's identity. The
     summary's ``layout`` is ``explain``'s (#187)."""
     normalized = normalize_structure(_structure_source(document))
-    structure = normalized.structure
     hpc = resolve_hpc_profile(document.hpc, field=_HPC_FIELD_NAME)
     overrides = build_overrides(document.overrides, task=document.task)
     ctx = default_shared_context()
-    if document.task == "dos":
-        dos_advice = advise_dos(
-            structure,
-            code=document.code,
-            hpc=hpc,
-            overrides=overrides,
-            fetch_missing=document.fetch_missing,
-        )
-        dos_report = check_dos(dos_advice)
-        steps = generate_dos(dos_advice, dos_report, ctx=ctx)
-        script = render_submission_dos(dos_advice, hpc, document.code, steps)
-        bundle_input = to_bundle_input_dos(
-            dos_advice,
-            steps,
-            script,
-            ctx,
-            code=document.code,
-            hpc=hpc,
-            assignments=document.overrides,
-            source=normalized.source,
-        )
-        tiers, adv_warnings = dos_advice.tiers(), dos_advice.warnings()
-    elif document.task in ("relax", "vc-relax"):
-        relax_advice = advise_relax(
-            structure,
-            calculation=document.task,
-            code=document.code,
-            hpc=hpc,
-            overrides=overrides,
-            fetch_missing=document.fetch_missing,
-        )
-        relax_report = check_relax(relax_advice)
-        # raises AdviceIncomplete if not ok
-        steps = generate_relax(relax_advice, relax_report, ctx=ctx)
-        script = render_submission_relax(relax_advice, hpc, document.code, steps)
-        bundle_input = to_bundle_input_relax(
-            relax_advice,
-            steps,
-            script,
-            ctx,
-            code=document.code,
-            hpc=hpc,
-            assignments=document.overrides,
-            source=normalized.source,
-        )
-        tiers, adv_warnings = relax_advice.tiers(), relax_advice.warnings()
-    else:
-        advice = advise(
-            structure,
-            code=document.code,
-            hpc=hpc,
-            overrides=overrides,
-            fetch_missing=document.fetch_missing,
-        )
-        report = check(advice)
-        steps = generate(advice, report)  # raises AdviceIncomplete if not ok
-        script = render_submission(advice, hpc, document.code, steps)
-        bundle_input = to_bundle_input(
-            advice,
-            steps,
-            script,
-            ctx,
-            code=document.code,
-            hpc=hpc,
-            assignments=document.overrides,
-            source=normalized.source,
-        )
-        tiers, adv_warnings = advice.tiers(), advice.warnings()
+    phases = TASK_PHASES[document.task]
+    advice = phases.advise(
+        normalized.structure,
+        code=document.code,
+        hpc=hpc,
+        overrides=overrides,
+        fetch_missing=document.fetch_missing,
+    )
+    report = phases.check(advice)
+    # raises AdviceIncomplete if not ok
+    steps = phases.generate(advice, report, ctx=ctx)
+    script = phases.render_submission(advice, hpc, document.code, steps)
+    bundle_input = phases.to_bundle_input(
+        advice,
+        steps,
+        script,
+        ctx,
+        code=document.code,
+        hpc=hpc,
+        assignments=document.overrides,
+        source=normalized.source,
+    )
+    tiers = advice.tiers()
     summary = {
         "files": [file["path"] for file in bundle_files(bundle_input)],
         "records": records_document(tiers.records()),
-        "warnings": adv_warnings,
+        "warnings": advice.warnings(),
         "layout": tiers.layout(),
     }
     return summary, bundle_input

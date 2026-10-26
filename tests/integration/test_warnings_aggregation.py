@@ -21,13 +21,17 @@ from goldilocks_core.bundle import bundle_files
 from goldilocks_core.server import _handlers
 from goldilocks_core.server.documents import ComputeRequestDocument
 
-_TASKS = ("scf_single_point", "relax", "vc-relax", "dos")
+_TASKS = ("scf_single_point", "relax", "vc-relax", "dos", "band")
 
-_TASK_RECORD_WARNINGS = {"dos": "nscf_parallelisation"}
-"""A task record that warns on this Si cell, by task: the nscf step's npool
-notice, which #152 lost. Its lists must carry it, so the dos case fails
-instead of passing on the shared records alone if the notice goes. The relax
-record never warns, so relax and vc-relax have no such record to check."""
+_TASK_RECORD_WARNINGS = {
+    "dos": "nscf_parallelisation",
+    "band": "bands_parallelisation",
+}
+"""A task record that warns on this Si cell, by task: the nscf or bands
+step's npool notice, which #152 lost for the nscf step. Its lists must carry
+it, so the dos and band cases fail instead of passing on the shared records
+alone if the notice goes. The relax record never warns, so relax and
+vc-relax have no such record to check."""
 
 
 @pytest.fixture

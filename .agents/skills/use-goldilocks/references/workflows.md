@@ -104,14 +104,15 @@ files: inputs, selected UPFs, a submission script, licences, citations, and
 CLI equivalents:
 
 ```bash
-uv run goldilocks run structure.cif --hpc scarf --set k_grid=4,4,4 --out run-dir --json
-uv run goldilocks run structure.cif --hpc scarf --set k_grid=4,4,4 --out run.zip --json
+uv run goldilocks run structure.cif --hpc scarf --set 'k_grid=[4,4,4]' --out run-dir --json
+uv run goldilocks run structure.cif --hpc scarf --set 'k_grid=[4,4,4]' --out run.zip --json
 ```
 
 ## Read only the records you need
 
-`Advice`/`DosAdvice` always compute every field; there is no partial-record
-selection in v2 -- filter the dict `advice.records()` returns instead:
+`Advice`/`DosAdvice`/`BandAdvice` always compute every field; there is no
+partial-record selection in v2 -- filter the dict `advice.records()` returns
+instead:
 
 ```python
 wanted = {"functional", "k_sampling", "cutoffs"}
@@ -167,6 +168,48 @@ to, with an `overrides.applies_to_multiple_steps` notice when that is both
 `pw.x` steps.
 CLI/HTTP/MCP equivalent: pass `task="dos"` (CLI: `--task dos`).
 
+## Generate a band structure (band)
+
+```python
+from goldilocks_core.service import advise_band, check_band, generate_band
+
+band_overrides = build_overrides({"k_path_distance": 0.05}, task="band")
+band_advice = advise_band(structure, hpc=hpc, overrides=band_overrides)
+band_report = check_band(band_advice)
+if band_report.ok:
+    band_steps = generate_band(band_advice, band_report, ctx=ctx)
+    print([step.name for step in band_steps])
+
+k_path = band_advice.records()["bands_k_path"]
+if isinstance(k_path, Resolved):
+    print(k_path.value.lattice_type, k_path.value.n_kpoints, k_path.value.primitive_cells)
+```
+
+The steps are `scf`, `bands` (`pw.x` with `calculation='bands'` on a
+`K_POINTS crystal_b` card) and `bands_x` (`bands.x`), or `bands_x_up` and
+`bands_x_down` for a collinear spin-polarized run, all in one job.
+`BandAdvice.records()` keys the shared system-level fields, the scf step's
+own and the task's one `job` unprefixed, and the bands step's own under
+`bands_`: `bands_k_path`, the high-symmetry path of the written cell
+(branches of labelled vertices in crystal coordinates of its reciprocal
+vectors, with `n_kpoints`, `lattice_type` and `primitive_cells`),
+`bands_occupations`, `bands_nbnd`, `bands_convergence` and
+`bands_parallelisation`; `band_advice.tiers().layout()` names the steps scf
+and bands, since `bands.x` has no records. Unless the request sets them, the
+bands step takes `k_path_distance` 0.025 1/Å (2π included) and three times
+the occupied bands from aiida-quantumespresso's `bands.yaml`; those records
+read `heuristic` with the protocol in `source_note`. `k_path_distance`
+reaches the bands step only, the k-mesh, occupations and SCF-loop keys the
+scf step only, and `nbnd`, `extra_bands`, `conv_thr`, `npool` and `ndiag`
+without a step both `pw.x` steps, with the
+`overrides.applies_to_multiple_steps` notice; `steps.bands.<key>` sets the
+bands step alone, and no key reaches `bands_x`. A conventional cell or a
+supercell gives folded bands (`primitive_cells` above 1, notice
+`k_path.folded_bands`). A molecule in a box is refused, and so is a
+`tot_magnetization` on a collinear band task
+(`occupations.bands_x_refuses_tot_magnetization`), which bands.x stops on.
+CLI/HTTP/MCP equivalent: pass `task="band"` (CLI: `--task band`).
+
 ## Optional transports
 
 ```bash
@@ -175,8 +218,9 @@ uv run goldilocks serve http --host 127.0.0.1 --port 8000
 uv run goldilocks serve mcp
 ```
 
-HTTP and MCP share `server/_handlers.py` with the CLI's `run`/`explain`
-commands -- same `RunOverrides`/`CalcTask` validation, same tri-state
-records and warnings shape, same `dos` task support. Both accept inline
-structure content; neither accepts filesystem paths, since a server process
-should not read from the caller's local disk.
+The CLI's `run`/`explain` commands and HTTP and MCP, which share
+`server/_handlers.py`, look each task's functions up in
+`service.TASK_PHASES` -- same `RunOverrides`/`CalcTask` validation, same
+tri-state records and warnings shape, same five tasks. HTTP and MCP accept
+inline structure content; neither accepts filesystem paths, since a server
+process should not read from the caller's local disk.

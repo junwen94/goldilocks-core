@@ -62,7 +62,8 @@ export interface ModelEvidence {
 
 /** One entry of a response's top-level `warnings` (`resolution
  * .collect_warnings`): a record's warning, naming the record it came from
- * (`nscf_parallelisation` for a dos task's nscf step). */
+ * (`nscf_parallelisation` for a dos task's nscf step,
+ * `bands_parallelisation` for a band task's bands step). */
 export interface RecordWarning extends AdvisorWarning {
   readonly record: string;
 }
@@ -243,7 +244,8 @@ export interface StructureInspection {
 // ---------------------------------------------------------------------
 
 /** One step of a `RecordLayout`: its purpose (`scf`, `nscf`, `dos`,
- * `relax`, `vc-relax`) and its records. */
+ * `bands`, `relax`, `vc-relax`) and its records. A step without records,
+ * such as a band task's `bands_x`, has no entry. */
 export interface StepLayout {
   readonly name: string;
   readonly records: readonly string[];
@@ -253,8 +255,9 @@ export interface StepLayout {
  * response, by name (#187). `analysis` holds what the structure alone
  * decides, `system` what every step of the task shares, then each step's
  * own records in run order -- the task's one `job` with its first step, a
- * `dos` task's nscf decisions under their `nscf_` names. Every record is
- * in exactly one list. */
+ * `dos` task's nscf decisions under their `nscf_` names, a `band` task's
+ * bands-step decisions under their `bands_` names. Every record is in
+ * exactly one list. */
 export interface RecordLayout {
   readonly analysis: readonly string[];
   readonly system: readonly string[];

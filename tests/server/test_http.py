@@ -334,7 +334,7 @@ class TestExplain:
         assert "warnings" in body
         assert body["blocking"] == []
 
-    @pytest.mark.parametrize("task", ["scf_single_point", "dos"])
+    @pytest.mark.parametrize("task", ["scf_single_point", "dos", "band"])
     def test_blocking_lists_the_reasons_run_refuses_with(
         self, client: TestClient, silicon_cif: str, task: str
     ) -> None:
@@ -455,6 +455,28 @@ class TestExplain:
             assert record["source"] == "human"
             assert record["source_note"] is None
 
+    def test_band_task_returns_bands_prefixed_records(
+        self, client: TestClient, real_assets, silicon_cif: str
+    ) -> None:
+        """#118: task='band' routes to advise_band through the real HTTP
+        transport: the bands step's decisions under bands_ names, laid out
+        under its own step."""
+        response = client.post(
+            "/explain",
+            json={"structure_content": silicon_cif, "hpc": "scarf", "task": "band"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        records = body["records"]
+        assert records["bands_k_path"]["value"]["lattice_type"] == "FCC"
+        assert (
+            records["bands_occupations"]["value"]["occupations"]
+            == (records["occupations"]["value"]["occupations"])
+        )
+        assert body["layout"]["steps"][1]["name"] == "bands"
+        assert body["blocking"] == []
+
     def test_relax_task_returns_a_relax_record(
         self, client: TestClient, real_assets, silicon_cif: str
     ) -> None:
@@ -475,7 +497,11 @@ class TestExplain:
     ) -> None:
         response = client.post(
             "/explain",
-            json={"structure_content": silicon_cif, "hpc": "scarf", "task": "bands"},
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "task": "no_such_task",
+            },
         )
 
         assert response.status_code == 422
@@ -857,6 +883,19 @@ class TestRun:
         assert "nscf.in" in files
         assert "dos.in" in files
         assert "submit.sh" in files
+
+    def test_band_task_generates_every_step(
+        self, client: TestClient, real_assets, silicon_cif: str
+    ) -> None:
+        response = client.post(
+            "/run",
+            json={"structure_content": silicon_cif, "hpc": "scarf", "task": "band"},
+        )
+
+        assert response.status_code == 200
+        files = response.json()["files"]
+        for name in ("scf.in", "bands.in", "bands_x.in", "submit.sh"):
+            assert name in files, name
 
     def test_relax_task_generates_relax_in(
         self, client: TestClient, real_assets, silicon_cif: str

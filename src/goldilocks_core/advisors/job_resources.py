@@ -61,7 +61,8 @@ sum past the 95%; a single step gets all of it. A step that reaches its
 share stops cleanly with exit_status 255, which the submission script
 reports (`submission/slurm.py`). The shares are static because they are
 written into each step's input (`generation/quantum_espresso/scf.py`).
-Programs other than pw.x (`dos.x`) get no share and run in the rest.
+Programs other than pw.x (`dos.x`, `bands.x`) get no share and run in the
+rest.
 
 `npool`/`ndiag`/`nimage` are not decided here -- that is
 `advisors/parallelisation.py`'s job, reading this module's `ntasks` as

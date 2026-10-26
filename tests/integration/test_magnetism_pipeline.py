@@ -3,8 +3,9 @@
 ``magnetic_ordering=afm`` can replace the uploaded cell with a different
 one: rock-salt NiO's 2-atom primitive cell and its 8-atom conventional cell
 both become the 4-atom AFM-II cell. Every count the input carries -- the
-electron count, ``nbnd``, ``conv_thr`` and the job's memory estimate --
-must then describe that written cell (#128). They used to be counted on
+electron count, ``nbnd``, ``conv_thr``, the k-points (a band task's path
+included, #118) and the job's memory estimate -- must then describe that
+written cell (#128). They used to be counted on
 the uploaded cell while the writer rendered the AFM one, and the writer
 turned the electron difference into ``tot_charge = 24.0`` (2-atom input)
 or ``-48.0`` (8-atom input).
@@ -56,7 +57,7 @@ from collections.abc import Callable
 import numpy as np
 import pytest
 from pymatgen.core import Lattice, Species, Structure
-from support import sssp_fixture_table_spec
+from support import hcp_gadolinium, sssp_fixture_table_spec
 
 from goldilocks_core.advisors.magnetic_config import OrderingRecord
 from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
@@ -68,13 +69,17 @@ from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
 from goldilocks_core.service import (
     Advice,
     AdviceIncomplete,
+    PathStepAdvice,
     advise,
+    advise_band,
     advise_dos,
     advise_relax,
     check,
+    check_band,
     check_dos,
     check_relax,
     generate,
+    generate_band,
     generate_dos,
     generate_relax,
 )
@@ -142,6 +147,10 @@ def _run(
         dos = advise_dos(structure, hpc=_hpc(), overrides=overrides, store=store)
         report, steps = check_dos(dos), (dos.scf, dos.nscf)
         rendered = generate_dos(dos, report) if report.ok else ()
+    elif task == "band":
+        band = advise_band(structure, hpc=_hpc(), overrides=overrides, store=store)
+        report, steps = check_band(band), (band.scf, band.bands)
+        rendered = generate_band(band, report) if report.ok else ()
     else:
         relax = advise_relax(
             structure, calculation=task, hpc=_hpc(), overrides=overrides, store=store
@@ -164,13 +173,22 @@ def _keyword(content: str, name: str) -> str | None:
 
 
 def _counts(advice: Advice) -> dict[str, object]:
+    """The counts of one pw.x step: its k-points are a mesh, or a bands
+    step's path, by its vertices' labels and the steps between them."""
     kpoints = advice.step.kpoints
     job = advice.step.resources.job.value
+    if isinstance(kpoints, PathStepAdvice):
+        sampling = tuple(
+            (tuple(vertex.label for vertex in branch.vertices), branch.steps)
+            for branch in kpoints.k_path.value.branches
+        )
+    else:
+        sampling = kpoints.k_sampling.value.mesh
     return {
         "nelec": advice.system.electron_count.value.nelec,
         "nbnd": kpoints.nbnd.value.nbnd,
         "conv_thr": kpoints.convergence.value.conv_thr,
-        "mesh": kpoints.k_sampling.value.mesh,
+        "k_points": sampling,
         "n_irr_k": kpoints.n_irr_k.value,
         "npool": advice.step.resources.parallelisation.value.npool,
         "job": (
@@ -189,7 +207,7 @@ _INPUT_CELLS: dict[str, Callable[[], Structure]] = {
 
 
 @_needs_enumlib
-@pytest.mark.parametrize("task", ["scf", "relax", "dos"])
+@pytest.mark.parametrize("task", ["scf", "relax", "dos", "band"])
 @pytest.mark.parametrize("input_cell", list(_INPUT_CELLS))
 def test_every_count_describes_the_written_afm_cell(
     input_cell: str, task: str, store: AssetStore
@@ -909,6 +927,31 @@ def test_a_smearing_magnet_s_bands_hold_its_seeded_moment(
     )
     assert _keyword(content, "nbnd") == "28"
     assert steps[0].records()["magnetic"].value.seeded_moment == pytest.approx(10.0)
+
+
+def test_a_dos_nscf_step_below_the_seeded_majority_count_misses_bands(
+    gdi2_store: AssetStore,
+) -> None:
+    """#118: the dos task's nscf step runs at the scf's density, so 22 bands,
+    below the (36 + 10)/2 = 23 electrons hcp Gd's seeded majority channel
+    fills, leave occupied majority bands out if the scf reaches that moment,
+    instead of capping it: the nscf step's warning says that, and the scf
+    keeps its 28 bands."""
+    (scf, nscf), _ = _run("dos", hcp_gadolinium(), {"steps.nscf.nbnd": 22}, gdi2_store)
+
+    scf_bands = scf.step.kpoints.nbnd.value
+    nscf_bands = nscf.step.kpoints.nbnd.value
+    assert scf_bands.nbnd == 28
+    assert "nbnd.moment_capped" not in [w.code for w in scf_bands.warnings]
+    assert nscf_bands.nbnd == 22
+    (capped,) = nscf_bands.warnings
+    assert capped.code == "nbnd.moment_capped"
+    assert capped.message.startswith(
+        "nbnd=22 holds fewer than the (nelec + |M|)/2 = 23 electrons the "
+        "majority spin channel fills"
+    )
+    assert "this nscf step" in capped.message
+    assert "Use nbnd >= 23" in capped.message
 
 
 def _janus_vsse(c: float = 20.0) -> Structure:

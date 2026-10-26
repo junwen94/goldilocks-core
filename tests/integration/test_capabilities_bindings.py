@@ -32,6 +32,7 @@ pytestmark = pytest.mark.integration
 _CASES: tuple[tuple[str, dict[str, object]], ...] = (
     ("scf_single_point", {}),
     ("dos", {}),
+    ("band", {}),
     ("relax", {}),
     ("vc-relax", {}),
     ("scf_single_point", {"spin_orbit_coupling": True}),
@@ -128,7 +129,9 @@ def test_each_layout_places_every_record_once_by_tier_and_step(
     """The analysis tier holds the structure-only records, the system tier
     what every step shares, then each step of the task in run order: the
     task's one job with its first step, a dos task's nscf decisions under
-    their nscf_ names, and a relaxation's own record with its step."""
+    their nscf_ names, a band task's bands-step decisions under their bands_
+    names (bands.x has none), and a relaxation's own record with its
+    step."""
     facts = {fact["key"] for fact in capabilities()["facts"]}
     for task, response in explained:
         layout = response["layout"]
@@ -151,6 +154,15 @@ def test_each_layout_places_every_record_once_by_tier_and_step(
             assert steps["dos"] == ["dos"]
             assert steps["nscf"]
             assert all(name.startswith("nscf_") for name in steps["nscf"])
+        elif task == "band":
+            assert list(steps) == ["scf", "bands"]
+            assert steps["bands"] == [
+                "bands_occupations",
+                "bands_k_path",
+                "bands_nbnd",
+                "bands_convergence",
+                "bands_parallelisation",
+            ]
         elif task in ("relax", "vc-relax"):
             assert list(steps) == [task]
             assert "relax" in steps[task]

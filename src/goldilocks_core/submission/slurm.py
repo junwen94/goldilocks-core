@@ -22,8 +22,9 @@ A step with ``Step.ntasks=None`` runs on the whole allocation through
 the bare profile launcher -- the task count ``pw.x``'s ``-npool``/
 ``-ndiag`` are computed for. A step that declares ``ntasks=N`` runs as
 ``srun --nodes=ceil(N / ntasks_per_node) --ntasks=N``, so no step
-inherits an allocation its program cannot use (``dos.x`` runs on one
-task; see ``generation/quantum_espresso/dos.py``). Those flags are
+inherits an allocation its program cannot use (``dos.x`` and ``bands.x``
+run on one task; see ``generation/quantum_espresso/dos.py`` and
+``bands.py``). Those flags are
 srun's: such a step on a profile whose launcher is not ``srun`` raises
 ``SubmissionError`` rather than guessing another launcher's syntax.
 
@@ -62,9 +63,10 @@ step's, exactly when the step failed.
   ``goldilocks_check_exit_status`` passes the step only if the file
   exists, has changed, and records exit_status 0. An unchanged file is
   an earlier step's; deleting it first is not an option, because the
-  nscf reads the scf's ``.save``. ``JOB DONE`` never passes a ``pw.x``
-  step.
-- ``StdoutMarkerCheck`` (``dos.x``, which writes no status file):
+  nscf and bands steps read the scf's ``.save``. ``JOB DONE`` never passes
+  a ``pw.x`` step.
+- ``StdoutMarkerCheck`` (``dos.x`` and ``bands.x``, which write no status
+  file):
   ``goldilocks_check_stdout_marker`` passes the step only if its stdout
   contains the marker.
 
@@ -80,8 +82,8 @@ the walltime in proportion to its estimated workload
 ``advisors/job_resources.py``). Each share is written into that step's
 input by ``generation/quantum_espresso/scf.py``, not here: baking it in
 at generation time keeps the published manifest's sha256 describing the
-bytes actually run. ``dos.x`` has no ``max_seconds`` and runs in the
-remaining 5% or more.
+bytes actually run. ``dos.x`` and ``bands.x`` have no ``max_seconds`` and
+run in the remaining 5% or more.
 """
 
 from __future__ import annotations

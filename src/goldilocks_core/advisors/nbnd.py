@@ -52,16 +52,22 @@ species of a ferromagnetic start), so an oversized seed over-pads, which
 costs only compute; a compensated one changes nothing. Without a seeded
 moment (no z_valence for an element) such a run is ``Blocked``. A human
 ``nbnd``, or a human or llm ``extra_bands``, that holds the moment below
-its seed resolves with ``nbnd.moment_capped``. Fixed occupations fill the
-pinned channels exactly, and a noncollinear spinor band holds either
-spin, so neither reads the seed.
+its seed resolves with ``nbnd.moment_capped`` on every step. On a step
+with its own SCF loop (``plan.SCF_LIKE_PURPOSES``) it says that pw.x holds
+the moment there. An nscf or bands step runs at the scf's density instead,
+so too few bands leave occupied bands of the majority channel out if the
+scf's moment reaches its seed, which as a maximal target it need not; its
+message says so and names the seeded majority count, (nelec + |M|)/2
+rounded up (#118). Fixed occupations fill the pinned channels exactly, and
+a noncollinear spinor band holds either spin, so neither reads the seed.
 
 **pw.x's own floors are the gate's (``band_floors``).** pw.x stops in
 setup when a given ``nbnd`` is below ``NINT(nelec/2)``, ``NINT(nelup)``
 or ``NINT(neldw)``, or ``NINT(nelec)`` for a noncollinear run
-(``setup.f90:349-356``), with the same ``nelup``/``neldw``;
-``checks.check_all`` refuses such a count from any source. The default is
-never below them.
+(``setup.f90:349-358``), with the same ``nelup``/``neldw``, but only in a
+run with its own SCF loop (``lscf``); an nscf or bands step below them
+would leave occupied bands out. ``checks.check_all`` refuses such a count
+from any source, on every step. The default is never below them.
 
 **Uses ``occupations`` (not ``is_metal``) to decide the metal branch.**
 ``advisors/occupations.py`` has already turned ``is_metal`` (plus any
@@ -83,33 +89,22 @@ sensible fallback value for a missing electron count, so this is not
 made optional with a guessed default -- a caller that does not yet know
 ``nelec`` should not call this advisor yet.
 
-**Per-purpose band boosting is not directly implemented, but the DOS
-task already gets it as a side effect, worth knowing about.** A
-``nscf``/``bands``/``dos`` step commonly wants materially more empty
-bands than a plain ``scf`` step, to actually cover the energy window a
-DOS or band structure plot needs -- this module has no explicit
-multiplier or target-energy-window rule keyed on ``purpose`` (it is
-still accepted in the signature, signature-stable for whenever such a
-rule exists, but not yet consulted -- the same treatment
-``advisors/k_sampling.py`` gives its own currently-unused
-``occupations`` input). In practice, the dos task's nscf step already
-gets ``occupations="tetrahedra_opt"`` unless the request sets occupations
-(``service/_step_protocol.py``'s ``DOS_NSCF_PROTOCOL``,
-aiida-quantumespresso's own DOS protocol default, chosen for
-integration-grid quality, not for band count) -- and ``tetrahedra_opt`` is
-one of this module's own ``_METAL_LIKE_OCCUPATIONS``, so ``nbnd()`` called
-for that nscf step takes the metal-like padding (20% more per spin channel,
-at least 4 more) regardless of the material's real classification, incidentally
-giving the nscf step real empty bands an insulator's own scf step gets
-none of (the bundled ``Si.cif``, nelec 32: scf ``nbnd=16``, exactly
-``nelec/2``; nscf ``nbnd=20``). This is a genuine, working mechanism,
-just an accidental one -- nobody chose 20%/+4 *for* band-gap
-visibility, it is only there because of how ``occupations`` classifies
-``tetrahedra_opt``. It has not been checked whether that margin is
-actually enough for every case (a narrow-gap material, or a DOS/band
-plot that wants to show several eV of conduction states) -- a future
-``purpose``-aware rule, if one is ever added, should treat this as the
-thing it would be replacing, not something already solved on purpose.
+**A task protocol can raise a step's band count (``NbndProtocol``,
+#118).** A band structure plots empty bands above the occupied ones, so
+the band task's bands step asks for more than pw.x's default
+(``service/_step_protocol.py``'s ``BANDS_PROTOCOL``, aiida-quantumespresso's
+``bands.yaml``). Without a human ``nbnd`` its default is the largest of
+pw.x's default for the run (with the seeded moment above),
+``int(nelec/epb*factor)`` and ``int(nelec/epb) + 4``, epb being 1 for a
+noncollinear run and 2 otherwise: aiida-quantumespresso's
+``PwBandsWorkChain`` rule, except that nelec is not truncated first and
+pw.x's default stands in for the scf run's count. A human or llm
+``extra_bands`` adds to it, and the record names the protocol in
+``source_note``. A step without one keeps pw.x's default: the dos task's
+nscf step gets the metal-like padding above (20% more, at least 4) only
+because its protocol runs ``tetrahedra_opt`` (``DOS_NSCF_PROTOCOL``),
+whose padding nobody chose for the DOS energy window (the bundled
+``Si.cif``, nelec 32: scf ``nbnd=16``, nscf ``nbnd=20``).
 """
 
 from __future__ import annotations
@@ -122,6 +117,7 @@ from pydantic import Field
 from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts, SpinMode
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
+from goldilocks_core.plan import SCF_LIKE_PURPOSES
 from goldilocks_core.resolution import (
     Blocked,
     FieldState,
@@ -181,7 +177,9 @@ MOMENT_CAPPED_WARNING = Warning(
         "nbnd leaves the majority spin channel of a collinear smearing run "
         "no room for the moment its starting magnetization seeds: pw.x holds "
         "the moment at 2*nbnd - nelec Bohr magnetons per cell without an "
-        "error. Raise nbnd, or unset nbnd and extra_bands."
+        "error, and an nscf or bands step leaves occupied majority bands out "
+        "if the scf's moment reaches the seed. Raise nbnd, or unset nbnd and "
+        "extra_bands."
     ),
 )
 
@@ -230,6 +228,18 @@ class NbndLlmInput(LlmInput):
 
 
 @dataclass(frozen=True, slots=True)
+class NbndProtocol:
+    """A task protocol's band count for one of its steps (#118), such as
+    the band task's bands step: ``factor`` times the occupied bands (module
+    docstring), ranked below a request's ``nbnd``, with a human or llm
+    ``extra_bands`` added to it. Not a request value, so its record reads
+    ``heuristic``, with ``note`` naming the protocol as its ``source_note``."""
+
+    factor: float
+    note: str
+
+
+@dataclass(frozen=True, slots=True)
 class _Sizing:
     """pw.x's default ``nbnd`` for the run, and the seeded moment it was
     sized for (``None`` when the seed does not size it)."""
@@ -245,14 +255,16 @@ def nbnd(
     magnetic: FieldState[MagneticConfigFacts] | None = None,
     human: NbndHumanInput | None = None,
     llm: NbndLlmInput | None = None,
+    protocol: NbndProtocol | None = None,
 ) -> FieldState[NbndDecision]:
     """The band count: a human ``nbnd``, else pw.x's default for the
-    run's spin channels (``_sizing``, module docstring) plus any human or
-    llm ``extra_bands``, with its spin note. ``Blocked`` when
-    ``occupations`` is, or when a collinear smearing run's seeded moment
-    is unknown, unless a human ``nbnd`` is given; a total that is not
-    positive is ``Unavailable``. A total that holds the moment below its
-    seed carries ``nbnd.moment_capped``."""
+    run's spin channels (``_sizing``, module docstring), or the larger
+    count a task ``protocol`` asks for, plus any human or llm
+    ``extra_bands``, with its spin note. ``Blocked`` when ``occupations``
+    is, or when a collinear smearing run's seeded moment is unknown, unless
+    a human ``nbnd`` is given; a total that is not positive is
+    ``Unavailable``. A total that holds the moment below its seed carries
+    ``nbnd.moment_capped``, worded for the step's ``purpose``."""
     human = human or NbndHumanInput()
     llm = llm or NbndLlmInput()
 
@@ -267,13 +279,18 @@ def nbnd(
     sizing = _sizing(
         nelec, occupations.value, spin_mode, tot_magnetization, seeded_moment
     )
+    note = None
     if human.nbnd is not None:
         total, source, notes = human.nbnd, "human", ()
     elif isinstance(sizing, str):
         return Blocked(by=sizing)
     else:
         extra, source = _extra_bands(human, llm)
-        total, notes = sizing.default + extra, _spin_note(spin_mode)
+        default = sizing.default
+        if protocol is not None:
+            default = _protocol_default(nelec, spin_mode, default, protocol)
+            note = protocol.note
+        total, notes = default + extra, _spin_note(spin_mode)
         if total <= 0:
             # #35 (v2 epic 9, #9): extra_bands is a legitimately-signed
             # adjustment (Field(gt=0) on it alone would reject valid
@@ -284,15 +301,15 @@ def nbnd(
             # success.
             return Unavailable(
                 reason=(
-                    f"heuristic nbnd={sizing.default} + extra_bands={extra} = "
+                    f"heuristic nbnd={default} + extra_bands={extra} = "
                     f"{total}, which is not a valid number of bands (must be "
                     "positive)"
                 )
             )
 
-    warnings = (*notes, *_moment_capped(total, nelec, sizing))
+    warnings = (*notes, *_moment_capped(total, nelec, sizing, purpose))
     decision = NbndDecision(nbnd=total, warnings=warnings)
-    return Resolved(decision, Provenance(source=source))
+    return Resolved(decision, Provenance(source=source, source_note=note))
 
 
 def band_floors(
@@ -304,8 +321,8 @@ def band_floors(
     order QE 7.3 ``PW/src/setup.f90:349-356`` checks them: ``NINT(nelec/2)``,
     ``NINT(nelup)`` and ``NINT(neldw)``, then ``NINT(nelec)`` for a
     noncollinear run, with the spin inputs ``nbnd`` sizes from. pw.x
-    applies them to a given ``nbnd``; its default never falls below
-    them."""
+    applies them to a given ``nbnd`` in a run with its own SCF loop; its
+    default never falls below them."""
     spin_mode, tot_magnetization, _ = _spin_inputs(occupations, magnetic)
     nelup, neldw = _spin_channels(nelec, tot_magnetization)
     floors = (
@@ -412,6 +429,17 @@ def _spin_channels(
     return (charge + tot_magnetization) / 2, (charge - tot_magnetization) / 2
 
 
+def _protocol_default(
+    nelec: float, spin_mode: SpinMode, default: int, protocol: NbndProtocol
+) -> int:
+    """The band count ``protocol`` asks for (module docstring): the largest
+    of pw.x's ``default`` for the run, ``factor`` times the occupied bands
+    and four more than them, a noncollinear band holding one electron and
+    any other two."""
+    occupied = nelec / (1 if spin_mode == "noncollinear" else 2)
+    return max(default, int(occupied * protocol.factor), int(occupied) + 4)
+
+
 def _nint(value: float) -> int:
     """Fortran ``NINT``: the nearest integer, halves away from zero."""
     return int(math.copysign(math.floor(abs(value) + 0.5), value))
@@ -436,25 +464,39 @@ def _spin_note(spin_mode: SpinMode) -> tuple[Warning, ...]:
 
 
 def _moment_capped(
-    total: int, nelec: float, sizing: _Sizing | str
+    total: int, nelec: float, sizing: _Sizing | str, purpose: str
 ) -> tuple[Warning, ...]:
     """``nbnd.moment_capped`` when ``total`` bands hold a seeded moment
     below its seed: pw.x fills at most ``total`` bands per spin channel,
-    so the moment of a smearing run stays within ``2*total - nelec``. The
-    default always has room (module docstring)."""
+    so the moment of a smearing run stays within ``2*total - nelec``, and
+    a step of ``purpose`` without its own SCF loop leaves occupied
+    majority bands out if the scf's moment reaches the seed (module
+    docstring). The default always has room."""
     if isinstance(sizing, str) or sizing.seeded_moment is None:
         return ()
     seed = abs(sizing.seeded_moment)
     cap = 2 * total - nelec
     if cap >= seed:
         return ()
-    message = (
-        f"nbnd={total} leaves room for at most 2*nbnd - nelec = {_number(cap)} "
-        "Bohr magnetons per cell in this collinear smearing run, below the "
-        f"{_number(seed)} its starting magnetization seeds; pw.x holds the "
-        f"moment there without an error. Use nbnd >= {sizing.default}, the "
-        "default for this seed, or unset nbnd and extra_bands."
-    )
+    if purpose in SCF_LIKE_PURPOSES:
+        message = (
+            f"nbnd={total} leaves room for at most 2*nbnd - nelec = "
+            f"{_number(cap)} Bohr magnetons per cell in this collinear smearing "
+            f"run, below the {_number(seed)} its starting magnetization seeds; "
+            "pw.x holds the moment there without an error. Use nbnd >= "
+            f"{sizing.default}, the default for this seed, or unset nbnd and "
+            "extra_bands."
+        )
+    else:
+        fill = (nelec + seed) / 2
+        message = (
+            f"nbnd={total} holds fewer than the (nelec + |M|)/2 = {_number(fill)} "
+            "electrons the majority spin channel fills at the "
+            f"{_number(seed)} Bohr magnetons the starting magnetization seeds: if "
+            f"the scf's moment reaches that seed, this {purpose} step leaves "
+            f"occupied majority bands out. Use nbnd >= {math.ceil(fill)}, or "
+            "unset nbnd and extra_bands."
+        )
     return (MOMENT_CAPPED_WARNING.model_copy(update={"message": message}),)
 
 
