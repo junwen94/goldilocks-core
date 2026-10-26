@@ -64,9 +64,10 @@ a noncollinear spinor band holds either spin, so neither reads the seed.
 **pw.x's own floors are the gate's (``band_floors``).** pw.x stops in
 setup when a given ``nbnd`` is below ``NINT(nelec/2)``, ``NINT(nelup)``
 or ``NINT(neldw)``, or ``NINT(nelec)`` for a noncollinear run
-(``setup.f90:349-356``), with the same ``nelup``/``neldw``;
-``checks.check_all`` refuses such a count from any source. The default is
-never below them.
+(``setup.f90:349-358``), with the same ``nelup``/``neldw``, but only in a
+run with its own SCF loop (``lscf``); an nscf or bands step below them
+would leave occupied bands out. ``checks.check_all`` refuses such a count
+from any source, on every step. The default is never below them.
 
 **Uses ``occupations`` (not ``is_metal``) to decide the metal branch.**
 ``advisors/occupations.py`` has already turned ``is_metal`` (plus any
@@ -320,8 +321,8 @@ def band_floors(
     order QE 7.3 ``PW/src/setup.f90:349-356`` checks them: ``NINT(nelec/2)``,
     ``NINT(nelup)`` and ``NINT(neldw)``, then ``NINT(nelec)`` for a
     noncollinear run, with the spin inputs ``nbnd`` sizes from. pw.x
-    applies them to a given ``nbnd``; its default never falls below
-    them."""
+    applies them to a given ``nbnd`` in a run with its own SCF loop; its
+    default never falls below them."""
     spin_mode, tot_magnetization, _ = _spin_inputs(occupations, magnetic)
     nelup, neldw = _spin_channels(nelec, tot_magnetization)
     floors = (

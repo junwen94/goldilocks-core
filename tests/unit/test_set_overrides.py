@@ -552,6 +552,54 @@ class TestTaskRouting:
             "it applies to steps scf, relax, vc-relax"
         )
 
+    def test_a_flat_k_path_distance_lands_on_the_bands_step_only(self) -> None:
+        overrides = build_overrides({"k_path_distance": 0.02}, task="band")
+
+        assert set(overrides.steps) == {"bands"}
+        assert overrides.steps["bands"].k_path.k_path.k_path_distance == 0.02
+        assert overrides.warnings == ()
+
+    def test_band_task_mesh_and_occupations_keys_reach_its_scf_step_only(
+        self,
+    ) -> None:
+        """#118: the bands step runs its band path with the scf step's
+        occupations, so these land on the scf step, with no notice."""
+        overrides = build_overrides(
+            {"k_grid": [6, 6, 6], "occupations": "smearing", "degauss": 0.02},
+            task="band",
+        )
+
+        assert set(overrides.steps) == {"scf"}
+        kpoints = overrides.steps["scf"].kpoints
+        assert kpoints.k_sampling.k_grid == (6, 6, 6)
+        assert (kpoints.occupations.occupations, kpoints.occupations.degauss) == (
+            "smearing",
+            0.02,
+        )
+        assert overrides.warnings == ()
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [("nbnd", 40), ("extra_bands", 4), ("conv_thr", 1e-9), ("npool", 2)],
+    )
+    def test_band_task_band_and_solver_keys_reach_both_pw_x_steps(
+        self, key: str, value: object
+    ) -> None:
+        overrides = build_overrides({key: value}, task="band")
+
+        assert set(overrides.steps) == {"scf", "bands"}
+        assert [warning.message for warning in overrides.warnings] == [
+            f"{key} was given without a step, so it applies to the scf and bands "
+            f"steps; set steps.<step>.{key} to set one step only."
+        ]
+
+    def test_steps_bands_nbnd_lands_on_the_bands_step_only(self) -> None:
+        overrides = build_overrides({"steps.bands.nbnd": 40}, task="band")
+
+        assert set(overrides.steps) == {"bands"}
+        assert overrides.steps["bands"].kpoints.nbnd.nbnd == 40
+        assert overrides.warnings == ()
+
     def test_system_and_job_keys_are_task_level_and_raise_no_notice(self) -> None:
         overrides = build_overrides(
             {"functional": "PBE", "walltime_h": 4, "is_metal": "non_metal"},
@@ -623,11 +671,62 @@ class TestTaskRouting:
                 id="scf-step-on-relax",
             ),
             pytest.param(
+                {"steps.no_such_step.k_grid": [4, 4, 4]},
+                "dos",
+                "unknown step 'no_such_step' in 'steps.no_such_step.k_grid'; "
+                "task 'dos' has steps: scf, nscf, dos",
+                id="unknown-step",
+            ),
+            pytest.param(
                 {"steps.bands.k_grid": [4, 4, 4]},
                 "dos",
                 "unknown step 'bands' in 'steps.bands.k_grid'; "
                 "task 'dos' has steps: scf, nscf, dos",
-                id="unknown-step",
+                id="bands-step-on-dos",
+            ),
+            pytest.param(
+                {"k_path_distance": 0.02},
+                "scf_single_point",
+                "'k_path_distance' does not apply to task 'scf_single_point'; "
+                "it applies to task band",
+                id="k-path-distance-on-scf",
+            ),
+            pytest.param(
+                {"steps.bands.k_grid": [4, 4, 4]},
+                "band",
+                "'k_grid' does not apply to step 'bands' (in 'steps.bands.k_grid'); "
+                "it applies to steps scf, nscf, relax, vc-relax",
+                id="k-grid-on-the-bands-step",
+            ),
+            pytest.param(
+                {"steps.bands.occupations": "smearing"},
+                "band",
+                "'occupations' does not apply to step 'bands' "
+                "(in 'steps.bands.occupations'); "
+                "it applies to steps scf, nscf, relax, vc-relax",
+                id="occupations-on-the-bands-step",
+            ),
+            pytest.param(
+                {"steps.bands.mixing_beta": 0.3},
+                "band",
+                "'mixing_beta' does not apply to step 'bands' "
+                "(in 'steps.bands.mixing_beta'); "
+                "it applies to steps scf, relax, vc-relax",
+                id="scf-loop-key-on-the-bands-step",
+            ),
+            pytest.param(
+                {"steps.bands_x.nbnd": 40},
+                "band",
+                "'nbnd' does not apply to step 'bands_x' (in 'steps.bands_x.nbnd'); "
+                "it applies to steps scf, nscf, bands, relax, vc-relax",
+                id="pw-key-on-the-bands-x-step",
+            ),
+            pytest.param(
+                {"steps.scf.k_path_distance": 0.02},
+                "band",
+                "'k_path_distance' does not apply to step 'scf' "
+                "(in 'steps.scf.k_path_distance'); it applies to step bands",
+                id="k-path-distance-on-the-scf-step",
             ),
             pytest.param(
                 {"steps.nscf.walltime_h": 4},
@@ -713,7 +812,7 @@ class TestTaskRouting:
             build_overrides({"k_grid": [4, 4, 4]}, task="scf")
 
         assert str(error.value) == (
-            "unknown task 'scf'; tasks: scf_single_point, dos, relax, vc-relax"
+            "unknown task 'scf'; tasks: scf_single_point, dos, band, relax, vc-relax"
         )
 
     def test_flat_walltime_on_dos_adds_no_notice(self) -> None:

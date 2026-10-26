@@ -81,9 +81,13 @@ is now where that decision belongs.
    a human ``nbnd`` or a human or llm ``extra_bands``: ``nbnd=2`` on 8
    electrons, or 96 bands for LiFePO4 with ``tot_magnetization=16``, whose
    spin-up channel holds 104 electrons, used to pass and stop pw.x after
-   the job had queued. pw.x checks only scf-like runs, but an nscf step
-   needs every occupied band too, to place the Fermi level, so this
-   applies to every purpose.
+   the job had queued. pw.x checks only runs with their own SCF loop
+   (``lscf``, ``setup.f90:349-358``), but an nscf step needs every occupied
+   band too, to place the Fermi level, and a bands step to plot them, so
+   this applies to every purpose; the message says pw.x stops only where it
+   does. Its ``cause`` leaves the step out, so one count that a dos or band
+   task's scf and later step both take, from one ``nbnd``, is one finding,
+   in the scf step's words.
 
 5. A user ``ndiag`` whose s x s diagonalization grid cannot distribute
    ``nbnd`` bands (#133), s = isqrt(min(ndiag, ntasks/npool)): pw.x
@@ -106,6 +110,25 @@ is now where that decision belongs.
    '2Dshape' are left to the 2D-frame rule, since they act on a and b in
    the plane they span once that plane is xy, however it got there.
 
+7. A ``tot_magnetization`` on a collinear spin-polarized band task's bands
+   step (#118). Any ``tot_magnetization`` gives pw.x two Fermi energies
+   (QE 7.3 ``PW/src/input.f90:758``), which the scf writes to its save and
+   the bands step reads from it whatever its own input says
+   (``PW/src/setup.f90:178-201``); bands.x then stops with 'The bands code
+   with constrained magnetization has not been tested'
+   (``PP/src/bands.f90:114-116``), after both pw.x steps have run. The band
+   task's scf derives no compensated moment (``BAND_SCF_PROTOCOL``,
+   ``service/_step_protocol.py``), so this refuses a requested one, checked
+   on the bands step's occupations, which carry the scf's moment. A
+   noncollinear run takes no ``tot_magnetization``.
+
+8. A band path with more k-point/spin pairs than pw.x holds, on the bands
+   step that runs every point of it: npk = 40000 (QE 7.3
+   ``Modules/parameters.f90:16``), counted after a collinear run doubles the
+   list (``PW/src/set_kup_and_kdw.f90:35``, ``setup.f90:640``). The default
+   ``k_path_distance`` never comes near it; only a distance near its lower
+   bound on a cell with lattice vectors shorter than about 1.4 Angstrom can.
+
 **Findings, not prose (#151).** Every refusal is a ``Finding``: a code
 from ``FINDING_CATALOGUE``, the setting keys it concerns (``fields``, as
 ``capabilities()`` names them), a user-facing ``message`` and its
@@ -117,8 +140,8 @@ which it would relax too). A value only the user can choose (a
 ``tot_magnetization``) is named in the message, never guessed in a remedy.
 A ``Blocked`` chain reaches the gate as ``advice.blocked`` with its root
 cause and no remedy: a refusal that needs one must be a named rule here.
-``CheckReport`` keeps one finding per root cause, however many fields share
-it.
+``CheckReport`` keeps one finding per root cause, however many fields or
+steps share it.
 
 **Everything else in the design doc's "constraint check table"** is
 not a rule here. Memory overflow is a warning, not a block
@@ -135,7 +158,7 @@ today, not to enumerate every rule up front.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from pymatgen.core import Structure
 
@@ -181,12 +204,16 @@ class Finding:
     the ``capabilities()`` setting keys it concerns; ``message`` is the text
     a user reads, with the occurrence's values filled in; each of
     ``remedies`` is a complete override patch that resolves it, a ``None``
-    value clearing that override."""
+    value clearing that override. ``cause`` states the occurrence's root
+    cause where ``message`` words it for one step of a task (rule 4), so
+    that ``CheckReport`` keeps it once; it is neither compared nor
+    published."""
 
     code: str
     message: str
     fields: tuple[str, ...] = ()
     remedies: tuple[dict[str, object], ...] = ()
+    cause: str | None = field(default=None, compare=False)
 
     def to_document(self) -> dict[str, object]:
         """The JSON every transport returns for this finding."""
@@ -200,6 +227,8 @@ class Finding:
 
 _SMEARING = {"occupations": "smearing"}
 _PERIODIC = {"isolation": "periodic"}
+_PW_X_MAX_KPOINTS = 40000
+"""pw.x's npk, the most k-points it holds (rule 8 of the module docstring)."""
 _MOMENT_FIELDS = ("occupations", "tot_magnetization")
 
 _BLOCKED = Finding(
@@ -247,12 +276,26 @@ _ODD_ELECTRON_COUNT = Finding(
 )
 _TOO_FEW_BANDS = Finding(
     code="nbnd.too_few_bands",
-    message=(
-        "nbnd is below the band count pw.x needs for the electrons of each spin "
-        "channel."
-    ),
+    message="nbnd is below the bands the electrons of each spin channel fill.",
     fields=("nbnd", "extra_bands"),
     remedies=({"nbnd": None, "extra_bands": None},),
+)
+_BANDS_X_TOT_MAGNETIZATION = Finding(
+    code="occupations.bands_x_refuses_tot_magnetization",
+    message=(
+        "A band task cannot pin tot_magnetization on a collinear spin-polarized "
+        "run: bands.x stops on the two Fermi energies it gives."
+    ),
+    fields=_MOMENT_FIELDS,
+    remedies=({**_SMEARING, "tot_magnetization": None},),
+)
+"""Both keys: clearing the moment alone would leave an explicit
+occupations=fixed with no moment to pin."""
+_TOO_MANY_KPOINTS = Finding(
+    code="k_path.too_many_kpoints",
+    message="The band path holds more k-points than pw.x accepts.",
+    fields=("k_path_distance",),
+    remedies=({"k_path_distance": None},),
 )
 _NPOOL = Finding(
     code="parallelisation.npool_does_not_divide_ntasks",
@@ -360,6 +403,8 @@ FINDING_CATALOGUE = (
     _TOT_MAGNETIZATION_PARITY,
     _ODD_ELECTRON_COUNT,
     _TOO_FEW_BANDS,
+    _BANDS_X_TOT_MAGNETIZATION,
+    _TOO_MANY_KPOINTS,
     _VC_RELAX_ION_DYNAMICS,
     _ISOLATED_WITHOUT_VACUUM,
     _SLAB_UNSUITED,
@@ -381,15 +426,18 @@ message, less any remedy that would not hold for it (module docstring)."""
 @dataclass(frozen=True, slots=True)
 class CheckReport:
     """The gate's verdict: ``blocking`` holds one finding per root cause, in
-    first-seen order; findings with the same code and message are kept once,
-    since many blocked fields can share one upstream cause."""
+    first-seen order. Findings with the same code and cause -- the
+    ``cause`` a finding states, else its message -- are kept once: many
+    blocked fields can share one upstream cause, and one band count that
+    two pw.x steps of a task take falls below the same floors in each."""
 
     blocking: tuple[Finding, ...] = ()
 
     def __post_init__(self) -> None:
         unique: dict[tuple[str, str], Finding] = {}
         for finding in self.blocking:
-            unique.setdefault((finding.code, finding.message), finding)
+            cause = finding.message if finding.cause is None else finding.cause
+            unique.setdefault((finding.code, cause), finding)
         object.__setattr__(self, "blocking", tuple(unique.values()))
 
     @property
@@ -465,7 +513,11 @@ def check_all(
         _fixed_occupations_needs_even_electron_count(
             occupations, magnetic, electron_count, purpose
         ),
-        _nbnd_holds_every_electron(nbnd, occupations, magnetic, electron_count),
+        _nbnd_holds_every_electron(
+            nbnd, occupations, magnetic, electron_count, purpose
+        ),
+        _bands_x_refuses_tot_magnetization(occupations, magnetic, purpose),
+        _band_path_within_pw_x_k_points(parallel, purpose),
         _vc_relax_requires_bfgs_ion_dynamics(relax, purpose),
         _isolation_matches_written_cell(boundary, magnetic),
         _vc_relax_forbids_isolated_boundary(boundary, purpose),
@@ -578,9 +630,12 @@ def _nbnd_holds_every_electron(
     occupations: FieldState[OccupationsDecision] | None,
     magnetic: FieldState[MagneticConfigFacts] | None,
     electron_count: FieldState[ElectronCountDecision] | None,
+    purpose: str,
 ) -> Finding | None:
     """Rule 4 of this module's docstring: the first of pw.x's band floors
-    ``nbnd`` falls below, with the fewest bands that pass them all."""
+    ``nbnd`` falls below, with the fewest bands that pass them all, worded
+    for a step of ``purpose``: pw.x itself stops only in a run with its own
+    SCF loop. The finding's ``cause`` is the same for every purpose."""
     if (
         nbnd is None
         or occupations is None
@@ -596,13 +651,69 @@ def _nbnd_holds_every_electron(
     if not short:
         return None
     floor = short[0]
+    least = max(each.bands for each in floors)
+    cannot_hold = f"nbnd={bands} cannot hold {floor.electrons:.10g} {floor.held}"
+    if purpose in SCF_LIKE_PURPOSES:
+        consequence = f"{cannot_hold}: pw.x stops in setup with '{floor.error}'."
+    else:
+        consequence = (
+            f"{cannot_hold}, so this {purpose} step would leave occupied bands "
+            "out; pw.x checks the band count only in a run with its own SCF loop."
+        )
     return replace(
         _TOO_FEW_BANDS,
         message=(
-            f"nbnd={bands} cannot hold {floor.electrons:.10g} {floor.held}: pw.x "
-            f"stops in setup with '{floor.error}'. Unset nbnd and extra_bands for "
-            f"the default, or set nbnd to at least "
-            f"{max(each.bands for each in floors)}."
+            f"{consequence} Unset nbnd and extra_bands for the default, or set "
+            f"nbnd to at least {least}."
+        ),
+        cause=f"{cannot_hold}; at least {least} bands hold them all",
+    )
+
+
+def _bands_x_refuses_tot_magnetization(
+    occupations: FieldState[OccupationsDecision] | None,
+    magnetic: FieldState[MagneticConfigFacts] | None,
+    purpose: str,
+) -> Finding | None:
+    """Rule 7 of this module's docstring."""
+    if purpose != "bands" or occupations is None or magnetic is None:
+        return None
+    if not (occupations.ok and magnetic.ok):
+        return None  # already surfaced via collect_blocked, or genuinely unknown
+    tot = occupations.value.tot_magnetization
+    if magnetic.value.spin_mode != "collinear" or tot is None:
+        return None
+    return replace(
+        _BANDS_X_TOT_MAGNETIZATION,
+        message=(
+            f"A band task cannot pin tot_magnetization={tot:.10g} on a collinear "
+            "spin-polarized run: it gives the scf two Fermi energies, which the "
+            "bands step inherits and bands.x stops on ('The bands code with "
+            "constrained magnetization has not been tested') once both pw.x "
+            "steps have run. Set occupations=smearing and unset "
+            "tot_magnetization."
+        ),
+    )
+
+
+def _band_path_within_pw_x_k_points(
+    parallel: FieldState[ParallelisationDecision] | None, purpose: str
+) -> Finding | None:
+    """Rule 8 of this module's docstring: the bands step's k-point/spin
+    pairs are every point of its path, per spin channel of a collinear
+    run."""
+    if purpose != "bands" or parallel is None or not parallel.ok:
+        return None
+    pairs = parallel.value.kpoint_spin_pairs
+    if pairs <= _PW_X_MAX_KPOINTS:
+        return None
+    return replace(
+        _TOO_MANY_KPOINTS,
+        message=(
+            f"The band path gives the bands step {pairs} k-point/spin pairs, more "
+            f"than the {_PW_X_MAX_KPOINTS} pw.x accepts: it stops in setup with "
+            "'too many k points'. Unset k_path_distance for the default, or set a "
+            "larger one."
         ),
     )
 

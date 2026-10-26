@@ -34,7 +34,7 @@ from goldilocks_core.types import CalcTask
 SCF_LIKE_PURPOSES = frozenset({"scf", "relax", "vc-relax"})
 """``PlannedStep.purpose``s whose ``pw.x`` run has its own SCF loop:
 ``relax``/``vc-relax`` re-run it at every ionic step, while ``nscf``
-reads an already-converged density. ``checks.py`` scopes its
+and ``bands`` read an already-converged density. ``checks.py`` scopes its
 fixed-occupations rules to these, and ``advisors/size.py`` counts
 several passes over their k-points in a step's workload."""
 
@@ -47,10 +47,12 @@ class PlannedStep:
     like ``dos`` has steps with purposes (``"scf"``, ``"nscf"``) that are
     not tasks in their own right, only ever ingredients of one. ``relax``/
     ``vc-relax`` (v2 epic 10, #10) *are* both a task and their own single
-    step's purpose -- one ``pw.x`` run does the whole task."""
+    step's purpose -- one ``pw.x`` run does the whole task. A ``bands``
+    step is ``pw.x`` with ``calculation='bands'`` and ``bands_x`` the
+    ``bands.x`` run after it (#118)."""
 
-    purpose: Literal["scf", "nscf", "dos", "relax", "vc-relax"]
-    program: Literal["pw.x", "dos.x"]
+    purpose: Literal["scf", "nscf", "dos", "bands", "bands_x", "relax", "vc-relax"]
+    program: Literal["pw.x", "dos.x", "bands.x"]
 
 
 _TASK_STEPS: Mapping[CalcTask, tuple[PlannedStep, ...]] = {
@@ -59,6 +61,11 @@ _TASK_STEPS: Mapping[CalcTask, tuple[PlannedStep, ...]] = {
         PlannedStep(purpose="scf", program="pw.x"),
         PlannedStep(purpose="nscf", program="pw.x"),
         PlannedStep(purpose="dos", program="dos.x"),
+    ),
+    "band": (
+        PlannedStep(purpose="scf", program="pw.x"),
+        PlannedStep(purpose="bands", program="pw.x"),
+        PlannedStep(purpose="bands_x", program="bands.x"),
     ),
     "relax": (PlannedStep(purpose="relax", program="pw.x"),),
     "vc-relax": (PlannedStep(purpose="vc-relax", program="pw.x"),),

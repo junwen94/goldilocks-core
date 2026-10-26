@@ -9,10 +9,11 @@ PathLike = str | Path
 
 CodeName = str
 
-CalcTask = Literal["scf_single_point", "dos", "relax", "vc-relax"]
+CalcTask = Literal["scf_single_point", "dos", "band", "relax", "vc-relax"]
 """``dos`` added v2 epic 9, #9. ``relax``/``vc-relax`` added v2 epic 10,
 #10 -- both single-step (one ``pw.x`` run with ``calculation`` set
-accordingly), unlike ``dos``'s three-step scf/nscf/dos.x sequence."""
+accordingly), unlike ``dos``'s three-step scf/nscf/dos.x sequence.
+``band`` added #118: scf, pw.x along the band path, then bands.x."""
 
 SmearingType = Literal["gaussian", "mp", "cold", "fd"]
 """QE's short names for its four smearing functions: Gaussian,

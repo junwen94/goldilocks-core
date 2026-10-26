@@ -105,6 +105,7 @@ def _framed(structure: Structure) -> Resolved[object]:
 _IRON = Structure(Lattice.cubic(2.87), ["Fe", "Fe"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]])
 _PURPOSE_SCF = {"purpose": "scf"}
 _VC_RELAX = {"purpose": "vc-relax"}
+_BANDS = {"purpose": "bands"}
 
 _TRIGGERS = {
     "advice.blocked": lambda: check_all(
@@ -133,6 +134,16 @@ _TRIGGERS = {
         magnetic=written_cell(_IRON),
         electron_count=_electrons(8.0),
         nbnd=_resolved(NbndDecision(nbnd=2)),
+        **_BANDS,
+    ),
+    "occupations.bands_x_refuses_tot_magnetization": lambda: check_all(
+        occupations=_fixed(2.0), magnetic=_spin_polarized(_IRON), **_BANDS
+    ),
+    "k_path.too_many_kpoints": lambda: check_all(
+        parallel=_resolved(
+            ParallelisationDecision(npool=1, ndiag=None, kpoint_spin_pairs=40001)
+        ),
+        **_BANDS,
     ),
     "relax.vc_relax_needs_bfgs": lambda: check_all(
         relax=_resolved(VcRelaxOptions(ion_dynamics="damp")), **_VC_RELAX

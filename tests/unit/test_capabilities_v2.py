@@ -24,6 +24,7 @@ from goldilocks_core.service import (
     AnalysisFacts,
     DosOverrides,
     JobOverrides,
+    KPathOverrides,
     KpointsOverrides,
     RelaxOverrides,
     ResourceOverrides,
@@ -32,7 +33,7 @@ from goldilocks_core.service import (
 )
 from goldilocks_core.set_overrides import build_overrides
 
-_ALL_TASKS = ["scf_single_point", "dos", "relax", "vc-relax"]
+_ALL_TASKS = ["scf_single_point", "dos", "band", "relax", "vc-relax"]
 
 
 def _install_every_model(monkeypatch, root) -> None:
@@ -91,6 +92,7 @@ def _expected_setting_field_count() -> int:
         ResourceOverrides,
         RelaxOverrides,
         DosOverrides,
+        KPathOverrides,
     ):
         hints = typing.get_type_hints(cls)
         for name, annotation in hints.items():
@@ -246,21 +248,27 @@ class TestTopLevelShape:
         """v2 epic 9 (#9, #28): ``dos`` joined ``scf_single_point`` once
         the delivery layers actually routed it, not before -- this list
         names every task a caller can request today, no more, no less.
-        ``relax``/``vc-relax`` joined the same way in v2 epic 10 (#10)."""
+        ``relax``/``vc-relax`` joined the same way in v2 epic 10 (#10), and
+        ``band`` with its scf, pw.x bands and bands.x steps (#118)."""
         caps = capabilities()
         assert caps["codes"] == [
             {
                 "id": "quantum_espresso",
                 "name": "Quantum ESPRESSO",
-                "tasks": ["scf_single_point", "dos", "relax", "vc-relax"],
+                "tasks": ["scf_single_point", "dos", "band", "relax", "vc-relax"],
             }
         ]
-        assert len(caps["tasks"]) == 4
+        assert [task["id"] for task in caps["tasks"]] == _ALL_TASKS
         by_id = {task["id"]: task for task in caps["tasks"]}
         assert by_id["scf_single_point"]["executables"] == ["pw.x"]
         assert by_id["scf_single_point"]["step_count"] == 1
         assert by_id["dos"]["executables"] == ["pw.x", "pw.x", "dos.x"]
         assert by_id["dos"]["step_count"] == 3
+        assert by_id["band"]["name"] == "Band structure"
+        assert by_id["band"]["executables"] == ["pw.x", "pw.x", "bands.x"]
+        assert by_id["band"]["step_count"] == 3
+        for default in ("k_path_distance 0.025", "bands.yaml"):
+            assert default in by_id["band"]["description"], default
         assert by_id["relax"]["executables"] == ["pw.x"]
         assert by_id["relax"]["step_count"] == 1
         assert by_id["vc-relax"]["executables"] == ["pw.x"]
@@ -407,10 +415,60 @@ class TestSettingApplicability:
     def test_pw_x_step_settings_apply_to_every_pw_x_step(self) -> None:
         settings = self._settings()
 
-        for key in ("k_grid", "occupations", "nbnd", "conv_thr", "npool", "ndiag"):
-            assert settings[key]["steps"] == ["scf", "nscf", "relax", "vc-relax"]
-            assert settings[key]["tasks"] == _ALL_TASKS
-            assert settings[key]["programs"] == ["pw.x"]
+        for key in ("nbnd", "extra_bands", "conv_thr", "npool", "ndiag"):
+            assert settings[key]["steps"] == [
+                "scf",
+                "nscf",
+                "bands",
+                "relax",
+                "vc-relax",
+            ], key
+            assert settings[key]["tasks"] == _ALL_TASKS, key
+            assert settings[key]["programs"] == ["pw.x"], key
+
+    def test_mesh_and_occupations_settings_skip_the_bands_step(self) -> None:
+        """#118: a bands step runs its band path with the scf step's
+        occupations, so a plain k_grid or occupations on a band task sets its
+        scf step only."""
+        settings = self._settings()
+
+        mesh = (
+            "occupations",
+            "smearing_type",
+            "degauss",
+            "k_grid",
+            "k_index",
+            "k_distance",
+            "shift",
+            "nosym",
+        )
+        for key in mesh:
+            assert settings[key]["steps"] == ["scf", "nscf", "relax", "vc-relax"], key
+            assert settings[key]["tasks"] == _ALL_TASKS, key
+            assert settings[key]["programs"] == ["pw.x"], key
+
+    def test_the_path_spacing_is_published_on_the_bands_step(self) -> None:
+        k_path_distance = self._settings()["k_path_distance"]
+
+        assert (k_path_distance["group"], k_path_distance["scope"]) == (
+            "k_path",
+            "per_step",
+        )
+        assert (k_path_distance["steps"], k_path_distance["tasks"]) == (
+            ["bands"],
+            ["band"],
+        )
+        assert k_path_distance["programs"] == ["pw.x"]
+        assert (k_path_distance["type"], k_path_distance["unit"]) == (
+            "number",
+            "1/Angstrom",
+        )
+        assert k_path_distance["structure_specific"] is False
+        assert k_path_distance["resolved_in"] == {
+            "record": "bands_k_path",
+            "path": ["k_path_distance"],
+        }
+        assert "2 pi included" in k_path_distance["description"]
 
     def test_scf_loop_settings_skip_the_nscf_step(self) -> None:
         """An nscf step runs no SCF loop (QE 7.3 calls non_scf and sets

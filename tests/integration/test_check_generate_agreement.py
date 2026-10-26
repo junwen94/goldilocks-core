@@ -36,17 +36,7 @@ from support import sssp_fixture_table_spec
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.inputs.hpc import Hardware, HpcProfile, Partition
-from goldilocks_core.service import (
-    advise,
-    advise_dos,
-    advise_relax,
-    check,
-    check_dos,
-    check_relax,
-    generate,
-    generate_dos,
-    generate_relax,
-)
+from goldilocks_core.service import TASK_PHASES, advise, check
 from goldilocks_core.set_overrides import build_overrides
 
 _Z_VALENCES = {
@@ -250,23 +240,19 @@ def store(tmp_path, monkeypatch) -> AssetStore:
 
 
 def _generate(task: str, scenario: _Scenario, store: AssetStore):
-    structure = scenario.structure()
-    overrides = build_overrides(
-        scenario.overrides, task="scf_single_point" if task == "scf" else task
+    """``task``'s advice for ``scenario`` and the steps its row of
+    ``TASK_PHASES`` renders, after asserting the check passes."""
+    task = "scf_single_point" if task == "scf" else task
+    phases = TASK_PHASES[task]
+    advice = phases.advise(
+        scenario.structure(),
+        hpc=_hpc(),
+        overrides=build_overrides(scenario.overrides, task=task),
+        store=store,
     )
-    if task == "scf":
-        advice = advise(structure, hpc=_hpc(), overrides=overrides, store=store)
-        report, render = check(advice), generate
-    elif task == "dos":
-        advice = advise_dos(structure, hpc=_hpc(), overrides=overrides, store=store)
-        report, render = check_dos(advice), generate_dos
-    else:
-        advice = advise_relax(
-            structure, calculation=task, hpc=_hpc(), overrides=overrides, store=store
-        )
-        report, render = check_relax(advice), generate_relax
+    report = phases.check(advice)
     assert report.ok, [finding.message for finding in report.blocking]
-    return advice, render(advice, report)
+    return advice, phases.generate(advice, report)
 
 
 def _hubbard_lines(content: str) -> tuple[str, ...]:
@@ -282,7 +268,7 @@ def _hubbard_lines(content: str) -> tuple[str, ...]:
 
 _CASES = [pytest.param("scf", name, id=f"scf-{name}") for name in _SCENARIOS] + [
     pytest.param(task, name, id=f"{task}-{name}")
-    for task in ("relax", "vc-relax", "dos")
+    for task in ("relax", "vc-relax", "dos", "band")
     for name in _MULTI_TASK_SCENARIOS
 ]
 

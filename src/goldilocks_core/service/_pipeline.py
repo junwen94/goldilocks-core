@@ -19,7 +19,8 @@ another in one allocation, so the job is sized over all of them and
 splits the walltime between them. It returns one ``Advice`` per step,
 all sharing the same analysis, system and job. ``advise()`` is its
 one-scf-step case; ``service/_dos.py`` (scf + nscf, the nscf with the dos
-protocol, ``_step_protocol.py``) and
+protocol, ``_step_protocol.py``), ``service/_band.py`` (scf + bands, each
+with the band task's protocol) and
 ``service/_relax.py`` (one relax/vc-relax step) call it directly. A
 ``bands`` step (pw.x ``calculation='bands'``, #118) is advised along the
 written cell's band path with the occupations of an scf step before it
@@ -140,7 +141,8 @@ def check(
     density/spin and does not re-derive this constraint. Every existing
     caller is an scf step and keeps the previous default unchanged;
     ``service/_dos.py``'s nscf pass is the first caller to pass
-    ``purpose="nscf"``.
+    ``purpose="nscf"``. ``service/_band.py``'s bands pass passes
+    ``purpose="bands"``, the purpose of ``checks.py``'s band-task rules.
 
     ``relax`` (v2 epic 10, #10): only ever passed by ``service/_relax.py``,
     which does not have a plain ``Advice`` field to fold it into --

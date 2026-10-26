@@ -50,6 +50,8 @@ module into one file. Split by pipeline phase instead, matching
 - ``_bundle.py`` -- submission-script rendering + bundle assembly
 - ``_dos.py`` -- ``dos`` task multi-step path (epic 9): ``advise_steps``
   for its scf and nscf steps, rather than a fourth phase of its own
+- ``_band.py`` -- ``band`` task path (#118): ``advise_steps`` for its scf
+  and pw.x bands steps, then ``bands.x``
 - ``_relax.py`` -- ``relax``/``vc-relax`` task path (epic 10):
   ``advise_steps`` for its one step (single-step tasks, unlike ``dos``)
 - ``_tasks.py`` -- ``TASK_PHASES``, each task's ``advise``/``check``/
@@ -79,6 +81,14 @@ from goldilocks_core.service._advice import (
     StepLayout,
 )
 from goldilocks_core.service._analysis import AnalysisFacts, AnalysisOverrides
+from goldilocks_core.service._band import (
+    BandAdvice,
+    advise_band,
+    check_band,
+    generate_band,
+    render_submission_band,
+    to_bundle_input_band,
+)
 from goldilocks_core.service._bundle import render_submission, to_bundle_input
 from goldilocks_core.service._dos import (
     DosAdvice,
@@ -131,6 +141,7 @@ __all__ = [
     "AdviceIncomplete",
     "AnalysisFacts",
     "AnalysisOverrides",
+    "BandAdvice",
     "DosAdvice",
     "DosOverrides",
     "ElectronicStepAdvice",
@@ -155,21 +166,26 @@ __all__ = [
     "SystemOverrides",
     "TaskPhases",
     "advise",
+    "advise_band",
     "advise_dos",
     "advise_relax",
     "applies_to_multiple_steps",
     "check",
+    "check_band",
     "check_dos",
     "check_relax",
     "generate",
+    "generate_band",
     "generate_dos",
     "generate_relax",
     "list_magnetic_orderings",
     "render_submission",
+    "render_submission_band",
     "render_submission_dos",
     "render_submission_relax",
     "report_to_json",
     "to_bundle_input",
+    "to_bundle_input_band",
     "to_bundle_input_dos",
     "to_bundle_input_relax",
 ]

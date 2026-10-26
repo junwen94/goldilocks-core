@@ -24,6 +24,18 @@ def test_dos_expands_to_scf_then_nscf_then_dos_in_order() -> None:
     )
 
 
+def test_band_expands_to_scf_then_bands_then_bands_x_in_order() -> None:
+    """#118: pw.x's bands run reads the scf's save, and bands.x the bands
+    run's."""
+    steps = expand_task("band")
+
+    assert steps == (
+        PlannedStep(purpose="scf", program="pw.x"),
+        PlannedStep(purpose="bands", program="pw.x"),
+        PlannedStep(purpose="bands_x", program="bands.x"),
+    )
+
+
 def test_relax_expands_to_exactly_one_step() -> None:
     steps = expand_task("relax")
 

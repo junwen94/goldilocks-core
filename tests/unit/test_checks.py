@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+from typing import get_args
 
 import pytest
 from pymatgen.core import Lattice, Structure
@@ -32,7 +33,7 @@ from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.parallelisation import ParallelisationDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.advisors.vdw_method import VdwFacts
-from goldilocks_core.capabilities import capabilities
+from goldilocks_core.capabilities import bindings, capabilities
 from goldilocks_core.checks import (
     FINDING_CATALOGUE,
     CheckReport,
@@ -43,6 +44,7 @@ from goldilocks_core.checks import (
 from goldilocks_core.pw_symmetry import pw_frame
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
 from goldilocks_core.set_overrides import build_overrides
+from goldilocks_core.types import CalcTask
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
 
@@ -1420,14 +1422,53 @@ def test_a_noncollinear_run_needs_a_band_per_electron() -> None:
     assert passed.ok
 
 
-@pytest.mark.parametrize("purpose", ["scf", "relax", "vc-relax", "nscf"])
-def test_the_band_rule_holds_for_every_purpose(purpose: str) -> None:
-    """An nscf step needs every occupied band too, to place the Fermi
-    level."""
+@pytest.mark.parametrize("purpose", ["scf", "relax", "vc-relax"])
+def test_the_band_rule_names_pw_x_s_stop_on_a_step_with_an_scf_loop(
+    purpose: str,
+) -> None:
     report = _band_check(2, 8.0, purpose=purpose)
 
     assert _only(report).code == "nbnd.too_few_bands"
-    assert "'too few bands'" in _only(report).message
+    assert "pw.x stops in setup with 'too few bands'" in _only(report).message
+
+
+@pytest.mark.parametrize("purpose", ["nscf", "bands"])
+def test_the_band_rule_holds_without_an_scf_loop_where_pw_x_does_not_stop(
+    purpose: str,
+) -> None:
+    """An nscf step needs every occupied band too, to place the Fermi level,
+    and a bands step to plot them, but pw.x checks the count only with lscf
+    (QE 7.3 PW/src/setup.f90:349-358): the message used to say it stops."""
+    report = _band_check(2, 8.0, purpose=purpose)
+
+    assert report.blocking == (
+        Finding(
+            code="nbnd.too_few_bands",
+            message=(
+                "nbnd=2 cannot hold 8 electrons, two per band, so this "
+                f"{purpose} step would leave occupied bands out; pw.x checks the "
+                "band count only in a run with its own SCF loop. Unset nbnd and "
+                "extra_bands for the default, or set nbnd to at least 4."
+            ),
+            fields=("nbnd", "extra_bands"),
+            remedies=({"nbnd": None, "extra_bands": None},),
+        ),
+    )
+
+
+def test_one_band_count_on_two_steps_is_one_finding_in_the_scf_step_s_words() -> None:
+    """A flat nbnd sets a dos or band task's scf and later pw.x step alike:
+    one count below the same floors, worded for each step, came back as two
+    findings. The task's report keeps the scf step's, which names pw.x's
+    stop; another count on the later step is a cause of its own."""
+    scf = _band_check(2, 8.0, purpose="scf")
+    same = _band_check(2, 8.0, purpose="bands")
+    other = _band_check(3, 8.0, purpose="nscf")
+
+    assert CheckReport(blocking=scf.blocking + same.blocking) == scf
+    assert CheckReport(blocking=scf.blocking + other.blocking).blocking == (
+        scf.blocking + other.blocking
+    )
 
 
 def test_a_blocked_nbnd_is_reported_once() -> None:
@@ -1446,6 +1487,92 @@ def test_the_band_rule_needs_occupations_and_the_electron_count() -> None:
     assert check_all(nbnd=_bands(2), occupations=_FIXED).ok
 
 
+# #118: any tot_magnetization gives a collinear run two Fermi energies (QE 7.3
+# PW/src/input.f90:758), which a bands step reads from the scf's save and
+# bands.x stops on (PP/src/bands.f90:114-116).
+
+
+@pytest.mark.parametrize(
+    ("occupations", "written"),
+    [(_SMEARING, "2.5"), (_fixed(2.0), "2")],
+    ids=["smearing", "fixed"],
+)
+def test_a_moment_on_a_collinear_bands_step_blocks(occupations, written) -> None:
+    report = check_all(
+        occupations=occupations, magnetic=_magnetic(True), purpose="bands"
+    )
+
+    assert report.blocking == (
+        Finding(
+            code="occupations.bands_x_refuses_tot_magnetization",
+            message=(
+                f"A band task cannot pin tot_magnetization={written} on a "
+                "collinear spin-polarized run: it gives the scf two Fermi "
+                "energies, which the bands step inherits and bands.x stops on "
+                "('The bands code with constrained magnetization has not been "
+                "tested') once both pw.x steps have run. Set occupations=smearing "
+                "and unset tot_magnetization."
+            ),
+            fields=("occupations", "tot_magnetization"),
+            remedies=({"occupations": "smearing", "tot_magnetization": None},),
+        ),
+    )
+
+
+def test_the_moment_rule_needs_a_collinear_moment_on_the_bands_step() -> None:
+    """A noncollinear run takes no tot_magnetization (input.f90:761-762), a
+    collinear one without a moment has one Fermi energy, and the scf step of
+    the same run is not where bands.x stops."""
+    unpinned = dataclasses.replace(_SMEARING.value, tot_magnetization=None)
+
+    assert check_all(
+        occupations=_SMEARING,
+        magnetic=_magnetic(True, spin_orbit_enabled=True),
+        purpose="bands",
+    ).ok
+    assert check_all(
+        occupations=Resolved(unpinned, Provenance(source="heuristic")),
+        magnetic=_magnetic(True),
+        purpose="bands",
+    ).ok
+    assert check_all(occupations=_SMEARING, magnetic=_magnetic(True), purpose="scf").ok
+
+
+def _path_pairs(kpoint_spin_pairs: int) -> Resolved[ParallelisationDecision]:
+    decision = ParallelisationDecision(
+        npool=1, ndiag=None, kpoint_spin_pairs=kpoint_spin_pairs
+    )
+    return Resolved(decision, Provenance(source="heuristic"))
+
+
+def test_a_bands_step_above_pw_x_s_k_point_limit_blocks() -> None:
+    """pw.x holds at most npk = 40000 k-points, counted after a collinear run
+    doubles its list (QE 7.3 Modules/parameters.f90:16, PW/src/setup.f90:640),
+    and a bands step runs every point of its path."""
+    report = check_all(parallel=_path_pairs(40001), purpose="bands")
+
+    assert report.blocking == (
+        Finding(
+            code="k_path.too_many_kpoints",
+            message=(
+                "The band path gives the bands step 40001 k-point/spin pairs, "
+                "more than the 40000 pw.x accepts: it stops in setup with 'too "
+                "many k points'. Unset k_path_distance for the default, or set a "
+                "larger one."
+            ),
+            fields=("k_path_distance",),
+            remedies=({"k_path_distance": None},),
+        ),
+    )
+
+
+def test_the_k_point_limit_admits_40000_and_reads_the_bands_step_only() -> None:
+    assert check_all(parallel=_path_pairs(40000), purpose="bands").ok
+    assert check_all(parallel=_path_pairs(40001), purpose="scf").ok
+    blocked = check_all(parallel=Blocked(by="job undecided"), purpose="bands")
+    assert blocked.blocking == _blocked("job undecided")
+
+
 def test_every_finding_code_is_catalogued_once() -> None:
     codes = [finding.code for finding in FINDING_CATALOGUE]
 
@@ -1456,10 +1583,17 @@ def test_every_finding_code_is_catalogued_once() -> None:
 @pytest.mark.parametrize("finding", FINDING_CATALOGUE, ids=lambda f: f.code)
 def test_every_remedy_is_an_override_the_request_accepts(finding: Finding) -> None:
     """#151: a remedy is a complete override patch; a None value clears that
-    override. Every key is a setting the vc-relax task reads (the task every
-    remedied setting applies to), and every value fits its setting."""
+    override. One task reads every key of it, and every value fits its
+    setting."""
+    catalogue = bindings()
     for remedy in finding.remedies:
-        build_overrides(remedy, task="vc-relax")
+        tasks = [
+            task
+            for task in get_args(CalcTask)
+            if all(task in catalogue[key].tasks for key in remedy)
+        ]
+        assert tasks, remedy
+        build_overrides(remedy, task=tasks[0])
 
 
 @pytest.mark.parametrize("finding", FINDING_CATALOGUE, ids=lambda f: f.code)

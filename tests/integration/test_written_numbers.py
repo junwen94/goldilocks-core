@@ -4,8 +4,8 @@
 SSSP-shaped table, so it runs in CI. The nat-scaled thresholds are the
 decimals their formulas name, in ``goldilocks.json`` and in the input alike,
 and no number in a ``pw.x`` input has more significant digits than its
-writer formats (12 in a namelist, 10 in a card), lies between 0 and 1e-10 in
-magnitude, or reads ``-0``.
+writer formats (12 in a namelist, 10 in a card, a band path's vertices
+included), lies between 0 and 1e-10 in magnitude, or reads ``-0``.
 
 On these cells ``pw_symmetry.pw_frame`` has already set every near-zero
 lattice component and coordinate to 0, so the writer's own card snap below
@@ -33,14 +33,19 @@ from goldilocks_core.bundle import DirectoryOutput, publish
 from goldilocks_core.inputs.hpc import load_hpc_profile
 from goldilocks_core.service import (
     advise,
+    advise_band,
     advise_relax,
     check,
+    check_band,
     check_relax,
     generate,
+    generate_band,
     generate_relax,
     render_submission,
+    render_submission_band,
     render_submission_relax,
     to_bundle_input,
+    to_bundle_input_band,
     to_bundle_input_relax,
 )
 from goldilocks_core.steps import default_shared_context
@@ -174,3 +179,37 @@ def test_a_dry_ice_vc_relax_bundle_writes_etot_conv_thr_as_its_decimal(
     assert records["convergence"]["value"]["etot_conv_thr"] == 0.00012
     assert records["relax"]["value"]["etot_conv_thr"] == 0.00012
     _assert_written_as_decimals(text)
+
+
+def test_a_spinel_band_bundle_writes_both_pw_x_inputs_as_decimals(
+    store, tmp_path
+) -> None:
+    """#118: bands.in is written with scf.in's helpers, its own conv_thr the
+    same nat-scaled decimal, and its K_POINTS crystal_b vertices, fractions
+    of the turned fcc cell's reciprocal vectors, are card numbers too."""
+    hpc = load_hpc_profile("scarf")
+    spinel = Structure.from_str(_MC3D_65529_SPINEL_CIF, fmt="cif")
+    advice = advise_band(spinel, hpc=hpc, store=store)
+    steps = generate_band(advice, check_band(advice))
+    script = render_submission_band(advice, hpc, "quantum_espresso", steps)
+    bundle = to_bundle_input_band(
+        advice,
+        steps,
+        script,
+        default_shared_context(),
+        code="quantum_espresso",
+        hpc=hpc,
+        assignments={},
+        source=in_memory_source(spinel),
+    )
+    publish(bundle, DirectoryOutput(tmp_path / "bundle"))
+
+    records = strict_json((tmp_path / "bundle" / "goldilocks.json").read_text())[
+        "records"
+    ]
+    assert records["bands_convergence"]["value"]["conv_thr"] == 2.8e-09
+    for name in ("scf.in", "bands.in"):
+        text = (tmp_path / "bundle" / name).read_text()
+        assert "   conv_thr         = 2.8e-09" in text.splitlines(), name
+        _assert_written_as_decimals(text)
+    assert "K_POINTS crystal_b" in (tmp_path / "bundle" / "bands.in").read_text()

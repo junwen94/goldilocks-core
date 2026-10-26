@@ -15,6 +15,13 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
+from goldilocks_core.service._band import (
+    advise_band,
+    check_band,
+    generate_band,
+    render_submission_band,
+    to_bundle_input_band,
+)
 from goldilocks_core.service._bundle import render_submission, to_bundle_input
 from goldilocks_core.service._dos import (
     advise_dos,
@@ -39,7 +46,7 @@ from goldilocks_core.types import CalcTask
 class TaskPhases:
     """One task's service functions, in the order ``run`` calls them. Every
     function after ``advise`` takes the advice that task's ``advise``
-    returns (``Advice``, ``DosAdvice`` or ``RelaxAdvice``):
+    returns (``Advice``, ``DosAdvice``, ``BandAdvice`` or ``RelaxAdvice``):
 
     - ``advise(structure, *, code, hpc, overrides, store, fetch_missing)``:
       the advice;
@@ -64,6 +71,13 @@ TASK_PHASES: Mapping[CalcTask, TaskPhases] = {
     ),
     "dos": TaskPhases(
         advise_dos, check_dos, generate_dos, render_submission_dos, to_bundle_input_dos
+    ),
+    "band": TaskPhases(
+        advise_band,
+        check_band,
+        generate_band,
+        render_submission_band,
+        to_bundle_input_band,
     ),
     "relax": TaskPhases(
         partial(advise_relax, calculation="relax"),

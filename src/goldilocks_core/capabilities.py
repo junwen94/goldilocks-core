@@ -29,9 +29,11 @@ field inside ``CutoffsHumanInput`` gets ``group="cutoffs"`` for free);
 ``SystemOverrides`` -> ``"system"``, ``JobOverrides`` -> ``"task"``, the
 step classes -> ``"per_step"``); `steps` is the step purposes a per-step
 setting applies to, by composing class (``_BRANCH_STEPS``: every pw.x step,
-relax and vc-relax, or dos), narrowed per key where ``_SETTING_META`` says
-so (vc-relax's cell keys, relax's ``etot_conv_thr``, the SCF loop's mixing
-and iteration keys, which an nscf step does not read). `tasks` and
+relax and vc-relax, dos, or a band task's bands step), narrowed per key
+where ``_SETTING_META`` says so (vc-relax's cell keys, relax's
+``etot_conv_thr``, the SCF loop's mixing and iteration keys, which an nscf
+or bands step does not read, and the occupations and k-mesh keys, which a
+bands step takes from its scf step and its band path). `tasks` and
 `programs` follow from `steps` through ``plan.expand_task``; a system or
 task setting applies to every task, once, and has no `steps` (#154).
 ``set_overrides`` routes a request with the same ``SettingBinding.steps``,
@@ -63,7 +65,8 @@ setting's own field name -- and ``_SETTING_META`` declares the
 exceptions: ``pseudo_table_id`` resolves in ``pseudo_table.id``,
 ``spin_orbit_coupling`` in ``magnetic.spin_orbit_enabled``,
 ``magnetic_ordering`` in ``magnetic.ordering.applied``, ``k_grid`` in
-``k_sampling.mesh``, and a knob no record holds a value of
+``k_sampling.mesh``, ``k_path_distance`` in the band task's ``bands_k_path``,
+and a knob no record holds a value of
 (``extra_bands``, ``nosym``, the Hubbard switches) has no path. Neither has
 a setting published under a key other than its field name, since a
 record's ``field_sources`` names settings by field name.
@@ -148,6 +151,7 @@ from goldilocks_core.service import (
     AnalysisOverrides,
     DosOverrides,
     JobOverrides,
+    KPathOverrides,
     KpointsOverrides,
     RelaxOverrides,
     ResourceOverrides,
@@ -172,6 +176,7 @@ tiers, per design point (5)."""
 _CODE = "quantum_espresso"
 _TASK = "scf_single_point"
 _DOS_TASK = "dos"
+_BAND_TASK = "band"
 _RELAX_TASK = "relax"
 _VC_RELAX_TASK = "vc-relax"
 _TASK_IDS: tuple[CalcTask, ...] = typing.get_args(CalcTask)
@@ -179,17 +184,23 @@ _TASK_IDS: tuple[CalcTask, ...] = typing.get_args(CalcTask)
 what each setting's ``tasks`` is drawn from."""
 _PROGRAM = "pw.x"
 
-_Branch = Literal["analysis", "system", "job", "kpoints", "resources", "relax", "dos"]
+_Branch = Literal[
+    "analysis", "system", "job", "kpoints", "resources", "relax", "dos", "k_path"
+]
 _Scope = Literal["system", "task", "per_step"]
 
-_PW_STEPS = ("scf", "nscf", "relax", "vc-relax")
+_PW_STEPS = ("scf", "nscf", "bands", "relax", "vc-relax")
 _RELAX_STEPS = ("relax", "vc-relax")
 _SCF_LOOP_STEPS = ("scf", "relax", "vc-relax")
-"""The pw.x steps that run an SCF loop. An nscf step diagonalizes once in
-the density the scf step wrote: QE 7.3 runs ``non_scf`` instead of
+"""The pw.x steps that run an SCF loop. An nscf or bands step diagonalizes
+once in the density the scf step wrote: QE 7.3 runs ``non_scf`` instead of
 ``electrons`` (``run_pwscf.f90``) and sets ``niter = 1`` (``setup.f90``), so
 ``mixing_beta``, ``mixing_mode``, ``mixing_fixed_ns`` and
 ``electron_maxstep`` have no effect on it."""
+_MESH_STEPS = ("scf", "nscf", "relax", "vc-relax")
+"""The pw.x steps on a k-mesh. A bands step runs the band path of its cell
+(``k_path_distance``) with the occupations of the scf step before it
+(#118), so the k-mesh, ``nosym`` and occupations keys have no effect on it."""
 _BRANCH_STEPS: dict[_Branch, tuple[str, ...] | None] = {
     "analysis": None,
     "system": None,
@@ -198,6 +209,7 @@ _BRANCH_STEPS: dict[_Branch, tuple[str, ...] | None] = {
     "resources": _PW_STEPS,
     "relax": _RELAX_STEPS,
     "dos": ("dos",),
+    "k_path": ("bands",),
 }
 """The step purposes (``plan.PlannedStep.purpose``) each composing class's
 settings apply to; ``None`` for a task-level class, set once per task."""
@@ -376,7 +388,8 @@ _SETTING_META: dict[str, _SettingExtra] = {
             "run takes starting_magnetization instead, and ignored when "
             "spin_polarized is false. Fixed occupations need an integer of the "
             "electron count's parity; a non-metal gets them by default only "
-            "then, and smearing otherwise."
+            "then, and smearing otherwise. A collinear band task refuses it: "
+            "bands.x stops on the two Fermi energies it gives."
         ),
     },
     "starting_magnetization": {
@@ -478,6 +491,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "occupations": {
         "structure_specific": True,
+        "steps": _MESH_STEPS,
         "description": (
             "Electronic-occupation scheme (fixed, smearing, or tetrahedra_opt). "
             "Default: smearing for a metal or unconfirmed metallicity; fixed for "
@@ -485,13 +499,17 @@ _SETTING_META: dict[str, _SettingExtra] = {
             "count without spin polarization (spin_orbit_coupling or not), any "
             "count on a spin-polarized spin_orbit_coupling run, and, for a "
             "collinear spin-polarized run, an integer tot_magnetization of the "
-            "count's parity (one set, or 0 for a magnetic_ordering compensated "
-            "by symmetry) -- and smearing otherwise. An explicit fixed on a "
-            "collinear run with no such moment is refused."
+            "count's parity (one set, or, except on a band task, 0 for a "
+            "magnetic_ordering compensated by symmetry) -- and smearing "
+            "otherwise. An explicit fixed on a collinear run with no such moment "
+            "is refused. On a band task it sets the scf step, whose occupations "
+            "the bands step takes, tetrahedra_opt written there as cold "
+            "smearing."
         ),
     },
     "smearing_type": {
         "structure_specific": False,
+        "steps": _MESH_STEPS,
         "description": (
             "Smearing function used when occupations=smearing, by Quantum "
             "ESPRESSO's name: gaussian, mp (Methfessel-Paxton), cold "
@@ -502,6 +520,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
     "degauss": {
         "structure_specific": False,
         "unit": "Ry",
+        "steps": _MESH_STEPS,
         "description": (
             "Smearing width used when occupations=smearing; heuristic default "
             "0.01 Ry for metals."
@@ -510,6 +529,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
     "k_grid": {
         "structure_specific": True,
         "path": ("mesh",),
+        "steps": _MESH_STEPS,
         "description": (
             "Explicit Monkhorst-Pack mesh dimensions (nk1, nk2, nk3); wins "
             "outright over k_index/k_distance if more than one is set."
@@ -518,6 +538,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
     "k_index": {
         "structure_specific": True,
         "ml_target": "k_index",
+        "steps": _MESH_STEPS,
         "description": (
             "A specific 1-based rung on this structure's own k-mesh ladder, "
             "the distinct meshes its point group maps onto itself (rung 1 is "
@@ -528,6 +549,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
         "structure_specific": False,
         "unit": "1/Angstrom",
         "ml_target": "k_distance",
+        "steps": _MESH_STEPS,
         "description": (
             "Target k-point spacing along each periodic axis; axes the point "
             "group mixes share the larger count, and a vacuum axis always gets "
@@ -537,6 +559,7 @@ _SETTING_META: dict[str, _SettingExtra] = {
     },
     "shift": {
         "structure_specific": False,
+        "steps": _MESH_STEPS,
         "description": (
             "K-mesh origin offset per axis (0 or 1); defaults to Gamma-centered."
         ),
@@ -545,7 +568,21 @@ _SETTING_META: dict[str, _SettingExtra] = {
         "structure_specific": False,
         "path": None,
         "default": False,
+        "steps": _MESH_STEPS,
         "description": "Disable symmetry reduction of the k-point mesh entirely.",
+    },
+    "k_path_distance": {
+        "structure_specific": False,
+        "unit": "1/Angstrom",
+        "record": "bands_k_path",
+        "description": (
+            "Largest spacing between neighbouring points of a band task's "
+            "high-symmetry path, with 2 pi included as for k_distance: each "
+            "segment takes the fewest equal steps no longer than it. Default "
+            "0.025, aiida-quantumespresso's bands.yaml. The path is read from "
+            "the written cell's own symmetry, so a conventional cell or a "
+            "supercell gives folded bands."
+        ),
     },
     "nbnd": {
         "structure_specific": True,
@@ -553,9 +590,10 @@ _SETTING_META: dict[str, _SettingExtra] = {
             "Total number of Kohn-Sham bands (per spin channel with nspin=2), "
             "overriding the default written otherwise: pw.x's setup.f90 rule, "
             "with a collinear smearing run's majority channel raised for its "
-            "seeded moment. Refused when below the electrons a "
-            "spin channel holds (pw.x's 'too few bands'); a count that holds "
-            "the moment below its seed gets a warning."
+            "seeded moment, and three times the occupied bands on a band task's "
+            "bands step (aiida-quantumespresso's bands.yaml). Refused when below "
+            "the electrons a spin channel holds (pw.x's 'too few bands'); a "
+            "count that holds the moment below its seed gets a warning."
         ),
     },
     "extra_bands": {
@@ -564,7 +602,8 @@ _SETTING_META: dict[str, _SettingExtra] = {
         "description": (
             "Extra bands added on top of the default band count (pw.x's "
             "setup.f90 rule, with a collinear smearing run's majority channel "
-            "raised for its seeded moment); a total below the electrons a spin "
+            "raised for its seeded moment, or three times the occupied bands on "
+            "a band task's bands step); a total below the electrons a spin "
             "channel holds is refused."
         ),
     },
@@ -573,7 +612,9 @@ _SETTING_META: dict[str, _SettingExtra] = {
         "unit": "Ry",
         "description": (
             "SCF self-consistency energy-convergence threshold; otherwise "
-            "scaled per atom."
+            "scaled per atom. An nscf or bands step, which runs no SCF loop, "
+            "takes it as its diagonalization threshold, 0.1 x min(0.01, "
+            "conv_thr / nelec) and at least 1e-13."
         ),
     },
     "etot_conv_thr": {
@@ -1000,6 +1041,7 @@ def _leaves() -> list[SettingBinding]:
         ),
         *_leaves_from_overrides(RelaxOverrides, branch="relax", scope="per_step"),
         *_leaves_from_overrides(DosOverrides, branch="dos", scope="per_step"),
+        *_leaves_from_overrides(KPathOverrides, branch="k_path", scope="per_step"),
     ]
 
 
@@ -1178,6 +1220,21 @@ def _tasks() -> list[dict[str, object]]:
             "codes": [_CODE],
             "step_count": 3,
             "executables": [_PROGRAM, _PROGRAM, "dos.x"],
+        },
+        {
+            "id": _BAND_TASK,
+            "name": "Band structure",
+            "description": (
+                "scf, then pw.x with calculation='bands' along the written "
+                "cell's high-symmetry path (K_POINTS crystal_b), then bands.x "
+                "once per spin channel -- three steps sharing one prefix/outdir. "
+                "Unless set, the bands step takes k_path_distance 0.025 and three "
+                "times the occupied bands from aiida-quantumespresso's bands.yaml "
+                "protocol."
+            ),
+            "codes": [_CODE],
+            "step_count": 3,
+            "executables": [_PROGRAM, _PROGRAM, "bands.x"],
         },
         {
             "id": _RELAX_TASK,

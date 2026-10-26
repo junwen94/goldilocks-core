@@ -71,7 +71,8 @@ BAND_SCF_PROTOCOL = StepProtocol(
 under fixed occupations (#138) is withheld, so a compensated
 antiferromagnetic non-metal takes the smearing fallback
 (``advisors/occupations.py``). A requested ``tot_magnetization`` is still
-carried, although bands.x stops on it too."""
+carried, and the gate refuses it on a collinear run, since bands.x stops on
+it too (``checks.py``, rule 7)."""
 
 _BANDS_NOTE = (
     "Protocol default for the band task's bands step: aiida-quantumespresso's "
