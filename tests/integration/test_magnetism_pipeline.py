@@ -56,7 +56,7 @@ from collections.abc import Callable
 import numpy as np
 import pytest
 from pymatgen.core import Lattice, Species, Structure
-from support import sssp_fixture_table_spec
+from support import hcp_gadolinium, sssp_fixture_table_spec
 
 from goldilocks_core.advisors.magnetic_config import OrderingRecord
 from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
@@ -909,6 +909,31 @@ def test_a_smearing_magnet_s_bands_hold_its_seeded_moment(
     )
     assert _keyword(content, "nbnd") == "28"
     assert steps[0].records()["magnetic"].value.seeded_moment == pytest.approx(10.0)
+
+
+def test_a_dos_nscf_step_below_the_seeded_majority_count_misses_bands(
+    gdi2_store: AssetStore,
+) -> None:
+    """#118: the dos task's nscf step runs at the scf's density, so 22 bands,
+    below the (36 + 10)/2 = 23 electrons hcp Gd's seeded majority channel
+    fills, leave occupied majority bands out if the scf reaches that moment,
+    instead of capping it: the nscf step's warning says that, and the scf
+    keeps its 28 bands."""
+    (scf, nscf), _ = _run("dos", hcp_gadolinium(), {"steps.nscf.nbnd": 22}, gdi2_store)
+
+    scf_bands = scf.step.kpoints.nbnd.value
+    nscf_bands = nscf.step.kpoints.nbnd.value
+    assert scf_bands.nbnd == 28
+    assert "nbnd.moment_capped" not in [w.code for w in scf_bands.warnings]
+    assert nscf_bands.nbnd == 22
+    (capped,) = nscf_bands.warnings
+    assert capped.code == "nbnd.moment_capped"
+    assert capped.message.startswith(
+        "nbnd=22 holds fewer than the (nelec + |M|)/2 = 23 electrons the "
+        "majority spin channel fills"
+    )
+    assert "this nscf step" in capped.message
+    assert "Use nbnd >= 23" in capped.message
 
 
 def _janus_vsse(c: float = 20.0) -> Structure:

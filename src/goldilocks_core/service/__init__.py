@@ -35,7 +35,8 @@ module into one file. Split by pipeline phase instead, matching
   ``step_settings.PwSettings``'s own field list one layer up, and one
   step's request overrides (``StepOverrides``, routed per step, #154)
 - ``_step_protocol.py`` -- ``StepProtocol``, a task's own defaults for one
-  of its steps, a tier below the request (the dos nscf protocol, #174)
+  of its steps, a tier below the request (the dos nscf protocol, #174; the
+  band task's scf and bands protocols, #118)
 - ``_advice.py`` -- ``Advice``/``RunOverrides``, composing the three
   phases above; ``RunOverrides`` holds one task's overrides, per step;
   ``RecordTiers``, the records of every advice type's ``tiers()``, and the

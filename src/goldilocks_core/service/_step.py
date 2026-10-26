@@ -139,13 +139,15 @@ def steps_advice(
     ``system.cell``. The steps share one job, sized with the task-level
     ``job_human``/``job_llm``; each step's own overrides give its
     k-point/band advice and npool/ndiag, over its task's protocol for it
-    in ``protocols`` (by purpose; a step without one has none, #174)."""
+    in ``protocols`` (by purpose; a step without one has none, #174), and
+    its purpose words its band count's moment warning (#118)."""
     electronic = {
         purpose: electronic_step_advice(
             analysis,
             system,
             step.kpoints,
             protocols.get(purpose, StepProtocol()),
+            purpose,
         )
         for purpose, step in steps.items()
     }

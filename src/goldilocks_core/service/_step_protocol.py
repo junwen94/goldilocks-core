@@ -2,11 +2,14 @@
 
 A protocol is a tier of its own for the step it is given to: it ranks
 below the request's overrides and above the ML tier, for that step only
-(``advisors/k_sampling.py``, ``advisors/occupations.py``). Its values are
-not request values, so their records read ``heuristic`` with the protocol
-named in ``source_note``; ``human`` only ever comes from the request. A
-request value replaces the protocol's field by field: a ``shift`` alone
-keeps the protocol's k_distance, a ``degauss`` alone its occupations.
+(``advisors/k_sampling.py``, ``advisors/occupations.py``,
+``advisors/nbnd.py``). Its values are not request values, so their records
+read ``heuristic`` with the protocol named in ``source_note``; ``human``
+only ever comes from the request. A request value replaces the protocol's
+field by field: a ``shift`` alone keeps the protocol's k_distance, a
+``degauss`` alone its occupations, and an ``extra_bands`` adds to its band
+count. ``unpinned_moment`` sets no value: it withholds the moment a
+compensated ordering would pin (#118).
 
 Kept apart from ``StepOverrides`` (``_step.py``), which carries request
 values only and is walked into ``capabilities``' settings.
@@ -17,7 +20,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from goldilocks_core.advisors.k_sampling import KSamplingProtocol
-from goldilocks_core.advisors.occupations import OccupationsProtocol
+from goldilocks_core.advisors.nbnd import NbndProtocol
+from goldilocks_core.advisors.occupations import (
+    OccupationsProtocol,
+    UnpinnedMomentProtocol,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +34,8 @@ class StepProtocol:
 
     k_sampling: KSamplingProtocol | None = None
     occupations: OccupationsProtocol | None = None
+    nbnd: NbndProtocol | None = None
+    unpinned_moment: UnpinnedMomentProtocol | None = None
 
 
 _DOS_NSCF_NOTE = (
@@ -46,3 +55,38 @@ integration grid. That protocol also sets ``nosym`` for the nscf step; this
 one does not, because the generated input does not write ``nosym``/``noinv``
 (``generation/quantum_espresso/scf.py``), and a protocol value with no effect
 on the rendered file would mislead."""
+
+BAND_SCF_PROTOCOL = StepProtocol(
+    unpinned_moment=UnpinnedMomentProtocol(
+        note=(
+            "Protocol default for the band task's scf step: no "
+            "tot_magnetization is derived for a magnetic ordering compensated "
+            "by symmetry, because bands.x stops on the two Fermi energies any "
+            "tot_magnetization writes (QE 7.3 PP/src/bands.f90:114-116), and "
+            "fixed occupations on a collinear run need one."
+        )
+    )
+)
+"""The band task's scf step (#118): the 0 a compensated ordering would pin
+under fixed occupations (#138) is withheld, so a compensated
+antiferromagnetic non-metal takes the smearing fallback
+(``advisors/occupations.py``). A requested ``tot_magnetization`` is still
+carried, although bands.x stops on it too."""
+
+_BANDS_NOTE = (
+    "Protocol default for the band task's bands step: aiida-quantumespresso's "
+    "bands.yaml, three times the occupied bands."
+)
+
+BANDS_PROTOCOL = StepProtocol(nbnd=NbndProtocol(factor=3.0, note=_BANDS_NOTE))
+"""The band task's bands step (#118), from aiida-quantumespresso's
+``workflows/protocols/pw/bands.yaml`` at 322b498e: ``nbands_factor`` 3.0 in
+every protocol, which its ``PwBandsWorkChain`` turns into the band count
+``advisors/nbnd.py`` computes. Its "balanced" ``bands_kpoints_distance``,
+0.025 1/angstrom, is ``advisors/k_path.py``'s default distance. That
+protocol also sets ``diagonalization='paro'``, ``diago_full_acc`` and
+``startingpot='file'`` for the bands step; this one does not. pw.x forces
+``startingpot='file'`` outside an SCF run (QE 7.3
+``PW/src/input.f90:860-865``) and converges every band there (only an SCF
+run's ``sum_band`` marks bands empty), and the bands step keeps pw.x's
+default diagonalization."""

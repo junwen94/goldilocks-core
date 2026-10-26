@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from pymatgen.core import Lattice, Structure
 from support import magnetic_decision
@@ -11,15 +13,19 @@ from goldilocks_core.advisors.magnetic_config import (
     OrderingRecord,
 )
 from goldilocks_core.advisors.occupations import (
+    OccupationsDecision,
     OccupationsHumanInput,
     OccupationsLlmInput,
     OccupationsProtocol,
+    UnpinnedMomentProtocol,
+    bands_occupations,
     occupations,
     whole_spin_channels,
 )
 from goldilocks_core.analysis.is_magnetic import is_magnetic
 from goldilocks_core.analysis.is_metal import is_metal
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
+from goldilocks_core.service._step_protocol import BAND_SCF_PROTOCOL
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe"], [[0.0, 0.0, 0.0]])
 _SILICON = Structure(Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]])
@@ -708,3 +714,190 @@ def test_a_smearing_protocol_applies_the_human_smearing_width() -> None:
             "degauss": "human",
         },
     )
+
+
+# #118: bands.x stops on the two Fermi energies any tot_magnetization writes
+# (QE 7.3 PP/src/bands.f90:114-116), so the band task's scf derives no moment,
+# and its bands step takes the scf step's occupations.
+_UNPINNED = UnpinnedMomentProtocol(note="A task protocol that pins no moment.")
+
+
+def test_an_unpinned_moment_protocol_gives_a_compensated_afm_smearing() -> None:
+    """Under the protocol a compensated AFM non-metal derives no 0, so it
+    takes the smearing fallback, and the record's note says why; without the
+    protocol it keeps fixed occupations with a 0 moment (#138)."""
+    magnetic = _applied_ordering(compensated=True)
+    count = _electron_count(48.0)
+
+    unpinned = occupations(_NON_METAL, magnetic, count, unpinned=_UNPINNED)
+    pinned = occupations(_NON_METAL, magnetic, count)
+
+    assert unpinned.value == OccupationsDecision(
+        occupations="smearing", smearing_type="cold", degauss=0.01
+    )
+    assert unpinned.provenance == Provenance(
+        source="heuristic",
+        source_note="A task protocol that pins no moment.",
+        field_sources={
+            "occupations": "heuristic",
+            "smearing_type": "heuristic",
+            "degauss": "heuristic",
+        },
+        derived_from=("is_metal", "magnetic"),
+    )
+    assert (pinned.value.occupations, pinned.value.tot_magnetization) == ("fixed", 0.0)
+    assert pinned.provenance.source_note is None
+
+
+@pytest.mark.parametrize(
+    ("metallicity", "magnetic", "human", "expected", "note"),
+    [
+        pytest.param(
+            _NON_METAL,
+            lambda: magnetic_decision(
+                _BCC_IRON,
+                is_magnetic(_BCC_IRON),
+                human=MagneticConfigHumanInput(tot_magnetization=4.0),
+            ),
+            None,
+            ("fixed", 4.0),
+            None,
+            id="human-moment",
+        ),
+        pytest.param(
+            _ML_METAL,
+            lambda: _applied_ordering(compensated=True),
+            None,
+            ("smearing", None),
+            None,
+            id="compensated-metal",
+        ),
+        pytest.param(
+            _NON_METAL,
+            lambda: _applied_ordering(compensated=True),
+            OccupationsHumanInput(occupations="fixed"),
+            ("fixed", None),
+            "A task protocol that pins no moment.",
+            id="explicit-fixed",
+        ),
+    ],
+)
+def test_the_unpinned_note_appears_where_the_protocol_changed_the_decision(
+    metallicity, magnetic, human, expected: tuple, note: str | None
+) -> None:
+    """A human moment is still carried, and a metal gets smearing either way,
+    so neither names the protocol; an explicit fixed loses the derived 0,
+    which the gate then refuses, and the note says why."""
+    state = occupations(
+        metallicity, magnetic(), _electron_count(48.0), human, unpinned=_UNPINNED
+    )
+
+    assert (state.value.occupations, state.value.tot_magnetization) == expected
+    assert state.provenance.source_note == note
+
+
+@pytest.mark.parametrize(
+    ("human", "expected"),
+    [
+        pytest.param(None, ("smearing", None), id="heuristic"),
+        pytest.param(
+            OccupationsHumanInput(occupations="fixed"),
+            ("fixed", None),
+            id="explicit-fixed",
+        ),
+    ],
+)
+def test_the_band_task_s_note_holds_for_either_outcome(human, expected: tuple) -> None:
+    """The band task's scf note is the source_note of both the smearing a
+    compensated AFM non-metal falls back to and an explicit fixed left with
+    no moment, which the gate refuses, so it gives the reason and claims
+    neither scheme."""
+    unpinned = BAND_SCF_PROTOCOL.unpinned_moment
+    magnetic = _applied_ordering(compensated=True)
+
+    state = occupations(
+        _NON_METAL, magnetic, _electron_count(48.0), human, unpinned=unpinned
+    )
+
+    assert (state.value.occupations, state.value.tot_magnetization) == expected
+    assert state.provenance.source_note == unpinned.note
+    assert "smearing" not in unpinned.note
+
+
+@pytest.mark.parametrize(
+    "scf",
+    [
+        pytest.param(
+            lambda: occupations(
+                _ML_METAL,
+                human=OccupationsHumanInput(occupations="smearing", degauss=0.02),
+            ),
+            id="human-smearing",
+        ),
+        pytest.param(
+            lambda: occupations(
+                _NON_METAL,
+                magnetic_decision(_BCC_IRON, is_magnetic(_BCC_IRON)),
+                _electron_count(32.0),
+                OccupationsHumanInput(occupations="fixed"),
+            ),
+            id="fixed-without-a-moment",
+        ),
+    ],
+)
+def test_bands_occupations_are_the_scf_step_s(scf) -> None:
+    """The bands step follows the scf step's decision, the record it was
+    derived from, so it reads heuristic; the scf record keeps its own
+    warnings."""
+    scf_state = scf()
+
+    state = bands_occupations(scf_state)
+
+    assert state.value == replace(scf_state.value, warnings=())
+    assert state.source == "heuristic"
+    assert set(state.provenance.field_sources.values()) == {"heuristic"}
+    assert state.provenance.derived_from == ("occupations",)
+    assert state.provenance.source_note is None
+
+
+def test_bands_occupations_write_a_tetrahedra_scf_as_cold_smearing() -> None:
+    """pw.x stops on tetrahedra along a k-point path (QE 7.3
+    PW/src/setup.f90:598), while a bands run only weights its bands at the
+    scf's Fermi energy (PW/src/non_scf.f90:104-105): the bands step gets
+    cold smearing at 0.01 Ry, with the moment carried for the gate."""
+    magnetic = magnetic_decision(
+        _BCC_IRON,
+        is_magnetic(_BCC_IRON),
+        human=MagneticConfigHumanInput(tot_magnetization=4.0),
+    )
+    scf = occupations(
+        _ML_METAL,
+        magnetic,
+        _electron_count(32.0),
+        OccupationsHumanInput(occupations="tetrahedra_opt"),
+    )
+
+    state = bands_occupations(scf)
+
+    assert state.value == OccupationsDecision(
+        occupations="smearing",
+        smearing_type="cold",
+        degauss=0.01,
+        tot_magnetization=4.0,
+    )
+    assert state.provenance.field_sources == {
+        "occupations": "heuristic",
+        "smearing_type": "heuristic",
+        "degauss": "heuristic",
+    }
+    assert state.provenance.derived_from == ("occupations",)
+    note = state.provenance.source_note
+    assert "setup.f90:598" in note
+    assert "non_scf.f90:104-105" in note
+
+
+def test_bands_occupations_stay_blocked_with_the_scf_step() -> None:
+    state = bands_occupations(occupations(Blocked(by="synthetic failure")))
+
+    assert isinstance(state, Blocked)
+    assert state.root_cause() == "synthetic failure"

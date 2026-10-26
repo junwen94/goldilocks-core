@@ -14,8 +14,11 @@ resolved by phase 2) so it is ``Blocked`` outright if that failed.
 
 A step's ``KpointsOverrides`` hold request values only; its task's
 protocol for it (``StepProtocol``, ``_step_protocol.py``: the dos task's
-nscf mesh and occupations) reaches ``occupations`` and ``k_sampling`` as
-a tier of its own, below the request (#174).
+nscf mesh and occupations) reaches ``occupations``, ``k_sampling`` and
+``nbnd`` as a tier of its own, below the request (#174), and can withhold
+a compensated ordering's moment from ``occupations`` (the band task's scf,
+#118). ``nbnd`` also reads the step's purpose, which words its moment
+warning.
 
 **Every structural input is the simulated cell** (``system.cell``, #128):
 ``k_sampling`` and ``n_irr_k`` mesh its reciprocal lattice -- ``n_irr_k``
@@ -102,9 +105,11 @@ def electronic_step_advice(
     system: SystemAdvice,
     overrides: KpointsOverrides,
     protocol: StepProtocol,
+    purpose: str,
 ) -> ElectronicStepAdvice:
     """One step's electronic advice from its request ``overrides`` and its
-    task's ``protocol`` for it, a tier below the overrides (#174)."""
+    task's ``protocol`` for it, a tier below the overrides (#174), for a
+    step of ``purpose`` (``plan.PlannedStep.purpose``)."""
     occupations_state = occupations(
         analysis.is_metal,
         system.magnetic,
@@ -112,6 +117,7 @@ def electronic_step_advice(
         human=overrides.occupations,
         llm=overrides.occupations_llm,
         protocol=protocol.occupations,
+        unpinned=protocol.unpinned_moment,
     )
     k_sampling_state, n_irr_k_state, convergence_state = _cell_sampling(
         analysis, system, occupations_state, overrides, protocol
@@ -121,10 +127,11 @@ def electronic_step_advice(
         nbnd_state = nbnd(
             system.electron_count.value.nelec,
             occupations_state,
-            "scf",
+            purpose,
             system.magnetic,
             overrides.nbnd,
             overrides.nbnd_llm,
+            protocol=protocol.nbnd,
         )
     else:
         nbnd_state = Blocked(by=blocked_by(system.electron_count))
