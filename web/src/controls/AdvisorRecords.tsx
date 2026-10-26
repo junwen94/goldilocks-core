@@ -28,8 +28,9 @@ export function AdvisorRecordItems({
 }
 
 /** The read-only records `names` of one step of a task with more than one
- * step, under a heading naming the step (`nscf step`): a dos task's nscf
- * decisions, under their `nscf_` names (#187). */
+ * step, under a heading naming the step (`nscf step`, `bands step`): a dos
+ * task's nscf decisions or a band task's bands-step decisions, under their
+ * `nscf_` or `bands_` names (#187, #118). */
 export function AdvisorStepRecords({
   step,
   names,

@@ -1,11 +1,11 @@
 # Check your recommendations
 
 Goldilocks suggests starting inputs for a Quantum ESPRESSO calculation --
-self-consistent-field (SCF), density of states (DOS), relaxation (`relax`), or
-variable-cell relaxation (`vc-relax`). It does not establish that your energy,
-forces, or other properties are converged. Review the choices below before
-running a calculation, then test the settings against the accuracy your work
-needs.
+self-consistent-field (SCF), density of states (DOS), band structure (`band`),
+relaxation (`relax`), or variable-cell relaxation (`vc-relax`). It does not
+establish that your energy, forces, or other properties are converged.
+Review the choices below before running a calculation, then test the
+settings against the accuracy your work needs.
 
 For a first calculation, use the [quickstart](quickstart.md). For exact units,
 defaults, and override precedence, see [Scientific conventions](conventions.md).
@@ -49,7 +49,9 @@ partner, so an odd count half-fills one); a spin-polarized spin-orbit run,
 which has no `tot_magnetization` and fills single-electron bands; or a collinear
 spin-polarized run with an integer `tot_magnetization` of the electron
 count's parity, either one you set or 0 when the applied `magnetic_ordering`
-is compensated by symmetry (see below). Any other non-metal gets smearing.
+is compensated by symmetry (see below; a `band` task pins no moment, see
+[the band structure path](#check-the-band-structure-path)). Any other
+non-metal gets smearing.
 LiFePO4, or NiO classified as a non-metal, therefore runs spin-polarized on
 smearing instead of being refused. The occupations record's
 `tot_magnetization` is the moment the input pins: the one you set, with any
@@ -129,7 +131,9 @@ Compare results on denser meshes. Use `k_grid` or `k_distance` to override
 the default; an explicit `k_grid` is written as given, vacuum axes included,
 even where the point group does not map it onto itself.
 Setting either one only affects k-point selection; it does not change the
-separate `is_metal` heuristic used elsewhere (e.g. by occupations).
+separate `is_metal` heuristic used elsewhere (e.g. by occupations). A `band`
+task's bands step runs no mesh but a path of high-symmetry lines (see
+[the band structure path](#check-the-band-structure-path)).
 
 ## Check the written cell
 
@@ -292,7 +296,13 @@ cell; Goldilocks gives it 28. An oversized seed only adds
 bands. An `nbnd` or `extra_bands` that leaves fewer bands than pw.x accepts
 -- the electrons of each spin channel, or one band per electron with
 spin-orbit coupling -- is refused before generation, and one that holds the
-moment below its seed gets the warning `nbnd.moment_capped`.
+moment below its seed gets the warning `nbnd.moment_capped`. pw.x checks
+these floors only in a run with its own SCF loop, but a `dos` task's nscf
+step and a `band` task's bands step need every occupied band too, so the
+refusal covers them; on those steps, which run at the scf step's density,
+`nbnd.moment_capped` says that bands of the majority channel are left out
+if the scf's moment reaches its seed, and names the count to use,
+(nelec + |M|)/2 rounded up.
 
 A `starting_magnetization` you set is a fraction of each species' valence
 electrons, strictly between -1 and 1: from Quantum ESPRESSO 7.3, a value of
@@ -396,8 +406,11 @@ has 3 Fe up and 3 down, but both tetrahedral Fe point down, so it is a
 ferrimagnet. Nor is B2 FeCo's `afm-1`, Fe up and Co down in the uploaded
 cell: its starting moments sum to zero, but no symmetry makes the two
 elements' moments cancel. A compensated non-metal gets fixed occupations with
-`tot_magnetization = 0`. This is decided on the starting magnetizations as
-written, to rounding: yours where you set them on the applied cell, the
+`tot_magnetization = 0`, except on a `band` task, whose `bands.x` step stops
+on any pinned moment: there it runs on smearing (see
+[the band structure path](#check-the-band-structure-path)). This is decided
+on the starting magnetizations as written, to rounding: yours where you set
+them on the applied cell, the
 computed ones elsewhere. Setting one NiO sublattice to its computed seed as
 `records.magnetic` or `scf.in` gives it (any copy to six significant digits
 or more) keeps the cell compensated; setting it to 0.28 or 0.5 does not,
@@ -709,6 +722,176 @@ written input has. `'volume'` is refused, because pw.x stops on it unless
 `ibrav = 0` pw.x ignores the `ibrav` part and only warns that it has no
 effect.
 
+## Check the band structure path
+
+The `band` task runs three steps in one job: an scf; pw.x with
+`calculation='bands'` (`bands.in`), which reads the scf's charge density and
+Fermi energy and computes the bands at every point of a path of
+high-symmetry lines through the Brillouin zone, with no SCF loop and no
+reduction of the path by symmetry; and `bands.x`, which collects the bands
+for plotting.
+
+The path is read from the symmetry of [the written cell](#check-the-written-cell),
+each site typed by its species as pw.x types it, within 1e-3 Å, the
+tolerance that cell was idealized to. The `Ni1`/`Ni2` sublattices of an
+antiferromagnetic ordering therefore stay distinct, and the run gets the
+path of its magnetic cell: NiO's AFM-II cell is rhombohedral (R-3m), so it
+gets the rhombohedral path, not rock salt's fcc one. The vertices are
+crystal coordinates of the written cell's reciprocal vectors, as
+`K_POINTS crystal_b` takes them. A conventional cell or a supercell gets the
+path of its primitive cell, written in its own basis, and folded bands: at
+each point of the path, the bands of several points of the primitive cell's
+zone appear together. The `bands_k_path` record counts the primitive cells
+the written cell holds (`primitive_cells`) and, above 1, carries the info
+notice `k_path.folded_bands`. The bundled `Si.cif`, diamond's 8-atom
+conventional cell, holds 4; upload the primitive cell for unfolded bands. A
+slab cut from a conventional cell can repeat its layer's primitive cell in
+the plane: pymatgen's `SlabGenerator`, given the 4-atom cell of fcc Cu,
+writes Cu(111) and Cu(211) slabs that hold 4 primitive cells of their layer
+and a Cu(311) slab that holds 12.
+
+The vacuum of the written cell, measured as for the `geometry` record's
+`vacuum_axes` (see
+[boundary conditions and vacuum](#check-boundary-conditions-and-vacuum)),
+decides the kind of path:
+
+- **Bulk.** Setyawan and Curtarolo's path for the lattice type (Comput.
+  Mater. Sci. 49, 299 (2010)), as pymatgen gives it for the standard
+  primitive cell, carried into the written cell's basis by the integer
+  matrix that maps one lattice onto the other, accepted only where every
+  written site lands on a site of its own species. A triclinic path runs
+  from Γ to each of the seven time-reversal-invariant points, each taken at
+  its equivalent on the boundary of the first Brillouin zone, so that every
+  segment stays inside the zone; a triclinic lattice with a right reciprocal
+  angle, for which pymatgen gives no path or picks a table by rounding, gets
+  Setyawan and Curtarolo's TRI1a table whatever its orientation, though not
+  always along the same lines (see the end of this section). A primitive
+  monoclinic crystal whose two lattice vectors normal to its unique axis
+  are equal in length, as on a C-centred orthorhombic or hexagonal lattice,
+  is put in Setyawan and Curtarolo's setting, which pymatgen leaves it out
+  of, before its path is read.
+- **Slab** (vacuum along one lattice vector). The layer is made contiguous
+  about the middle of the vacuum, and its vacuum vector is replaced by its
+  component along the normal, so a tilted c or a layer straddling the cell
+  boundary keeps the layer's symmetry. The layer's 2D Bravais system is
+  read from the point group of its primitive cell, with time reversal, and
+  the path is ASE's for that system (table below), as the C2DB database
+  uses them (Larsen et al., J. Phys.: Condens. Matter 29, 273002 (2017)).
+  Every vertex is at 0 along the vacuum vector, across which electrons do
+  not disperse. A monoclinic layer whose unique axis lies in the sheet, such
+  as 1T'-WTe2, is rectangular, so its path passes through Γ, which the
+  in-plane segments of its 3D path would miss.
+- **Wire** (vacuum along two). One segment along the wire, from Γ to Z on
+  the zone boundary of the wire's own period; a cell that holds several
+  periods gets folded bands.
+- **Molecule or cluster in a box** (vacuum along all three). It has no band
+  structure, so the band task is refused (`advice.blocked`): use
+  `scf_single_point` or `relax`.
+
+| Slab's 2D Bravais system | `lattice_type` | Path              |
+| ------------------------ | -------------- | ----------------- |
+| Hexagonal                | `HEX2D`        | Γ-M-K-Γ           |
+| Square                   | `SQR`          | M-Γ-X-M           |
+| Rectangular              | `RECT`         | Γ-X-S-Y-Γ-S       |
+| Centred rectangular      | `CRECT`        | Γ-X-A_1-Y-Γ       |
+| Oblique                  | `OBL`          | Γ-Y-H-C-H_1-X-Γ   |
+
+The record and the input name the vertices in ASCII: `Gamma`, `X_1`,
+`Sigma_1`, `A_1`. `k_path_distance` is the largest spacing between
+neighbouring points of the path, in 1/Å with 2π included as for
+`k_distance`: each segment takes the fewest equal steps no longer than it
+(see [band path spacing](conventions.md#band-path-spacing)), and pw.x
+interpolates those points between the vertices the `K_POINTS crystal_b` card
+lists, each row ending with its vertex's label as a `! label` comment. The
+default, 0.025 Å⁻¹, is aiida-quantumespresso's `bands.yaml` (balanced); it
+gives diamond Si 306 points. Vertices that coincide in a particular cell are
+merged, since bands.x writes no plot file for two equal consecutive points,
+and a path that would turn back along the segment it came by is split into
+two branches there. `bands_k_path` records the branches (each vertex's
+`label` and crystal coordinates `k`, and the `steps` between them),
+`n_kpoints`, the points pw.x runs per spin channel, the table (`convention`,
+`lattice_type`), the space group of the typed cell it was read on (for a
+slab, its layer's primitive cell) and `primitive_cells`. A bundle's
+`CITATIONS.md` cites the table. pw.x holds at most 40000 k-point/spin pairs,
+so a path with more is refused (`k_path.too_many_kpoints`); only a
+`k_path_distance` near its lower bound, 0.001 Å⁻¹, on a cell with lattice
+vectors shorter than about 1.4 Å reaches that.
+
+A band structure shows empty bands, so unless you set `nbnd` the bands step
+computes three times the occupied bands (aiida-quantumespresso's
+`bands.yaml`): the largest of int(3 nelec/e) and int(nelec/e) + 4, where e
+is 1 for a noncollinear run and 2 otherwise, and pw.x's own default for the
+run, which leaves room for a seeded moment (see
+[magnetism](#check-magnetism-and-spin-orbit-coupling)). Primitive diamond
+Si (8 electrons) gets 12 bands against its scf step's 4, 24 spinor bands
+with spin-orbit coupling, and NiO's AFM-II cell (48 electrons) 72 per spin
+channel. The `bands_nbnd` record names the protocol in `source_note`;
+`steps.bands.nbnd` replaces the count and `extra_bands` adds to it. pw.x
+checks no band count in a bands run, but Goldilocks keeps its floors there
+(see [magnetism](#check-magnetism-and-spin-orbit-coupling)).
+
+The bands step takes the scf step's occupations (`bands_occupations`, whose
+warnings stay on the `occupations` record): a bands run only weights its
+bands at the Fermi energy the scf found, so they do not change the bands. A
+`tetrahedra_opt` scf is the exception: pw.x stops on tetrahedra without an
+automatic k-point mesh, so the bands step is written with cold smearing at
+0.01 Ry, and `bands_occupations` says why in `source_note`.
+`occupations`, `smearing_type` and `degauss` set the scf step;
+`steps.bands.occupations` is refused. `conv_thr` sets the bands step's
+diagonalization threshold (see
+[override precedence](conventions.md#override-precedence)); the SCF-loop
+settings do not reach it.
+
+Any `tot_magnetization` gives a collinear run two Fermi energies, which the
+scf writes to its save and the bands step reads from there whatever its own
+input says, and `bands.x` stops on them ("The bands code with constrained
+magnetization has not been tested") after both pw.x steps have run. So the
+band task's scf derives no `tot_magnetization = 0` for a compensated
+magnetic ordering: a compensated antiferromagnetic non-metal, which the
+other tasks run on fixed occupations with that 0, runs on smearing, and the
+`occupations` record's `source_note` says why. A `tot_magnetization` you set
+on a collinear band task is refused
+(`occupations.bands_x_refuses_tot_magnetization`), with the remedy
+`occupations=smearing` and `tot_magnetization` unset, and so is
+`occupations=fixed` on a collinear spin-polarized band task, for want of a
+moment, with the remedy `occupations=smearing`. A noncollinear run takes no
+`tot_magnetization`.
+
+`bands.x` runs once for each spin channel of a collinear spin-polarized run
+(`bands_x_up.in` and `bands_x_down.in`, writing `bands_up.dat` and
+`bands_down.dat`) and once otherwise (`bands_x.in`, writing `bands.dat`).
+Each also writes a `.gnu` file of every band's energy in eV against the
+distance along the path, for plotting; it draws the gap between two branches
+as a segment when they lie at most five steps apart, so take the branch ends
+from `bands_k_path`. bands.x runs without its symmetry analysis
+(`lsym=.false.`), which can stop it after it has written the bands; only its
+`.rap` file of symmetry labels is lost. It runs on one task
+(`srun --nodes=1 --ntasks=1`) in the walltime the two pw.x steps leave, and
+passes when its output says `JOB DONE`. The bands step usually sizes the job
+and takes most of its walltime: a few hundred points, twice that for a
+collinear run, at three times the bands.
+
+Both tables choose a path by lattice type, not by space group. In R3 and
+R-3 with a rhombohedral angle below 90°, such as ilmenite FeTiO3, Setyawan
+and Curtarolo's B, B_1, P, P_1, Q and X are general points of the zone
+boundary, not points of special symmetry, and `bands_k_path` carries the info
+notice `k_path.non_special_vertices`. ASE's oblique loop encloses about a
+third of the zone, and its corners H and H_1 are general points too. The
+typing ignores the moments' directions, and the path assumes E(k) = E(-k),
+which the moments of a spin-polarized run with spin-orbit coupling can
+break: such a run gets the warning `k_path.magnetic_noncollinear_symmetry`.
+Where the lattice is more symmetric than the crystal, as for a P1 or P-1
+cell on an orthorhombic, monoclinic or hexagonal lattice, a monoclinic
+crystal on an orthorhombic lattice or with two equal axes normal to its
+unique axis, or a slightly distorted cubic crystal, several settings of the
+table, or several equally short equivalents of a vertex, fit the lattice
+alike, and which one the path takes can depend on the orientation and basis
+of the uploaded cell. The labels can then move, and a segment can follow a
+line that the crystal's symmetry does not relate to the line another
+orientation gives: for P2_1/c ZrO2 with a = c, Γ-Y runs along c* in one
+orientation and along a* in another. Every vertex is still a special point
+on the zone boundary.
+
 ## Read the reasons and warnings
 
 Every analysis fact and every advisor decision -- occupations, k-point
@@ -746,8 +929,10 @@ applied the rule, `heuristic`, and names that record in `derived_from`:
 `occupations` and a heuristic `k_sampling` name `is_metal`, `hubbard` names
 `needs_correlation` (or `functional` for a hybrid functional), an
 automatically selected `pseudo_table` names `functional` and `magnetic`,
-`relativistic` names `magnetic`, and `pseudopotentials` names
-`pseudo_table`. A non-metal's `occupations` also names the records that
+`relativistic` names `magnetic`, `pseudopotentials` names
+`pseudo_table`, a `band` task's `bands_k_path` names `magnetic`, whose cell
+it reads, and its `bands_occupations` names `occupations`, the scf step's
+decision it follows. A non-metal's `occupations` also names the records that
 decided whether fixed occupations can run: `magnetic`, and `electron_count`
 where its parity was tested. An `occupations` that pins a `tot_magnetization`
 names `magnetic` too, whichever tier chose the occupations (a requested
@@ -758,15 +943,18 @@ that record admitted, or the 0 of its compensated ordering, which also names
 reads `heuristic` even when the classifier decided `is_metal` (`ml`), and you
 follow `derived_from` to find that. `human` only ever means a value set in the
 request: a `dos` task's nscf protocol values (`nscf_k_sampling`'s k_distance,
-`nscf_occupations`) read `heuristic`, with `source_note` naming the protocol.
+`nscf_occupations`) read `heuristic`, with `source_note` naming the protocol,
+and so do a `band` task's bands-step defaults (`bands_nbnd`, and
+`bands_k_path`'s `k_path_distance`).
 Per-decision warnings live inside that decision's own value (e.g.
 `job.warnings`, `cutoffs.warnings`), and every run, whatever its task, also
 carries one aggregated top-level `warnings` list: every record's warnings, in
 record-name order, each naming the record it came from in `record`, then the
 request's routing notices (a setting given without a step that reached several
 steps), under the `record` `overrides`. A `dos` task's nscf step keeps its
-own, under `nscf_`-prefixed records: a notice on `nscf_parallelisation` is
-about the nscf step's npool, not the scf step's.
+own, under `nscf_`-prefixed records, and a `band` task's bands step under
+`bands_`-prefixed ones: a notice on `nscf_parallelisation` is about the nscf
+step's npool, not the scf step's.
 
 A resolved record also carries the rest of its provenance: `source_note`,
 the advisor's rationale where it gives one (such as why a molecule gets a
@@ -781,7 +969,8 @@ classifier's `score` and `threshold`, QRF95's `interval`) and its `warnings`.
 Each model warning, such as the is_magnetic classifier's "has not been
 externally validated", is also in the top-level `warnings` list as
 `<record>.model_warning`. A bundle's `CITATIONS.md` and the manifest's
-`citations` list every record's citations: the selected pseudopotential table
-and every model that decided a record. `CITATIONS.md` also names the table's
+`citations` list every record's citations: the selected pseudopotential table,
+every model that decided a record, and the source of a `band` task's path
+for a bulk crystal or a slab. `CITATIONS.md` also names the table's
 licence file under `licences/`, which lists SSSP's per-family references. Read analysis and selection warnings
 as well as advice; do not treat a `resolved` status as scientific validation.

@@ -170,11 +170,18 @@ print(inspection["structure"]["reduced_formula"])
 print(inspection["canonical_cif"])
 ```
 
-## Generate a multi-step task (DOS)
+## Generate a multi-step task
 
-Tasks with more than one Quantum ESPRESSO step use the `_dos`-suffixed
-equivalents, which advise the scf and a denser nscf pass together, then
-generate one input per step:
+Two tasks run more than one Quantum ESPRESSO step: `dos` (an scf, a denser
+nscf pass and `dos.x`) and `band` (an scf, `pw.x` along a band path and
+`bands.x`). Each has its own five functions, named after the task
+(`advise_dos` ... `to_bundle_input_dos`, `advise_band` ...
+`to_bundle_input_band`), which advise the task's `pw.x` steps together, then
+generate one input per step. `TASK_PHASES` in `goldilocks_core.service`
+holds every task's five functions by task name, as the CLI, HTTP and MCP
+look them up.
+
+### Density of states
 
 ```python
 from goldilocks_core.service import (
@@ -229,6 +236,59 @@ workload (`job.max_seconds_by_step`), and each input gets its own share;
 `dos.x` runs on one task of it (`srun --nodes=1 --ntasks=1`), because every
 extra task would repeat the whole DOS and `dos.x` aborts when a task owns no
 FFT plane.
+
+### Band structure
+
+```python
+from goldilocks_core.service import (
+    advise_band,
+    check_band,
+    generate_band,
+    render_submission_band,
+)
+
+band_overrides = build_overrides({"k_path_distance": 0.05}, task="band")
+band_advice = advise_band(silicon, hpc=hpc, overrides=band_overrides)
+band_report = check_band(band_advice)
+if band_report.ok:
+    band_steps = generate_band(band_advice, band_report, ctx=ctx)
+    band_script = render_submission_band(
+        band_advice, hpc, "quantum_espresso", band_steps
+    )
+    print([step.name for step in band_steps])
+
+k_path = band_advice.records()["bands_k_path"]
+if isinstance(k_path, Resolved):
+    print(k_path.value.lattice_type, k_path.value.n_kpoints)
+    print(k_path.value.primitive_cells)
+```
+
+The task's steps are `scf`, `bands` (`pw.x` with `calculation='bands'`) and
+`bands_x` (`bands.x`); a collinear spin-polarized run gets `bands_x_up` and
+`bands_x_down` instead, one `bands.x` run per spin channel.
+`k_path_distance`, the largest spacing between neighbouring points of the
+path in Å⁻¹ (2π included, as for `k_distance`), reaches the bands step only.
+The k-mesh, occupations and SCF-loop settings set the scf step only, since
+the bands step runs the path with the scf step's occupations and no SCF
+loop; `nbnd`, `extra_bands`, `conv_thr`, `npool` and `ndiag` given without a
+step reach both `pw.x` steps, with the `overrides.applies_to_multiple_steps`
+notice.
+
+`band_advice.records()` keys the shared fields, the scf step's own and the
+task's one `job` unprefixed, and the bands step's own under `bands_`:
+`bands_k_path`, the path, and `bands_occupations`, `bands_nbnd`,
+`bands_convergence` and `bands_parallelisation`. Unless the request sets
+them, the bands step takes its `k_path_distance` (0.025 Å⁻¹) and three times
+the occupied bands from aiida-quantumespresso's `bands.yaml` protocol, read
+`heuristic` with the protocol in `source_note`.
+
+The path comes from the symmetry of the cell that is written: here the FCC
+path of diamond. The bundled `Si.cif` is diamond's 8-atom conventional
+cell, so `primitive_cells` is 4 and `bands_k_path` carries the
+`k_path.folded_bands` notice: at each point of the path, the bands of four
+points of the primitive cell's zone appear together. Upload a primitive cell
+for unfolded bands. See [the band structure path](science.md#check-the-band-structure-path)
+for slabs, wires, magnets and what the path does not cover.
 
 See [Recommendations](science.md) to interpret other settings, or
 [Architecture](architecture.md) to extend the computation workflow.

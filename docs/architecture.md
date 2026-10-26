@@ -62,8 +62,9 @@ A `run` (or `explain`) request follows this path, shown for the
    `report.ok` is false, whose message lists each finding with its remedies
    and whose HTTP error envelope carries the findings in
    `error.details.findings`; otherwise it renders one or more `Step`s by calling
-   `generation.quantum_espresso.scf.write_qe_scf` or
-   `generation.quantum_espresso.relax.write_qe_relax` directly. There is no
+   `generation.quantum_espresso.scf.write_qe_scf`,
+   `generation.quantum_espresso.relax.write_qe_relax` or, for a bands step,
+   `generation.quantum_espresso.bands.write_qe_bands` directly. There is no
    writer registry.
 5. `service.render_submission(advice, hpc, code, steps)` renders the
    SLURM script via `submission/slurm.py`. Each step is followed by the
@@ -92,7 +93,8 @@ A `run` (or `explain`) request follows this path, shown for the
    or ZIP (`ArchiveOutput`), or return an in-memory preview.
 
 `explain` (CLI, HTTP `POST /explain` and the MCP `explain` tool) is the
-task's `advise` -> `check` (`advise_dos()` -> `check_dos()` for `dos`): every
+task's `advise` -> `check` (`advise_dos()` -> `check_dos()` for `dos`,
+`advise_band()` -> `check_band()` for `band`): every
 decision plus `blocking`, the findings `run` would refuse to generate an input
 for (as finding documents; the CLI prints each with its remedies' `--set`
 flags), without rendering anything. Its `layout`, which `run`'s JSON summary carries too, names
@@ -121,6 +123,15 @@ system advice run once, and the steps share one job, because they run one
 after another in one allocation: it is sized over both steps, and each
 `pw.x` step gets its own `max_seconds` share of the walltime, since `pw.x`
 counts `max_seconds` from its own start. `dos.x` runs in what is left.
+The `band` task asks it for an `scf` and a `bands` step
+(`service.advise_band`/`check_band`/`generate_band`, `service/_band.py`).
+The bands step's advice is a `PathStepAdvice` (`service/_step_kpath.py`),
+which holds the band path of the written cell (`advisors/k_path.py`) in
+place of a k-mesh, the scf step's occupations, and its own band count and
+convergence. The band task's protocols withhold the moment a compensated
+ordering would pin on the scf step and ask for three times the occupied
+bands on the bands step. `generate_band` then appends one `bands.x` step per
+spin channel, which has no advisor or settings and runs in what is left.
 `relax`/`vc-relax` similarly get `advise_relax`/`check_relax`/
 `generate_relax` (`service/_relax.py`), asking `advise_steps` for their one
 step and adding one more resolved decision (`relax`) on top.
@@ -153,10 +164,12 @@ Inside `advise()` itself, the three phases are:
   advice, the gate and the writer -- reads that one cell object, so no count
   describes a cell other than the one written.
 - **Step advice** (`service/_step.py`, split into `service/_step_kpoints.py`
-  for occupations/k-mesh/bands/convergence and `service/_step_resources.py`
-  for the job/parallelisation, backed by per-step advisors such as
-  `advisors/k_sampling.py`, `advisors/nbnd.py`, `advisors/occupations.py`,
-  `advisors/convergence.py`, `advisors/cutoffs.py`, `advisors/job_resources.py`,
+  for occupations/k-mesh/bands/convergence, `service/_step_kpath.py` for a
+  bands step's band path in place of the k-mesh, and
+  `service/_step_resources.py` for the job/parallelisation, backed by
+  per-step advisors such as `advisors/k_sampling.py`, `advisors/k_path.py`,
+  `advisors/nbnd.py`, `advisors/occupations.py`, `advisors/convergence.py`,
+  `advisors/cutoffs.py`, `advisors/job_resources.py`,
   `advisors/parallelisation.py`, `advisors/n_irr_k.py`, `advisors/relax.py`)
   recommends per-step parameters. Resources are task-level: one job
   (`advisors/job_resources.py`) takes the fewest nodes on which pw.x's
@@ -182,11 +195,11 @@ Paths below are relative to `src/goldilocks_core/` unless stated otherwise.
 | Area                | Files and responsibility                                                                                                                                                                                                                                                       |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Core types          | `resolution.py`: the `Resolved`/`Unavailable`/`Blocked` tri-state and `Provenance`/`Source`, used everywhere; `steps.py`: `Step`/`SharedContext`; `step_settings.py`/`system_settings.py`: the settings dataclasses `generate()` builds; `plan.py`: `PlannedStep`/`expand_task`, multi-step task planning. There is no centralized `contracts` package any more — importing `goldilocks_core.contracts` is a ruff-banned API; import from the module that defines the name instead. |
-| Orchestration       | `service/_pipeline.py`: `advise()`/`check()`, and `advise_steps`, which advises every `pw.x` step of a task with one shared job; `service/_generate.py`: `generate()`, the hard-fail boundary; `service/_dos.py` / `service/_relax.py`: the multi-step and relax task variants; `service/_tasks.py`: `TASK_PHASES`, each task's service functions, which every transport dispatches through; `service/_bundle.py`: submission rendering and bundle assembly; `checks.py`: the sole cross-parameter hard-fail gateway. |
+| Orchestration       | `service/_pipeline.py`: `advise()`/`check()`, and `advise_steps`, which advises every `pw.x` step of a task with one shared job; `service/_generate.py`: `generate()`, the hard-fail boundary; `service/_dos.py` / `service/_band.py` / `service/_relax.py`: the dos, band and relax task variants; `service/_tasks.py`: `TASK_PHASES`, each task's service functions, which every transport dispatches through; `service/_bundle.py`: submission rendering and bundle assembly; `checks.py`: the sole cross-parameter hard-fail gateway. |
 | Input and discovery | `inputs/structure.py`: structure normalization and inspection; `capabilities.py`: available codes, tasks, settings, pseudopotential tables, HPC profiles, and warnings — reflected from the override dataclasses and advisor warning catalogues, not hand-listed.                                                        |
-| Scientific behavior | `analysis/`: structure facts (`composition.py`, `geometry.py`, `is_magnetic.py`, `is_metal.py`, `local_moments.py`, `needs_correlation.py`, `needs_soc.py`, `symmetry.py`); `advisors/`: the recommendation layer (`boundary.py`, `convergence.py`, `cutoffs.py`, `electron_count.py`, `functional.py`, `hubbard_u.py`, `job_resources.py`, `k_sampling.py`, `magnetic_config.py`, `n_irr_k.py`, `nbnd.py`, `occupations.py`, `parallelisation.py`, `pseudo_selection.py`, `relax.py`, `size.py`, `species_split.py`, `vdw_method.py`, `dos.py`, `warning_catalogue.py`); top-level `kmesh.py`: k-point mesh ladder math; top-level `pw_symmetry.py`: the symmetry operations pw.x keeps in a cell as written (which `advisors/n_irr_k.py` counts k-points with) and the frame the cell is written in. |
+| Scientific behavior | `analysis/`: structure facts (`composition.py`, `geometry.py`, `is_magnetic.py`, `is_metal.py`, `local_moments.py`, `needs_correlation.py`, `needs_soc.py`, `symmetry.py`); `advisors/`: the recommendation layer (`boundary.py`, `convergence.py`, `cutoffs.py`, `electron_count.py`, `functional.py`, `hubbard_u.py`, `job_resources.py`, `k_path.py`, `k_sampling.py`, `magnetic_config.py`, `n_irr_k.py`, `nbnd.py`, `occupations.py`, `parallelisation.py`, `pseudo_selection.py`, `relax.py`, `size.py`, `species_split.py`, `vdw_method.py`, `dos.py`, `warning_catalogue.py`); top-level `kmesh.py`: k-point mesh ladder math; top-level `pw_symmetry.py`: the symmetry operations pw.x keeps in a cell as written (which `advisors/n_irr_k.py` counts k-points with) and the frame the cell is written in. |
 | Assets              | `assets/`: installation and integrity (`AssetStore`); `ml/models.py`: model declarations (loading plumbing only — no advisor calls it yet, see below); `assets/pseudopotentials/registry.py` and `assets/pseudopotentials/importers.py`: table declarations and provider normalization; `service/_pseudo.py`: the one place in the pipeline that touches the asset store/filesystem, resolving the installed asset, loading its manifest, narrowing it to a structure's elements, and reading the selected UPF headers' projector counts for the memory estimate. |
-| Output              | `generation/`: target-code writers (`generation/quantum_espresso/scf.py`, `relax.py`, `dos.py`, `namelists.py`); top-level `bundle.py`: manifest assembly and directory/ZIP publication, replacing v1's separate `input_data.py`/`publication.py`/`serialization.py` roles.                                                                                                                        |
+| Output              | `generation/`: target-code writers (`generation/quantum_espresso/scf.py`, `relax.py`, `dos.py`, `bands.py`, `namelists.py`); top-level `bundle.py`: manifest assembly and directory/ZIP publication, replacing v1's separate `input_data.py`/`publication.py`/`serialization.py` roles.                                                                                                                        |
 | Transports          | `cli/core.py`: local commands; `server/documents.py`: request/response pydantic models; `server/_handlers.py`: the one shared request-validation/dispatch implementation both `server/http.py` and `server/mcp.py` call; `server/readiness.py`: cached asset checks.                                                     |
 | Browser             | Repository `web/src/api/`: HTTP client and generated types; `web/src/workspace/`: draft, request, result, and download state.                                                                                                                                                                                              |
 
@@ -194,33 +207,52 @@ Paths below are relative to `src/goldilocks_core/` unless stated otherwise.
 
 ### Add a task
 
-There is no generic task-registration API or graph to define. To add a new
-task, add it to `types.CalcTask`, the one task list (the CLI's `--task`
-choices, the request documents, `capabilities.py` and
-`set_overrides.build_overrides` read it), give it a row of steps in
-`plan.py`'s `expand_task` table (their purposes are also the step names
-`set_overrides.build_overrides` routes settings to, and `capabilities.py`
-derives each setting's `tasks` from them), and add a
-`service/_<task>.py` module that calls `_pipeline.advise_steps` with one
-entry per `pw.x` step (purpose -> that step's `StepOverrides`, from
-`RunOverrides.for_steps`, in run order) — one entry for a single-step task,
-like `service/_relax.py`, or several, like `service/_dos.py`'s `scf` and
-`nscf` — and then
-`_generate.generate` once per step with that step's purpose. `advise_steps`
-returns one `Advice` per step, all sharing the same analysis, system advice
-and job, so the submission script is rendered from that one job, which
-holds every step's `max_seconds` share. Multi-step ordering is described by
-`plan.py`'s `PlannedStep`/`expand_task`, not a graph.
+There is no generic task-registration API or graph to define. Multi-step
+ordering is described by `plan.py`'s `PlannedStep`/`expand_task`, and each
+task's functions by one row of `service/_tasks.py`'s `TASK_PHASES`. To add
+a task:
 
-Give the task its row in `service/_tasks.py`'s `TASK_PHASES`: its
-`advise_<task>`/`check_<task>`/`generate_<task>`/
-`render_submission_<task>`/`to_bundle_input_<task>` functions, which `explain`
-and `run` on every transport look up there (`cli/_explain.py`, `cli/_run.py`,
-`server/_handlers.py`). A task without a row in either table raises
-`KeyError` rather than running another task's steps or functions, and a unit
-test holds `TASK_PHASES` to `types.CalcTask`. Export the functions from
-`service/__init__.py`'s `__all__`, and describe the task in
-`capabilities.py`'s `_tasks()`.
+1. Add it to `types.CalcTask`, the one task list: the CLI's `--task`
+   choices, the request documents, `capabilities.py` and
+   `set_overrides.build_overrides` read it.
+2. Give it a row of steps in `plan.py`'s `expand_task` table. Their
+   purposes are also the step names `set_overrides.build_overrides` routes
+   settings to (`steps.<step>.<key>`), and `capabilities.py` derives each
+   setting's `tasks` from them. A new `pw.x` step purpose joins
+   `capabilities.py`'s `_PW_STEPS`; when its run has its own SCF loop, also
+   `plan.SCF_LIKE_PURPOSES` and `capabilities.py`'s `_SCF_LOOP_STEPS`, and
+   when it runs on a k-mesh, `_MESH_STEPS`. A new group of step settings is
+   a `StepOverrides` field (`service/_step.py`) whose class
+   `capabilities._leaves()` walks, with its steps in
+   `capabilities._BRANCH_STEPS` and its class in `set_overrides._STEP_CLASSES`,
+   as `KPathOverrides` is for the band task's bands step.
+3. Add a `service/_<task>.py` module. Its `advise_<task>` calls
+   `_pipeline.advise_steps` with one entry per `pw.x` step (purpose -> that
+   step's `StepOverrides`, from `RunOverrides.for_steps`, in run order) --
+   one for a single-step task, like `service/_relax.py`, or several, like
+   `service/_dos.py`'s `scf` and `nscf` and `service/_band.py`'s `scf` and
+   `bands` -- and a `StepProtocol` (`service/_step_protocol.py`) for each
+   step whose defaults the task sets itself. `advise_steps` returns
+   one `Advice` per step, all sharing the same analysis, system advice and
+   job, so the submission script is rendered from that one job, which holds
+   every step's `max_seconds` share. `_step.steps_advice` picks each step's
+   advice by its purpose: a k-mesh (`service/_step_kpoints.py`), or a band
+   path for a `bands` step (`service/_step_kpath.py`). Its `check_<task>`
+   checks each step with that step's purpose, which `checks.py`'s
+   step-specific rules read, and its `generate_<task>` calls
+   `_generate.generate` once per `pw.x` step with that step's purpose, then
+   appends the steps of any program without settings, as `generate_band`
+   appends `bands.x`'s.
+4. Give the task its row in `service/_tasks.py`'s `TASK_PHASES`: its
+   `advise_<task>`/`check_<task>`/`generate_<task>`/
+   `render_submission_<task>`/`to_bundle_input_<task>` functions, which
+   `explain` and `run` on every transport look up there (`cli/_explain.py`,
+   `cli/_run.py`, `server/_handlers.py`). A task without a row in either
+   table raises `KeyError` rather than running another task's steps or
+   functions, and unit tests hold both tables to `types.CalcTask`. Export
+   the functions from `service/__init__.py`'s `__all__`, describe the task
+   in `capabilities.py`'s `_tasks()`, and name it in the descriptions of the
+   MCP `explain` and `run` tools (`server/mcp.py`).
 
 ### Add an input writer
 
@@ -228,23 +260,29 @@ Implement the writer as a function in `generation/quantum_espresso/` (or a
 new `generation/<code>/` package for a new code) taking the resolved
 `SystemSettings`/`PwSettings` and a `SharedContext`, and returning `Step`s
 (see `steps.py`). There is no `(code, task, writer)` registry — dispatch is a
-direct Python reference in `service/_generate.py`
-(`write_qe_relax if purpose in ("relax", "vc-relax") else write_qe_scf`).
+direct Python reference in `service/_generate.py` (`write_qe_bands` for a
+`bands` step, otherwise
+`write_qe_relax if purpose in ("relax", "vc-relax") else write_qe_scf`).
 Wire a new writer into `service/_generate.py` or the relevant
 `service/_<task>.py` module the same way. Writers should reject unsupported
 combinations before rendering, rather than inventing scientific choices —
 per `generation/quantum_espresso/scf.py`'s own governing invariant,
 "generation never makes a scientific choice, only translation and
-formatting." The writers today cover all four tasks: `write_qe_scf`,
-`write_qe_relax`, and a DOS writer (`generation/quantum_espresso/dos.py`).
+formatting." The writers today cover all five tasks: `write_qe_scf`,
+`write_qe_relax`, a DOS writer (`generation/quantum_espresso/dos.py`), and
+the band task's `write_qe_bands` and `write_qe_bands_x`
+(`generation/quantum_espresso/bands.py`). `write_qe_relax` and
+`write_qe_bands` render their namelists and cards with `scf.py`'s helpers,
+so `bands.in`, written from the same `SystemSettings` as `scf.in`, repeats
+every keyword of it that defines the Hamiltonian.
 A writer sets `Step.ntasks` when its program cannot use the whole allocation
-(the DOS writer sets 1); `submission/slurm.py` then launches that step on that
-many tasks instead of every task the job allocates. Every `Step` also declares
-how the script decides it finished (`Step.completion`, from `steps.py`):
-`pw.x` steps use `ExitStatusCheck`, which passes only if
+(the DOS and `bands.x` writers set 1); `submission/slurm.py` then launches
+that step on that many tasks instead of every task the job allocates. Every
+`Step` also declares how the script decides it finished (`Step.completion`,
+from `steps.py`): `pw.x` steps use `ExitStatusCheck`, which passes only if
 `<outdir>/<prefix>.save/data-file-schema.xml` was rewritten during the step
-with `exit_status` 0, and `dos.x`, which writes no status file, uses
-`StdoutMarkerCheck` (`JOB DONE` in its stdout).
+with `exit_status` 0, and `dos.x` and `bands.x`, which write no status file,
+use `StdoutMarkerCheck` (`JOB DONE` in their stdout).
 
 ### Add a model or pseudopotential table
 
@@ -363,7 +401,8 @@ requirements.
 - **Keep imports direct.** Package code imports from the module defining a
   name. The top-level `goldilocks_core` package deliberately exports
   nothing; library users import directly from `goldilocks_core.service`
-  (`advise`/`check`/`generate` and the `dos`/`relax` task variants),
+  (`advise`/`check`/`generate`, the `dos`/`band`/`relax` task variants and
+  `TASK_PHASES`),
   `goldilocks_core.cli`, or `goldilocks_core.server`.
 - **Classify expected failures once.** Domain exceptions implement
   `ExpectedFailure` from `failures.py` with a category and safe public
@@ -378,8 +417,9 @@ requirements.
 import ceiling applies to every production owner: 12 project origin modules and
 24 imported symbols by default, with tighter limits for the thin transports
 `cli.core`, `server.http` and `server.mcp`, and raised ones for `checks`,
-`service._system` and `service._dos` (the modules whose own orchestration role
-needs more imports than the default ceiling allows).
+`service._system`, `service._dos` and `advisors.warning_catalogue` (the
+modules whose own orchestration or aggregation role needs more imports than
+the default ceiling allows).
 It counts local and type-only imports, resolves re-exports, and counts accessed
 module-alias members. Pure export packages are transparent to consumer counts.
 The same gate runs Ruff's McCabe check: at most 10 per production function,
@@ -428,7 +468,8 @@ The Analysis card offers an override control for a fact only when
 It places records by the response's `layout`: the Analysis card shows the
 analysis tier; the Advisors card shows every other record with the settings
 whose `resolved_in` names it, or read-only after them, a multi-step task's
-per-step records (a `dos` task's `nscf_` records) under their step. Each
+per-step records (a `dos` task's `nscf_` records, a `band` task's `bands_`
+records) under their step. Each
 setting control shows the value its `resolved_in` path leads to, captioned
 with the tier that produced that value: the record's per-setting source, or
 its own source -- except a record-level `human`, which another of the

@@ -2,7 +2,8 @@
 
 Goldilocks recommends settings for density functional theory (DFT) calculations
 and generates Quantum ESPRESSO input files from a crystal structure — single-point
-SCF, density of states, relaxation, and variable-cell relaxation.
+SCF, density of states, band structure, relaxation, and variable-cell
+relaxation.
 
 Treat the recommended settings as a starting point: review warnings and check
 convergence for your calculation.
