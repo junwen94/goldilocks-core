@@ -3,9 +3,8 @@
 New in v2 (v2 epic 6, #6). Second of five per-step advisors
 (``occupations -> k_sampling -> n_irr_k -> nbnd -> convergence``,
 goldilocks-core-design.md:3239-3248) -- named ``k_sampling`` rather than
-v1's ambiguous ``sampling``/``k_spacing`` (that name is reserved for a
-future ``q_sampling.py`` covering phonon q-points and hybrid-functional
-EXX q-grids, which are a genuinely different thing).
+v1's ambiguous ``sampling``/``k_spacing``: the phonon q-points, a
+genuinely different thing, are ``advisors/q_sampling.py``'s.
 
 v1 had **no heuristic tier at all** for k-point selection: both of its
 advisors (``advice/kdistance.py``'s QRF backend, ``advice/kindex.py``)

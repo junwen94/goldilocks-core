@@ -15,7 +15,10 @@ import math
 import pytest
 from pymatgen.core import Lattice, Structure
 from support import (
+    QE_BOHR_ANGSTROM,
+    aluminium_arsenide,
     graphite,
+    qe_fcc_lattice,
     written_afm_hematite,
     written_afm_manganese_oxide,
     written_afm_nickel,
@@ -38,37 +41,16 @@ from goldilocks_core.pw_fft import (
 )
 from goldilocks_core.pw_symmetry import fft_factors, mixing_axis_pairs, pw_rotations
 
-_BOHR = 0.529177210903
-"""QE 7.3's bohr radius in A, which converts celldm(1)."""
-
-
-def _fcc(celldm: float) -> Lattice:
-    """QE's ibrav = 2 lattice for celldm(1) in bohr."""
-    half = celldm * _BOHR / 2
-    return Lattice([[-half, 0, half], [0, half, half], [-half, half, 0]])
-
 
 def _hexagonal(celldm: float, c_over_a: float) -> Lattice:
     """QE's ibrav = 4 lattice for celldm(1) in bohr and celldm(3)."""
-    a = celldm * _BOHR
+    a = celldm * QE_BOHR_ANGSTROM
     return Lattice([[a, 0, 0], [-a / 2, a * math.sqrt(3) / 2, 0], [0, 0, a * c_over_a]])
-
-
-def aluminium_arsenide() -> Structure:
-    """PHonon example02's AlAs: celldm(1) 10.50, As at (1/4, 1/4, 1/4) alat."""
-    lattice = _fcc(10.50)
-    quarter = 10.50 * _BOHR / 4
-    return Structure(
-        lattice,
-        ["Al", "As"],
-        [[0, 0, 0], [quarter, quarter, quarter]],
-        coords_are_cartesian=True,
-    )
 
 
 def aluminium() -> Structure:
     """PHonon example03's fcc Al, celldm(1) 7.5."""
-    return Structure(_fcc(7.5), ["Al"], [[0, 0, 0]])
+    return Structure(qe_fcc_lattice(7.5), ["Al"], [[0, 0, 0]])
 
 
 def example_graphite() -> Structure:
@@ -89,7 +71,7 @@ def example_graphite() -> Structure:
 def boron_nitride() -> Structure:
     """PHonon example17's hBN monolayer, B and N at (0, +-0.288675135, 0)
     alat."""
-    alat = 4.7419 * _BOHR
+    alat = 4.7419 * QE_BOHR_ANGSTROM
     return Structure(
         _hexagonal(4.7419, 4.3),
         ["B", "N"],

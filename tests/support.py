@@ -48,7 +48,7 @@ from goldilocks_core.advisors.magnetic_config import (
     magnetic_cell,
     magnetic_config,
 )
-from goldilocks_core.analysis.geometry import GeometryFacts, SlabGeometry
+from goldilocks_core.analysis.geometry import GeometryFacts, SlabGeometry, vacuum_axes
 from goldilocks_core.assets.records import AssetFile, AssetSpec
 from goldilocks_core.assets.runtime import statuses
 from goldilocks_core.assets.store import AssetStore, asset_root
@@ -64,6 +64,7 @@ if TYPE_CHECKING:
     from goldilocks_core.analysis.geometry import Dimensionality, LatticeAxis
     from goldilocks_core.analysis.is_magnetic import Magnetism
     from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
+    from goldilocks_core.pw_symmetry import PwRotations
     from goldilocks_core.resolution import FieldState
     from goldilocks_core.types import RelativisticTreatment
 
@@ -792,6 +793,29 @@ def fcc_copper() -> Structure:
     return Structure.from_spacegroup("Fm-3m", Lattice.cubic(3.61), ["Cu"], [[0, 0, 0]])
 
 
+QE_BOHR_ANGSTROM = 0.529177210903
+"""QE 7.3's bohr radius in A (``Modules/constants.f90``), which converts
+celldm(1) of QE's example inputs."""
+
+
+def qe_fcc_lattice(celldm: float) -> Lattice:
+    """QE's ibrav = 2 lattice for celldm(1) in bohr."""
+    half = celldm * QE_BOHR_ANGSTROM / 2
+    return Lattice([[-half, 0, half], [0, half, half], [-half, half, 0]])
+
+
+def aluminium_arsenide() -> Structure:
+    """QE 7.3 PHonon example02's zincblende AlAs: ibrav = 2, celldm(1)
+    10.50, Al at the origin and As at (1/4, 1/4, 1/4) alat."""
+    quarter = 10.50 * QE_BOHR_ANGSTROM / 4
+    return Structure(
+        qe_fcc_lattice(10.50),
+        ["Al", "As"],
+        [[0, 0, 0], [quarter, quarter, quarter]],
+        coords_are_cartesian=True,
+    )
+
+
 def rutile_titanium_dioxide() -> Structure:
     """Rutile TiO2 (P4_2/mnm, a = 4.594 A, c = 2.959 A, O at u = 0.3053)."""
     return Structure.from_spacegroup(
@@ -1305,6 +1329,72 @@ def written_afm_uranium_dioxide() -> Structure:
             ("O", 0.0, (0.25, 0.875, 0.625)),
             ("O", 0.0, (0.25, 0.375, 0.125)),
         ],
+    )
+
+
+def written_magnetic_cell(structure: Structure) -> Resolved[MagneticCell]:
+    """``structure``, a cell as goldilocks writes it (``_written``), as the
+    resolved simulated cell of a collinear run in its own basis, for
+    advisors that read the written cell: spin-polarized when its species
+    carry starting-magnetization classes, with the ordering
+    ``magnetic_ordering=afm`` applies when some class is negative, as in the
+    antiferromagnetic cells above, otherwise the input kept."""
+    spins = [getattr(site.specie, "spin", None) for site in structure]
+    spin_polarized = any(spin is not None for spin in spins)
+    if any(spin is not None and spin < 0 for spin in spins):
+        ordering = OrderingRecord(
+            requested="afm", applied="afm-1", criterion="smallest_cell"
+        )
+    else:
+        ordering = OrderingRecord(
+            requested=None, applied="fm" if spin_polarized else None
+        )
+    cell = MagneticCell(
+        structure=structure,
+        spin_polarized=spin_polarized,
+        spin_orbit_enabled=False,
+        magnetic_elements=(),
+        ordering=ordering,
+        cell_in_input_basis=((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+        tot_magnetization=None,
+    )
+    return Resolved(cell, Provenance(source="heuristic"))
+
+
+ISOTROPIC_STRAINS = (-0.03, -0.02, -0.01, -0.005, 0.005, 0.01, 0.02, 0.03)
+"""The isotropic strains ``symmetric_strains`` starts with."""
+_RANDOM_STRAIN_SIZES = (0.01, 0.02, 0.03)
+_RANDOM_STRAINS_PER_SIZE = 8
+
+
+def symmetric_strains(structure: Structure, rotations: PwRotations) -> list[np.ndarray]:
+    """Cartesian strain tensors that keep every operation in ``rotations``,
+    as a vc-relax does: isotropic ones of +-0.5, 1, 2 and 3%, and eight
+    random ones each of 1, 2 and 3% (seeded), averaged over the operations
+    so that each maps the strained lattice onto itself. A slab, written with
+    its vacuum along c and its plane in xy, is strained in its plane only,
+    as cell_dofree='2Dxy' relaxes it."""
+    lattice = structure.lattice.matrix
+    cartesian = [lattice.T @ w @ np.linalg.inv(lattice.T) for w in rotations.rotations]
+    plane = np.diag([1.0, 1.0, 0.0]) if vacuum_axes(structure) == ("c",) else np.eye(3)
+    strains = [size * plane for size in ISOTROPIC_STRAINS]
+    generator = np.random.default_rng(215)
+    for size in _RANDOM_STRAIN_SIZES:
+        for _ in range(_RANDOM_STRAINS_PER_SIZE):
+            raw = generator.uniform(-1.0, 1.0, (3, 3))
+            raw = plane @ (raw + raw.T) @ plane
+            averaged = sum(r @ raw @ r.T for r in cartesian) / len(cartesian)
+            strains.append(averaged * size / np.abs(np.linalg.eigvalsh(averaged)).max())
+    return strains
+
+
+def strained(structure: Structure, strain: np.ndarray) -> Structure:
+    """``structure`` with every lattice vector a turned into (1 + strain) a,
+    its fractional coordinates kept."""
+    return Structure(
+        structure.lattice.matrix @ (np.eye(3) + strain).T,
+        structure.species,
+        structure.frac_coords,
     )
 
 
