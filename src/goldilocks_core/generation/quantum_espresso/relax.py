@@ -107,7 +107,6 @@ def write_qe_relax(
         ("nbnd", step.nbnd),
         ("convergence", step.convergence),
         ("parallel", step.parallel),
-        ("max_seconds", step.max_seconds),
     ):
         if value is None:
             raise GenerationError(

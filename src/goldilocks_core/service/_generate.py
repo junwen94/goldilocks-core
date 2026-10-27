@@ -77,7 +77,9 @@ def generate(
     written along its band path (``PathStepAdvice``), every other step on
     its k-mesh; each writer refuses settings without the k-points it
     renders. ``max_seconds`` is the advised step's own share of the task's
-    walltime (``ResourceStepAdvice.max_seconds``, #169).
+    walltime (``ResourceStepAdvice.max_seconds``, #169), ``None`` when the
+    task runs a job timer instead (#215), and the scf and relaxation
+    writers then write none.
 
     ``relax`` (v2 epic 10, #10): only ``service/_relax.py`` ever passes
     this -- it is threaded onto ``PwSettings.relax`` and dispatches to

@@ -1,6 +1,6 @@
 """job_resources: one job per task -- partition, nodes, ntasks, walltime,
-and each ``pw.x`` step's ``max_seconds`` -- from the task's per-step
-resource estimates and an HPC profile.
+and each ``pw.x`` step's ``max_seconds`` or the job's timer -- from the
+task's per-step resource estimates and an HPC profile.
 
 New in v2 (v2 epic 7, #7); no v1 precedent. Part of the false
 -circularity fix goldilocks-core-design.md:3176-3195 describes:
@@ -63,6 +63,16 @@ reports (`submission/slurm.py`). The shares are static because they are
 written into each step's input (`generation/quantum_espresso/scf.py`).
 Programs other than pw.x (`dos.x`, `bands.x`) get no share and run in the
 rest.
+
+**A task's protocol can run a job timer instead** (`JobTimerProtocol`,
+#215). No step then gets a share: `max_seconds_by_step` is empty, so no
+input carries `max_seconds`, and `timer_seconds` is the same 95% of the
+walltime, counted from the job's start. At that time the job's timer
+creates `<prefix>.EXIT`, which pw.x and ph.x look for in the working
+directory, delete, and stop cleanly at (QE 7.3
+`Modules/check_stop.f90:59-63`, `:124-133`), so each step can use the time
+the steps before it left. The job record's `source_note` is the
+protocol's note.
 
 `npool`/`ndiag`/`nimage` are not decided here -- that is
 `advisors/parallelisation.py`'s job, reading this module's `ntasks` as
@@ -182,7 +192,9 @@ class JobStep:
 @dataclass(frozen=True, slots=True)
 class JobDecision:
     """The task's one job. ``max_seconds_by_step`` maps each pw.x step's
-    purpose to its share of the walltime, in seconds (module docstring).
+    purpose to its share of the walltime, in seconds; under a job timer it
+    is empty and ``timer_seconds`` is when the timer fires, in seconds from
+    the job's start, otherwise ``None`` (module docstring).
     ``memory_per_process_mb``/``memory_total_mb`` are pw.x's estimated
     memory per process and in total, in MB, for the step that needs the
     most per process, at this job's layout."""
@@ -197,6 +209,7 @@ class JobDecision:
     memory_total_mb: float
     account: str | None
     warnings: tuple[Warning, ...] = ()
+    timer_seconds: int | None = None
 
 
 class JobHumanInput(HumanInput):
@@ -224,17 +237,29 @@ class JobLlmInput(LlmInput):
     walltime_h: float | None = Field(default=None, gt=0)
 
 
+@dataclass(frozen=True, slots=True)
+class JobTimerProtocol:
+    """A task protocol's job timer in place of the steps' ``max_seconds``
+    shares (#215, module docstring). Not a request value, so it leaves the
+    job record's source as the job settings give it; ``note`` becomes the
+    record's ``source_note``."""
+
+    note: str
+
+
 def job_resources(
     steps: Mapping[str, JobStep],
     hpc: HpcProfile,
     human: JobHumanInput | None = None,
     llm: JobLlmInput | None = None,
+    timer: JobTimerProtocol | None = None,
 ) -> FieldState[JobDecision]:
     """The job for a task whose pw.x steps run one after another in one
     allocation; ``steps`` maps each step's purpose to its estimate and
     npool/ndiag overrides. The step that needs the most memory per
     process sizes partition and nodes, and every step gets a
-    ``max_seconds`` share (module docstring)."""
+    ``max_seconds`` share, unless the task's protocol runs a ``timer``
+    instead (module docstring)."""
     human = human or JobHumanInput()
     llm = llm or JobLlmInput()
 
@@ -297,20 +322,23 @@ def job_resources(
             )
         )
 
+    max_seconds_by_step, timer_seconds = _time_limits(walltime_h, steps, timer)
     decision = JobDecision(
         partition=partition.name,
         nodes=nodes,
         ntasks=ntasks,
         ntasks_per_node=ntasks_per_node,
         walltime_h=walltime_h,
-        max_seconds_by_step=_max_seconds_by_step(walltime_h, steps),
+        max_seconds_by_step=max_seconds_by_step,
         memory_per_process_mb=round(memory.per_process_mb, 2),
         memory_total_mb=round(memory.total_mb, 2),
         account=human.account,
         warnings=tuple(warnings),
+        timer_seconds=timer_seconds,
     )
     source = "human" if _any_set(human) else "llm" if _any_set(llm) else "heuristic"
-    return Resolved(decision, Provenance(source=source))
+    note = None if timer is None else timer.note
+    return Resolved(decision, Provenance(source=source, source_note=note))
 
 
 def _pick_partition(
@@ -439,17 +467,22 @@ def _memory_warnings(
     ]
 
 
-def _max_seconds_by_step(
-    walltime_h: float, steps: Mapping[str, JobStep]
-) -> dict[str, int]:
-    """Each step's share of 95% of the walltime, in proportion to its
-    workload and floored, so the shares never sum past it."""
+def _time_limits(
+    walltime_h: float, steps: Mapping[str, JobStep], timer: JobTimerProtocol | None
+) -> tuple[dict[str, int], int | None]:
+    """``max_seconds_by_step`` and ``timer_seconds`` from 95% of the
+    walltime: each step's share, in proportion to its workload and floored
+    so the shares never sum past it, and no timer; or, under ``timer``, no
+    shares and all of it for the timer."""
     budget = int(walltime_h * 3600 * _MAX_SECONDS_FRACTION)
+    if timer is not None:
+        return {}, budget
     total = sum(step.estimate.workload for step in steps.values())
-    return {
+    shares = {
         purpose: budget * step.estimate.workload // total
         for purpose, step in steps.items()
     }
+    return shares, None
 
 
 def _pick_walltime(

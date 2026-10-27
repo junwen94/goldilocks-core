@@ -9,6 +9,7 @@ from goldilocks_core.advisors.job_resources import (
     JobHumanInput,
     JobLlmInput,
     JobStep,
+    JobTimerProtocol,
     job_resources,
 )
 from goldilocks_core.advisors.parallelisation import (
@@ -251,6 +252,41 @@ def test_steps_split_the_max_seconds_budget_by_workload() -> None:
     state = job_resources(steps, _profile(), human=JobHumanInput(walltime_h=4.0))
 
     assert state.value.max_seconds_by_step == {"scf": 6946, "nscf": 6733}
+    assert state.value.timer_seconds is None
+    assert state.provenance.source_note is None
+
+
+@pytest.mark.parametrize("walltime_h, seconds", [(None, 574560), (4.0, 13680)])
+def test_a_job_timer_replaces_every_steps_max_seconds_share(
+    walltime_h: float | None, seconds: int
+) -> None:
+    """#215: under a task protocol's job timer no step gets a share; the
+    timer fires at the same 95% of the walltime (of 168 h, the partition's
+    ceiling, or of a requested 4 h), the job record carries the protocol's
+    note, and the job is otherwise the one the shares would have run in."""
+    steps = {
+        "scf": JobStep(replace(_SMALL, workload=1560)),
+        "nscf": JobStep(replace(_SMALL, workload=1512)),
+    }
+    human = JobHumanInput(walltime_h=walltime_h)
+    timer = JobTimerProtocol(note="Test protocol: one timer for the whole job.")
+
+    split = job_resources(steps, _profile(), human=human)
+    timed = job_resources(steps, _profile(), human=human, timer=timer)
+
+    assert timed.value.max_seconds_by_step == {}
+    assert timed.value.timer_seconds == seconds
+    assert timed.provenance.source_note == "Test protocol: one timer for the whole job."
+    assert timed.source == split.source
+    assert split.value.timer_seconds is None
+    assert (
+        replace(
+            timed.value,
+            max_seconds_by_step=split.value.max_seconds_by_step,
+            timer_seconds=None,
+        )
+        == split.value
+    )
 
 
 def test_max_seconds_shares_are_proportional_to_workload() -> None:

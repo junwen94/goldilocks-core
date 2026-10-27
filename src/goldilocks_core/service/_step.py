@@ -161,7 +161,10 @@ def steps_advice(
     in ``protocols`` (by purpose; a step without one has none, #174), and
     its purpose words its band count's moment warning (#118). A ``bands``
     step gets its band path and the ``scf`` step's occupations, so an
-    ``scf`` entry must precede it (``_step_kpath.py``)."""
+    ``scf`` entry must precede it (``_step_kpath.py``). A job timer is the
+    task's: whichever step's protocol declares one
+    (``StepProtocol.job_timer``), the job runs it in place of every step's
+    ``max_seconds`` share (#215)."""
     electronic: dict[str, ElectronicStepAdvice | PathStepAdvice] = {}
     for purpose, step in steps.items():
         protocol = protocols.get(purpose, StepProtocol())
@@ -186,6 +189,14 @@ def steps_advice(
         job_human,
         job_llm,
         {purpose: step.resources.parallelisation for purpose, step in steps.items()},
+        timer=next(
+            (
+                protocol.job_timer
+                for protocol in protocols.values()
+                if protocol.job_timer is not None
+            ),
+            None,
+        ),
     )
     return {
         purpose: StepAdvice(kpoints=electronic[purpose], resources=resources[purpose])

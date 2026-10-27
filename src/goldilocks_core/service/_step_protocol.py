@@ -24,6 +24,11 @@ step's k-mesh after every tier: a mesh the request did not set is raised
 against that q-mesh, and one it did set is kept, with a warning where it
 falls short (``advisors/k_sampling.py``).
 
+``job_timer`` is task-level (#215): the task's one job runs a timer in
+place of every step's ``max_seconds`` share
+(``advisors/job_resources.py``), so ``steps_advice`` (``_step.py``) reads
+it from whichever step's protocol declares it.
+
 Kept apart from ``StepOverrides`` (``_step.py``), which carries request
 values only and is walked into ``capabilities``' settings.
 """
@@ -32,6 +37,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from goldilocks_core.advisors.job_resources import JobTimerProtocol
 from goldilocks_core.advisors.k_sampling import KSamplingProtocol, PhononKProtocol
 from goldilocks_core.advisors.nbnd import NbndProtocol
 from goldilocks_core.advisors.occupations import (
@@ -44,8 +50,9 @@ from goldilocks_core.advisors.relax import RelaxProtocol
 @dataclass(frozen=True, slots=True)
 class StepProtocol:
     """The protocol fields a step's advisors read; ``None`` leaves that
-    advisor to its own tiers, or the k-mesh unconstrained for
-    ``phonon_k``."""
+    advisor to its own tiers, the k-mesh unconstrained for ``phonon_k``,
+    and, on every step of a task, the ``max_seconds`` shares for
+    ``job_timer``."""
 
     k_sampling: KSamplingProtocol | None = None
     occupations: OccupationsProtocol | None = None
@@ -53,6 +60,7 @@ class StepProtocol:
     unpinned_moment: UnpinnedMomentProtocol | None = None
     phonon_k: PhononKProtocol | None = None
     relax: RelaxProtocol | None = None
+    job_timer: JobTimerProtocol | None = None
 
 
 _DOS_NSCF_NOTE = (

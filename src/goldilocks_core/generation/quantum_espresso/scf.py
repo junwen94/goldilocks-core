@@ -28,7 +28,11 @@ published ``goldilocks.json`` sha256 no longer describes the bytes
 actually run (goldilocks-core-design.md:1230-1237, publication
 guarantee 3). The allocation itself (``nodes``/``ntasks``/
 ``walltime_h``/``partition``) is ``submission/slurm.py``'s concern, not
-this writer's.
+this writer's. A step without a share (``None``: its task runs a job
+timer instead, ``JobDecision.timer_seconds``, #215) is written without
+``max_seconds``, so pw.x keeps its default of 1e7 s (QE 7.3
+``Modules/input_parameters.f90:174``, ``PW/src/input.f90:1266``) and
+stops at the timer's stop file instead.
 
 Structure always comes from ``system.magnetic.cell``, the simulated cell,
 never a separately-passed ``Structure`` -- goldilocks-qe-pw-parameter-audit
@@ -190,7 +194,6 @@ def write_qe_scf(
         ("nbnd", step.nbnd),
         ("convergence", step.convergence),
         ("parallel", step.parallel),
-        ("max_seconds", step.max_seconds),
     ):
         if value is None:
             raise GenerationError(
@@ -279,19 +282,22 @@ def control_keywords(
     step: PwSettings,
     purpose: Literal["scf", "nscf", "bands", "relax", "vc-relax"],
 ) -> dict[str, object]:
-    """``&CONTROL`` keywords. ``tstress`` is written unless ``boundary`` is
-    'isolated': pw.x computes no stress under Martyna-Tuckerman and clears
-    the flag (QE 7.3 PW/src/input.f90:1361-1365), even for vc-relax, where
-    input.f90:646 switches it on. Under '2D', 'slab', it computes the stress
-    in a two-dimensional framework (PW/Doc/INPUT_PW.def:1655-1675)."""
+    """``&CONTROL`` keywords. ``max_seconds`` is written only when the step
+    has a share of the walltime (module docstring). ``tstress`` is written
+    unless ``boundary`` is 'isolated': pw.x computes no stress under
+    Martyna-Tuckerman and clears the flag (QE 7.3 PW/src/input.f90:1361-1365),
+    even for vc-relax, where input.f90:646 switches it on. Under '2D', 'slab',
+    it computes the stress in a two-dimensional framework
+    (PW/Doc/INPUT_PW.def:1655-1675)."""
     keywords: dict[str, object] = {
         "calculation": purpose,
         "prefix": ctx.prefix,
         "outdir": ctx.outdir,
         "pseudo_dir": ctx.pseudo_dir,
         "tprnfor": True,
-        "max_seconds": step.max_seconds,
     }
+    if step.max_seconds is not None:
+        keywords["max_seconds"] = step.max_seconds
     if boundary.isolation != "isolated":
         keywords["tstress"] = True
     if step.relax is not None:

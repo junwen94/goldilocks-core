@@ -230,6 +230,21 @@ def test_max_seconds_is_the_steps_own_share_of_the_walltime(
     ]
 
 
+def test_a_step_without_a_max_seconds_share_writes_none(
+    diamond_silicon, pseudo_metadata_factory
+) -> None:
+    """#215: a task that runs a job timer gives its steps no share
+    (PwSettings.max_seconds None), so scf.in leaves max_seconds to pw.x's
+    default."""
+    system = _system(diamond_silicon, pseudo_metadata_factory)
+
+    (rendered,) = write_qe_scf(system, _step(max_seconds=None), _CTX)
+
+    content = rendered.files["scf.in"]
+    assert "max_seconds" not in content
+    assert "calculation      = 'scf'" in content
+
+
 @pytest.mark.parametrize("purpose", ["scf", "nscf"])
 def test_pw_x_step_is_checked_by_the_status_it_always_writes(
     diamond_silicon, pseudo_metadata_factory, purpose
@@ -899,8 +914,7 @@ def test_cif_site_labels_render_one_line_per_qe_species(
 
 
 @pytest.mark.parametrize(
-    "field",
-    ["occupations", "k_sampling", "nbnd", "convergence", "parallel", "max_seconds"],
+    "field", ["occupations", "k_sampling", "nbnd", "convergence", "parallel"]
 )
 def test_missing_required_step_setting_raises_generation_error(
     silicon_structure, pseudo_metadata_factory, field

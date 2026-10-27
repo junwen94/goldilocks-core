@@ -72,7 +72,11 @@ class PwSettings:
     of an scf, nscf or relaxation step, ``k_path`` the band path of a bands
     step, which ``write_qe_bands`` writes as ``K_POINTS crystal_b`` (#118).
     ``max_seconds`` is this step's share of the task's walltime
-    (``JobDecision.max_seconds_by_step``, ``advisors/job_resources.py``).
+    (``JobDecision.max_seconds_by_step``, ``advisors/job_resources.py``),
+    or ``None`` when the task runs a job timer instead
+    (``JobDecision.timer_seconds``, #215): ``write_qe_scf`` and
+    ``write_qe_relax`` then write none, while ``write_qe_bands``, whose
+    task always splits the walltime, still requires one.
     There is no ``disk_io``: QE's default always writes the status file the
     submission script checks (``steps.ExitStatusCheck``), and
     ``disk_io='none'`` would write none (``PW/src/punch.f90:60-63``)."""

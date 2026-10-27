@@ -315,14 +315,18 @@ def test_max_seconds_comes_from_the_steps_own_settings(
     assert _line_with(content, "max_seconds") == "   max_seconds      = 13680"
 
 
-def test_missing_max_seconds_raises_same_as_scf(
+def test_a_step_without_a_max_seconds_share_writes_none(
     diamond_silicon, pseudo_metadata_factory
 ) -> None:
+    """#215: as in scf.in, a relaxation of a task that runs a job timer has
+    no share (PwSettings.max_seconds None) and relax.in carries none."""
     system = _system(diamond_silicon, pseudo_metadata_factory)
     step = _step(relax=RelaxOptions(), max_seconds=None)
 
-    with pytest.raises(GenerationError, match="max_seconds"):
-        write_qe_relax(system, step, _CTX, "relax")
+    content = write_qe_relax(system, step, _CTX, "relax")[0].files["relax.in"]
+
+    assert "max_seconds" not in content
+    assert _line_with(content, "calculation") == "   calculation      = 'relax'"
 
 
 def _silicon_slab():
