@@ -11,6 +11,13 @@ field by field: a ``shift`` alone keeps the protocol's k_distance, a
 count. ``unpinned_moment`` sets no value: it withholds the moment a
 compensated ordering would pin (#118).
 
+``relax`` is the same kind of tier for a relaxation's ``forc_conv_thr``
+(#215), which has no ML or llm tier: it ranks above QE's default, and a
+request value looser than the protocol's carries the protocol's warning
+(``advisors/relax.py``). ``advise_steps`` does not read it: the task
+resolves the relax record itself on the step's advice (``relax_settings``)
+and passes the protocol there.
+
 ``phonon_k`` is not a tier (#215). It carries the q request of a phonon
 task's ph step, ``None`` for the default q-mesh, and constrains the first
 step's k-mesh after every tier: a mesh the request did not set is raised
@@ -31,6 +38,7 @@ from goldilocks_core.advisors.occupations import (
     OccupationsProtocol,
     UnpinnedMomentProtocol,
 )
+from goldilocks_core.advisors.relax import RelaxProtocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +52,7 @@ class StepProtocol:
     nbnd: NbndProtocol | None = None
     unpinned_moment: UnpinnedMomentProtocol | None = None
     phonon_k: PhononKProtocol | None = None
+    relax: RelaxProtocol | None = None
 
 
 _DOS_NSCF_NOTE = (

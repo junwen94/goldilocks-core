@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from typing import get_args
 
 import pytest
@@ -12,10 +13,17 @@ from goldilocks_core.advisors.relax import (
     RelaxHumanInput,
     RelaxLlmInput,
     RelaxOptions,
+    RelaxProtocol,
     VcRelaxOptions,
     relax_settings,
 )
-from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
+from goldilocks_core.resolution import (
+    Blocked,
+    Provenance,
+    Resolved,
+    Unavailable,
+    Warning,
+)
 
 _CONVERGENCE = convergence(nat=4)
 _IBRAV_0_CELL_DOFREE = {
@@ -320,3 +328,88 @@ def test_every_applied_relax_field_reads_the_tier_that_set_it() -> None:
         "press_conv_thr": "heuristic",
         "cell_factor": "heuristic",
     }
+
+
+_PROTOCOL = RelaxProtocol(
+    forc_conv_thr=1.0e-4,
+    note="A task protocol's force threshold.",
+    citations=("Protocol citation.",),
+    loose_warning=Warning(
+        code="relax.protocol_threshold_loosened",
+        level="warning",
+        category="relax",
+        message="forc_conv_thr is looser than the task's 1e-4 Ry/Bohr.",
+    ),
+)
+"""A stand-in for a task's relaxation protocol, such as the phonon tasks'
+1e-4 Ry/Bohr (#215)."""
+
+
+def test_without_a_protocol_forc_conv_thr_is_the_qe_default_with_no_note() -> None:
+    state = relax_settings("relax", _CONVERGENCE)
+
+    assert state.value.forc_conv_thr == 1.0e-3
+    assert state.provenance.source_note is None
+    assert state.provenance.citations == ()
+
+
+def test_a_protocol_sets_forc_conv_thr_and_names_itself() -> None:
+    """#215: the protocol's 1e-4 Ry/Bohr is not a request value, so the record
+    reads heuristic, with the protocol's note and citations."""
+    state = relax_settings("relax", _CONVERGENCE, protocol=_PROTOCOL)
+
+    assert state.value.forc_conv_thr == 1.0e-4
+    assert state.value.warnings == ()
+    assert state.source == "heuristic"
+    assert state.provenance.field_sources["forc_conv_thr"] == "heuristic"
+    assert state.provenance.source_note == "A task protocol's force threshold."
+    assert state.provenance.citations == ("Protocol citation.",)
+
+
+def test_a_protocol_on_a_vc_relax_sets_only_forc_conv_thr() -> None:
+    state = _vc_relax(_geometry("3d"), protocol=_PROTOCOL)
+
+    plain = _vc_relax(_geometry("3d"))
+    assert state.value == dataclasses.replace(plain.value, forc_conv_thr=1.0e-4)
+    assert (
+        state.value.cell_dofree,
+        state.value.press_conv_thr,
+        state.value.cell_factor,
+    ) == ("all", 0.5, 2.0)
+    assert state.provenance.field_sources == plain.provenance.field_sources
+    assert state.provenance.source_note == "A task protocol's force threshold."
+
+
+@pytest.mark.parametrize(
+    ("forc_conv_thr", "warnings"),
+    [(5.0e-4, (_PROTOCOL.loose_warning,)), (1.0e-4, ()), (5.0e-5, ())],
+    ids=["looser", "equal", "tighter"],
+)
+def test_a_request_forc_conv_thr_wins_over_the_protocol(
+    forc_conv_thr: float, warnings: tuple[Warning, ...]
+) -> None:
+    """#215: a request value is used as given and reads human, without the
+    protocol's note; only one looser than the protocol's carries its
+    warning."""
+    state = relax_settings(
+        "relax",
+        _CONVERGENCE,
+        human=RelaxHumanInput(forc_conv_thr=forc_conv_thr),
+        protocol=_PROTOCOL,
+    )
+
+    assert state.value.forc_conv_thr == forc_conv_thr
+    assert state.value.warnings == warnings
+    assert state.source == "human"
+    assert state.provenance.field_sources["forc_conv_thr"] == "human"
+    assert state.provenance.source_note is None
+    assert state.provenance.citations == ()
+
+
+def test_a_loose_request_without_a_protocol_carries_no_warning() -> None:
+    state = relax_settings(
+        "relax", _CONVERGENCE, human=RelaxHumanInput(forc_conv_thr=5.0e-4)
+    )
+
+    assert state.value.forc_conv_thr == 5.0e-4
+    assert state.value.warnings == ()
