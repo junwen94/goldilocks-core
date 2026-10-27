@@ -764,6 +764,18 @@ loop_
 """
 
 
+def rock_salt(
+    cation: str, anion: str, a: float, *, primitive: bool = True
+) -> Structure:
+    """``cation`` and ``anion`` on rock salt (Fm-3m, lattice constant ``a`` in
+    A), in the 2-atom primitive cell or, with ``primitive=False``, the 8-atom
+    conventional one."""
+    cell = Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(a), [cation, anion], [[0, 0, 0], [0.5, 0.5, 0.5]]
+    )
+    return cell.get_primitive_structure() if primitive else cell
+
+
 def uranium_nitride() -> Structure:
     """UN (rock salt, Fm-3m), Materials Project mp-1865, as MP serves it:
     the fcc primitive cell, whose three reciprocal lengths, equal by

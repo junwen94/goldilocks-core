@@ -161,11 +161,21 @@ _TRIGGERS = {
 """A request that blocks with exactly one finding, of that code, per
 catalogued code with remedies."""
 
-_UNREACHABLE = {"k_path.too_many_kpoints"}
+_UNREACHABLE = {
+    "k_path.too_many_kpoints",
+    "phonon.hubbard_projectors_unsupported",
+    "phonon.noncollinear_hubbard_unsupported",
+    "phonon.pinned_moment_with_smearing",
+    "phonon.q_grid_breaks_symmetry",
+    "phonon.too_many_q_points",
+    "phonon.fix_bottom_layers_unsupported",
+    "phonon.metallicity_unconfirmed",
+}
 """Catalogued codes with remedies that no real request reaches: a band path
 needs more than 40000 k-point/spin pairs, which within k_path_distance's
 lower bound only a cell with lattice vectors shorter than about 1.4 Angstrom
-gives. tests/unit/test_checks.py triggers it on the gate directly."""
+gives; and the phonon tasks' codes, until the phonon tasks exist.
+tests/unit/test_checks.py triggers each on the gate directly."""
 
 
 @pytest.fixture

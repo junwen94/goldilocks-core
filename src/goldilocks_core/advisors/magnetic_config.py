@@ -86,6 +86,9 @@ elements and the answer overridden. A human ``spin_polarized`` still
 wins. The rule reads the count, not "U implies nspin=2": low-spin Co3+ d6
 in LiCoO2 keeps a non-magnetic answer, and so does an element whose count
 ``local_moments`` cannot fix (no anion, or no oxidation-state guess).
+``unpolarized_if_non_magnetic`` says whether the answer
+is_magnetic=non_magnetic gives a run no spin polarization by these rules,
+which the phonon tasks' metallicity rule in ``checks.py`` reads (#215).
 
 **Two steps, around pseudopotential selection (#128).** ``magnetic_cell``
 decides what selection depends on, and the simulated cell: spin
@@ -1498,6 +1501,29 @@ def _odd_shells(structure: Structure, decision: HubbardUDecision) -> str:
         for entry in decision.u_values
         if counts.get(entry.element) in _ODD_SHELL_COUNTS
     )
+
+
+def unpolarized_if_non_magnetic(
+    magnetic: FieldState[MagneticConfigFacts],
+    hubbard: FieldState[HubbardUDecision] | None,
+) -> bool:
+    """Whether the answer is_magnetic=non_magnetic gives the run of
+    ``magnetic`` no spin polarization: its spin polarization followed the
+    is_magnetic fact, not a human ``spin_polarized`` or spin request or the
+    llm (``_resolve_spin_polarized``), and ``hubbard`` applies no U to an odd
+    d or f count of its cell (``_odd_shells``), which would turn spin
+    polarization back on (``_hubbard_spin``). A spin decision the fact made
+    requests no ordering, so the cell is the input's (the FM identity, or no
+    ordering without spin polarization) and has its composition."""
+    if not magnetic.ok:
+        return False
+    provenance = magnetic.provenance
+    decided = (provenance.field_sources or {}).get("spin_polarized")
+    if decided != "heuristic" or "is_magnetic" not in provenance.derived_from:
+        return False
+    if hubbard is None or not hubbard.ok:
+        return True
+    return not _odd_shells(magnetic.value.cell, hubbard.value)
 
 
 def _fraction_for(symbol: str, z_valences: dict[str, float] | None) -> float:

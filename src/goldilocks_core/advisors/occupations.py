@@ -73,7 +73,9 @@ moments spin-orbit coupling keeps time reversal, so every band has a
 degenerate Kramers partner and an odd count half-fills a pair; for a
 collinear run only with a pinned integer moment of nelec's parity.
 Otherwise it gets
-smearing. An explicit ``fixed`` stays fixed, with the derived moment
+smearing. ``fixed_occupations_run`` is that test, which the phonon tasks'
+metallicity rule in ``checks.py`` reads too (#215). An explicit ``fixed``
+stays fixed, with the derived moment
 where there is one; a collinear run without one carries
 ``FIXED_SPIN_POLARIZED_WARNING``, and ``checks.py`` refuses it. An
 electron count that is not resolved (a table not installed yet, a normal
@@ -237,6 +239,18 @@ class _Spin:
         if self.requested is None:
             return self.compensated and not self.unpinned
         return self.requested == int(self.requested)
+
+
+def fixed_occupations_run(
+    magnetic: FieldState[MagneticConfigFacts] | None,
+    electron_count: FieldState[ElectronCountDecision] | None,
+) -> bool:
+    """Whether fixed occupations can run on the spin of ``magnetic`` with the
+    electrons of ``electron_count`` (module docstring), the test that puts a
+    non-metal on them outside the band task. Each record is read only when
+    resolved: without the magnetic one the run reads as spin-unpolarized,
+    and without the count the parity test is skipped."""
+    return _spin(magnetic, electron_count).fixed_runs
 
 
 def _spin(

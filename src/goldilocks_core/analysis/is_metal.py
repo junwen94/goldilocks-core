@@ -6,7 +6,8 @@ heuristic (``_heuristic``).
 
 The heuristic asserts ``metal`` only for a composition made entirely of
 metallic elements by pymatgen's ``Element.is_metal`` (elements and
-intermetallics; ``all_metallic``). Any non-metal element leaves it ``Unavailable``:
+intermetallics; ``all_metallic``, which the phonon tasks' metallicity rule
+in ``checks.py`` reads too). Any non-metal element leaves it ``Unavailable``:
 whether a compound with non-metals conducts depends on its band filling, so
 insulating NaCl, MgO and ZnO and metallic RuO2, ReO3, TiN, LaNiO3 and CrO2
 look alike to composition (#164). This reverses stfc/goldilocks-core#175,

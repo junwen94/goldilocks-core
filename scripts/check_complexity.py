@@ -16,7 +16,14 @@ LIMITS = {
     # + advisors.k_path for the band path notices (#118)
     # + advisors.q_sampling and advisors.phonon for the phonon tasks' notices (#215)
     "advisors.warning_catalogue": (15, 24),
-    "checks": (13, 24),  # + advisors.vdw_method, functionals for the D3(BJ) rule (#141)
+    # + advisors.vdw_method, functionals for the D3(BJ) rule (#141)
+    # + advisors.hubbard_u, q_sampling and fft_grid for the phonon findings (#215)
+    # + analysis.is_metal for the phonon tasks' metallicity rule (#215)
+    # + advisors.occupations.fixed_occupations_run, so that rule offers fixed
+    #   occupations where the occupations rule gives them (#215)
+    # + advisors.magnetic_config.unpolarized_if_non_magnetic, so that it offers
+    #   is_magnetic=non_magnetic exactly where the spin rules then give none (#215)
+    "checks": (17, 31),
     "cli.core": (11, 16),  # + cli._output.command_stdout (#183)
     "server.http": (5, 12),
     "server.mcp": (5, 10),

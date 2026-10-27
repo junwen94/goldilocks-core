@@ -16,25 +16,38 @@ import pytest
 from pymatgen.core import Lattice, Structure
 from support import (
     INTERNAL_TEXT,
+    alpha_uranium,
+    carbon_pair_in_a_box,
+    framed_magnetic_cell,
     geometry_facts,
     graphene_monolayer,
     graphite,
     mc3d_42058_silicon,
     molybdenum_disulfide_monolayer,
     rhombohedral_bismuth_selenide,
+    rutile_titanium_dioxide,
     written_cell,
 )
 
 from goldilocks_core.advisors.boundary import BoundaryFacts, boundary
+from goldilocks_core.advisors.cutoffs import CutoffsDecision
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
+from goldilocks_core.advisors.fft_grid import fft_grid
+from goldilocks_core.advisors.hubbard_u import HubbardU, HubbardUDecision
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.parallelisation import ParallelisationDecision
+from goldilocks_core.advisors.q_sampling import QSamplingHumanInput, q_sampling
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.advisors.warning_catalogue import WARNING_CATALOGUE
-from goldilocks_core.checks import FINDING_CATALOGUE, CheckReport, check_all
+from goldilocks_core.checks import (
+    FINDING_CATALOGUE,
+    CheckReport,
+    check_all,
+    with_phonon_findings,
+)
 from goldilocks_core.pw_symmetry import pw_frame
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Warning
 from goldilocks_core.service import OVERRIDES_WARNING_CATALOGUE
@@ -100,6 +113,47 @@ def _framed(structure: Structure) -> Resolved[object]:
     framed, frame = pw_frame(structure)
     facts = dataclasses.replace(written_cell(framed).value, frame=frame)
     return _resolved(facts, "heuristic")
+
+
+def _spin_orbit(structure: Structure) -> Resolved[object]:
+    facts = dataclasses.replace(written_cell(structure).value, spin_orbit_enabled=True)
+    return _resolved(facts, "heuristic")
+
+
+def _smearing(tot_magnetization: float | None) -> Resolved[object]:
+    return _resolved(
+        OccupationsDecision(
+            occupations="smearing",
+            smearing_type="cold",
+            degauss=0.01,
+            tot_magnetization=tot_magnetization,
+        )
+    )
+
+
+def _hubbard(projectors: str) -> Resolved[object]:
+    return _resolved(
+        HubbardUDecision(
+            u_values=(HubbardU("Ni", "3d", 6.2, "table"),), projectors=projectors
+        ),
+        "heuristic",
+    )
+
+
+def _alpha_uranium_q_grid(q_grid: tuple[int, int, int]):
+    return q_sampling(
+        framed_magnetic_cell(alpha_uranium()), QSamplingHumanInput(q_grid=q_grid)
+    )
+
+
+def _alpha_uranium_fft_grid():
+    cutoffs = _resolved(CutoffsDecision(ecutwfc_ry=60.0, ecutrho_ry=480.0))
+    return fft_grid(framed_magnetic_cell(alpha_uranium()), cutoffs, "vc-relax")
+
+
+def _phonon(purpose: str = "scf", **states: object) -> CheckReport:
+    """The phonon tasks' findings for ``states`` alone."""
+    return with_phonon_findings(CheckReport(), purpose=purpose, **states)
 
 
 _IRON = Structure(Lattice.cubic(2.87), ["Fe", "Fe"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]])
@@ -192,9 +246,41 @@ _TRIGGERS = {
     "parallelisation.ndiag_grid_too_large": lambda: check_all(
         job=_job(), parallel=_layout(4, 16), nbnd=_resolved(NbndDecision(nbnd=8))
     ),
+    "phonon.hubbard_projectors_unsupported": lambda: _phonon(
+        hubbard=_hubbard("ortho-atomic")
+    ),
+    "phonon.noncollinear_hubbard_unsupported": lambda: _phonon(
+        hubbard=_hubbard("atomic"), magnetic=_spin_orbit(_IRON)
+    ),
+    "phonon.isolated_boundary_unsupported": lambda: _phonon(
+        boundary=_resolved(BoundaryFacts("isolated")),
+        magnetic=written_cell(carbon_pair_in_a_box()),
+    ),
+    "phonon.pinned_moment_with_smearing": lambda: _phonon(
+        occupations=_smearing(2.0),
+        magnetic=_spin_polarized(_IRON),
+        electron_count=_electrons(16.0),
+    ),
+    "phonon.q_grid_breaks_symmetry": lambda: _phonon(
+        q_sampling=_alpha_uranium_q_grid((4, 8, 4))
+    ),
+    "phonon.too_many_q_points": lambda: _phonon(
+        q_sampling=_alpha_uranium_q_grid((36, 36, 36))
+    ),
+    "phonon.vc_relax_fft_grid_unsupported": lambda: _phonon(
+        "vc-relax", fft_grid=_alpha_uranium_fft_grid()
+    ),
+    "phonon.fix_bottom_layers_unsupported": lambda: _phonon(
+        "relax", relax=_resolved(RelaxOptions(fix_bottom_layers=1))
+    ),
+    "phonon.metallicity_unconfirmed": lambda: _phonon(
+        occupations=_smearing(None),
+        is_metal=_resolved("metal", "ml"),
+        magnetic=written_cell(rutile_titanium_dioxide()),
+    ),
 }
-"""One ``check_all`` call per catalogued code that returns exactly that
-finding."""
+"""One ``check_all`` or ``with_phonon_findings`` call per catalogued code
+that returns exactly that finding."""
 
 
 @pytest.mark.parametrize(
