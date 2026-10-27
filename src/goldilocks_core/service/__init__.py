@@ -39,7 +39,8 @@ module into one file. Split by pipeline phase instead, matching
   and the scf step's occupations (#118)
 - ``_step_protocol.py`` -- ``StepProtocol``, a task's own defaults for one
   of its steps, a tier below the request (the dos nscf protocol, #174; the
-  band task's scf and bands protocols, #118)
+  band task's scf and bands protocols, #118), and the phonon tasks' protocol
+  for their first step (#215)
 - ``_advice.py`` -- ``Advice``/``RunOverrides``, composing the three
   phases above; ``RunOverrides`` holds one task's overrides, per step;
   ``RecordTiers``, the records of every advice type's ``tiers()``, and the
@@ -54,6 +55,9 @@ module into one file. Split by pipeline phase instead, matching
   and pw.x bands steps, then ``bands.x``
 - ``_relax.py`` -- ``relax``/``vc-relax`` task path (epic 10):
   ``advise_steps`` for its one step (single-step tasks, unlike ``dos``)
+- ``_phonon_steps.py`` -- what a phonon task decides on its first pw.x
+  step's advice (``PhononStepsAdvice``, #215): a relaxation's relax record,
+  the FFT grid for ph.x, and the ph, q2r and phonon_dos steps' records
 - ``_tasks.py`` -- ``TASK_PHASES``, each task's ``advise``/``check``/
   ``generate``/``render_submission``/``to_bundle_input`` by
   ``types.CalcTask``: the one table every transport's ``explain`` and

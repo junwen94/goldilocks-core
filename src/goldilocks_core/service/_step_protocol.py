@@ -15,8 +15,8 @@ compensated ordering would pin (#118).
 (#215), which has no ML or llm tier: it ranks above QE's default, and a
 request value looser than the protocol's carries the protocol's warning
 (``advisors/relax.py``). ``advise_steps`` does not read it: the task
-resolves the relax record itself on the step's advice (``relax_settings``)
-and passes the protocol there.
+resolves the relax record itself on the step's advice (``relax_settings``,
+called by ``_phonon_steps.py``) and passes the protocol there.
 
 ``phonon_k`` is not a tier (#215). It carries the q request of a phonon
 task's ph step, ``None`` for the default q-mesh, and constrains the first
@@ -29,6 +29,11 @@ place of every step's ``max_seconds`` share
 (``advisors/job_resources.py``), so ``steps_advice`` (``_step.py``) reads
 it from whichever step's protocol declares it.
 
+A phonon task gives its first step ``phonon_k``, ``job_timer``
+(``PHONON_JOB_TIMER``) and, for a relax or vc-relax, ``relax``
+(``RELAX_PHONON_PROTOCOL``). ``phonon_step_protocol`` builds that protocol
+per request, since ``phonon_k`` carries the request's q.
+
 Kept apart from ``StepOverrides`` (``_step.py``), which carries request
 values only and is walked into ``capabilities``' settings.
 """
@@ -36,6 +41,7 @@ values only and is walked into ``capabilities``' settings.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from goldilocks_core.advisors.job_resources import JobTimerProtocol
 from goldilocks_core.advisors.k_sampling import KSamplingProtocol, PhononKProtocol
@@ -44,6 +50,11 @@ from goldilocks_core.advisors.occupations import (
     OccupationsProtocol,
     UnpinnedMomentProtocol,
 )
+from goldilocks_core.advisors.phonon import (
+    AIIDA_PROTOCOLS_CITATION,
+    LOOSE_FORCE_THRESHOLD_WARNING,
+)
+from goldilocks_core.advisors.q_sampling import QSamplingHumanInput
 from goldilocks_core.advisors.relax import RelaxProtocol
 
 
@@ -116,3 +127,54 @@ protocol also sets ``diagonalization='paro'``, ``diago_full_acc`` and
 ``PW/src/input.f90:860-865``) and converges every band there (only an SCF
 run's ``sum_band`` marks bands empty), and the bands step keeps pw.x's
 default diagonalization."""
+
+RELAX_PHONON_PROTOCOL = RelaxProtocol(
+    forc_conv_thr=1e-4,
+    note=(
+        "Protocol default for the phonon tasks' relaxation: "
+        "aiida-quantumespresso's pw base.yaml, balanced (fast 1e-3, stringent "
+        "0.5e-4); Quantum ESPRESSO's own default is 1e-3. The phonons are "
+        "computed at the relaxed geometry, and leftover forces shift their "
+        "frequencies."
+    ),
+    citations=(AIIDA_PROTOCOLS_CITATION,),
+    loose_warning=LOOSE_FORCE_THRESHOLD_WARNING,
+)
+"""The relaxation that replaces the phonon scf in the relax-phonon and
+vc-relax-phonon tasks (#215): forc_conv_thr 1e-4 Ry/Bohr, the balanced value
+of aiida-quantumespresso's ``workflows/protocols/pw/base.yaml``, ten times
+tighter than QE's 1e-3, which the relax and vc-relax tasks keep. DFPT takes
+second derivatives at the geometry it is given, so leftover forces shift the
+frequencies, soft modes most. A request value looser than 1e-4 carries
+``phonon.loose_force_threshold`` (``advisors/phonon.py``)."""
+
+PHONON_JOB_TIMER = JobTimerProtocol(
+    note=(
+        "Protocol default for the phonon tasks: no step writes max_seconds. "
+        "The job's timer creates <prefix>.EXIT at timer_seconds, 95% of the "
+        "walltime, and pw.x or ph.x, whichever is running, stops there "
+        "cleanly. The memory figures are pw.x's for the first step: ph.x's own "
+        "memory is not estimated, and it holds arrays that figure leaves out."
+    )
+)
+"""The phonon tasks' job timer (#215): pw.x and ph.x stop cleanly at the
+stop file the timer creates (``submission/slurm.py``), so the relaxation
+takes the time it needs and ph.x the rest; a ph.x stopped there resumes from
+its recover data when the job is resubmitted from its step. The job is sized
+on the first step's pw.x estimate, since ph.x's memory has no estimate here;
+ph.x also keeps arrays that estimate leaves out, such as the projections of
+each of its k-points (QE 7.3 ``PHonon/PH/allocate_phq.f90:143-150``)."""
+
+
+def phonon_step_protocol(
+    first_step: Literal["scf", "relax", "vc-relax"], q: QSamplingHumanInput | None
+) -> StepProtocol:
+    """A phonon task's protocol for its first step, ``first_step`` (#215,
+    module docstring): the k-mesh constrained by the q-mesh of ``q``, the ph
+    step's q request (``None`` for the default mesh), the job timer, and,
+    for a relax or vc-relax, ``RELAX_PHONON_PROTOCOL``."""
+    return StepProtocol(
+        phonon_k=PhononKProtocol(q),
+        relax=None if first_step == "scf" else RELAX_PHONON_PROTOCOL,
+        job_timer=PHONON_JOB_TIMER,
+    )

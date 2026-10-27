@@ -29,6 +29,8 @@ LIMITS = {
     "server.mcp": (5, 10),
     "service._system": (13, 23),
     "service._dos": (16, 26),
+    # + advisors.q_sampling, advisors.phonon for the phonon steps' override bags (#215)
+    "service._step": (14, 25),
 }
 DEFAULT_LIMIT = (12, 24)
 

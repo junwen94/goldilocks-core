@@ -43,9 +43,11 @@ here today. ``DosSettings``'s fields are numbers ``service/_dos.py``
 copies from the dos record. ``PhSettings``, ``Q2rSettings`` and
 ``MatdynSettings`` (#215) came after their producers, the q-mesh and
 phonon advisors (``advisors/q_sampling.py``, ``advisors/phonon.py``), so
-every one of their fields is required. Every optional field here is
-expected to become required once its real producer exists -- a natural,
-signature-breaking change at that point, not scope creep now.
+every one of their fields is required; ``service/_phonon_steps.py`` builds
+them from those advisors' records (``phonon_step_settings``). Every
+optional field here is expected to become required once its real producer
+exists -- a natural, signature-breaking change at that point, not scope
+creep now.
 
 ``DosSettings`` existing as its own type with its own ``broadening``
 field (QE calls this ``degauss`` too, in ``dos.x``/``projwfc.x`` --
