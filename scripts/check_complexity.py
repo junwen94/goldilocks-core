@@ -14,7 +14,8 @@ PACKAGE = "goldilocks_core"
 ROOT = Path(__file__).resolve().parents[1]
 LIMITS = {
     # + advisors.k_path for the band path notices (#118)
-    "advisors.warning_catalogue": (13, 24),
+    # + advisors.q_sampling and advisors.phonon for the phonon tasks' notices (#215)
+    "advisors.warning_catalogue": (15, 24),
     "checks": (13, 24),  # + advisors.vdw_method, functionals for the D3(BJ) rule (#141)
     "cli.core": (11, 16),  # + cli._output.command_stdout (#183)
     "server.http": (5, 12),

@@ -244,6 +244,33 @@ class TestTopLevelShape:
                 "k_path",
             )
 
+    def test_warnings_catalogue_lists_the_phonon_notices(self) -> None:
+        """#215: the phonon tasks' notices are published under the record
+        that carries each, so a frontend can filter on them before any run
+        has emitted them; the k-mesh and force-threshold codes keep their
+        phonon prefix."""
+        by_code = {entry["code"]: entry for entry in capabilities()["warnings"]}
+
+        for code, level, category in (
+            ("phonon.relax_first", "info", "phonon"),
+            ("phonon.vc_relax_input_cell", "info", "phonon"),
+            ("phonon.slab_lo_to_needs_2d_truncation", "warning", "phonon"),
+            ("phonon.magnetic_noncollinear_experimental", "warning", "phonon"),
+            ("phonon.hubbard_experimental", "warning", "phonon"),
+            ("phonon.d3_two_body", "info", "phonon"),
+            ("phonon.loose_force_threshold", "warning", "relax"),
+            ("phonon.asr_simple_fallback", "info", "q2r"),
+            ("phonon.k_mesh_raised", "info", "k_sampling"),
+            ("phonon.k_grid_coarser_than_q", "warning", "k_sampling"),
+            ("phonon.k_grid_not_commensurate", "warning", "k_sampling"),
+            ("phonon.lanthanide_actinide_k", "info", "k_sampling"),
+            ("q_sampling.grid_and_distance_conflict", "info", "q_sampling"),
+        ):
+            assert (by_code[code]["level"], by_code[code]["category"]) == (
+                level,
+                category,
+            ), code
+
     def test_codes_and_tasks_reflect_only_what_actually_runs(self) -> None:
         """v2 epic 9 (#9, #28): ``dos`` joined ``scf_single_point`` once
         the delivery layers actually routed it, not before -- this list

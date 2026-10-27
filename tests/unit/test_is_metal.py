@@ -3,10 +3,12 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 from pymatgen.core import Lattice, Structure
+from support import written_afm_nickel, written_afm_nickel_oxide
 
 from goldilocks_core.analysis.is_metal import (
     IsMetalHumanInput,
     IsMetalLlmInput,
+    all_metallic,
     is_metal,
 )
 
@@ -119,6 +121,27 @@ def test_an_all_metal_composition_resolves_as_metal(formula: str) -> None:
     assert state.ok
     assert state.value == "metal"
     assert state.source == "heuristic"
+
+
+@pytest.mark.parametrize("formula", sorted(_ALL_METAL_COMPOSITIONS))
+def test_all_metallic_holds_for_a_composition_of_metallic_elements(
+    formula: str,
+) -> None:
+    assert all_metallic(_crystal(_ALL_METAL_COMPOSITIONS[formula]))
+
+
+@pytest.mark.parametrize("formula", sorted(_COMPOUNDS_WITH_NON_METALS))
+def test_all_metallic_fails_for_any_non_metal_element(formula: str) -> None:
+    """The heuristic's own rule: RuO2 and TiN fail it like NaCl, since
+    composition cannot tell them apart (#164)."""
+    assert not all_metallic(_crystal(_COMPOUNDS_WITH_NON_METALS[formula]))
+
+
+def test_all_metallic_reads_a_written_cell_s_spin_split_species_by_element() -> None:
+    """The simulated cell carries one species per spin class (Ni with spin
+    +1 and -1); each is read as its element."""
+    assert all_metallic(written_afm_nickel())
+    assert not all_metallic(written_afm_nickel_oxide())
 
 
 def test_metalloid_oxide_is_unavailable_not_a_guessed_non_metal() -> None:

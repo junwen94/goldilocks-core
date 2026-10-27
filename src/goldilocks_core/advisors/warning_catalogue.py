@@ -29,6 +29,8 @@ from goldilocks_core.advisors.occupations import WARNING_CATALOGUE as _OCCUPATIO
 from goldilocks_core.advisors.parallelisation import (
     WARNING_CATALOGUE as _PARALLELISATION,
 )
+from goldilocks_core.advisors.phonon import WARNING_CATALOGUE as _PHONON
+from goldilocks_core.advisors.q_sampling import WARNING_CATALOGUE as _Q_SAMPLING
 from goldilocks_core.advisors.vdw_method import WARNING_CATALOGUE as _VDW
 from goldilocks_core.ml.predict import WARNING_CATALOGUE as _MODEL
 
@@ -45,5 +47,7 @@ WARNING_CATALOGUE = (
     + _NBND
     + _OCCUPATIONS
     + _PARALLELISATION
+    + _PHONON
+    + _Q_SAMPLING
     + _VDW
 )
