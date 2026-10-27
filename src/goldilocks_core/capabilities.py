@@ -66,10 +66,11 @@ exceptions: ``pseudo_table_id`` resolves in ``pseudo_table.id``,
 ``spin_orbit_coupling`` in ``magnetic.spin_orbit_enabled``,
 ``magnetic_ordering`` in ``magnetic.ordering.applied``, ``k_grid`` in
 ``k_sampling.mesh``, ``k_path_distance`` in the band task's ``bands_k_path``,
-and a knob no record holds a value of
-(``extra_bands``, ``nosym``, the Hubbard switches) has no path. Neither has
-a setting published under a key other than its field name, since a
-record's ``field_sources`` names settings by field name.
+``hubbard_projectors`` in ``hubbard.projectors``, and a knob no record holds
+a value of (``extra_bands``, ``nosym``, ``hubbard_needs_correlation``,
+``u_by_element``) has no path. Neither has a setting published under a key
+other than its field name, since a record's ``field_sources`` names
+settings by field name.
 
 **One real key collision, resolved by renaming, not by luck**:
 ``advisors/hubbard_u.py``'s own ``HubbardUHumanInput.needs_correlation``
@@ -487,6 +488,18 @@ _SETTING_META: dict[str, _SettingExtra] = {
             "table, so only listed elements present in the structure get +U. "
             "La and Ac are rejected: no installed pseudopotential has an "
             "occupied La 4f or any Ac 5f channel, so pw.x stops on any U for them."
+        ),
+    },
+    "hubbard_projectors": {
+        "structure_specific": False,
+        "path": ("projectors",),
+        "default": "ortho-atomic",
+        "description": (
+            "Projector type of the HUBBARD card when an element gets +U: "
+            "'ortho-atomic', the default, which Quantum ESPRESSO recommends, or "
+            "'atomic', the only type ph.x accepts with +U. A U value is tied to "
+            "the projectors it was derived with, so switching changes what a "
+            "given U means; the built-in U table is used unchanged with either."
         ),
     },
     "occupations": {

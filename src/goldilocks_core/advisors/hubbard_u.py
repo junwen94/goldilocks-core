@@ -7,8 +7,16 @@ that gets +U, either from the built-in table below or from a human
 HUBBARD card iff ``u_values`` is non-empty, so every resolved decision is
 renderable: no Hubbard outcome can pass ``checks.check_all`` and then fail
 in a writer (#135). An element without a U is plain DFT. The decision's
-warnings follow from its entries alone, whichever branch produced them
-(``_decision``, #167).
+warnings follow from its entries and projectors alone, whichever branch
+produced them (``_decision``, #167).
+
+**Projectors.** The card's projector type is the ``hubbard_projectors``
+setting, the same for every task: ``ortho-atomic`` by default, which QE
+recommends (Doc/Hubbard_input.tex:141), or ``atomic``, the only type ph.x
+accepts for DFPT+U (PHonon/PH/phq_readin.f90:766-767). A U value is tied
+to the projectors it was derived with (I. Timrov et al., Phys. Rev. B 102,
+235159 (2020); Doc/Hubbard_input.tex:624), so switching projectors changes
+what a given U means; the table below is used unchanged with either.
 
 **When.** The ``needs_correlation`` fact (a transition metal, lanthanide or
 actinide with O or F, Materials Project's screening rule) or a human/LLM
@@ -20,7 +28,7 @@ the self-interaction error +U patches, so it always gets no +U
 **Built-in table** (``_U_TABLE``), conventions in short:
 
 - Each value is a Dudarev U_eff = U - J in eV on one manifold, written as
-  ``U <label>-<manifold> <value>`` under ``HUBBARD (ortho-atomic)``. QE
+  ``U <label>-<manifold> <value>`` under ``HUBBARD (<projectors>)``. QE
   reads a card holding only U values as ``lda_plus_u_kind = 0``, the
   simplified Dudarev scheme (Modules/read_cards.f90:3046-3048).
 - d block: the Materials Project convention (V, Cr, Mn, Fe, Co, Ni, Mo, W;
@@ -32,12 +40,13 @@ the self-interaction error +U patches, so it always gets no +U
   (OQMD's qmpy configuration) and U, Np, Pu (OQMD): 4.0 for An(IV) oxides,
   VASP PAW. Am, Cm: Suzuki et al. 2013 (all-electron LDA+U+SOC, J = 0).
   Bk: Chen & Kaltsoyannis 2025 (all-electron PBE+U+SOC).
-- None of these was derived with QE's ortho-atomic projectors, so every
-  table value carries ``hubbard.projector_mismatch``. Each is one value per
-  element whatever its oxidation state or environment, fitted on oxides or
-  fluorides (Pr-Yb: nitrides) with PBE, PW91 or LDA, while the default
-  functional here is PBEsol; the SOC-derived actinide values are applied
-  without SOC.
+- None of these was derived with QE's ortho-atomic projectors, so under
+  them every table value carries ``hubbard.projector_mismatch``; under
+  atomic projectors the Pr-Yb values match and only the others carry it.
+  Each is one value per element whatever its oxidation state or
+  environment, fitted on oxides or fluorides (Pr-Yb: nitrides) with PBE,
+  PW91 or LDA, while the default functional here is PBEsol; the
+  SOC-derived actinide values are applied without SOC.
 - ``_NO_U`` elements deliberately get no U (plain DFT, no warning): the
   other d-block elements (Materials Project convention), La (La3+ is 4f0),
   Lu (4f14 5d0) and Th (5f0).
@@ -79,6 +88,12 @@ from goldilocks_core.resolution import (
     blocked_by,
     field_sources_from,
 )
+
+HubbardProjectors = Literal["ortho-atomic", "atomic"]
+"""The HUBBARD card's projector types this package writes (module
+docstring)."""
+
+_DEFAULT_PROJECTORS: HubbardProjectors = "ortho-atomic"
 
 
 class _TabulatedU(NamedTuple):
@@ -135,6 +150,13 @@ _VASP_PAW_SOURCES = frozenset(
         _OQMD,
     }
 )
+_ALL_ELECTRON_SOURCES = frozenset({_SUZUKI_2013, _CHEN_2025})
+_DERIVED_WITH: dict[HubbardProjectors, frozenset[tuple[str, str]]] = {
+    "ortho-atomic": frozenset(),
+    "atomic": frozenset({_TOPSAKAL_2014}),
+}
+"""The sources whose values were fitted in QE with each projector type:
+none with ortho-atomic, Topsakal & Wentzcovitch's with atomic."""
 
 _U_TABLE: dict[str, _TabulatedU] = {
     "V": _TabulatedU("3d", 3.25, *_MATERIALS_PROJECT),
@@ -208,19 +230,52 @@ _VASP_DERIVED = ", ".join(
     for symbol, row in _U_TABLE.items()
     if (row.citation, row.doi) in _VASP_PAW_SOURCES
 )
+_ALL_ELECTRON_DERIVED = ", ".join(
+    symbol
+    for symbol, row in _U_TABLE.items()
+    if (row.citation, row.doi) in _ALL_ELECTRON_SOURCES
+)
 
 PROJECTOR_MISMATCH_WARNING = Warning(
     code="hubbard.projector_mismatch",
     level="warning",
     category="hubbard",
     message=(
-        "No built-in U value was derived with the Quantum ESPRESSO ortho-atomic "
-        "projectors this input uses, so the same U need not give the same "
-        f"correction. VASP-derived (PAW projectors): {_VASP_DERIVED}. The other "
-        "built-in values come from QE atomic-projector or all-electron "
-        "calculations."
+        "A built-in U value was not derived with the Quantum ESPRESSO projectors "
+        "this input uses (hubbard_projectors), so the same U need not give the "
+        "same correction."
     ),
 )
+"""Catalogue entry; ``_PROJECTOR_MISMATCH`` words it for each projector
+type."""
+
+_PROJECTOR_MISMATCH: dict[HubbardProjectors, Warning] = {
+    "ortho-atomic": PROJECTOR_MISMATCH_WARNING.model_copy(
+        update={
+            "message": (
+                "No built-in U value was derived with the Quantum ESPRESSO "
+                "ortho-atomic projectors this input uses, so the same U need not "
+                "give the same correction. VASP-derived (PAW projectors): "
+                f"{_VASP_DERIVED}. The other built-in values come from QE "
+                "atomic-projector or all-electron calculations."
+            )
+        }
+    ),
+    "atomic": PROJECTOR_MISMATCH_WARNING.model_copy(
+        update={
+            "message": (
+                f"The built-in U values of {_VASP_DERIVED} (VASP-derived, PAW "
+                f"projectors) and {_ALL_ELECTRON_DERIVED} (all-electron) were not "
+                "derived with the Quantum ESPRESSO atomic projectors this input "
+                "uses, so the same U need not give the same correction."
+            )
+        }
+    ),
+}
+"""The warning a built-in value not fitted with the projectors in use
+(``_DERIVED_WITH``) adds, by projector type. Every table value mismatches
+ortho-atomic projectors; the Pr-Yb values match atomic ones, so that text
+names only the others."""
 
 STARTING_NS_EIGENVALUE_WARNING = Warning(
     code="hubbard.starting_ns_eigenvalue_missing",
@@ -288,9 +343,12 @@ class HubbardU:
 @dataclass(frozen=True, slots=True)
 class HubbardUDecision:
     """``u_values`` holds one entry per element that gets +U, sorted by
-    element; the QE writers render a HUBBARD card iff it is non-empty."""
+    element; the QE writers render a HUBBARD card iff it is non-empty, with
+    ``projectors`` as its projector type: ortho-atomic unless the request
+    asks for atomic, and ``None`` exactly when no element gets +U."""
 
     u_values: tuple[HubbardU, ...] = ()
+    projectors: HubbardProjectors | None = None
     warnings: tuple[Warning, ...] = ()
 
 
@@ -316,6 +374,10 @@ class HubbardUHumanInput(HumanInput):
     element out for no U); replaces the built-in table, so only listed
     elements present in the structure get +U. La and Ac are rejected
     (``_NO_HUBBARD_CHANNEL``)."""
+    hubbard_projectors: HubbardProjectors | None = None
+    """The HUBBARD card's projector type when an element gets +U
+    (``HubbardUDecision.projectors``). Named as the setting is published:
+    a record's ``field_sources`` name settings by field name."""
 
 
 class HubbardULlmInput(LlmInput):
@@ -333,58 +395,72 @@ def hubbard_u(
     overrides (``needs_correlation=False``, then ``u_by_element``, then
     ``needs_correlation=True``), the LLM override, then the
     ``needs_correlation`` fact, which this propagates when it is blocked.
-    The provenance names the setting that decided and who set it, and the
-    record the rule followed (``_provenance``, #173)."""
+    A decision with a U takes the human ``hubbard_projectors``, else
+    ortho-atomic. The provenance names the setting that decided and who set
+    it, ``hubbard_projectors`` too when a U applies, and the record the rule
+    followed (``_resolved``, #173)."""
     human = human or HubbardUHumanInput()
     llm = llm or HubbardULlmInput()
+    projectors = human.hubbard_projectors or _DEFAULT_PROJECTORS
 
     if functional == HYBRID_FUNCTIONAL:
-        return Resolved(_decision(), _provenance(None, None, ("functional",)))
+        return _resolved(_decision(), None, None, ("functional",))
     if human.needs_correlation is False:
-        return Resolved(_decision(), _provenance(human, llm))
+        return _resolved(_decision(), human, llm)
     if human.u_by_element is not None:
-        return Resolved(
-            _from_u_by_element(structure, human.u_by_element),
-            _provenance(human, llm, setting="u_by_element"),
+        return _resolved(
+            _from_u_by_element(structure, human.u_by_element, projectors),
+            human,
+            llm,
+            setting="u_by_element",
         )
     if human.needs_correlation is True:
-        return Resolved(_from_table(structure), _provenance(human, llm))
+        return _resolved(_from_table(structure, projectors), human, llm)
     if llm.needs_correlation is False:
-        return Resolved(_decision(), _provenance(human, llm))
+        return _resolved(_decision(), human, llm)
     if llm.needs_correlation is True:
-        return Resolved(_from_table(structure), _provenance(human, llm))
+        return _resolved(_from_table(structure, projectors), human, llm)
 
     if not needs_correlation.ok:
         return Blocked(by=blocked_by(needs_correlation))
-    from_fact = _provenance(human, llm, ("needs_correlation",))
     if not needs_correlation.value:
-        return Resolved(_decision(), from_fact)
-    return Resolved(_from_table(structure), from_fact)
+        return _resolved(_decision(), human, llm, ("needs_correlation",))
+    return _resolved(
+        _from_table(structure, projectors), human, llm, ("needs_correlation",)
+    )
 
 
-def _provenance(
+def _resolved(
+    decision: HubbardUDecision,
     human: HubbardUHumanInput | None,
     llm: HubbardULlmInput | None,
     derived_from: tuple[str, ...] = (),
     *,
     setting: str = "needs_correlation",
-) -> Provenance:
-    """The provenance of a decision ``setting`` decided: ``human`` or
+) -> Resolved[HubbardUDecision]:
+    """``decision`` with the provenance of the ``setting`` that decided it
+    and, when it applies a U, of ``hubbard_projectors``: ``human`` or
     ``llm`` where that input set it, else ``heuristic``, with
     ``derived_from`` naming the record a heuristic rule followed (the
     ``needs_correlation`` fact, or ``functional`` for a hybrid, which reads
     neither input). Keyed by the attribute name ``needs_correlation``;
     ``/capabilities`` exposes it as ``hubbard_needs_correlation``."""
-    return Provenance.from_field_sources(
-        field_sources_from(human, llm, fields=(setting,)), derived_from=derived_from
+    fields = (setting, "hubbard_projectors") if decision.u_values else (setting,)
+    return Resolved(
+        decision,
+        Provenance.from_field_sources(
+            field_sources_from(human, llm, fields=fields), derived_from=derived_from
+        ),
     )
 
 
-def _from_table(structure: Structure) -> HubbardUDecision:
-    """The built-in U for every tabulated correlated element. The others
-    get plain DFT: silently for ``_NO_U``, with a warning otherwise. A
-    structure with no correlated element (#36: a forced ``needs_correlation``
-    on plain Si) gets an empty decision."""
+def _from_table(
+    structure: Structure, projectors: HubbardProjectors
+) -> HubbardUDecision:
+    """The built-in U for every tabulated correlated element, on
+    ``projectors``. The others get plain DFT: silently for ``_NO_U``, with a
+    warning otherwise. A structure with no correlated element (#36: a
+    forced ``needs_correlation`` on plain Si) gets an empty decision."""
     correlated = _correlated_elements(composition(structure).value)
     u_values = tuple(_tabulated(symbol) for symbol in correlated if symbol in _U_TABLE)
     missing = tuple(
@@ -392,7 +468,7 @@ def _from_table(structure: Structure) -> HubbardUDecision:
         for symbol in correlated
         if symbol not in _U_TABLE and symbol not in _NO_U
     )
-    return _decision(u_values, missing=missing)
+    return _decision(u_values, projectors, missing=missing)
 
 
 def _tabulated(symbol: str) -> HubbardU:
@@ -401,11 +477,11 @@ def _tabulated(symbol: str) -> HubbardU:
 
 
 def _from_u_by_element(
-    structure: Structure, u_by_element: dict[str, float]
+    structure: Structure, u_by_element: dict[str, float], projectors: HubbardProjectors
 ) -> HubbardUDecision:
     """Replace semantics: only listed elements present in ``structure`` get
-    +U; listed elements it does not contain are reported, not refused, so
-    one U table can serve many structures."""
+    +U, on ``projectors``; listed elements it does not contain are reported,
+    not refused, so one U table can serve many structures."""
     present = set(composition(structure).value.elements)
     u_values = tuple(
         HubbardU(symbol, _manifold(symbol), u_ev, "human")
@@ -413,30 +489,41 @@ def _from_u_by_element(
         if symbol in present
     )
     unused = tuple(sorted(set(u_by_element) - present))
-    return _decision(u_values, unused=unused)
+    return _decision(u_values, projectors, unused=unused)
 
 
 def _decision(
     u_values: tuple[HubbardU, ...] = (),
+    projectors: HubbardProjectors = _DEFAULT_PROJECTORS,
     *,
     missing: tuple[str, ...] = (),
     unused: tuple[str, ...] = (),
 ) -> HubbardUDecision:
-    """Builds every resolved decision, so its warnings follow from its
-    entries whichever branch produced them (#167): any applied U carries
-    the starting-guess warning and a built-in one also the projector
-    warning (a ``u_by_element`` value's source is unknown), each element
-    without a published U adds ``hubbard.u_value_missing``, and unused
+    """Builds every resolved decision, so its projectors and warnings follow
+    from its entries whichever branch produced them (#167): a decision with
+    a U writes its card with ``projectors`` and one without has none, any
+    applied U carries the starting-guess warning and a built-in one not
+    fitted with ``projectors`` also the projector warning (a
+    ``u_by_element`` value's source is unknown), each element without a
+    published U adds ``hubbard.u_value_missing``, and unused
     ``u_by_element`` keys add ``hubbard.u_by_element_unused``."""
     warnings: list[Warning] = []
-    if any(entry.value_source == "table" for entry in u_values):
-        warnings.append(PROJECTOR_MISMATCH_WARNING)
+    if any(
+        entry.value_source == "table"
+        and (entry.citation, entry.doi) not in _DERIVED_WITH[projectors]
+        for entry in u_values
+    ):
+        warnings.append(_PROJECTOR_MISMATCH[projectors])
     if u_values:
         warnings.append(STARTING_NS_EIGENVALUE_WARNING)
     warnings += [_u_value_missing(symbol, u_values, missing) for symbol in missing]
     if unused:
         warnings.append(_u_by_element_unused(unused, applied=bool(u_values)))
-    return HubbardUDecision(u_values=u_values, warnings=tuple(warnings))
+    return HubbardUDecision(
+        u_values=u_values,
+        projectors=projectors if u_values else None,
+        warnings=tuple(warnings),
+    )
 
 
 def _u_value_missing(

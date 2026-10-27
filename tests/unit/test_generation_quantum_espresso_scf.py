@@ -739,9 +739,10 @@ def test_explicit_mixing_fixed_ns_is_written(pseudo_metadata_factory) -> None:
 def _hubbard_card(content: str) -> list[str]:
     """The HUBBARD card's lines, header first; [] when there is none."""
     lines = content.splitlines()
-    if "HUBBARD (ortho-atomic)" not in lines:
+    starts = [index for index, line in enumerate(lines) if line.startswith("HUBBARD")]
+    if not starts:
         return []
-    start = lines.index("HUBBARD (ortho-atomic)")
+    (start,) = starts
     card = []
     for line in lines[start:]:
         if not line.strip():
@@ -768,12 +769,33 @@ def test_u_values_render_the_qe_hubbard_card(
     system = _system(
         silicon_structure,
         pseudo_metadata_factory,
-        hubbard=HubbardUDecision(u_values=(HubbardU("Si", "3p", 3.0, "human"),)),
+        hubbard=HubbardUDecision(
+            u_values=(HubbardU("Si", "3p", 3.0, "human"),), projectors="ortho-atomic"
+        ),
     )
 
     content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
 
     assert _hubbard_card(content) == ["HUBBARD (ortho-atomic)", "  U  Si-3p  3"]
+
+
+def test_the_hubbard_card_names_the_decision_s_projectors(
+    pseudo_metadata_factory,
+) -> None:
+    """ph.x runs DFPT+U only with atomic projectors
+    (PHonon/PH/phq_readin.f90:766-767), so the card's header writes the
+    projectors the decision resolved, not a fixed ortho-atomic."""
+    system = _system(
+        _nickel_oxide(),
+        pseudo_metadata_factory,
+        hubbard=HubbardUDecision(
+            u_values=(HubbardU("Ni", "3d", 6.2, "table"),), projectors="atomic"
+        ),
+    )
+
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+
+    assert _hubbard_card(content) == ["HUBBARD (atomic)", "  U  Ni-3d  6.2"]
 
 
 def test_no_u_values_render_no_hubbard_card(pseudo_metadata_factory) -> None:
@@ -793,7 +815,9 @@ def test_only_elements_with_a_u_value_get_a_hubbard_line(
     system = _system(
         _nickel_oxide(),
         pseudo_metadata_factory,
-        hubbard=HubbardUDecision(u_values=(HubbardU("Ni", "3d", 6.2, "table"),)),
+        hubbard=HubbardUDecision(
+            u_values=(HubbardU("Ni", "3d", 6.2, "table"),), projectors="ortho-atomic"
+        ),
     )
 
     content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
@@ -827,7 +851,8 @@ def test_each_species_of_a_split_element_gets_the_element_s_u_line(
             u_values=(
                 HubbardU("Fe", "3d", 5.3, "table"),
                 HubbardU("O", "2p", 1.5, "human"),
-            )
+            ),
+            projectors="ortho-atomic",
         ),
     )
 
@@ -862,7 +887,9 @@ def test_cif_site_labels_render_one_line_per_qe_species(
     system = _system(
         cell,
         pseudo_metadata_factory,
-        hubbard=HubbardUDecision(u_values=(HubbardU("V", "3d", 3.25, "table"),)),
+        hubbard=HubbardUDecision(
+            u_values=(HubbardU("V", "3d", 3.25, "table"),), projectors="ortho-atomic"
+        ),
     )
 
     content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]

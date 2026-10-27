@@ -107,7 +107,9 @@ def _system(
             angle2=None,
         ),
         vdw=VdwFacts(use_vdw=False, method=None),
-        hubbard=HubbardUDecision(u_values=hubbard),
+        hubbard=HubbardUDecision(
+            u_values=hubbard, projectors="ortho-atomic" if hubbard else None
+        ),
         boundary=BoundaryFacts(isolation="periodic"),
     )
 

@@ -84,8 +84,9 @@ Si's 48 operations, so it ran six times the k-points ``n_irr_k`` counted.
 the only Hubbard parameter ``HubbardUDecision`` models, is keyed by
 atomic *type* (species label) plus its Hubbard manifold, e.g.
 ``U Mn-3d 5.0``. ``hubbard_lines`` renders one such line per species
-label whose element has a U value, and no card when none does, so every
-resolved Hubbard decision renders (#135).
+label whose element has a U value, under the projector type the decision
+names, and no card when none does, so every resolved Hubbard decision
+renders (#135).
 
 **Shared with the bands writer (#118).** ``generation/quantum_espresso/
 bands.py`` renders ``bands.in`` with this module's namelist and card
@@ -469,9 +470,10 @@ def hubbard_lines(
     ``ATOMIC_SPECIES`` uses. Returns ``[]`` when no species gets +U: QE
     stops on a HUBBARD card without a positive value
     (Modules/read_cards.f90 ``card_hubbard``).
-    ``ortho-atomic`` is QE's recommended projector (Doc/Hubbard_input.tex:
-    "It is recommended to use ortho-atomic whenever possible"); nothing
-    upstream chooses another, so it is a fixed literal like ``ibrav = 0``."""
+    The header names ``system.hubbard.projectors``, the projector type the
+    Hubbard advisor resolved: ``ortho-atomic``, which QE recommends
+    (Doc/Hubbard_input.tex:141), unless the request asks for ``atomic``,
+    the only type ph.x accepts (PHonon/PH/phq_readin.f90:766-767)."""
     entries = {entry.element: entry for entry in system.hubbard.u_values}
     lines = [
         f"  U  {label}-{entries[element].manifold}  "
@@ -481,7 +483,7 @@ def hubbard_lines(
     ]
     if not lines:
         return []
-    return ["\n".join(["HUBBARD (ortho-atomic)", *lines]) + "\n"]
+    return ["\n".join([f"HUBBARD ({system.hubbard.projectors})", *lines]) + "\n"]
 
 
 def k_points(step: PwSettings) -> str:

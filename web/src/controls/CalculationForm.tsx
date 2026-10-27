@@ -906,8 +906,9 @@ function AppliedHubbardU({
   );
 }
 
-/** The Hubbard settings, which no record holds a value of, then the U
- * values the decision they feed applied. */
+/** The Hubbard settings, then the U values the decision they feed applied.
+ * Of the settings, the `hubbard` record holds a value only of
+ * `hubbard_projectors`, and only when an element gets +U. */
 function HubbardGroupBody({
   groupedSettings,
   overrides,

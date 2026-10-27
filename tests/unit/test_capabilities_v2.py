@@ -322,6 +322,19 @@ class TestSettingsCompleteness:
         assert settings["functional"]["enum_from"] == expected
         assert settings["functional"]["default"] == "PBEsol"
 
+    def test_hubbard_projectors_is_one_system_choice_for_every_task(self) -> None:
+        settings = {s["key"]: s for s in capabilities()["settings"]}
+
+        projectors = settings["hubbard_projectors"]
+        assert (projectors["type"], projectors["enum"]) == (
+            "string",
+            ["atomic", "ortho-atomic"],
+        )
+        assert projectors["default"] == "ortho-atomic"
+        assert (projectors["group"], projectors["scope"]) == ("hubbard", "system")
+        assert projectors["tasks"] == _ALL_TASKS
+        assert (projectors["steps"], projectors["programs"]) == (None, None)
+
     def test_occupations_enum_matches_the_literal_type(self) -> None:
         settings = {s["key"]: s for s in capabilities()["settings"]}
 
@@ -579,6 +592,7 @@ class TestStructureSpecific:
             "k_distance",
             "smearing_type",
             "delta_e",
+            "hubbard_projectors",
         ):
             assert settings[key]["structure_specific"] is False, key
 
@@ -655,6 +669,10 @@ class TestResolvedIn:
         assert settings["k_grid"]["resolved_in"] == {
             "record": "k_sampling",
             "path": ["mesh"],
+        }
+        assert settings["hubbard_projectors"]["resolved_in"] == {
+            "record": "hubbard",
+            "path": ["projectors"],
         }
 
     def test_input_only_knobs_name_their_record_but_no_path(self) -> None:

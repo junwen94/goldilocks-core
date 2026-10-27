@@ -479,7 +479,9 @@ def test_u_values_render_the_qe_hubbard_card(
     system = _system(
         silicon_structure,
         pseudo_metadata_factory,
-        hubbard=HubbardUDecision(u_values=(HubbardU("Si", "3p", 3.0, "human"),)),
+        hubbard=HubbardUDecision(
+            u_values=(HubbardU("Si", "3p", 3.0, "human"),), projectors="ortho-atomic"
+        ),
     )
     step = _step(relax=RelaxOptions())
 
