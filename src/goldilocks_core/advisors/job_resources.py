@@ -68,8 +68,8 @@ rest.
 #215). No step then gets a share: `max_seconds_by_step` is empty, so no
 input carries `max_seconds`, and `timer_seconds` is the same 95% of the
 walltime, counted from the job's start. At that time the job's timer
-creates `<prefix>.EXIT`, which pw.x and ph.x look for in the working
-directory, delete, and stop cleanly at (QE 7.3
+(`submission/slurm.py`) creates `<prefix>.EXIT`, which pw.x and ph.x look
+for in the working directory, delete, and stop cleanly at (QE 7.3
 `Modules/check_stop.f90:59-63`, `:124-133`), so each step can use the time
 the steps before it left. The job record's `source_note` is the
 protocol's note.

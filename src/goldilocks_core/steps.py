@@ -73,7 +73,8 @@ class DynamicalMatricesCheck:
     exit code alone says nothing: stopped in the non-scf step of a q-point it
     exits with 0 (``run_nscf.f90:121-128``, ``PW/src/stop_run.f90:64-65``),
     and stopped in the linear response with 1 after printing ``JOB DONE``
-    (``solve_linter.f90:578``, ``stop_ph.f90:31-41``)."""
+    (``solve_linter.f90:578``, ``stop_ph.f90:31-41``), so the submission
+    script keeps that code past ``set -e`` (``submission/slurm.py``)."""
 
     fildyn: str
 
@@ -104,12 +105,14 @@ class Step:
     the step runs, makes its program stop cleanly: ``<prefix>.EXIT``, which
     pw.x and ph.x look for there first and delete (QE 7.3
     ``Modules/check_stop.f90:59-63``, ``:126-144``). The ph.x writer declares
-    it, for the phonon tasks' job timer; ``None`` declares none.
+    it, for the phonon tasks' job timer, which creates it
+    (``submission/slurm.py``); ``None`` declares none.
     ``restart_data`` are the paths and shell globs the step's program
     resumes from when rerun with the same input: ph.x's recover data,
     ``<outdir>/_ph0``, and its dynamical matrices, ``<prefix>.dyn*``. They
     belong to the save the step read, so a rerun that first rewrites that
-    save must delete them.
+    save must delete them; a step that declares any makes the submission
+    script resumable at any step, deleting them when it starts at the first.
     """
 
     name: str
