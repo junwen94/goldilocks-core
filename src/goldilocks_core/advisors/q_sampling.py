@@ -12,6 +12,8 @@ included), by default ``Q_DISTANCE`` = 0.3, the balanced
 mesh through ``kmesh.k_distance_to_mesh`` on the written cell, as
 ``k_sampling`` meshes k: one division along each vacuum axis, and one
 count, the larger, on the periodic axes the point group mixes.
+``k_sampling`` raises the first step's k-mesh against this mesh
+(``PhononKProtocol``).
 
 **Refusals.** A mesh ph.x or q2r.x would stop on is recorded with a
 ``QRefusal``, for ``checks`` to refuse:

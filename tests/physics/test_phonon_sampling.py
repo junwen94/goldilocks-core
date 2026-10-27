@@ -1,4 +1,5 @@
-"""The phonon tasks' q-mesh against ph.x and on written cells (#215).
+"""The phonon tasks' q-mesh against ph.x and on written cells, and the
+first step's k-mesh raised against it (#215).
 
 QE 7.3's PHonon example02 runs ph.x on zincblende AlAs at 4x4x4: it lists 8
 q-points whose stars hold 1, 4, 4, 6, 12, 12, 3 and 6 points ("Number of q
@@ -36,6 +37,12 @@ from support import (
     written_sodium_chloride,
 )
 
+from goldilocks_core.advisors.k_sampling import (
+    KSamplingProtocol,
+    PhononKProtocol,
+    k_sampling,
+)
+from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.q_sampling import QSamplingHumanInput, q_sampling
 from goldilocks_core.pw_symmetry import (
     PwRotations,
@@ -44,6 +51,7 @@ from goldilocks_core.pw_symmetry import (
     mixing_axis_pairs,
     pw_rotations,
 )
+from goldilocks_core.resolution import Provenance, Resolved
 
 pytestmark = pytest.mark.physics
 
@@ -217,3 +225,96 @@ def test_default_meshes_stay_symmetric_on_written_cells_and_their_strains(
         assert {w.tobytes() for w in strained_rotations.rotations} == kept
         for decision in meshes:
             assert _maps_onto_itself(strained_rotations, decision.mesh)
+
+
+_K_DISTANCES = (0.6, 0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.12, 0.1)
+"""1/A: the spacings a tier's k-mesh is swept over."""
+
+_METAL = Resolved("metal", Provenance(source="heuristic"))
+
+
+def _occupations(occupied: str) -> Resolved[OccupationsDecision]:
+    decision = (
+        OccupationsDecision("fixed", None, None)
+        if occupied == "fixed"
+        else OccupationsDecision("smearing", "cold", 0.01)
+    )
+    return Resolved(decision, Provenance(source="heuristic"))
+
+
+def _raised_meshes(
+    structure: Structure, q: QSamplingHumanInput | None = None
+) -> list[tuple[str, tuple[int, int, int]]]:
+    """The k-mesh of each spacing of the sweep on ``structure``, raised
+    against the q-mesh of ``q``, with the occupations it was raised for."""
+    return [
+        (
+            occupied,
+            k_sampling(
+                _METAL,
+                structure,
+                _occupations(occupied),
+                protocol=KSamplingProtocol(k_distance, "A spacing of the sweep."),
+                phonon=PhononKProtocol(q),
+            ).value.mesh,
+        )
+        for occupied in ("smearing", "fixed")
+        for k_distance in _K_DISTANCES
+    ]
+
+
+def _meets(occupied: str, mesh: tuple[int, ...], q: tuple[int, ...]) -> bool:
+    """Whether ``mesh`` is what DFPT asks against the q-mesh ``q``: each
+    axis a multiple of its q-axis under smearing, at least it under fixed
+    occupations."""
+    pairs = zip(mesh, q, strict=True)
+    if occupied == "fixed":
+        return all(k >= n for k, n in pairs)
+    return all(k % n == 0 for k, n in pairs)
+
+
+@pytest.mark.parametrize("build", _WRITTEN, ids=_name)
+def test_raised_k_meshes_stay_symmetric_on_written_cells_and_their_strains(
+    build,
+) -> None:
+    """The tiers' k-meshes and the default q-mesh give the axes a kept
+    rotation mixes one count, and raising each axis by its own counts keeps
+    them equal, so the rotations map every raised mesh onto itself, on the
+    cell and on its symmetric strains: a vc-relax-phonon run keeps the mesh
+    it decides on the input cell. Each mesh meets the q record's q-mesh."""
+    structure = build()
+    rotations = pw_rotations(structure)
+    q = q_sampling(written_magnetic_cell(structure)).value.mesh
+    raised = _raised_meshes(structure)
+
+    for occupied, mesh in raised:
+        assert _meets(occupied, mesh, q)
+        assert _maps_onto_itself(rotations, mesh)
+    for strain in symmetric_strains(structure, rotations):
+        strained_rotations = pw_rotations(strained(structure, strain))
+        for _, mesh in raised:
+            assert _maps_onto_itself(strained_rotations, mesh)
+
+
+def test_k_meshes_raised_against_every_accepted_q_grid_stay_symmetric() -> None:
+    """alpha-U's kept rotations mix a and b, so of the request q_grids up to
+    12x12x7, q_sampling accepts the 84 with equal counts there. Against each,
+    the raised k-meshes meet the grid and stay symmetric, as 20x24x12, from
+    17x17x9 against 4x8x4, would not."""
+    structure = written_alpha_uranium()
+    rotations = pw_rotations(structure)
+    cell = written_magnetic_cell(structure)
+    grids = [
+        grid
+        for grid in itertools.product(range(1, 13), range(1, 13), range(1, 8))
+        if q_sampling(cell, QSamplingHumanInput(q_grid=grid)).value.refusal is None
+    ]
+
+    assert len(grids) == 84
+    assert all(n1 == n2 for n1, n2, _ in grids)
+    for grid in grids:
+        for occupied, mesh in _raised_meshes(
+            structure, QSamplingHumanInput(q_grid=grid)
+        ):
+            assert _meets(occupied, mesh, grid)
+            assert _maps_onto_itself(rotations, mesh)

@@ -11,6 +11,12 @@ field by field: a ``shift`` alone keeps the protocol's k_distance, a
 count. ``unpinned_moment`` sets no value: it withholds the moment a
 compensated ordering would pin (#118).
 
+``phonon_k`` is not a tier (#215). It carries the q request of a phonon
+task's ph step, ``None`` for the default q-mesh, and constrains the first
+step's k-mesh after every tier: a mesh the request did not set is raised
+against that q-mesh, and one it did set is kept, with a warning where it
+falls short (``advisors/k_sampling.py``).
+
 Kept apart from ``StepOverrides`` (``_step.py``), which carries request
 values only and is walked into ``capabilities``' settings.
 """
@@ -19,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from goldilocks_core.advisors.k_sampling import KSamplingProtocol
+from goldilocks_core.advisors.k_sampling import KSamplingProtocol, PhononKProtocol
 from goldilocks_core.advisors.nbnd import NbndProtocol
 from goldilocks_core.advisors.occupations import (
     OccupationsProtocol,
@@ -30,12 +36,14 @@ from goldilocks_core.advisors.occupations import (
 @dataclass(frozen=True, slots=True)
 class StepProtocol:
     """The protocol fields a step's advisors read; ``None`` leaves that
-    advisor to its own tiers."""
+    advisor to its own tiers, or the k-mesh unconstrained for
+    ``phonon_k``."""
 
     k_sampling: KSamplingProtocol | None = None
     occupations: OccupationsProtocol | None = None
     nbnd: NbndProtocol | None = None
     unpinned_moment: UnpinnedMomentProtocol | None = None
+    phonon_k: PhononKProtocol | None = None
 
 
 _DOS_NSCF_NOTE = (

@@ -40,6 +40,33 @@ record reads ``heuristic``, with the protocol named in ``source_note``,
 since the request did not set it; a request's ``shift`` still applies on
 it.
 
+**The phonon tasks' rule** (#215). The first step of a phonon task writes
+the ground state ph.x reads. Its mesh comes from the tiers above and is then
+held against the q-mesh of the ph step (``PhononKProtocol``: not a tier; it
+carries the ph step's q request). QRF95 predicts the spacing at which scf
+total energies converge to 1 meV/atom, and DFPT asks two more things of k.
+With occupations other than fixed, each k-axis is raised to the next
+multiple of its q-axis, so that every q-point is a difference of k-points,
+without which the phonons of a metal converge very slowly in k (QE 7.3
+``PHonon/Doc/user_guide.tex:562-565``). With fixed occupations, each is
+raised to at least its q-axis, since a q-mesh denser than the k-mesh can
+give spurious acoustic frequencies near Gamma (Petretto et al., Comput.
+Mater. Sci. 144, 331 (2018)). The q-mesh is ``q_sampling.q_mesh`` of the
+same cell, which gives the periodic axes pw.x's operations mix one count,
+as a kmesh mesh does (``q_sampling`` refuses a request ``q_grid`` that does
+not), so the raised mesh keeps them equal and those operations still map
+it onto itself. A raised mesh keeps the evidence and the shift of the tier
+that decided, has no single ``k_distance``, and names the raise in
+``source_note``. A request's own ``k_grid``, ``k_index`` or ``k_distance``
+is used as given, with a warning where it is coarser than the q-mesh or,
+with occupations other than fixed, not a multiple of it. A run with
+occupations other than fixed on a structure holding a lanthanide or an
+actinide is told that Nascimento et al. advise k_distance 0.10 1/Angstrom
+for metals of that kind. A q-mesh of more than
+``q_sampling.MAX_Q_MESH_POINTS`` points, which q2r.x cannot read and the q
+record refuses, raises nothing: a k-mesh raised against it could be too
+large to reduce.
+
 ``occupations`` is accepted as an explicit input -- not because either
 the heuristic or the now-wired QRF95 ml tier uses it (neither does;
 QRF95's own feature contract is composition/structure/SOAP/lattice/
@@ -50,7 +77,8 @@ k_sampling rather than an implicit shared condition (the goldilocks
 dataset itself was generated at fixed ``cold``/0.01 Ry smearing while
 only ``k_index`` was scanned, so pretending the two are decoupled would
 be dishonest). A future k_index ladder-rung model's own contract (#90)
-may turn out to actually consume this; QRF95 does not.
+may turn out to actually consume this; QRF95 does not. The phonon tasks'
+rule (above) reads it: the occupations decide how the mesh is raised.
 
 Reuses ``legacy_kmesh/resolve.py``'s human-hint-wins-over-model
 precedence pattern (explicit grid beats an explicit distance, both beat
@@ -98,13 +126,19 @@ output, not this heuristic's.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Annotated, Any
 
 from pydantic import Field
 from pymatgen.core import Structure
 
-from goldilocks_core.advisors.occupations import OccupationsDecision
+from goldilocks_core.advisors.occupations import Occupations, OccupationsDecision
+from goldilocks_core.advisors.q_sampling import (
+    MAX_Q_MESH_POINTS,
+    QSamplingHumanInput,
+    q_mesh,
+)
 from goldilocks_core.advisors.species_split import split_species
 from goldilocks_core.analysis.is_metal import Metallicity
 from goldilocks_core.inputs.overrides import HumanInput, LlmInput
@@ -120,6 +154,7 @@ from goldilocks_core.resolution import (
     Resolved,
     Source,
     Warning,
+    blocked_by,
     field_sources_from,
 )
 
@@ -157,9 +192,73 @@ INDEX_AND_DISTANCE_WARNING = Warning(
     ),
 )
 
-WARNING_CATALOGUE = (GRID_AND_DISTANCE_WARNING, INDEX_AND_DISTANCE_WARNING)
+_PETRETTO = "Petretto et al., Comput. Mater. Sci. 144, 331 (2018)"
+_USER_GUIDE = "Quantum ESPRESSO's PHonon user guide"
+_NASCIMENTO = "npj Comput. Mater. (2026), doi:10.1038/s41524-026-02097-8"
+_PHONON_DEFAULT = (
+    "leave k_grid, k_index and k_distance unset for the phonon default, which "
+    "raises the k-mesh against the q-mesh."
+)
+
+K_MESH_RAISED_NOTE = Warning(
+    code="phonon.k_mesh_raised",
+    level="info",
+    category="k_sampling",
+    message=(
+        "the k-mesh was raised against the phonon q-mesh: each k-axis to the "
+        "next multiple of its q-axis with smearing or tetrahedra, to at least "
+        "its q-axis with fixed occupations; a k_grid, k_index or k_distance "
+        "the request sets is used as given."
+    ),
+)
+
+K_GRID_COARSER_THAN_Q_WARNING = Warning(
+    code="phonon.k_grid_coarser_than_q",
+    level="warning",
+    category="k_sampling",
+    message=(
+        "the requested k-mesh is coarser than the phonon q-mesh along some "
+        "axis, and a q-mesh denser than the k-mesh can give spurious acoustic "
+        f"frequencies near Gamma ({_PETRETTO}); {_PHONON_DEFAULT}"
+    ),
+)
+
+K_GRID_NOT_COMMENSURATE_WARNING = Warning(
+    code="phonon.k_grid_not_commensurate",
+    level="warning",
+    category="k_sampling",
+    message=(
+        "with smearing or tetrahedra, the requested k-mesh is not a multiple of "
+        "the phonon q-mesh along some axis, so some q-points are not "
+        "differences of k-points, and the phonons of a metal then converge very "
+        f"slowly in k ({_USER_GUIDE}); {_PHONON_DEFAULT}"
+    ),
+)
+
+LANTHANIDE_ACTINIDE_K_NOTE = Warning(
+    code="phonon.lanthanide_actinide_k",
+    level="info",
+    category="k_sampling",
+    message=(
+        "the structure holds a lanthanide or an actinide and the run uses "
+        "smearing or tetrahedra: if it is a metal, Nascimento et al. advise "
+        f"k_distance 0.10 1/Angstrom for metals of that kind ({_NASCIMENTO})."
+    ),
+)
+
+WARNING_CATALOGUE = (
+    GRID_AND_DISTANCE_WARNING,
+    INDEX_AND_DISTANCE_WARNING,
+    K_MESH_RAISED_NOTE,
+    K_GRID_COARSER_THAN_Q_WARNING,
+    K_GRID_NOT_COMMENSURATE_WARNING,
+    LANTHANIDE_ACTINIDE_K_NOTE,
+)
 """Every warning code this module can emit -- ``capabilities.py``'s
-``warnings[]`` catalogue aggregates one of these tuples per advisor."""
+``warnings[]`` catalogue aggregates one of these tuples per advisor. The
+phonon tasks' four keep their ``phonon.`` codes under this record's
+category; each per-occurrence message names the meshes or the elements
+(``_against_q``)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +324,16 @@ class KSamplingProtocol:
     note: str
 
 
+@dataclass(frozen=True, slots=True)
+class PhononKProtocol:
+    """The phonon tasks' rule for their first step's mesh (#215): not a tier
+    but a constraint applied after every tier, against the q-mesh of the ph
+    step (module docstring). ``q`` is the ph step's q request, ``None`` for
+    the default q-mesh."""
+
+    q: QSamplingHumanInput | None = None
+
+
 def k_sampling(
     is_metal: FieldState[Metallicity],
     structure: Structure,
@@ -232,14 +341,28 @@ def k_sampling(
     human: KSamplingHumanInput | None = None,
     llm: KSamplingLlmInput | None = None,
     protocol: KSamplingProtocol | None = None,
+    phonon: PhononKProtocol | None = None,
 ) -> FieldState[KSamplingDecision]:
     """The mesh from a human ``k_grid``, else a human ``k_index``, else the
     k_distance of the first tier that gives one (``_k_distance_tier``):
     human, the step's ``protocol``, QRF95, llm, then the ``is_metal``
-    heuristic."""
+    heuristic. Under ``phonon``, that mesh is then held against the phonon
+    q-mesh by ``occupations``, which must be given (``_against_q``)."""
     human = human or KSamplingHumanInput()
-    llm = llm or KSamplingLlmInput()
+    state = _tiered(is_metal, structure, human, llm or KSamplingLlmInput(), protocol)
+    if phonon is None or not isinstance(state, Resolved):
+        return state
+    return _against_q(state, structure, occupations, human, phonon)
 
+
+def _tiered(
+    is_metal: FieldState[Metallicity],
+    structure: Structure,
+    human: KSamplingHumanInput,
+    llm: KSamplingLlmInput,
+    protocol: KSamplingProtocol | None,
+) -> FieldState[KSamplingDecision]:
+    """``k_sampling``'s mesh from its tiers, before any phonon rule."""
     if human.k_grid is not None:
         warnings = (
             (GRID_AND_DISTANCE_WARNING,)
@@ -436,3 +559,166 @@ def _with_k_index(
                 k_distance_interval=entry.k_distance_interval,
             )
     return decision
+
+
+def _against_q(
+    state: Resolved[KSamplingDecision],
+    structure: Structure,
+    occupations: FieldState[OccupationsDecision],
+    human: KSamplingHumanInput,
+    phonon: PhononKProtocol,
+) -> FieldState[KSamplingDecision]:
+    """``state``, the tiers' mesh, held against the phonon q-mesh of
+    ``structure`` (module docstring): a request mesh kept with the warnings
+    it earns, any other raised for the ``occupations``; ``Blocked`` when
+    ``occupations`` is."""
+    if not occupations.ok:
+        return Blocked(by=blocked_by(occupations))
+    q = q_mesh(structure, phonon.q)
+    if math.prod(q) > MAX_Q_MESH_POINTS:
+        return state
+    occupied = occupations.value.occupations
+    decision, provenance = state.value, state.provenance
+    if any(
+        setting is not None
+        for setting in (human.k_grid, human.k_index, human.k_distance)
+    ):
+        warnings = _request_warnings(decision.mesh, q, occupied)
+    else:
+        raised = _raised(decision.mesh, q, occupied)
+        warnings = ()
+        if raised != decision.mesh:
+            note, notice = _raise_texts(decision.mesh, raised, q, occupied)
+            decision = _with_k_index(
+                replace(
+                    decision,
+                    mesh=raised,
+                    k_distance=None,
+                    k_index=None,
+                    k_distance_interval=None,
+                ),
+                structure,
+            )
+            notes = (provenance.source_note, note)
+            provenance = provenance.model_copy(
+                update={"source_note": " ".join(text for text in notes if text)}
+            )
+            warnings = (notice,)
+    warnings += _lanthanide_actinide_note(structure, occupied)
+    return Resolved(
+        replace(decision, warnings=decision.warnings + warnings), provenance
+    )
+
+
+def _raised(
+    mesh: tuple[int, int, int], q: tuple[int, int, int], occupied: Occupations
+) -> tuple[int, int, int]:
+    """Each axis of ``mesh`` raised to at least its axis of ``q`` for fixed
+    occupations, otherwise to the next multiple of it."""
+    if occupied == "fixed":
+        counts = [max(k, n) for k, n in zip(mesh, q, strict=True)]
+    else:
+        counts = [n * math.ceil(k / n) for k, n in zip(mesh, q, strict=True)]
+    return counts[0], counts[1], counts[2]
+
+
+def _raise_texts(
+    mesh: tuple[int, int, int],
+    raised: tuple[int, int, int],
+    q: tuple[int, int, int],
+    occupied: Occupations,
+) -> tuple[str, Warning]:
+    """The ``source_note`` and the notice of ``mesh`` raised to ``raised``
+    against the q-mesh ``q``."""
+    rule, why = (
+        (
+            "at least its q-axis",
+            "since a q-mesh denser than the k-mesh can give spurious acoustic "
+            f"frequencies near Gamma ({_PETRETTO})",
+        )
+        if occupied == "fixed"
+        else (
+            "the next multiple of its q-axis",
+            "so that every q-point is a difference of k-points, without which "
+            "the phonons of a metal converge very slowly in k "
+            f"({_USER_GUIDE}, user_guide.tex:562-565)",
+        )
+    )
+    note = (
+        f"Raised for DFPT from {_grid(mesh)} to {_grid(raised)}: each k-axis to "
+        f"{rule} (q-mesh {_grid(q)}), {why}."
+    )
+    notice = K_MESH_RAISED_NOTE.model_copy(
+        update={
+            "message": (
+                f"the k-mesh was raised from {_grid(mesh)} to {_grid(raised)} "
+                f"against the {_grid(q)} phonon q-mesh, each k-axis to {rule}; a "
+                "k_grid, k_index or k_distance the request sets is used as given."
+            )
+        }
+    )
+    return note, notice
+
+
+def _request_warnings(
+    mesh: tuple[int, int, int], q: tuple[int, int, int], occupied: Occupations
+) -> tuple[Warning, ...]:
+    """What the request ``mesh`` misses of the q-mesh ``q`` (module
+    docstring)."""
+    requested = f"the requested {_grid(mesh)} k-mesh"
+    phonon_q = f"the {_grid(q)} phonon q-mesh"
+    warnings = []
+    if any(k < n for k, n in zip(mesh, q, strict=True)):
+        warnings.append(
+            K_GRID_COARSER_THAN_Q_WARNING.model_copy(
+                update={
+                    "message": (
+                        f"{requested} is coarser than {phonon_q}, and a q-mesh "
+                        "denser than the k-mesh can give spurious acoustic "
+                        f"frequencies near Gamma ({_PETRETTO}); {_PHONON_DEFAULT}"
+                    )
+                }
+            )
+        )
+    if occupied != "fixed" and any(k % n for k, n in zip(mesh, q, strict=True)):
+        warnings.append(
+            K_GRID_NOT_COMMENSURATE_WARNING.model_copy(
+                update={
+                    "message": (
+                        f"with occupations='{occupied}', {requested} is not a "
+                        f"multiple of {phonon_q}, so some q-points are not "
+                        "differences of k-points, and the phonons of a metal "
+                        f"then converge very slowly in k ({_USER_GUIDE}); "
+                        f"{_PHONON_DEFAULT}"
+                    )
+                }
+            )
+        )
+    return tuple(warnings)
+
+
+def _lanthanide_actinide_note(
+    structure: Structure, occupied: Occupations
+) -> tuple[Warning, ...]:
+    """The notice for the lanthanides and actinides of ``structure`` on a run
+    with occupations other than fixed (module docstring), or nothing."""
+    found = sorted(
+        {
+            element.symbol
+            for element in structure.composition.elements
+            if element.is_lanthanoid or element.is_actinoid
+        }
+    )
+    if occupied == "fixed" or not found:
+        return ()
+    message = (
+        f"the structure holds {', '.join(found)} and the run uses "
+        f"occupations='{occupied}': if it is a metal, Nascimento et al. advise "
+        f"k_distance 0.10 1/Angstrom for metals of that kind ({_NASCIMENTO})."
+    )
+    return (LANTHANIDE_ACTINIDE_K_NOTE.model_copy(update={"message": message}),)
+
+
+def _grid(mesh: tuple[int, int, int]) -> str:
+    """``mesh`` as text, e.g. '12x12x12'."""
+    return "x".join(str(count) for count in mesh)

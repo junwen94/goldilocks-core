@@ -10,14 +10,20 @@ from support import (
     carbon_pair_in_a_box,
     graphene_monolayer,
     uranium_nitride,
+    written_bcc_iron,
+    written_silicon,
+    written_sodium_chloride,
 )
 
 from goldilocks_core.advisors.k_sampling import (
     KSamplingHumanInput,
     KSamplingLlmInput,
     KSamplingProtocol,
+    PhononKProtocol,
     k_sampling,
 )
+from goldilocks_core.advisors.occupations import OccupationsDecision
+from goldilocks_core.advisors.q_sampling import QSamplingHumanInput
 from goldilocks_core.advisors.species_split import split_species
 from goldilocks_core.analysis.is_metal import is_metal
 from goldilocks_core.kmesh import build_gamma_kmesh_entries, k_distance_to_mesh
@@ -678,3 +684,250 @@ def test_a_human_shift_applies_on_the_protocol_k_distance() -> None:
         source_note="A task protocol's nscf spacing.",
         field_sources={"k_distance": "heuristic", "shift": "human"},
     )
+
+
+_METAL = Resolved("metal", Provenance(source="heuristic"))
+_SMEARING = Resolved(
+    OccupationsDecision(occupations="smearing", smearing_type="cold", degauss=0.01),
+    Provenance(source="heuristic"),
+)
+_FIXED = Resolved(
+    OccupationsDecision(occupations="fixed", smearing_type=None, degauss=None),
+    Provenance(source="heuristic"),
+)
+_TETRAHEDRA = Resolved(
+    OccupationsDecision(occupations="tetrahedra_opt", smearing_type=None, degauss=None),
+    Provenance(source="heuristic"),
+)
+_PHONON = PhononKProtocol()
+"""The phonon tasks' k rule against the default q-mesh, 0.3 1/A (#215)."""
+
+
+def _codes(state) -> list[str]:
+    return [warning.code for warning in state.value.warnings]
+
+
+@pytest.mark.parametrize(
+    "occupations", [_SMEARING, _TETRAHEDRA], ids=["smearing", "tetrahedra_opt"]
+)
+def test_a_metal_s_occupations_raise_the_mesh_to_a_multiple_of_the_q_mesh(
+    monkeypatch: pytest.MonkeyPatch, occupations: Resolved[OccupationsDecision]
+) -> None:
+    """#215: QRF95's spacing gives bcc Fe 12x12x12, on which the 11x11x11
+    q-points of 0.3 1/A are not differences of k-points; with smearing or
+    tetrahedra each axis goes to the next multiple of 11. The record keeps
+    QRF95's evidence and says why the mesh is denser; the mesh is rung 22,
+    which no single spacing names."""
+    prediction = _stub_qrf95(monkeypatch, 0.2747)
+
+    state = k_sampling(_METAL, written_bcc_iron(), occupations, phonon=_PHONON)
+
+    assert state.value.mesh == (22, 22, 22)
+    assert state.value.shift == (0, 0, 0)
+    assert state.value.k_distance is None
+    assert state.value.k_index == 22
+    assert state.value.k_distance_interval == (0.14482541, 0.15172186)
+    assert state.provenance.field_sources == {"k_distance": "ml", "shift": "heuristic"}
+    assert state.provenance.model == prediction.provenance.model
+    assert state.provenance.citations == ("QRF95 citation.",)
+    assert state.provenance.source_note == (
+        "Raised for DFPT from 12x12x12 to 22x22x22: each k-axis to the next "
+        "multiple of its q-axis (q-mesh 11x11x11), so that every q-point is a "
+        "difference of k-points, without which the phonons of a metal converge "
+        "very slowly in k (Quantum ESPRESSO's PHonon user guide, "
+        "user_guide.tex:562-565)."
+    )
+    (notice,) = state.value.warnings
+    assert (notice.code, notice.level, notice.category) == (
+        "phonon.k_mesh_raised",
+        "info",
+        "k_sampling",
+    )
+    assert "from 12x12x12 to 22x22x22" in notice.message
+
+
+def test_a_request_shift_alone_leaves_the_mesh_to_the_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#215: a shift sets no mesh, so QRF95's 12x12x12 for bcc Fe is still
+    raised, and keeps the request's shift."""
+    _stub_qrf95(monkeypatch, 0.2747)
+
+    state = k_sampling(
+        _METAL,
+        written_bcc_iron(),
+        _SMEARING,
+        KSamplingHumanInput(shift=(1, 1, 1)),
+        phonon=_PHONON,
+    )
+
+    assert (state.value.mesh, state.value.shift) == ((22, 22, 22), (1, 1, 1))
+    assert state.provenance.field_sources == {"k_distance": "ml", "shift": "human"}
+    assert _codes(state) == ["phonon.k_mesh_raised"]
+
+
+@pytest.mark.parametrize(
+    ("q", "mesh"),
+    [(None, (7, 7, 7)), (QSamplingHumanInput(q_grid=(8, 8, 8)), (8, 8, 8))],
+    ids=["default", "q_grid"],
+)
+def test_fixed_occupations_raise_the_mesh_to_at_least_the_q_mesh(
+    monkeypatch: pytest.MonkeyPatch,
+    q: QSamplingHumanInput | None,
+    mesh: tuple[int, int, int],
+) -> None:
+    """#215: QRF95 meshes rock-salt NaCl 4x4x4, coarser than its 7x7x7
+    q-points at 0.3 1/A, where Petretto et al. found spurious acoustic
+    frequencies near Gamma; k goes to the q-mesh, also to a request q_grid
+    denser than the default."""
+    _stub_qrf95(monkeypatch, 0.4901)
+
+    state = k_sampling(
+        _NON_METAL, written_sodium_chloride(), _FIXED, phonon=PhononKProtocol(q)
+    )
+
+    assert state.value.mesh == mesh
+    assert state.value.k_distance is None
+    assert state.provenance.source_note == (
+        f"Raised for DFPT from 4x4x4 to {'x'.join(map(str, mesh))}: each k-axis "
+        f"to at least its q-axis (q-mesh {'x'.join(map(str, mesh))}), since a "
+        "q-mesh denser than the k-mesh can give spurious acoustic frequencies "
+        "near Gamma (Petretto et al., Comput. Mater. Sci. 144, 331 (2018))."
+    )
+    assert _codes(state) == ["phonon.k_mesh_raised"]
+
+
+def test_a_mesh_that_already_meets_the_q_mesh_is_left_as_it_is(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QRF95's 10x10x10 for diamond Si is denser than its 7x7x7 q-points, so
+    fixed occupations keep the decision whole: spacing, rung, no note."""
+    _stub_qrf95(monkeypatch, 0.2174)
+
+    state = k_sampling(_NON_METAL, written_silicon(), _FIXED, phonon=_PHONON)
+
+    assert state.value.mesh == (10, 10, 10)
+    assert state == k_sampling(_NON_METAL, written_silicon(), _FIXED)
+
+
+@pytest.mark.parametrize(
+    ("structure", "occupations", "human", "codes"),
+    [
+        (
+            written_bcc_iron(),
+            _SMEARING,
+            KSamplingHumanInput(k_grid=(4, 4, 4)),
+            ["phonon.k_grid_coarser_than_q", "phonon.k_grid_not_commensurate"],
+        ),
+        (
+            written_bcc_iron(),
+            _SMEARING,
+            KSamplingHumanInput(k_grid=(12, 12, 12)),
+            ["phonon.k_grid_not_commensurate"],
+        ),
+        (
+            written_bcc_iron(),
+            _TETRAHEDRA,
+            KSamplingHumanInput(k_grid=(12, 12, 12)),
+            ["phonon.k_grid_not_commensurate"],
+        ),
+        (
+            written_sodium_chloride(),
+            _FIXED,
+            KSamplingHumanInput(k_distance=0.49),
+            ["phonon.k_grid_coarser_than_q"],
+        ),
+        (
+            written_bcc_iron(),
+            _SMEARING,
+            KSamplingHumanInput(k_index=22),
+            [],
+        ),
+    ],
+    ids=[
+        "k_grid-coarse",
+        "k_grid-off-multiple",
+        "k_grid-off-multiple-tetrahedra",
+        "k_distance-fixed",
+        "k_index",
+    ],
+)
+def test_a_request_mesh_is_used_as_given_with_what_it_misses(
+    structure: Structure,
+    occupations: Resolved[OccupationsDecision],
+    human: KSamplingHumanInput,
+    codes: list[str],
+) -> None:
+    """#215: the request's own k_grid, k_index or k_distance is not raised. It
+    is warned about where it is coarser than the q-mesh (Fe's 11x11x11,
+    NaCl's 7x7x7) and, with smearing or tetrahedra, where it is not a
+    multiple of it; fixed occupations need no multiple."""
+    state = k_sampling(_METAL, structure, occupations, human, phonon=_PHONON)
+
+    plain = k_sampling(_METAL, structure, occupations, human)
+    assert state.value.mesh == plain.value.mesh
+    assert state.provenance == plain.provenance
+    assert _codes(state) == codes
+    assert all(warning.level == "warning" for warning in state.value.warnings)
+
+
+def _fcc_cerium() -> Structure:
+    """fcc Ce (Fm-3m), Materials Project mp-28, in its 4-atom conventional
+    cell (a = 4.672 A)."""
+    return Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(4.6724), ["Ce"], [[0.0, 0.0, 0.0]]
+    )
+
+
+def test_a_smearing_run_with_a_lanthanide_is_told_of_the_denser_metal_mesh() -> None:
+    """#215: a smearing run holding a lanthanide or an actinide hears that
+    Nascimento et al. advise k_distance 0.10 1/A for metals of that kind; its
+    heuristic 9x9x9 is raised to 10x10x10 against the 5x5x5 q-mesh, and a
+    request 8x8x8 is kept, with the warning that it is not a multiple of the
+    q-mesh. A run on fixed occupations keeps 9x9x9 and hears nothing."""
+    structure = _fcc_cerium()
+
+    smearing = k_sampling(_METAL, structure, _SMEARING, phonon=_PHONON)
+    requested = k_sampling(
+        _METAL,
+        structure,
+        _SMEARING,
+        KSamplingHumanInput(k_grid=(8, 8, 8)),
+        phonon=_PHONON,
+    )
+    fixed = k_sampling(_METAL, structure, _FIXED, phonon=_PHONON)
+
+    assert smearing.value.mesh == (10, 10, 10)
+    assert _codes(smearing) == ["phonon.k_mesh_raised", "phonon.lanthanide_actinide_k"]
+    notice = smearing.value.warnings[-1]
+    assert (notice.level, notice.category) == ("info", "k_sampling")
+    assert notice.message.startswith(
+        "the structure holds Ce and the run uses occupations='smearing': if it "
+        "is a metal, Nascimento et al. advise k_distance 0.10 1/Angstrom"
+    )
+    assert requested.value.mesh == (8, 8, 8)
+    assert _codes(requested) == [
+        "phonon.k_grid_not_commensurate",
+        "phonon.lanthanide_actinide_k",
+    ]
+    assert requested.value.warnings[-1] == notice
+    assert (fixed.value.mesh, fixed.value.warnings) == ((9, 9, 9), ())
+
+
+def test_a_q_mesh_too_large_for_q2r_x_leaves_the_mesh_alone() -> None:
+    """q_distance 0.02 gives Si 101x101x101 q-points, which the q record
+    refuses without counting them; the k-mesh is not raised against it."""
+    q = PhononKProtocol(QSamplingHumanInput(q_distance=0.02))
+
+    state = k_sampling(_NON_METAL, written_silicon(), _FIXED, phonon=q)
+
+    assert state == k_sampling(_NON_METAL, written_silicon(), _FIXED)
+
+
+def test_blocked_occupations_block_the_phonon_mesh() -> None:
+    state = k_sampling(
+        _METAL, written_bcc_iron(), Blocked(by="synthetic failure"), phonon=_PHONON
+    )
+
+    assert state.status == "blocked"
+    assert state.root_cause() == "synthetic failure"
