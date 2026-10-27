@@ -4,7 +4,12 @@ import dataclasses
 
 import pytest
 from pymatgen.core import Lattice, Species, Structure
-from support import carbon_pair_in_a_box, graphene_monolayer
+from support import (
+    carbon_pair_in_a_box,
+    graphene_monolayer,
+    graphite,
+    written_alpha_uranium,
+)
 
 from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.convergence import ConvergenceDecision
@@ -210,6 +215,8 @@ def test_writes_one_scf_step_with_pure_translated_content(
     assert "nspin" not in content
     assert "vdw_corr" not in content
     assert "disk_io" not in content
+    assert "nr1" not in content
+    assert "dftd3_threebody" not in content
 
 
 @pytest.mark.parametrize("purpose, seconds", [("scf", 6946), ("nscf", 6733)])
@@ -650,6 +657,56 @@ def test_vdw_method_translates_to_qe_keyword(
 
     assert "vdw_corr         = 'grimme-d3'" in content
     assert "dftd3_version    = 4" in content
+    assert "dftd3_threebody" not in content
+
+
+def _system_namelist(content: str) -> list[str]:
+    return content.split("&SYSTEM\n")[1].split("\n/\n")[0].splitlines()
+
+
+def test_the_phonon_first_step_writes_the_grid_ph_x_accepts_as_nr1_nr3(
+    pseudo_metadata_factory,
+) -> None:
+    """At 480 Ry pw.x's own dense grid for alpha-U, 40x45x64, is one ph.x
+    refuses; the phonon tasks' scf writes 45x45x64 instead, all three values
+    (#215)."""
+    system = dataclasses.replace(
+        _system(written_alpha_uranium(), pseudo_metadata_factory),
+        cutoffs=CutoffsDecision(ecutwfc_ry=60.0, ecutrho_ry=480.0),
+    )
+    step = dataclasses.replace(_step(max_seconds=None), fft_grid=(45, 45, 64))
+
+    content = write_qe_scf(system, step, _CTX)[0].files["scf.in"]
+
+    assert [line for line in _system_namelist(content) if " nr" in line] == [
+        "   nr1              = 45",
+        "   nr2              = 45",
+        "   nr3              = 64",
+    ]
+    assert "dftd3_threebody" not in content
+
+
+def test_two_body_d3_turns_the_three_body_terms_off(
+    pseudo_metadata_factory,
+) -> None:
+    """d3hess.x builds the D3 Hessian from two-body terms only, so the phonon
+    tasks' scf of layered graphite writes dftd3_threebody = .false. beside
+    its DFT-D3 keywords (#215)."""
+    system = _system(
+        graphite(),
+        pseudo_metadata_factory,
+        vdw=VdwFacts(use_vdw=True, method="d3bj"),
+    )
+    step = dataclasses.replace(_step(max_seconds=None), dftd3_threebody=False)
+
+    content = write_qe_scf(system, step, _CTX)[0].files["scf.in"]
+
+    assert {
+        "   vdw_corr         = 'grimme-d3'",
+        "   dftd3_version    = 4",
+        "   dftd3_threebody  = .false.",
+    } <= set(_system_namelist(content))
+    assert "nr1" not in content
 
 
 def test_a_periodic_boundary_writes_tstress_and_no_assume_isolated(

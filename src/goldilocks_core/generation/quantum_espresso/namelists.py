@@ -97,7 +97,13 @@ def render_namelist(keywords: dict[str, object], binary: str = _DEFAULT_BINARY) 
     shapes the same way, so no dos-specific branch is needed here.
     ``bands.x``'s ``&BANDS`` (#118) is the third, a single section too
     (``ALL_KEYS["bands"]``: ``prefix``/``outdir``/``filband``/
-    ``spin_component``/``lsym``/...).
+    ``spin_component``/``lsym``/...). The phonon tasks (#215) add four more
+    single-section schemas: ``ph.x``'s ``&INPUTPH`` (``ALL_KEYS["ph"]``),
+    and the ``&INPUT`` of ``d3hess.x``, ``q2r.x`` and ``matdyn.x``
+    (``ALL_KEYS["d3hess"]``, ``["q2r"]``, ``["matdyn"]``). Each is checked
+    the same way: a keyword outside the schema is refused, even one the
+    program reads but the schema leaves out, such as d3hess.x's ``q_gamma``
+    and q2r.x's ``prefix``, which the phonon writer leaves unset.
 
     Floats are written to 12 significant digits, never as ``-0.0``
     (module docstring).

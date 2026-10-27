@@ -20,11 +20,12 @@ given program does not use as ``None`` -- rejected
 ``dos.x`` fields it cannot use (``k_sampling``/``n_irr_k``/``nbnd``/
 ``convergence``) and has nowhere to put what ``dos.x`` actually needs
 (``emin``/``delta_e``/``ngauss``). ``StepSettings`` is instead a tagged
-union (``PwSettings | DosSettings | PhSettings``), dispatched by
-ordinary ``isinstance``/pattern matching -- there is no shared base
-data class for the union members. Resource estimates are not settings:
-no writer reads one, and the job record carries pw.x's estimated memory
-instead (``advisors/job_resources.py``, #148).
+union (``PwSettings | DosSettings | PhSettings | Q2rSettings |
+MatdynSettings``), dispatched by ordinary ``isinstance``/pattern matching
+-- there is no shared base data class for the union members. Resource
+estimates are not settings: no writer reads one, and the job record
+carries pw.x's estimated memory instead (``advisors/job_resources.py``,
+#148).
 
 **Only the fields this codebase currently has a producer for are
 required; every other field defaults to `None` rather than forcing a
@@ -38,11 +39,13 @@ per-step orchestration loop that constructs one of these yet (v2 epic
 epic 10: ``advisors/relax.py``'s ``relax_settings()`` is called by
 ``service/_relax.py`` and threaded into ``generate(relax=...)``, so a
 ``relax``/``vc-relax`` task genuinely constructs a non-``None`` value
-here today. ``DosSettings``'s/``PhSettings``'s fields have no producer
-or real type at all yet (their own per-step advisors do not exist).
-Every optional field here is expected to become required once its real
-producer exists -- a natural, signature-breaking change at that point,
-not scope creep now.
+here today. ``DosSettings``'s fields are numbers ``service/_dos.py``
+copies from the dos record. ``PhSettings``, ``Q2rSettings`` and
+``MatdynSettings`` (#215) came after their producers, the q-mesh and
+phonon advisors (``advisors/q_sampling.py``, ``advisors/phonon.py``), so
+every one of their fields is required. Every optional field here is
+expected to become required once its real producer exists -- a natural,
+signature-breaking change at that point, not scope creep now.
 
 ``DosSettings`` existing as its own type with its own ``broadening``
 field (QE calls this ``degauss`` too, in ``dos.x``/``projwfc.x`` --
@@ -63,6 +66,12 @@ from goldilocks_core.advisors.k_sampling import KSamplingDecision
 from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.parallelisation import ParallelisationDecision
+from goldilocks_core.advisors.phonon import (
+    PhononDecision,
+    PhononDosDecision,
+    Q2rDecision,
+)
+from goldilocks_core.advisors.q_sampling import QSamplingDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 
 
@@ -77,6 +86,12 @@ class PwSettings:
     (``JobDecision.timer_seconds``, #215): ``write_qe_scf`` and
     ``write_qe_relax`` then write none, while ``write_qe_bands``, whose
     task always splits the walltime, still requires one.
+    ``fft_grid`` and ``dftd3_threebody`` are the phonon tasks' first-step
+    keywords (#215): ``fft_grid`` the dense FFT grid written as nr1-nr3 where
+    ph.x would refuse pw.x's own (``FftGridDecision.written``,
+    ``advisors/fft_grid.py``), and ``dftd3_threebody`` ``False`` for DFT-D3
+    from two-body terms only, the D3 of d3hess.x's Hessian; ``None`` writes
+    neither (``dfpt_system_keywords``).
     There is no ``disk_io``: QE's default always writes the status file the
     submission script checks (``steps.ExitStatusCheck``), and
     ``disk_io='none'`` would write none (``PW/src/punch.f90:60-63``)."""
@@ -90,6 +105,24 @@ class PwSettings:
     parallel: ParallelisationDecision | None = None
     max_seconds: int | None = None
     relax: RelaxOptions | VcRelaxOptions | None = None
+    fft_grid: tuple[int, int, int] | None = None
+    dftd3_threebody: bool | None = None
+
+    @property
+    def dfpt_system_keywords(self) -> dict[str, object]:
+        """The ``&SYSTEM`` keywords of ``fft_grid`` and ``dftd3_threebody``,
+        which ``scf.system_keywords`` adds to the step's pw.x input: nr1, nr2
+        and nr3 together, since pw.x computes all three itself when any is 0
+        (QE 7.3 ``FFTXlib/src/fft_types.f90:1078``) and otherwise uses them as
+        given, for the smooth grid too when ecutrho is 4 ecutwfc
+        (``PW/src/input.f90:1785-1797``); dftd3_threebody as set. ``{}`` when
+        neither is set: pw.x's own grid and QE's three-body D3 terms."""
+        keywords: dict[str, object] = {}
+        if self.fft_grid is not None:
+            keywords.update(zip(("nr1", "nr2", "nr3"), self.fft_grid, strict=True))
+        if self.dftd3_threebody is not None:
+            keywords["dftd3_threebody"] = self.dftd3_threebody
+        return keywords
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,12 +139,33 @@ class DosSettings:
 
 @dataclass(frozen=True, slots=True)
 class PhSettings:
-    """ph.x: phonon q-point sampling and self-consistency threshold."""
+    """ph.x: the q-point mesh it runs on (``advisors/q_sampling.py``), its
+    linear-response settings (``advisors/phonon.py``) and the pools and
+    diagonalization group of the first pw.x step, which it runs with. No
+    ``epsil``: on a q-mesh ph.x decides it at Gamma itself (QE 7.3
+    ``PHonon/PH/prepare_q.f90:137-180``)."""
 
-    q_sampling: dict[str, float] | None = None
-    tr2_ph: float | None = None
-    epsil: bool | None = None
-    parallel: dict[str, int] | None = None
+    q_sampling: QSamplingDecision
+    phonon: PhononDecision
+    parallel: ParallelisationDecision
 
 
-type StepSettings = PwSettings | DosSettings | PhSettings
+@dataclass(frozen=True, slots=True)
+class Q2rSettings:
+    """q2r.x: the acoustic sum rule it applies to the effective charges and
+    the 2D non-analytic term (``advisors/phonon.py``)."""
+
+    q2r: Q2rDecision
+
+
+@dataclass(frozen=True, slots=True)
+class MatdynSettings:
+    """matdyn.x's phonon DOS: q2r.x's acoustic sum rule and 2D non-analytic
+    term, which matdyn.x applies to the force constants, and the DOS mesh and
+    energy step (``advisors/phonon.py``)."""
+
+    q2r: Q2rDecision
+    phonon_dos: PhononDosDecision
+
+
+type StepSettings = PwSettings | DosSettings | PhSettings | Q2rSettings | MatdynSettings

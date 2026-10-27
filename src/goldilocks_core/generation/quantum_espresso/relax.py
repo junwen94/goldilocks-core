@@ -20,6 +20,14 @@ are real ``&CONTROL`` keys per ``INPUT_PW.txt``/ASE's own
 ``&IONS`` key as the design doc's own directory sketch might suggest)
 are new.
 
+``system_keywords`` also writes the phonon tasks' nr1-nr3 and
+``dftd3_threebody`` (``PwSettings.dfpt_system_keywords``, #215). A
+fixed-cell relaxation keeps nr1-nr3 through every ionic step and stores
+them in the save ph.x reads (QE 7.3 ``PW/src/pw_restart_new.f90:398-400``);
+a vc-relax's final scf drops them and rebuilds pw.x's own grid for the
+relaxed cell (``PW/src/run_pwscf.f90:404-405``), so vc-relax.in is given
+none.
+
 ``render_namelist`` sections a flat keyword dict automatically (ASE's
 ``Namelist.to_nested``, keyed against ``ALL_KEYS['pw']``) -- this writer
 does not need to know or assert which QE namelist a keyword belongs to,

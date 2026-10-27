@@ -98,6 +98,13 @@ helpers, so its species and every keyword that defines the Hamiltonian
 repeat ``scf.in``'s, and writes its ``K_POINTS crystal_b`` rows with
 ``format_float``; only that card is its own.
 
+**The phonon tasks' first step (#215).** ``system_keywords`` adds
+``PwSettings.dfpt_system_keywords``: nr1-nr3, the dense FFT grid ph.x
+accepts where it would refuse pw.x's own, and ``dftd3_threebody =
+.false.``, so that the energy and forces use the two-body D3 of d3hess.x's
+Hessian. ``relax.py`` shares ``system_keywords``, so relax.in and
+vc-relax.in carry them too; no other task sets them.
+
 **Still not in this epic's scope, on purpose:**
 
 - ``ConvergenceDecision.etot_conv_thr``/``RelaxOptions``. QE only
@@ -327,6 +334,7 @@ def system_keywords(
         "ecutwfc": system.cutoffs.ecutwfc_ry,
         "ecutrho": system.cutoffs.ecutrho_ry,
         "nbnd": step.nbnd.nbnd,
+        **step.dfpt_system_keywords,
     }
     keywords.update(_occupations_keywords(step))
     keywords.update(_magnetic_keywords(system, step, species_index))

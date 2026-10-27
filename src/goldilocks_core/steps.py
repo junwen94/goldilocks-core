@@ -52,13 +52,33 @@ class ExitStatusCheck:
 @dataclass(frozen=True, slots=True)
 class StdoutMarkerCheck:
     """Passes a step only if its stdout contains ``marker``. For a
-    program that writes no status file (``dos.x``, ``bands.x``); a non-zero
-    exit code already stops the script."""
+    program that writes no status file (``dos.x``, ``bands.x``, ``d3hess.x``,
+    ``q2r.x``, ``matdyn.x``); a non-zero exit code already stops the
+    script."""
 
     marker: str = "JOB DONE"
 
 
-type CompletionCheck = ExitStatusCheck | StdoutMarkerCheck
+@dataclass(frozen=True, slots=True)
+class DynamicalMatricesCheck:
+    """Passes a ``ph.x`` step only if ph.x exited with 0 and wrote a complete
+    dynamical matrix for every q-point ``<fildyn>0`` lists. ``<fildyn>0``
+    holds the q-mesh on its first line and the number N of irreducible
+    q-points on its second (QE 7.3 ``PHonon/PH/q_points.f90:112-124``). Each
+    of ``<fildyn>1`` to ``<fildyn>N`` is created after its q-point's non-scf
+    step, when its linear response starts (``do_phonon.f90:84``, ``:100``;
+    ``openfilq.f90:205-209``), and written once all its irreducible
+    representations are done, ending with a line of 74 '*'
+    (``dynmatrix.f90:127-141``, ``:219``; ``dyndia.f90:113-114``). ph.x's
+    exit code alone says nothing: stopped in the non-scf step of a q-point it
+    exits with 0 (``run_nscf.f90:121-128``, ``PW/src/stop_run.f90:64-65``),
+    and stopped in the linear response with 1 after printing ``JOB DONE``
+    (``solve_linter.f90:578``, ``stop_ph.f90:31-41``)."""
+
+    fildyn: str
+
+
+type CompletionCheck = ExitStatusCheck | StdoutMarkerCheck | DynamicalMatricesCheck
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -77,8 +97,19 @@ class Step:
 
     ``ntasks`` is the step's launch shape: how many MPI tasks its program
     runs on, with ``None`` meaning every task the job allocates. A writer
-    sets it when its program cannot use the whole allocation (``dos.x``
-    and ``bands.x`` run on one task).
+    sets it when its program cannot use the whole allocation (``dos.x``,
+    ``bands.x``, ``d3hess.x``, ``q2r.x`` and ``matdyn.x`` run on one task).
+
+    ``stop_file`` is the file that, created in the working directory while
+    the step runs, makes its program stop cleanly: ``<prefix>.EXIT``, which
+    pw.x and ph.x look for there first and delete (QE 7.3
+    ``Modules/check_stop.f90:59-63``, ``:126-144``). The ph.x writer declares
+    it, for the phonon tasks' job timer; ``None`` declares none.
+    ``restart_data`` are the paths and shell globs the step's program
+    resumes from when rerun with the same input: ph.x's recover data,
+    ``<outdir>/_ph0``, and its dynamical matrices, ``<prefix>.dyn*``. They
+    belong to the save the step read, so a rerun that first rewrites that
+    save must delete them.
     """
 
     name: str
@@ -89,6 +120,8 @@ class Step:
     files: dict[str, str] = field(default_factory=dict)
     workdir: str | None = None
     ntasks: int | None = None
+    stop_file: str | None = None
+    restart_data: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

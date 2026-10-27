@@ -8,7 +8,22 @@ from goldilocks_core.advisors.convergence import ConvergenceDecision
 from goldilocks_core.advisors.k_sampling import KSamplingDecision
 from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
-from goldilocks_core.step_settings import DosSettings, PhSettings, PwSettings
+from goldilocks_core.advisors.parallelisation import ParallelisationDecision
+from goldilocks_core.advisors.phonon import (
+    PhononDecision,
+    PhononDosDecision,
+    Q2rDecision,
+)
+from goldilocks_core.advisors.q_sampling import QSamplingDecision
+from goldilocks_core.step_settings import (
+    DosSettings,
+    MatdynSettings,
+    PhSettings,
+    PwSettings,
+    Q2rSettings,
+)
+
+_SETTINGS = [PwSettings, DosSettings, PhSettings, Q2rSettings, MatdynSettings]
 
 
 def _pw_settings() -> PwSettings:
@@ -57,7 +72,7 @@ def test_a_step_sampled_on_a_mesh_carries_no_band_path() -> None:
     assert _pw_settings().k_path is None
 
 
-@pytest.mark.parametrize("settings", [PwSettings, DosSettings, PhSettings])
+@pytest.mark.parametrize("settings", _SETTINGS)
 @pytest.mark.parametrize("field", ["size", "mem_per_proc"])
 def test_no_step_settings_carry_a_memory_estimate(settings: type, field: str) -> None:
     """#148: no writer reads a memory estimate; the job record carries
@@ -67,7 +82,7 @@ def test_no_step_settings_carry_a_memory_estimate(settings: type, field: str) ->
         settings(**{field: None})
 
 
-@pytest.mark.parametrize("settings", [PwSettings, DosSettings, PhSettings])
+@pytest.mark.parametrize("settings", _SETTINGS)
 def test_no_step_settings_carry_disk_io(settings: type) -> None:
     """#129: disk_io='none' would leave pw.x no status file to check
     (punch.f90:60-63), so no settings can request it."""
@@ -109,25 +124,104 @@ def test_pw_settings_has_no_dos_specific_fields() -> None:
     assert not hasattr(pw, "emin")
 
 
-def test_ph_settings_is_its_own_distinct_type_too() -> None:
-    ph = PhSettings(tr2_ph=1e-14, epsil=True)
+def _q2r() -> Q2rDecision:
+    return Q2rDecision(asr="crystal", loto_2d=False, asr_memory_mb=6.12)
 
-    assert ph.tr2_ph == 1e-14
-    assert ph.epsil is True
+
+def _ph_settings() -> PhSettings:
+    """Diamond Si's ph.x step: the 7x7x7 q-mesh and the balanced protocol."""
+    return PhSettings(
+        q_sampling=QSamplingDecision(
+            mesh=(7, 7, 7), q_distance=0.3, n_irr_q=20, work=2401
+        ),
+        phonon=PhononDecision(tr2_ph=1e-18, alpha_mix=0.4, nmix_ph=8),
+        parallel=ParallelisationDecision(npool=4, ndiag=None, kpoint_spin_pairs=72),
+    )
+
+
+def _matdyn_settings() -> MatdynSettings:
+    return MatdynSettings(
+        q2r=_q2r(),
+        phonon_dos=PhononDosDecision(
+            mesh=(21, 21, 21), dos_q_distance=0.1, delta_e=1.0
+        ),
+    )
+
+
+def test_ph_settings_is_its_own_distinct_type_too() -> None:
+    """ph.x's settings are the advisors' decisions, all required. No epsil:
+    on a q-mesh ph.x decides it at Gamma itself (#215)."""
+    ph = _ph_settings()
+
+    assert ph.q_sampling.mesh == (7, 7, 7)
+    assert ph.phonon.tr2_ph == 1e-18
+    assert ph.parallel.npool == 4
+    assert not hasattr(ph, "epsil")
     assert not hasattr(ph, "occupations")
     assert not hasattr(ph, "broadening")
+    with pytest.raises(TypeError, match="q_sampling"):
+        PhSettings()  # type: ignore[call-arg]
+
+
+def test_q2r_x_and_matdyn_x_share_the_sum_rule_and_split_the_dos() -> None:
+    """q2r.x and matdyn.x apply the same acoustic sum rule and 2D term;
+    only matdyn.x has the DOS mesh."""
+    q2r, matdyn = Q2rSettings(q2r=_q2r()), _matdyn_settings()
+
+    assert matdyn.q2r == q2r.q2r
+    assert matdyn.phonon_dos.mesh == (21, 21, 21)
+    assert not hasattr(q2r, "phonon_dos")
 
 
 def test_step_settings_variants_are_distinguishable_by_isinstance() -> None:
-    variants: list[object] = [_pw_settings(), DosSettings(), PhSettings()]
-
-    kinds = [
-        "pw"
-        if isinstance(v, PwSettings)
-        else "dos"
-        if isinstance(v, DosSettings)
-        else "ph"
-        for v in variants
+    variants: list[object] = [
+        _pw_settings(),
+        DosSettings(),
+        _ph_settings(),
+        Q2rSettings(q2r=_q2r()),
+        _matdyn_settings(),
     ]
 
-    assert kinds == ["pw", "dos", "ph"]
+    matched = [
+        [settings for settings in _SETTINGS if isinstance(variant, settings)]
+        for variant in variants
+    ]
+
+    assert matched == [[settings] for settings in _SETTINGS]
+
+
+def test_the_phonon_first_step_keywords_default_to_none() -> None:
+    settings = _pw_settings()
+
+    assert settings.fft_grid is None
+    assert settings.dftd3_threebody is None
+
+
+@pytest.mark.parametrize(
+    ("fft_grid", "dftd3_threebody", "keywords"),
+    [
+        (None, None, {}),
+        ((45, 45, 64), None, {"nr1": 45, "nr2": 45, "nr3": 64}),
+        (None, False, {"dftd3_threebody": False}),
+        (
+            (45, 45, 64),
+            False,
+            {"nr1": 45, "nr2": 45, "nr3": 64, "dftd3_threebody": False},
+        ),
+    ],
+    ids=["neither", "fft_grid", "two_body_d3", "both"],
+)
+def test_dfpt_system_keywords_write_the_whole_grid_and_the_d3_flag(
+    fft_grid: tuple[int, int, int] | None,
+    dftd3_threebody: bool | None,
+    keywords: dict[str, object],
+) -> None:
+    """The phonon tasks' first step writes alpha-U's grid ph.x accepts,
+    45x45x64, as nr1-nr3, always all three, since pw.x computes its own grid
+    when any is 0 (QE 7.3 FFTXlib/src/fft_types.f90:1078), and
+    dftd3_threebody when set; nothing when neither is (#215)."""
+    settings = dataclasses.replace(
+        _pw_settings(), fft_grid=fft_grid, dftd3_threebody=dftd3_threebody
+    )
+
+    assert settings.dfpt_system_keywords == keywords

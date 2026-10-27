@@ -37,6 +37,15 @@ def test_step_defaults_to_the_whole_allocation() -> None:
     assert step.ntasks is None
 
 
+def test_step_declares_no_stop_file_or_restart_data_by_default() -> None:
+    """Only the ph.x writer declares the stop file a job timer creates and
+    the data a rerun resumes from (#215)."""
+    step = _step()
+
+    assert step.stop_file is None
+    assert step.restart_data == ()
+
+
 @pytest.mark.parametrize(
     "missing, fields",
     [

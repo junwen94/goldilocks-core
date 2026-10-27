@@ -62,6 +62,8 @@ def generate(
     ctx: SharedContext | None = None,
     purpose: Literal["scf", "nscf", "bands", "relax", "vc-relax"] = "scf",
     relax: RelaxOptions | VcRelaxOptions | None = None,
+    fft_grid: tuple[int, int, int] | None = None,
+    dftd3_threebody: bool | None = None,
 ) -> tuple[Step, ...]:
     """Delivery: raises ``AdviceIncomplete`` if ``report`` is not ``ok``,
     per the "generate() refuses iff a needed field is unavailable/blocked"
@@ -89,6 +91,15 @@ def generate(
     ``PwSettings`` construction above: nothing about assembling those
     two differs between an scf step and a relax step, only which
     writer gets called and what ``PwSettings.relax`` holds.
+
+    ``fft_grid`` and ``dftd3_threebody`` (#215): the phonon tasks' first
+    step writes the dense FFT grid ph.x accepts as nr1-nr3 where it would
+    refuse pw.x's own (``FftGridDecision.written``), and, with DFT-D3,
+    ``dftd3_threebody = .false.``, so that its energy, forces and any
+    relaxation use the two-body D3 of d3hess.x's Hessian. Both are stored
+    on ``PwSettings``, whose ``dfpt_system_keywords`` the scf and relaxation
+    writers add to ``&SYSTEM``; ``None``, every other caller's, writes
+    neither.
     """
     if not report.ok:
         raise AdviceIncomplete(report)
@@ -114,6 +125,8 @@ def generate(
         parallel=advice.step.resources.parallelisation.value,
         max_seconds=advice.step.resources.max_seconds,
         relax=relax,
+        fft_grid=fft_grid,
+        dftd3_threebody=dftd3_threebody,
     )
     shared_ctx = ctx or default_shared_context()
     if purpose == "bands":
