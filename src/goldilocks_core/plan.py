@@ -49,10 +49,27 @@ class PlannedStep:
     ``vc-relax`` (v2 epic 10, #10) *are* both a task and their own single
     step's purpose -- one ``pw.x`` run does the whole task. A ``bands``
     step is ``pw.x`` with ``calculation='bands'`` and ``bands_x`` the
-    ``bands.x`` run after it (#118)."""
+    ``bands.x`` run after it (#118). A phonon task's first step keeps its
+    pw.x purpose, ``scf``, ``relax`` or ``vc-relax``, and ``ph``, ``q2r``
+    and ``phonon_dos`` are the ph.x run on its save, q2r.x on ph.x's
+    dynamical matrices and matdyn.x on q2r.x's force constants (#215).
+    d3hess.x, which runs before ph.x for DFT-D3, has no row: the writer
+    inserts it (``generation/quantum_espresso/phonon.py``), as it inserts
+    one bands.x step per spin channel."""
 
-    purpose: Literal["scf", "nscf", "dos", "bands", "bands_x", "relax", "vc-relax"]
-    program: Literal["pw.x", "dos.x", "bands.x"]
+    purpose: Literal[
+        "scf",
+        "nscf",
+        "dos",
+        "bands",
+        "bands_x",
+        "relax",
+        "vc-relax",
+        "ph",
+        "q2r",
+        "phonon_dos",
+    ]
+    program: Literal["pw.x", "dos.x", "bands.x", "ph.x", "q2r.x", "matdyn.x"]
 
 
 _TASK_STEPS: Mapping[CalcTask, tuple[PlannedStep, ...]] = {
@@ -69,6 +86,24 @@ _TASK_STEPS: Mapping[CalcTask, tuple[PlannedStep, ...]] = {
     ),
     "relax": (PlannedStep(purpose="relax", program="pw.x"),),
     "vc-relax": (PlannedStep(purpose="vc-relax", program="pw.x"),),
+    "phonon": (
+        PlannedStep(purpose="scf", program="pw.x"),
+        PlannedStep(purpose="ph", program="ph.x"),
+        PlannedStep(purpose="q2r", program="q2r.x"),
+        PlannedStep(purpose="phonon_dos", program="matdyn.x"),
+    ),
+    "relax-phonon": (
+        PlannedStep(purpose="relax", program="pw.x"),
+        PlannedStep(purpose="ph", program="ph.x"),
+        PlannedStep(purpose="q2r", program="q2r.x"),
+        PlannedStep(purpose="phonon_dos", program="matdyn.x"),
+    ),
+    "vc-relax-phonon": (
+        PlannedStep(purpose="vc-relax", program="pw.x"),
+        PlannedStep(purpose="ph", program="ph.x"),
+        PlannedStep(purpose="q2r", program="q2r.x"),
+        PlannedStep(purpose="phonon_dos", program="matdyn.x"),
+    ),
 }
 
 

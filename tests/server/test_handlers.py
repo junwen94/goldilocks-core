@@ -152,6 +152,31 @@ class TestExplain:
                 ],
                 id="vc-relax",
             ),
+            pytest.param(
+                "phonon",
+                {},
+                [
+                    "is not installed",
+                    "The phonon tasks need this structure on fixed occupations, or "
+                    "confirmed as a metal",
+                ],
+                id="phonon",
+            ),
+            pytest.param(
+                "relax-phonon",
+                {"is_metal": "non_metal", "fix_bottom_layers": 1},
+                ["is not installed", "fix_bottom_layers=1 pins atoms"],
+                id="relax-phonon",
+            ),
+            pytest.param(
+                "vc-relax-phonon",
+                {"is_metal": "non_metal", "ion_dynamics": "damp"},
+                [
+                    "is not installed",
+                    "vc-relax is generated only with ion_dynamics=bfgs",
+                ],
+                id="vc-relax-phonon",
+            ),
         ],
     )
     def test_blocking_is_the_verdict_run_refuses_with(
@@ -160,7 +185,9 @@ class TestExplain:
         """#165: explain reports run's verdict (advise, then the task's own
         check) before any files are requested. No real assets: the isolated
         asset root has no pseudopotential table installed, a deterministic
-        blocker; the relax overrides add each task's named check rule."""
+        blocker; the relax overrides add each task's named check rule, and the
+        phonon task, on Si without is_metal, which no model decides here, its
+        metallicity rule."""
         document = ComputeRequestDocument(
             structure_content=silicon_cif,
             hpc="scarf",
@@ -197,6 +224,9 @@ class TestExplain:
             ("band", ["scf", "bands"]),
             ("relax", ["relax"]),
             ("vc-relax", ["vc-relax"]),
+            ("phonon", ["scf", "ph", "q2r", "phonon_dos"]),
+            ("relax-phonon", ["relax", "ph", "q2r", "phonon_dos"]),
+            ("vc-relax-phonon", ["vc-relax", "ph", "q2r", "phonon_dos"]),
         ],
     )
     def test_lays_out_every_record_by_tier_and_step(
@@ -244,6 +274,11 @@ class TestExplain:
             ]
         if task in ("relax", "vc-relax"):
             assert by_step[task][-1] == "relax"
+        if "ph" in by_step:
+            assert by_step[steps[0]][-1] == "fft_grid"
+            assert ("relax" in by_step[steps[0]]) is (steps[0] != "scf")
+            assert by_step["ph"] == ["q_sampling", "phonon"]
+            assert (by_step["q2r"], by_step["phonon_dos"]) == (["q2r"], ["phonon_dos"])
 
     def test_blocking_names_a_cross_parameter_rule(
         self, real_assets, silicon_cif
@@ -309,15 +344,29 @@ class TestRun:
         assert summary["records"]["functional"]["source"] == "human"
 
     @pytest.mark.parametrize(
-        "task", ["scf_single_point", "dos", "band", "relax", "vc-relax"]
+        "task",
+        [
+            "scf_single_point",
+            "dos",
+            "band",
+            "relax",
+            "vc-relax",
+            "phonon",
+            "relax-phonon",
+            "vc-relax-phonon",
+        ],
     )
     def test_returns_the_layout_explain_returns(
         self, silicon_fixture_table, silicon_cif, task
     ) -> None:
         """#187: the summary's records come with the same layout as
-        explain's."""
+        explain's. Si is set to a non-metal, which a phonon task needs on
+        smearing without a model to decide it."""
         document = ComputeRequestDocument(
-            structure_content=silicon_cif, hpc="scarf", task=task
+            structure_content=silicon_cif,
+            hpc="scarf",
+            task=task,
+            overrides={"is_metal": "non_metal"},
         )
 
         summary, _bundle_input = _handlers.run(document)
@@ -333,6 +382,26 @@ class TestRun:
             ("band", {"k_path_distance": 0.05, "steps.bands.nbnd": 20}),
             ("relax", {"nstep": 123}),
             ("vc-relax", {"press": 10.0, "steps.vc-relax.nstep": 50}),
+            (
+                "phonon",
+                {
+                    "is_metal": "non_metal",
+                    "q_distance": 0.4,
+                    "steps.phonon_dos.dos_q_distance": 0.2,
+                },
+            ),
+            (
+                "relax-phonon",
+                {
+                    "is_metal": "non_metal",
+                    "forc_conv_thr": 5e-5,
+                    "steps.ph.tr2_ph": 1e-16,
+                },
+            ),
+            (
+                "vc-relax-phonon",
+                {"is_metal": "non_metal", "press": 10.0, "asr": "simple"},
+            ),
         ],
     )
     def test_the_manifest_records_the_request_as_submitted(

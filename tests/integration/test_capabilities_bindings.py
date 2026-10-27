@@ -35,8 +35,18 @@ _CASES: tuple[tuple[str, dict[str, object]], ...] = (
     ("band", {}),
     ("relax", {}),
     ("vc-relax", {}),
+    ("phonon", {}),
+    ("relax-phonon", {}),
+    ("vc-relax-phonon", {}),
     ("scf_single_point", {"spin_orbit_coupling": True}),
 )
+
+_PHONON_FIRST_STEPS = {
+    "phonon": "scf",
+    "relax-phonon": "relax",
+    "vc-relax-phonon": "vc-relax",
+}
+"""Each phonon task's first pw.x step."""
 
 _MISSING = object()
 _CUT = object()
@@ -130,8 +140,9 @@ def test_each_layout_places_every_record_once_by_tier_and_step(
     what every step shares, then each step of the task in run order: the
     task's one job with its first step, a dos task's nscf decisions under
     their nscf_ names, a band task's bands-step decisions under their bands_
-    names (bands.x has none), and a relaxation's own record with its
-    step."""
+    names (bands.x has none), a relaxation's own record with its step, and a
+    phonon task's first step with its relax record and FFT grid, then its
+    ph, q2r and phonon_dos steps (d3hess.x has none)."""
     facts = {fact["key"] for fact in capabilities()["facts"]}
     for task, response in explained:
         layout = response["layout"]
@@ -166,6 +177,13 @@ def test_each_layout_places_every_record_once_by_tier_and_step(
         elif task in ("relax", "vc-relax"):
             assert list(steps) == [task]
             assert "relax" in steps[task]
+        elif task in _PHONON_FIRST_STEPS:
+            first_step = _PHONON_FIRST_STEPS[task]
+            assert list(steps) == [first_step, "ph", "q2r", "phonon_dos"]
+            assert steps[first_step][-1] == "fft_grid"
+            assert ("relax" in steps[first_step]) is (first_step != "scf")
+            assert steps["ph"] == ["q_sampling", "phonon"]
+            assert (steps["q2r"], steps["phonon_dos"]) == (["q2r"], ["phonon_dos"])
         else:
             assert list(steps) == ["scf"]
         assert "job" in next(iter(steps.values())), task

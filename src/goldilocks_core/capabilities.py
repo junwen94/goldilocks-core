@@ -29,15 +29,17 @@ field inside ``CutoffsHumanInput`` gets ``group="cutoffs"`` for free);
 ``SystemOverrides`` -> ``"system"``, ``JobOverrides`` -> ``"task"``, the
 step classes -> ``"per_step"``); `steps` is the step purposes a per-step
 setting applies to, by composing class (``_BRANCH_STEPS``: every pw.x step,
-relax and vc-relax, dos, or a band task's bands step), narrowed per key
-where ``_SETTING_META`` says so (vc-relax's cell keys, relax's
-``etot_conv_thr``, the SCF loop's mixing and iteration keys, which an nscf
-or bands step does not read, and the occupations and k-mesh keys, which a
-bands step takes from its scf step and its band path). `tasks` and
-`programs` follow from `steps` through ``plan.expand_task``; a system or
-task setting applies to every task, once, and has no `steps` (#154).
-``set_overrides`` routes a request with the same ``SettingBinding.steps``,
-so what is published is what is accepted.
+relax and vc-relax, dos, a band task's bands step, or a phonon task's ph,
+q2r or phonon_dos step), narrowed per key where ``_SETTING_META`` says so
+(vc-relax's cell keys, relax's ``etot_conv_thr``, the SCF loop's mixing and
+iteration keys, which an nscf or bands step does not read, and the
+occupations and k-mesh keys, which a bands step takes from its scf step and
+its band path). A phonon task's first step keeps its pw.x purpose (scf,
+relax or vc-relax), so the pw.x settings reach it through those steps.
+`tasks` and `programs` follow from `steps` through ``plan.expand_task``; a
+system or task setting applies to every task, once, and has no `steps`
+(#154). ``set_overrides`` routes a request with the same
+``SettingBinding.steps``, so what is published is what is accepted.
 
 **What genuinely can't be derived** -- physical unit, a confidently-known
 fixed default (many fields have no fixed default at all: cutoffs and
@@ -66,8 +68,9 @@ exceptions: ``pseudo_table_id`` resolves in ``pseudo_table.id``,
 ``spin_orbit_coupling`` in ``magnetic.spin_orbit_enabled``,
 ``magnetic_ordering`` in ``magnetic.ordering.applied``, ``k_grid`` in
 ``k_sampling.mesh``, ``k_path_distance`` in the band task's ``bands_k_path``,
-``hubbard_projectors`` in ``hubbard.projectors``, and a knob no record holds
-a value of (``extra_bands``, ``nosym``, ``hubbard_needs_correlation``,
+``hubbard_projectors`` in ``hubbard.projectors``, ``q_grid`` in the phonon
+tasks' ``q_sampling.mesh``, and a knob no record holds a value of
+(``extra_bands``, ``nosym``, ``hubbard_needs_correlation``,
 ``u_by_element``) has no path. Neither has a setting published under a key
 other than its field name, since a record's ``field_sources`` names
 settings by field name.
@@ -154,13 +157,16 @@ from goldilocks_core.service import (
     JobOverrides,
     KPathOverrides,
     KpointsOverrides,
+    PhononDosOverrides,
+    PhOverrides,
+    Q2rOverrides,
     RelaxOverrides,
     ResourceOverrides,
     SystemOverrides,
 )
 from goldilocks_core.types import CalcTask
 
-VOCABULARY_VERSION = "2"
+VOCABULARY_VERSION = "3"
 """Bump when the settings/facts vocabulary changes in a way other
 ecosystem repos (ml/agent/data) need to know about -- goldilocks-core
 -design.md S4.2's cross-repo validation antidote."""
@@ -180,13 +186,26 @@ _DOS_TASK = "dos"
 _BAND_TASK = "band"
 _RELAX_TASK = "relax"
 _VC_RELAX_TASK = "vc-relax"
+_PHONON_TASK = "phonon"
+_RELAX_PHONON_TASK = "relax-phonon"
+_VC_RELAX_PHONON_TASK = "vc-relax-phonon"
 _TASK_IDS: tuple[CalcTask, ...] = typing.get_args(CalcTask)
 """Every task, in ``types.CalcTask``'s order: the code's ``tasks`` and
 what each setting's ``tasks`` is drawn from."""
 _PROGRAM = "pw.x"
 
 _Branch = Literal[
-    "analysis", "system", "job", "kpoints", "resources", "relax", "dos", "k_path"
+    "analysis",
+    "system",
+    "job",
+    "kpoints",
+    "resources",
+    "relax",
+    "dos",
+    "k_path",
+    "ph",
+    "q2r",
+    "phonon_dos",
 ]
 _Scope = Literal["system", "task", "per_step"]
 
@@ -211,6 +230,9 @@ _BRANCH_STEPS: dict[_Branch, tuple[str, ...] | None] = {
     "relax": _RELAX_STEPS,
     "dos": ("dos",),
     "k_path": ("bands",),
+    "ph": ("ph",),
+    "q2r": ("q2r",),
+    "phonon_dos": ("phonon_dos",),
 }
 """The step purposes (``plan.PlannedStep.purpose``) each composing class's
 settings apply to; ``None`` for a task-level class, set once per task."""
@@ -697,7 +719,9 @@ _SETTING_META: dict[str, _SettingExtra] = {
         "description": (
             "Requested job walltime; heuristic default is the partition's own "
             "maximum. 95% of it is split across the task's pw.x steps as "
-            "max_seconds, by estimated workload."
+            "max_seconds, by estimated workload. The phonon tasks write no "
+            "max_seconds: their job timer creates <prefix>.EXIT at 95% of it, "
+            "where pw.x or ph.x, whichever is running, stops cleanly."
         ),
     },
     "account": {
@@ -735,8 +759,13 @@ _SETTING_META: dict[str, _SettingExtra] = {
     "forc_conv_thr": {
         "structure_specific": False,
         "unit": "Ry/Bohr",
-        "default": 1.0e-3,
-        "description": "Force-convergence threshold for relax/vc-relax.",
+        "description": (
+            "Force-convergence threshold of a relaxation. Default: Quantum "
+            "ESPRESSO's 1e-3 for the relax and vc-relax tasks, and 1e-4, "
+            "aiida-quantumespresso's balanced pw protocol, for the relaxation "
+            "of relax-phonon and vc-relax-phonon, where a looser value gets a "
+            "warning."
+        ),
     },
     "nstep": {
         "structure_specific": False,
@@ -779,7 +808,8 @@ _SETTING_META: dict[str, _SettingExtra] = {
             "relax/vc-relax, counted up from the vacuum; refused unless the cell "
             "to be written has one vacuum gap, along exactly one lattice vector, "
             "and at least N layers (atoms within 0.5 Å along the normal share "
-            "one)."
+            "one). The phonon tasks refuse it: pinned atoms keep their forces, "
+            "and the phonons are computed where every force is zero."
         ),
     },
     "cell_dofree": {
@@ -861,6 +891,84 @@ _SETTING_META: dict[str, _SettingExtra] = {
             "(Marzari-Vanderbilt), 0 Gaussian (default) or 1..10 a "
             "Methfessel-Paxton order. dos.x reads it only with a broadening "
             "width, so it needs broadening unless the nscf step uses smearing."
+        ),
+    },
+    "q_grid": {
+        "structure_specific": True,
+        "path": ("mesh",),
+        "description": (
+            "Explicit Gamma-centred q-point mesh (nq1, nq2, nq3) of a phonon "
+            "task's ph.x run; wins outright over q_distance if both are set. "
+            "Each count is at most 1024 and their product at most 49152, "
+            "within q2r.x's limits. Refused unless every symmetry operation "
+            "pw.x keeps maps it onto itself, with one division along each "
+            "vacuum axis and equal counts on two axes an operation mixes, and "
+            "refused with more than 1024 irreducible q-points."
+        ),
+    },
+    "q_distance": {
+        "structure_specific": False,
+        "unit": "1/Angstrom",
+        "default": 0.3,
+        "description": (
+            "Target q-point spacing of a phonon task's ph.x mesh, with 2 pi "
+            "included as for k_distance: axes the point group mixes share the "
+            "larger count, and a vacuum axis always gets one q-point. Default "
+            "0.3, aiida-quantumespresso's ph protocol (balanced). A mesh beyond "
+            "q2r.x's limits, more than 1024 divisions along an axis or 1024 "
+            "irreducible q-points, is refused. The first step's k-mesh, unless "
+            "the request sets it, is raised against the q-mesh: to the next "
+            "multiple of each q-axis with smearing or tetrahedra, to at least "
+            "it with fixed occupations."
+        ),
+    },
+    "tr2_ph": {
+        "structure_specific": False,
+        "default": 1.0e-18,
+        "description": (
+            "Threshold of ph.x's self-consistent linear response (> 0). Default "
+            "1e-18, aiida-quantumespresso's ph protocol (balanced); ph.x's own "
+            "is 1e-12."
+        ),
+    },
+    "alpha_mix": {
+        "structure_specific": False,
+        "default": 0.4,
+        "description": (
+            "Mixing factor of ph.x's linear-response potential, alpha_mix(1), "
+            "from 0 to 1, which ph.x applies at every iteration. Default 0.4, "
+            "aiida-quantumespresso's ph protocol (balanced); ph.x's own is 0.7."
+        ),
+    },
+    "nmix_ph": {
+        "structure_specific": False,
+        "default": 8,
+        "description": (
+            "Number of iterations ph.x's potential mixing uses (>= 1). Default "
+            "8, aiida-quantumespresso's ph protocol (balanced); ph.x's own is 4."
+        ),
+    },
+    "asr": {
+        "structure_specific": False,
+        "description": (
+            "Acoustic sum rule q2r.x applies to the effective charges and "
+            "matdyn.x to the force constants of the phonon DOS: 'crystal', the "
+            "optimized correction of the force constants (a projection), or "
+            "'simple', which corrects their diagonal only. Unset: 'crystal', "
+            "or 'simple' with a notice where the projection would not fit one "
+            "task's share of a node's memory on the partition, since matdyn.x "
+            "runs as one task."
+        ),
+    },
+    "dos_q_distance": {
+        "structure_specific": False,
+        "unit": "1/Angstrom",
+        "default": 0.1,
+        "description": (
+            "Spacing of the mesh on which matdyn.x interpolates the phonon DOS "
+            "(tetrahedra, every 1 cm^-1), with 2 pi included as for "
+            "k_distance. Default 0.10, the dos task's nscf spacing "
+            "(aiida-quantumespresso's pdos.yaml)."
         ),
     },
 }
@@ -1055,6 +1163,11 @@ def _leaves() -> list[SettingBinding]:
         *_leaves_from_overrides(RelaxOverrides, branch="relax", scope="per_step"),
         *_leaves_from_overrides(DosOverrides, branch="dos", scope="per_step"),
         *_leaves_from_overrides(KPathOverrides, branch="k_path", scope="per_step"),
+        *_leaves_from_overrides(PhOverrides, branch="ph", scope="per_step"),
+        *_leaves_from_overrides(Q2rOverrides, branch="q2r", scope="per_step"),
+        *_leaves_from_overrides(
+            PhononDosOverrides, branch="phonon_dos", scope="per_step"
+        ),
     ]
 
 
@@ -1270,6 +1383,57 @@ def _tasks() -> list[dict[str, object]]:
             "codes": [_CODE],
             "step_count": 1,
             "executables": [_PROGRAM],
+        },
+        {
+            "id": _PHONON_TASK,
+            "name": "Phonon (no relaxation)",
+            "description": (
+                "scf, then ph.x on a q-point mesh (DFPT), q2r.x and matdyn.x "
+                "for the phonon DOS -- four steps in one job sharing one "
+                "prefix/outdir, with d3hess.x before ph.x under DFT-D3. The "
+                "phonons are computed at the written geometry, so relax it "
+                "first or use relax-phonon. Unless set, the q-mesh takes "
+                "q_distance 0.3 from aiida-quantumespresso's ph protocol, and "
+                "the scf k-mesh is raised against it."
+            ),
+            "codes": [_CODE],
+            "step_count": 4,
+            "executables": [_PROGRAM, "ph.x", "q2r.x", "matdyn.x"],
+        },
+        {
+            "id": _RELAX_PHONON_TASK,
+            "name": "Phonon (incl. relaxation)",
+            "description": (
+                "A fixed-cell relax, then ph.x on its save on a q-point mesh "
+                "(DFPT), q2r.x and matdyn.x for the phonon DOS -- four steps in "
+                "one job sharing one prefix/outdir, with d3hess.x before ph.x "
+                "under DFT-D3. Unless set, the relaxation takes forc_conv_thr "
+                "1e-4 from aiida-quantumespresso's pw protocol and the q-mesh "
+                "q_distance 0.3 from its ph protocol, and the relaxation's "
+                "k-mesh is raised against the q-mesh."
+            ),
+            "codes": [_CODE],
+            "step_count": 4,
+            "executables": [_PROGRAM, "ph.x", "q2r.x", "matdyn.x"],
+        },
+        {
+            "id": _VC_RELAX_PHONON_TASK,
+            "name": "Phonon (incl. vc-relaxation)",
+            "description": (
+                "A vc-relax, then ph.x on the relaxed cell's save on a q-point "
+                "mesh (DFPT), q2r.x and matdyn.x for the phonon DOS -- four "
+                "steps in one job sharing one prefix/outdir, with d3hess.x "
+                "before ph.x under DFT-D3. Refused on a cell whose FFT grid, "
+                "rebuilt by the vc-relax, ph.x can refuse; relax-phonon runs "
+                "there. Unless set, the relaxation takes forc_conv_thr 1e-4 "
+                "from aiida-quantumespresso's pw protocol and the q-mesh "
+                "q_distance 0.3 from its ph protocol; the q-mesh and the "
+                "relaxation's k-mesh, raised against it, are sized on the input "
+                "cell."
+            ),
+            "codes": [_CODE],
+            "step_count": 4,
+            "executables": [_PROGRAM, "ph.x", "q2r.x", "matdyn.x"],
         },
     ]
 

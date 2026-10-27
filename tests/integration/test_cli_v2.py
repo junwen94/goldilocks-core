@@ -526,6 +526,41 @@ def test_blocked_pipeline_reports_deduplicated_reasons_and_exits_nonzero() -> No
             ],
             id="vc-relax",
         ),
+        pytest.param(
+            ["--task", "phonon"],
+            [
+                ("is not installed", []),
+                (
+                    "The phonon tasks need this structure on fixed occupations, or "
+                    "confirmed as a metal",
+                    ["  try: --set is_metal=non_metal", "  try: --set is_metal=metal"],
+                ),
+            ],
+            id="phonon",
+        ),
+        pytest.param(
+            [
+                "--task",
+                "relax-phonon",
+                "--set",
+                "is_metal=non_metal",
+                "--set",
+                "fix_bottom_layers=1",
+            ],
+            [
+                ("is not installed", []),
+                (
+                    "fix_bottom_layers=1 pins atoms in the relaxation",
+                    ["  try: remove --set fix_bottom_layers"],
+                ),
+            ],
+            id="relax-phonon",
+        ),
+        pytest.param(
+            ["--task", "vc-relax-phonon", "--set", "is_metal=non_metal"],
+            [("is not installed", [])],
+            id="vc-relax-phonon",
+        ),
     ],
 )
 def test_explain_reports_the_reasons_run_refuses_with_and_still_exits_zero(
@@ -533,9 +568,11 @@ def test_explain_reports_the_reasons_run_refuses_with_and_still_exits_zero(
 ) -> None:
     """#165: no real assets, so the isolated asset root's uninstalled
     default table is a deterministic blocker (vc-relax adds its named
-    check rule). explain prints run's verdict (diagnosis output, on stdout)
-    and still exits 0; run refuses with the same lines on stderr: each
-    finding's message, then one ``try:`` line per remedy (#151)."""
+    check rule, and the phonon task, run on Si without is_metal, which no
+    model decides here, its metallicity rule). explain prints run's verdict
+    (diagnosis output, on stdout) and still exits 0; run refuses with the
+    same lines on stderr: each finding's message, then one ``try:`` line per
+    remedy (#151)."""
     arguments = [str(structure("Si.cif")), "--hpc", "scarf", *task_arguments]
 
     as_json = _run_cli("explain", *arguments, "--json")
@@ -846,6 +883,69 @@ class TestRunAndExplainAgainstRealAssets:
             assert (destination / name).exists(), name
         assert "calculation      = 'bands'" in (destination / "bands.in").read_text()
 
+    def test_explain_vc_relax_phonon_reports_every_step_s_records(
+        self, real_assets: None
+    ) -> None:
+        """#215: --task vc-relax-phonon routes to advise_phonon: the vc-relax
+        step relaxes to the phonon protocol's 1e-4, and the ph, q2r and
+        phonon_dos steps follow it in the layout."""
+        silicon = structure("Si.cif")
+
+        completed = _run_cli(
+            "explain",
+            str(silicon),
+            "--hpc",
+            "scarf",
+            "--task",
+            "vc-relax-phonon",
+            "--json",
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        document = json.loads(completed.stdout)
+        records = document["records"]
+        assert records["relax"]["value"]["forc_conv_thr"] == 1e-4
+        assert records["q_sampling"]["value"]["mesh"] == [4, 4, 4]
+        assert document["blocking"] == []
+        assert [step["name"] for step in document["layout"]["steps"]] == [
+            "vc-relax",
+            "ph",
+            "q2r",
+            "phonon_dos",
+        ]
+
+    @pytest.mark.parametrize(
+        ("task", "first_step"),
+        [("phonon", "scf"), ("relax-phonon", "relax"), ("vc-relax-phonon", "vc-relax")],
+    )
+    def test_run_phonon_task_publishes_every_step(
+        self, real_assets: None, tmp_path: Path, task: str, first_step: str
+    ) -> None:
+        silicon = structure("Si.cif")
+        destination = tmp_path / "out"
+
+        completed = _run_cli(
+            "run",
+            str(silicon),
+            "--hpc",
+            "scarf",
+            "--task",
+            task,
+            "-o",
+            str(destination),
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        for name in (
+            f"{first_step}.in",
+            "ph.in",
+            "q2r.in",
+            "phonon_dos.in",
+            "submit.sh",
+        ):
+            assert (destination / name).exists(), name
+        assert "ldisp            = .true." in (destination / "ph.in").read_text()
+
     def test_unknown_task_is_an_operator_error_not_a_silent_fallback(self) -> None:
         silicon = structure("Si.cif")
 
@@ -1152,7 +1252,13 @@ class TestPerStepOverrides:
                 "scf_single_point",
                 "press=10",
                 "'press' does not apply to task 'scf_single_point'; "
-                "it applies to task vc-relax",
+                "it applies to tasks vc-relax, vc-relax-phonon",
+            ),
+            (
+                "relax-phonon",
+                "steps.scf.k_grid=[4,4,4]",
+                "unknown step 'scf' in 'steps.scf.k_grid'; "
+                "task 'relax-phonon' has steps: relax, ph, q2r, phonon_dos",
             ),
             (
                 "dos",

@@ -83,14 +83,15 @@ def generate(
     task runs a job timer instead (#215), and the scf and relaxation
     writers then write none.
 
-    ``relax`` (v2 epic 10, #10): only ``service/_relax.py`` ever passes
-    this -- it is threaded onto ``PwSettings.relax`` and dispatches to
-    ``write_qe_relax`` instead of ``write_qe_scf`` whenever ``purpose``
-    is ``"relax"``/``"vc-relax"``. Reusing this function rather than a
-    parallel ``generate_relax`` duplicating the ``SystemSettings``/
-    ``PwSettings`` construction above: nothing about assembling those
-    two differs between an scf step and a relax step, only which
-    writer gets called and what ``PwSettings.relax`` holds.
+    ``relax`` (v2 epic 10, #10): only ``service/_relax.py`` and
+    ``service/_phonon.py`` (#215) ever pass this -- it is threaded onto
+    ``PwSettings.relax`` and dispatches to ``write_qe_relax`` instead of
+    ``write_qe_scf`` whenever ``purpose`` is ``"relax"``/``"vc-relax"``.
+    Reusing this function rather than a parallel ``generate_relax``
+    duplicating the ``SystemSettings``/``PwSettings`` construction above:
+    nothing about assembling those two differs between an scf step and a
+    relax step, only which writer gets called and what ``PwSettings.relax``
+    holds.
 
     ``fft_grid`` and ``dftd3_threebody`` (#215): the phonon tasks' first
     step writes the dense FFT grid ph.x accepts as nr1-nr3 where it would

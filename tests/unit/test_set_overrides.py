@@ -600,6 +600,75 @@ class TestTaskRouting:
         assert overrides.steps["bands"].kpoints.nbnd.nbnd == 40
         assert overrides.warnings == ()
 
+    @pytest.mark.parametrize(
+        ("task", "first_step"),
+        [("phonon", "scf"), ("relax-phonon", "relax"), ("vc-relax-phonon", "vc-relax")],
+    )
+    def test_a_phonon_task_s_pw_x_keys_land_on_its_first_step_alone(
+        self, task: str, first_step: str
+    ) -> None:
+        """#215: the first step is a phonon task's only pw.x step, whatever its
+        purpose, so a flat k_grid or conv_thr lands there with no notice."""
+        overrides = build_overrides({"k_grid": [6, 6, 6], "conv_thr": 1e-9}, task=task)
+
+        assert set(overrides.steps) == {first_step}
+        kpoints = overrides.steps[first_step].kpoints
+        assert (kpoints.k_sampling.k_grid, kpoints.convergence.conv_thr) == (
+            (6, 6, 6),
+            1e-9,
+        )
+        assert overrides.warnings == ()
+
+    def test_the_phonon_steps_keys_land_on_their_own_steps(self) -> None:
+        """#215: the q-mesh and ph.x's settings on the ph step, the acoustic
+        sum rule on q2r and the DOS spacing on phonon_dos."""
+        overrides = build_overrides(
+            {
+                "q_grid": [4, 4, 4],
+                "tr2_ph": 1e-16,
+                "asr": "simple",
+                "dos_q_distance": 0.2,
+            },
+            task="phonon",
+        )
+
+        assert set(overrides.steps) == {"ph", "q2r", "phonon_dos"}
+        ph = overrides.steps["ph"].ph
+        assert (ph.q_sampling.q_grid, ph.phonon.tr2_ph) == ((4, 4, 4), 1e-16)
+        assert overrides.steps["q2r"].q2r.q2r.asr == "simple"
+        assert overrides.steps["phonon_dos"].phonon_dos.phonon_dos.dos_q_distance == (
+            0.2
+        )
+        assert overrides.warnings == ()
+
+    def test_vc_relax_keys_reach_vc_relax_phonon_only(self) -> None:
+        """#215: press is a vc-relax setting, so vc-relax-phonon takes it,
+        flat or on its vc-relax step, and relax-phonon refuses it."""
+        flat = build_overrides({"press": 10.0}, task="vc-relax-phonon")
+        scoped = build_overrides({"steps.vc-relax.press": 10.0}, task="vc-relax-phonon")
+
+        for overrides in (flat, scoped):
+            assert overrides.steps["vc-relax"].relax.relax.press == 10.0
+        with pytest.raises(InvalidSetting) as error:
+            build_overrides({"press": 10.0}, task="relax-phonon")
+        assert str(error.value) == (
+            "'press' does not apply to task 'relax-phonon'; "
+            "it applies to tasks vc-relax, vc-relax-phonon"
+        )
+
+    @pytest.mark.parametrize(
+        ("task", "first_step"),
+        [("relax-phonon", "relax"), ("vc-relax-phonon", "vc-relax")],
+    )
+    def test_fix_bottom_layers_routes_to_a_phonon_relaxation(
+        self, task: str, first_step: str
+    ) -> None:
+        """Routing accepts it, as for any relaxation step; the gate refuses it
+        in the phonon tasks (``checks.with_phonon_findings``)."""
+        overrides = build_overrides({"fix_bottom_layers": 2}, task=task)
+
+        assert overrides.steps[first_step].relax.relax.fix_bottom_layers == 2
+
     def test_system_and_job_keys_are_task_level_and_raise_no_notice(self) -> None:
         overrides = build_overrides(
             {"functional": "PBE", "walltime_h": 4, "is_metal": "non_metal"},
@@ -619,34 +688,35 @@ class TestTaskRouting:
                 {"press": 10},
                 "scf_single_point",
                 "'press' does not apply to task 'scf_single_point'; "
-                "it applies to task vc-relax",
+                "it applies to tasks vc-relax, vc-relax-phonon",
                 id="press-on-scf",
             ),
             pytest.param(
                 {"press": 10},
                 "dos",
-                "'press' does not apply to task 'dos'; it applies to task vc-relax",
+                "'press' does not apply to task 'dos'; "
+                "it applies to tasks vc-relax, vc-relax-phonon",
                 id="press-on-dos",
             ),
             pytest.param(
                 {"nstep": 100},
                 "scf_single_point",
                 "'nstep' does not apply to task 'scf_single_point'; "
-                "it applies to tasks relax, vc-relax",
+                "it applies to tasks relax, vc-relax, relax-phonon, vc-relax-phonon",
                 id="nstep-on-scf",
             ),
             pytest.param(
                 {"etot_conv_thr": 1e-4},
                 "dos",
                 "'etot_conv_thr' does not apply to task 'dos'; "
-                "it applies to tasks relax, vc-relax",
+                "it applies to tasks relax, vc-relax, relax-phonon, vc-relax-phonon",
                 id="etot-conv-thr-on-dos",
             ),
             pytest.param(
                 {"cell_dofree": "2Dxy"},
                 "relax",
                 "'cell_dofree' does not apply to task 'relax'; "
-                "it applies to task vc-relax",
+                "it applies to tasks vc-relax, vc-relax-phonon",
                 id="cell-dofree-on-relax",
             ),
             pytest.param(
@@ -757,6 +827,54 @@ class TestTaskRouting:
                 id="dos-key-on-the-nscf-step",
             ),
             pytest.param(
+                {"steps.scf.k_grid": [4, 4, 4]},
+                "relax-phonon",
+                "unknown step 'scf' in 'steps.scf.k_grid'; "
+                "task 'relax-phonon' has steps: relax, ph, q2r, phonon_dos",
+                id="scf-step-on-relax-phonon",
+            ),
+            pytest.param(
+                {"steps.vc-relax.press": 10},
+                "relax-phonon",
+                "unknown step 'vc-relax' in 'steps.vc-relax.press'; "
+                "task 'relax-phonon' has steps: relax, ph, q2r, phonon_dos",
+                id="vc-relax-step-on-relax-phonon",
+            ),
+            pytest.param(
+                {"delta_e": 0.05},
+                "phonon",
+                "'delta_e' does not apply to task 'phonon'; it applies to task dos",
+                id="delta-e-on-phonon",
+            ),
+            pytest.param(
+                {"k_path_distance": 0.02},
+                "vc-relax-phonon",
+                "'k_path_distance' does not apply to task 'vc-relax-phonon'; "
+                "it applies to task band",
+                id="k-path-distance-on-vc-relax-phonon",
+            ),
+            pytest.param(
+                {"q_grid": [4, 4, 4]},
+                "scf_single_point",
+                "'q_grid' does not apply to task 'scf_single_point'; "
+                "it applies to tasks phonon, relax-phonon, vc-relax-phonon",
+                id="q-grid-on-scf",
+            ),
+            pytest.param(
+                {"steps.ph.k_grid": [4, 4, 4]},
+                "phonon",
+                "'k_grid' does not apply to step 'ph' (in 'steps.ph.k_grid'); "
+                "it applies to steps scf, nscf, relax, vc-relax",
+                id="pw-key-on-the-ph-step",
+            ),
+            pytest.param(
+                {"steps.q2r.q_grid": [4, 4, 4]},
+                "phonon",
+                "'q_grid' does not apply to step 'q2r' (in 'steps.q2r.q_grid'); "
+                "it applies to step ph",
+                id="ph-key-on-the-q2r-step",
+            ),
+            pytest.param(
                 {"steps.nscf": 1},
                 "dos",
                 "malformed steps.<name>.<key> setting: 'steps.nscf'",
@@ -812,7 +930,8 @@ class TestTaskRouting:
             build_overrides({"k_grid": [4, 4, 4]}, task="scf")
 
         assert str(error.value) == (
-            "unknown task 'scf'; tasks: scf_single_point, dos, band, relax, vc-relax"
+            "unknown task 'scf'; tasks: scf_single_point, dos, band, relax, "
+            "vc-relax, phonon, relax-phonon, vc-relax-phonon"
         )
 
     def test_flat_walltime_on_dos_adds_no_notice(self) -> None:

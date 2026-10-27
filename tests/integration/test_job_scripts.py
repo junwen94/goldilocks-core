@@ -13,7 +13,10 @@ Before #169 the dos task's scf and nscf each got max_seconds = 0.95 x
 the whole walltime, although pw.x counts it from its own start. Before
 #148 the job record carried no memory figure, and nodes were sized on
 one pool's single copy of the wavefunctions and density. The band task
-(#118) runs bands.x like dos.x, once per spin channel.
+(#118) runs bands.x like dos.x, once per spin channel. The phonon tasks
+(#215) run ph.x on the whole allocation and d3hess.x, q2r.x and matdyn.x on
+one task each, under a job timer in place of max_seconds, and their scripts
+resume from a named step.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.bundle import DirectoryOutput, publish
 from goldilocks_core.inputs.hpc import load_hpc_profile
 from goldilocks_core.service import (
+    TASK_PHASES,
     advise,
     advise_band,
     advise_dos,
@@ -191,6 +195,75 @@ def test_band_task_runs_bands_x_on_one_task_per_spin_channel(
         assert "max_seconds" not in step.files[f"{step.name}.in"]
     job = advice.records()["job"].value
     assert job.max_seconds_by_step.keys() == {"scf", "bands"}
+
+
+@pytest.mark.parametrize(
+    ("task", "first_step"),
+    [("phonon", "scf"), ("relax-phonon", "relax"), ("vc-relax-phonon", "vc-relax")],
+)
+def test_a_phonon_script_runs_every_step_under_the_job_timer(
+    task, first_step, tmp_path, monkeypatch
+) -> None:
+    """Diamond Si, set to a non-metal, with DFT-D3 and a 4 h walltime: the
+    first pw.x step, then d3hess.x, ph.x with the first step's pools, q2r.x
+    and matdyn.x, each named by GOLDILOCKS_FROM_STEP's switch, which a fresh
+    run passes at the first step, deleting ph.x's recover data. No input
+    writes max_seconds: the timer creates pwscf.EXIT at the job's
+    timer_seconds, 95% of the walltime."""
+    store = _installed_store(tmp_path, monkeypatch)
+    hpc = load_hpc_profile("scarf")
+    phases = TASK_PHASES[task]
+    overrides = build_overrides(
+        {"is_metal": "non_metal", "use_vdw": True, "walltime_h": 4}, task=task
+    )
+    advice = phases.advise(
+        _diamond_silicon(), hpc=hpc, overrides=overrides, store=store
+    )
+    report = phases.check(advice)
+    assert report.ok, report.blocking
+    steps = phases.generate(advice, report, ctx=default_shared_context())
+
+    script = phases.render_submission(advice, hpc, "quantum_espresso", steps)
+
+    lines = [line.strip() for line in script.splitlines()]
+    names = [first_step, "d3hess", "ph", "q2r", "phonon_dos"]
+    assert [line for line in lines if line.startswith("# ")] == [
+        f"# {name}" for name in names
+    ]
+    job = advice.records()["job"].value
+    assert (job.timer_seconds, job.max_seconds_by_step) == (13680, {})
+    assert "#SBATCH --time=4:00:00" in lines
+    assert "rm -f pwscf.EXIT" in lines
+    assert f"sleep {job.timer_seconds} &" in lines
+    assert f'goldilocks_steps="{" ".join(names)}"' in lines
+    assert f'goldilocks_from="${{GOLDILOCKS_FROM_STEP-{first_step}}}"' in lines
+    assert (
+        f'if [ "$goldilocks_from" = "{first_step}" ]; then '
+        "rm -rf -- ./out/_ph0 pwscf.dyn*; fi"
+    ) in lines
+    (pw,) = (line for line in lines if line.startswith("srun pw.x "))
+    assert pw.endswith(f" -in {first_step}.in > {first_step}.out")
+    npool = pw.split()[pw.split().index("-npool") + 1]
+    assert (
+        f"srun ph.x -npool {npool} -in ph.in > ph.out || goldilocks_status=$?"
+    ) in lines
+    assert 'goldilocks_check_ph "ph" "ph.out" "pwscf.dyn" "$goldilocks_status"' in (
+        lines
+    )
+    for program, name in (
+        ("d3hess.x", "d3hess"),
+        ("q2r.x", "q2r"),
+        ("matdyn.x", "phonon_dos"),
+    ):
+        launch = lines.index(
+            f"srun --nodes=1 --ntasks=1 {program} -in {name}.in > {name}.out"
+        )
+        assert lines[launch + 1] == (
+            f'goldilocks_check_stdout_marker "{name}" "{name}.out" "JOB DONE"'
+        )
+    for step in steps:
+        for content in step.files.values():
+            assert "max_seconds" not in content, step.name
 
 
 def test_scf_script_checks_the_status_pw_x_always_writes(tmp_path, monkeypatch) -> None:

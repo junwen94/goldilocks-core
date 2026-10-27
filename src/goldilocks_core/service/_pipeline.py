@@ -16,15 +16,17 @@ submission script -> bundle.
 analysis and system advice run once, then each step's own advice, then
 one job for the whole task (``_step.py``) -- the steps run one after
 another in one allocation, so the job is sized over all of them and
-splits the walltime between them. It returns one ``Advice`` per step,
-all sharing the same analysis, system and job. ``advise()`` is its
-one-scf-step case; ``service/_dos.py`` (scf + nscf, the nscf with the dos
-protocol, ``_step_protocol.py``), ``service/_band.py`` (scf + bands, each
-with the band task's protocol) and
-``service/_relax.py`` (one relax/vc-relax step) call it directly. A
-``bands`` step (pw.x ``calculation='bands'``, #118) is advised along the
-written cell's band path with the occupations of an scf step before it
-(``_step_kpath.py``).
+splits the walltime between them, unless a step's protocol declares a job
+timer, which runs in place of the split (#215). It returns one ``Advice``
+per step, all sharing the same analysis, system and job. ``advise()`` is
+its one-scf-step case; ``service/_dos.py`` (scf + nscf, the nscf with the
+dos protocol, ``_step_protocol.py``), ``service/_band.py`` (scf + bands,
+each with the band task's protocol), ``service/_relax.py`` (one
+relax/vc-relax step) and ``service/_phonon.py`` (a phonon task's first
+step, an scf, relax or vc-relax under the phonon protocol) call it
+directly. A ``bands`` step (pw.x ``calculation='bands'``, #118) is advised
+along the written cell's band path with the occupations of an scf step
+before it (``_step_kpath.py``).
 
 The input structure reaches only the analysis and the system phase,
 which turns it into the simulated cell once (``system.cell``,
@@ -144,9 +146,10 @@ def check(
     ``purpose="nscf"``. ``service/_band.py``'s bands pass passes
     ``purpose="bands"``, the purpose of ``checks.py``'s band-task rules.
 
-    ``relax`` (v2 epic 10, #10): only ever passed by ``service/_relax.py``,
-    which does not have a plain ``Advice`` field to fold it into --
-    every other caller leaves it ``None``.
+    ``relax`` (v2 epic 10, #10): only ever passed by ``service/_relax.py``
+    and ``service/_phonon.py`` (#215), whose relax record sits beside the
+    step's ``Advice``, with no field of it to fold into -- every other
+    caller leaves it ``None``.
 
     ``job``/``parallel``/``nbnd``: always read straight off ``advice``
     (every ``Advice`` has all three) -- the ``npool``-must-divide-

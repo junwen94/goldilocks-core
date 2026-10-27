@@ -838,6 +838,17 @@ def rutile_titanium_dioxide() -> Structure:
     )
 
 
+def wurtzite_zinc_oxide() -> Structure:
+    """Wurtzite ZnO (P6_3mc, a = 3.250 A, c = 5.207 A, u = 0.382): an
+    insulator that the installed metallicity classifier calls a metal."""
+    return Structure.from_spacegroup(
+        "P6_3mc",
+        Lattice.hexagonal(3.250, 5.207),
+        ["Zn", "O"],
+        [[1 / 3, 2 / 3, 0], [1 / 3, 2 / 3, 0.382]],
+    )
+
+
 def generated_slab(bulk: Structure, miller: tuple[int, int, int]) -> Slab:
     """pymatgen's ``SlabGenerator`` slab of ``bulk`` with Miller index
     ``miller``, at least 6 A thick under 12 A of vacuum along c, centred in

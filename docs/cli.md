@@ -31,13 +31,14 @@ for a memory-only preview instead. Use `uv run goldilocks --help` or a
 subcommand's `--help` for full syntax.
 
 `run` and `explain` share the same seven flags: the `structure` path,
-`--code`, `--task {scf_single_point,dos,band,relax,vc-relax}`, `--hpc`, `--set
-KEY=VALUE` (repeatable), `--config FILE.toml`, and `--json`; both also accept
-`--fetch-missing`, and only `run` additionally accepts `-o/--out`. `--task` is
-validated against the five listed choices; `--code` is passed through
-unchecked — only `quantum_espresso` is a registered code today, so an
-unrecognised `--code` silently produces a Quantum-ESPRESSO-shaped bundle
-instead of failing.
+`--code`,
+`--task {scf_single_point,dos,band,relax,vc-relax,phonon,relax-phonon,vc-relax-phonon}`,
+`--hpc`, `--set KEY=VALUE` (repeatable), `--config FILE.toml`, and `--json`;
+both also accept `--fetch-missing`, and only `run` additionally accepts
+`-o/--out`. `--task` is validated against the eight listed choices; `--code`
+is passed through unchecked — only `quantum_espresso` is a registered code
+today, so an unrecognised `--code` silently produces a Quantum-ESPRESSO-shaped
+bundle instead of failing.
 
 `uv run goldilocks capabilities --json` dumps the same full payload HTTP's
 `GET /capabilities` and the MCP `capabilities` tool return: `codes`, `tasks`

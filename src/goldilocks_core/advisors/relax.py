@@ -1,4 +1,4 @@
-"""relax: ion/cell relaxation parameters, for relax/vc-relax tasks.
+"""relax: ion/cell relaxation parameters of a relax or vc-relax step.
 
 ``RelaxOptions``/``VcRelaxOptions`` (the typed fields) landed in v2 epic
 7 (#7); this epic (v2 epic 10, #10) adds the actual decision cascade

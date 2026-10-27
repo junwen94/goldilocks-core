@@ -334,14 +334,30 @@ class TestExplain:
         assert "warnings" in body
         assert body["blocking"] == []
 
-    @pytest.mark.parametrize("task", ["scf_single_point", "dos", "band"])
+    @pytest.mark.parametrize(
+        "task",
+        [
+            "scf_single_point",
+            "dos",
+            "band",
+            "phonon",
+            "relax-phonon",
+            "vc-relax-phonon",
+        ],
+    )
     def test_blocking_lists_the_reasons_run_refuses_with(
         self, client: TestClient, silicon_cif: str, task: str
     ) -> None:
         """#165: no real assets, so the isolated asset root's uninstalled
         default table blocks both routes; /explain still answers 200 and
-        names the reason /run's 422 gives."""
-        body = {"structure_content": silicon_cif, "hpc": "scarf", "task": task}
+        names the reason /run's 422 gives. Si is set to a non-metal, which a
+        phonon task needs on smearing without a model to decide it."""
+        body = {
+            "structure_content": silicon_cif,
+            "hpc": "scarf",
+            "task": task,
+            "overrides": {"is_metal": "non_metal"},
+        }
 
         explained = client.post("/explain", json=body)
         refused = client.post("/run", json=body)
@@ -476,6 +492,47 @@ class TestExplain:
         )
         assert body["layout"]["steps"][1]["name"] == "bands"
         assert body["blocking"] == []
+
+    @pytest.mark.parametrize(
+        ("task", "first_step"),
+        [("phonon", "scf"), ("relax-phonon", "relax"), ("vc-relax-phonon", "vc-relax")],
+    )
+    def test_a_phonon_task_returns_its_steps_records(
+        self,
+        client: TestClient,
+        silicon_fixture_table,
+        silicon_cif: str,
+        task: str,
+        first_step: str,
+    ) -> None:
+        """#215: each phonon task routes to advise_phonon through the real HTTP
+        transport: the first pw.x step's records under its own name, then the
+        ph step's q-mesh and ph.x settings, q2r.x's and matdyn.x's. Si is set
+        to a non-metal, which a phonon task needs on smearing without a model
+        to decide it."""
+        response = client.post(
+            "/explain",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "task": task,
+                "overrides": {"is_metal": "non_metal"},
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["blocking"] == []
+        assert body["layout"]["steps"][1:] == [
+            {"name": "ph", "records": ["q_sampling", "phonon"]},
+            {"name": "q2r", "records": ["q2r"]},
+            {"name": "phonon_dos", "records": ["phonon_dos"]},
+        ]
+        assert body["layout"]["steps"][0]["name"] == first_step
+        records = body["records"]
+        assert records["q_sampling"]["value"]["q_distance"] == 0.3
+        assert records["phonon"]["value"]["tr2_ph"] == 1e-18
+        assert ("relax" in records) is (first_step != "scf")
 
     def test_relax_task_returns_a_relax_record(
         self, client: TestClient, real_assets, silicon_cif: str
@@ -683,13 +740,19 @@ class TestPerStepOverrides:
                 "scf_single_point",
                 {"press": 10},
                 "'press' does not apply to task 'scf_single_point'; "
-                "it applies to task vc-relax",
+                "it applies to tasks vc-relax, vc-relax-phonon",
             ),
             (
                 "relax",
                 {"cell_dofree": "2Dxy", "press": 5},
                 "'cell_dofree' does not apply to task 'relax'; "
-                "it applies to task vc-relax",
+                "it applies to tasks vc-relax, vc-relax-phonon",
+            ),
+            (
+                "relax-phonon",
+                {"steps.scf.k_grid": [4, 4, 4]},
+                "unknown step 'scf' in 'steps.scf.k_grid'; "
+                "task 'relax-phonon' has steps: relax, ph, q2r, phonon_dos",
             ),
             (
                 "scf_single_point",
@@ -896,6 +959,42 @@ class TestRun:
         files = response.json()["files"]
         for name in ("scf.in", "bands.in", "bands_x.in", "submit.sh"):
             assert name in files, name
+
+    @pytest.mark.parametrize(
+        ("task", "first_step"),
+        [("phonon", "scf"), ("relax-phonon", "relax"), ("vc-relax-phonon", "vc-relax")],
+    )
+    def test_a_phonon_task_generates_every_step(
+        self,
+        client: TestClient,
+        silicon_fixture_table,
+        silicon_cif: str,
+        task: str,
+        first_step: str,
+    ) -> None:
+        """Si set to a non-metal, which a phonon task needs on smearing without
+        a model to decide it."""
+        response = client.post(
+            "/run",
+            json={
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "task": task,
+                "overrides": {"is_metal": "non_metal"},
+            },
+        )
+
+        assert response.status_code == 200
+        files = response.json()["files"]
+        for name in (
+            f"{first_step}.in",
+            "ph.in",
+            "q2r.in",
+            "phonon_dos.in",
+            "submit.sh",
+        ):
+            assert name in files, name
+        assert "d3hess.in" not in files
 
     def test_relax_task_generates_relax_in(
         self, client: TestClient, real_assets, silicon_cif: str

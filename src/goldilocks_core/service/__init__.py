@@ -58,6 +58,10 @@ module into one file. Split by pipeline phase instead, matching
 - ``_phonon_steps.py`` -- what a phonon task decides on its first pw.x
   step's advice (``PhononStepsAdvice``, #215): a relaxation's relax record,
   the FFT grid for ph.x, and the ph, q2r and phonon_dos steps' records
+- ``_phonon.py`` -- the ``phonon``/``relax-phonon``/``vc-relax-phonon``
+  tasks' path (#215): ``advise_steps`` for the first pw.x step (scf, relax
+  or vc-relax) under the phonon protocol, ``_phonon_steps.py`` on its
+  advice, then d3hess.x for DFT-D3, ph.x, q2r.x and matdyn.x
 - ``_tasks.py`` -- ``TASK_PHASES``, each task's ``advise``/``check``/
   ``generate``/``render_submission``/``to_bundle_input`` by
   ``types.CalcTask``: the one table every transport's ``explain`` and
@@ -109,6 +113,14 @@ from goldilocks_core.service._magnetic_orderings import (
     list_magnetic_orderings,
     report_to_json,
 )
+from goldilocks_core.service._phonon import (
+    PhononAdvice,
+    advise_phonon,
+    check_phonon,
+    generate_phonon,
+    render_submission_phonon,
+    to_bundle_input_phonon,
+)
 from goldilocks_core.service._pipeline import advise, check
 from goldilocks_core.service._pseudo import PseudoAdvice
 from goldilocks_core.service._relax import (
@@ -123,6 +135,9 @@ from goldilocks_core.service._step import (
     OVERRIDES_WARNING_CATALOGUE,
     DosOverrides,
     KPathOverrides,
+    PhononDosOverrides,
+    PhOverrides,
+    Q2rOverrides,
     RelaxOverrides,
     StepAdvice,
     StepOverrides,
@@ -155,7 +170,11 @@ __all__ = [
     "MagneticOrderingCandidate",
     "MagneticOrderingsReport",
     "PathStepAdvice",
+    "PhOverrides",
+    "PhononAdvice",
+    "PhononDosOverrides",
     "PseudoAdvice",
+    "Q2rOverrides",
     "RecordLayout",
     "RecordTiers",
     "RelaxAdvice",
@@ -172,24 +191,29 @@ __all__ = [
     "advise",
     "advise_band",
     "advise_dos",
+    "advise_phonon",
     "advise_relax",
     "applies_to_multiple_steps",
     "check",
     "check_band",
     "check_dos",
+    "check_phonon",
     "check_relax",
     "generate",
     "generate_band",
     "generate_dos",
+    "generate_phonon",
     "generate_relax",
     "list_magnetic_orderings",
     "render_submission",
     "render_submission_band",
     "render_submission_dos",
+    "render_submission_phonon",
     "render_submission_relax",
     "report_to_json",
     "to_bundle_input",
     "to_bundle_input_band",
     "to_bundle_input_dos",
+    "to_bundle_input_phonon",
     "to_bundle_input_relax",
 ]

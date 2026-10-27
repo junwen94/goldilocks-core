@@ -13,6 +13,12 @@ output follows the same decision (#166): ``mixing_fixed_ns`` appears only
 as the user set it, and a nonzero value carries the frozen-occupation
 warning exactly when a card is rendered.
 
+The phonon tasks run the scenarios their own gate accepts, where a U is
+written on atomic projectors, the only ones ph.x takes, and the first step
+runs on fixed occupations, which a phonon task needs for a compound that is
+not all-metallic unless the user confirms a metal: their first step's pw.x
+input carries the same card.
+
 A request no input can express is refused by ``check`` itself, where
 ``/explain`` shows it, and never reaches a writer: spin-orbit coupling
 with a ``tot_magnetization``, which pw.x accepts only with nspin=2 (#146),
@@ -162,6 +168,19 @@ _SCENARIOS = {
         {"hubbard_projectors": "atomic"},
         projectors="atomic",
     ),
+    # On fixed occupations, as the phonon tasks need a compound that is not a
+    # confirmed metal: TiO2 as a non-metal, ferromagnetic NiO with its moment.
+    "TiO2 is_metal non_metal": _Scenario(_rutile_tio2, (), {"is_metal": "non_metal"}),
+    "NiO hubbard_projectors atomic, is_metal non_metal, tot_magnetization": _Scenario(
+        lambda: _rock_salt("Ni", 4.17),
+        ("U  Ni-3d  6.2",),
+        {
+            "hubbard_projectors": "atomic",
+            "is_metal": "non_metal",
+            "tot_magnetization": 2,
+        },
+        projectors="atomic",
+    ),
     # A user mixing_fixed_ns, flagged only where a U is applied, whatever
     # needs_correlation says (#166): true for ThO2, false for the nitride UN.
     "ThO2 no +U, mixing_fixed_ns": _Scenario(
@@ -220,6 +239,13 @@ _MULTI_TASK_SCENARIOS = (
     "NiO is_metal non_metal",
     "NiO hubbard_projectors atomic",
 )
+
+_PHONON_SCENARIOS = (
+    "TiO2 is_metal non_metal",
+    "NiO hubbard_projectors atomic, is_metal non_metal, tot_magnetization",
+)
+"""The scenarios the phonon tasks' gate accepts: no U, or a U on atomic
+projectors, on fixed occupations."""
 
 _FROZEN_NS = "convergence.mixing_fixed_ns_freezes_hubbard_occupations"
 
@@ -284,11 +310,19 @@ def _hubbard_lines(content: str, projectors: str) -> tuple[str, ...]:
     return tuple(card)
 
 
-_CASES = [pytest.param("scf", name, id=f"scf-{name}") for name in _SCENARIOS] + [
-    pytest.param(task, name, id=f"{task}-{name}")
-    for task in ("relax", "vc-relax", "dos", "band")
-    for name in _MULTI_TASK_SCENARIOS
-]
+_CASES = (
+    [pytest.param("scf", name, id=f"scf-{name}") for name in _SCENARIOS]
+    + [
+        pytest.param(task, name, id=f"{task}-{name}")
+        for task in ("relax", "vc-relax", "dos", "band")
+        for name in _MULTI_TASK_SCENARIOS
+    ]
+    + [
+        pytest.param(task, name, id=f"{task}-{name}")
+        for task in ("phonon", "relax-phonon", "vc-relax-phonon")
+        for name in _PHONON_SCENARIOS
+    ]
+)
 
 
 @pytest.mark.parametrize(("task", "name"), _CASES)

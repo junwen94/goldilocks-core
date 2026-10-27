@@ -31,6 +31,9 @@ LIMITS = {
     "service._dos": (16, 26),
     # + advisors.q_sampling, advisors.phonon for the phonon steps' override bags (#215)
     "service._step": (14, 25),
+    "service._tasks": (8, 26),  # + service._phonon's five phase functions (#215)
+    # the phonon tasks' phase functions, like service._dos (#215)
+    "service._phonon": (14, 27),
 }
 DEFAULT_LIMIT = (12, 24)
 

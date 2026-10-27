@@ -2875,30 +2875,7 @@ def test_every_finding_code_is_catalogued_once() -> None:
     assert "advice.blocked" in codes
 
 
-_Q_MESH_FINDINGS = {"phonon.q_grid_breaks_symmetry", "phonon.too_many_q_points"}
-"""Findings naming q_grid and q_distance, which capabilities publishes with
-the phonon tasks' ph step: until the phonon tasks exist they are not
-settings yet, and the catalogue tests below fail on them."""
-
-
-def _catalogue() -> list:
-    """``FINDING_CATALOGUE`` as parameters, the q-mesh findings marked as
-    strict expected failures (``_Q_MESH_FINDINGS``), so that the marks have
-    to go once q_grid and q_distance are published."""
-    unpublished = pytest.mark.xfail(
-        strict=True, reason="q_grid and q_distance are published with the ph step"
-    )
-    return [
-        pytest.param(
-            finding,
-            id=finding.code,
-            marks=unpublished if finding.code in _Q_MESH_FINDINGS else (),
-        )
-        for finding in FINDING_CATALOGUE
-    ]
-
-
-@pytest.mark.parametrize("finding", _catalogue())
+@pytest.mark.parametrize("finding", FINDING_CATALOGUE, ids=lambda f: f.code)
 def test_every_remedy_is_an_override_the_request_accepts(finding: Finding) -> None:
     """#151: a remedy is a complete override patch; a None value clears that
     override. One task reads every key of it, and every value fits its
@@ -2914,7 +2891,7 @@ def test_every_remedy_is_an_override_the_request_accepts(finding: Finding) -> No
         build_overrides(remedy, task=tasks[0])
 
 
-@pytest.mark.parametrize("finding", _catalogue())
+@pytest.mark.parametrize("finding", FINDING_CATALOGUE, ids=lambda f: f.code)
 def test_a_finding_names_settings_and_remedies_only_change_them(
     finding: Finding,
 ) -> None:
