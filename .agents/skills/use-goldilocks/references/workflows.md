@@ -110,9 +110,9 @@ uv run goldilocks run structure.cif --hpc scarf --set 'k_grid=[4,4,4]' --out run
 
 ## Read only the records you need
 
-`Advice`/`DosAdvice`/`BandAdvice` always compute every field; there is no
-partial-record selection in v2 -- filter the dict `advice.records()` returns
-instead:
+`Advice`/`DosAdvice`/`BandAdvice`/`PhononAdvice` always compute every field;
+there is no partial-record selection in v2 -- filter the dict
+`advice.records()` returns instead:
 
 ```python
 wanted = {"functional", "k_sampling", "cutoffs"}
@@ -210,6 +210,67 @@ supercell gives folded bands (`primitive_cells` above 1, notice
 (`occupations.bands_x_refuses_tot_magnetization`), which bands.x stops on.
 CLI/HTTP/MCP equivalent: pass `task="band"` (CLI: `--task band`).
 
+## Generate phonons (phonon, relax-phonon, vc-relax-phonon)
+
+`advise_phonon(structure, task="relax-phonon", hpc=hpc, overrides=...)`, with
+overrides built by `build_overrides(..., task="relax-phonon")`, advises a
+phonon task; `check_phonon`, `generate_phonon`, `render_submission_phonon`
+and `to_bundle_input_phonon` take its `PhononAdvice`, and
+`TASK_PHASES[task]` holds all five with the task bound. The steps are the
+first `pw.x` step (`scf` for `phonon`, `relax` for `relax-phonon`,
+`vc-relax` for `vc-relax-phonon`), `d3hess` (`d3hess.x`) under DFT-D3, `ph`
+(`ph.x` on a q-point mesh), `q2r` (`q2r.x`) and `phonon_dos` (`matdyn.x`),
+all in one job on one prefix and outdir.
+
+`PhononAdvice.records()` keys the first step's records and the task's one
+`job` unprefixed, with `fft_grid` (the dense FFT grid ph.x accepts; `written`
+is the `nr1`-`nr3` the first step writes, or `null`) and, for a relaxation,
+`relax`, then `q_sampling` (`mesh`, `n_irr_q`, `work`) and `phonon` for the
+ph step, `q2r` and `phonon_dos`. Unless the request sets them, the q-mesh
+takes `q_distance` 0.3 1/Å, the ph.x settings `tr2_ph` 1e-18, `alpha_mix`
+0.4 and `nmix_ph` 8, and the relaxation `forc_conv_thr` 1e-4 Ry/Bohr, from
+aiida-quantumespresso's protocols; those records read `heuristic` with the
+protocol in `source_note`. The first step's k-mesh is raised against the
+q-mesh (notice `phonon.k_mesh_raised`) unless the request sets `k_grid`,
+`k_index` or `k_distance`. The job splits no walltime:
+`job.max_seconds_by_step` is empty and `job.timer_seconds`, 95% of
+`walltime_h`, is when `submit.sh` creates `<prefix>.EXIT`, where pw.x or
+ph.x stops cleanly. The pw.x settings reach the first step only, `q_grid`,
+`q_distance`, `tr2_ph`, `alpha_mix` and `nmix_ph` the `ph` step, `asr` the
+`q2r` step and `dos_q_distance` the `phonon_dos` step; `steps.scf.<key>` is
+an unknown step in the relaxation tasks. The gate refuses, with remedies,
++U without `hubbard_projectors=atomic`, spin-orbit coupling with +U,
+`tot_magnetization` with smearing, a `q_grid` that breaks symmetry, a q-mesh
+beyond q2r.x's limits, `fix_bottom_layers` and smearing or tetrahedra on a
+composition that is not all-metallic unless `is_metal=metal` is set (a
+requested `occupations=fixed` the run cannot take is refused under the same
+code, and for a metal needs `is_metal=metal` with `occupations=smearing`), and,
+with
+no remedy, `isolation='isolated'` and `vc-relax-phonon` on a fragile cell,
+where the FFT grid the vc-relax rebuilds can fail ph.x's symmetry test
+(`relax-phonon` runs there). The metallicity refusal
+(`phonon.metallicity_unconfirmed`) is the user's call: the classifier calls
+many insulators metals, and ph.x treats a run on smearing as a metal, so ask
+whether the material is a metal (`is_metal=metal`) or an insulator rather than
+picking a remedy. An insulator needs fixed occupations, which
+`is_metal=non_metal` alone does not always give: the message says why the run
+is not on them, and every remedy it offers resolves it. Where it says the run
+is collinear spin-polarized, ask for the insulator's integer moment
+(`tot_magnetization`, which no remedy guesses) or whether it has no magnetic
+moments (`is_magnetic=non_magnetic`, offered where that resolves it); where it
+names an odd electron count, the material is a metal unless it is magnetic;
+where the request sets smearing or tetrahedra, an insulator needs
+`occupations=fixed`.
+
+```bash
+uv run goldilocks explain structure.cif --hpc scarf --task relax-phonon --json
+uv run goldilocks run structure.cif --hpc scarf --task relax-phonon --set q_distance=0.2 --out run-dir
+```
+
+A stopped job prints `goldilocks:` lines naming why, and resumes at the ph
+step, without repeating the relaxation, with
+`sbatch --export=ALL,GOLDILOCKS_FROM_STEP=ph submit.sh`.
+
 ## Optional transports
 
 ```bash
@@ -221,6 +282,6 @@ uv run goldilocks serve mcp
 The CLI's `run`/`explain` commands and HTTP and MCP, which share
 `server/_handlers.py`, look each task's functions up in
 `service.TASK_PHASES` -- same `RunOverrides`/`CalcTask` validation, same
-tri-state records and warnings shape, same five tasks. HTTP and MCP accept
+tri-state records and warnings shape, same eight tasks. HTTP and MCP accept
 inline structure content; neither accepts filesystem paths, since a server
 process should not read from the caller's local disk.

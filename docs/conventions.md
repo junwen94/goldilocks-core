@@ -9,12 +9,16 @@ before trusting a recommendation, see [Check your recommendations](science.md).
 | ------------------------- | ------------- | --------------------------------------------------- |
 | k-point spacing           | 1/Å           | setting `k_distance` (group `k_sampling`)          |
 | Band-path point spacing   | 1/Å           | setting `k_path_distance` (group `k_path`)         |
+| q-point spacing           | 1/Å           | setting `q_distance` (group `q_sampling`)          |
+| Phonon-DOS mesh spacing   | 1/Å           | setting `dos_q_distance` (group `phonon_dos`)      |
 | Smearing width            | Rydberg (Ry)  | setting `degauss` (group `occupations`)            |
 | Wavefunction cutoff       | Ry            | setting `ecutwfc_ry` (group `cutoffs`)             |
 | Charge-density cutoff     | Ry            | setting `ecutrho_ry` (group `cutoffs`)             |
 | SCF convergence threshold | Ry            | setting `conv_thr` (group `convergence`)           |
 | Density-mixing strength   | Dimensionless | setting `mixing_beta` (group `convergence`)        |
 | SCF iteration limit       | Integer       | setting `electron_maxstep` (group `convergence`)   |
+| Force threshold           | Ry/Bohr       | setting `forc_conv_thr` (group `relax`)            |
+| Phonon frequency          | cm⁻¹          | the phonon DOS (`pwscf.phdos`) and its step, `phonon_dos.delta_e` |
 
 Energies use Quantum ESPRESSO's Rydberg convention, not Hartree: 1 Ha = 2 Ry.
 The SCF threshold controls the estimated self-consistency error; it is not a
@@ -23,10 +27,13 @@ k-point or cutoff convergence tolerance.
 Every setting above is listed by `goldilocks settings` (with its group, type,
 and default) and, once resolved for a structure, shown in the matching record
 from `goldilocks explain`/the published `goldilocks.json` (`k_sampling`,
-a `band` task's `bands_k_path`, `occupations`, `cutoffs`, and `convergence`
+a `band` task's `bands_k_path`, a phonon task's `q_sampling` and
+`phonon_dos`, `occupations`, `cutoffs`, `convergence` and `relax`
 respectively). `k_distance` defaults to `0.15` for metals or when
 metallicity is unknown and `0.30` for a confirmed non-metal;
-`k_path_distance` to `0.025`; `degauss` defaults to
+`k_path_distance` to `0.025`; `q_distance` to `0.3`; `dos_q_distance` to
+`0.10`; `forc_conv_thr` to `1e-3` Ry/Bohr, or `1e-4` in the phonon tasks'
+relaxation; `degauss` defaults to
 `0.01` Ry for metals; `ecutwfc_ry`/`ecutrho_ry` are decided together by the
 `cutoffs` advisor from the selected pseudopotentials' own published
 recommendations. When the table publishes no charge-density cutoff
@@ -65,6 +72,13 @@ wider than 5 Å (the `geometry` record's `vacuum_axes`), so a slab gets one
 k-point across its vacuum and a molecule in a box the Γ-point alone, for any
 `k_distance` or `k_index`; an explicit `k_grid` is written as given.
 
+A phonon task's q-point mesh (`q_distance`) and phonon-DOS mesh
+(`dos_q_distance`) follow the same formula on the written cell, vacuum axes
+and mixed vectors included. An explicit `q_grid` is the q-point mesh as
+given, but is refused unless every symmetry operation pw.x keeps maps it onto
+itself, with one division along each vacuum axis and equal counts on mixed
+vectors (see [Check the phonon tasks](science.md#check-the-phonon-tasks)).
+
 ## Band path spacing
 
 A `band` task's bands step runs a path of high-symmetry lines instead of a
@@ -93,9 +107,14 @@ spin channel. The default, `0.025` Å⁻¹, is aiida-quantumespresso's
 | Mixing / iteration limit                      | `mixing_beta 0.4` / `electron_maxstep 80`                      |
 | Hubbard +U (d/f compounds with O or F)        | Built-in Dudarev U_eff table, see [Check Hubbard +U](science.md#check-hubbard-u) |
 | Fixed Hubbard occupations (+U)                | `mixing_fixed_ns` unset (QE's 0)                               |
+| Hubbard projectors (+U)                       | `hubbard_projectors` `ortho-atomic`                            |
 | Confirmed metal, or metallicity unconfirmed   | `smearing`, `cold`, `degauss` `0.01` Ry                        |
 | Confirmed non-metal                           | `fixed`, no width, where it can run; otherwise `smearing` as above |
 | `band` task's bands step                      | `k_path_distance 0.025` Å⁻¹; `nbnd` three times the occupied bands |
+| Phonon tasks' relaxation                      | `forc_conv_thr 1e-4` Ry/Bohr (the `relax` and `vc-relax` tasks: Quantum ESPRESSO's `1e-3`) |
+| Phonon tasks' first step                      | k-mesh raised against the q-mesh; no `max_seconds`, a job timer at 95% of the walltime |
+| Phonon tasks' ph step                         | `q_distance 0.3` Å⁻¹; `tr2_ph 1e-18`, `alpha_mix(1) 0.4`, `nmix_ph 8` |
+| Phonon tasks' q2r and phonon_dos steps        | `asr` `crystal` (`simple` where it would not fit one task's memory); `dos_q_distance 0.10` Å⁻¹, every 1 cm⁻¹ |
 
 `conv_thr`/`etot_conv_thr` scale with the structure's atom count `nat`, not a
 fixed constant: for Si (`nat=8`) this gives `conv_thr = 1.6e-9` Ry and
@@ -118,6 +137,12 @@ non-metal gets `fixed` occupations; a confirmed metal, or a structure where
 composition alone cannot confirm metallic character (`is_metal` is
 `Unavailable`), gets `smearing`. This is deliberate -- a wrong-but-plausible
 fixed-occupations run is worse than an unnecessary but correct smearing run.
+The phonon tasks are the exception: ph.x treats a smearing run as a metal,
+which an insulator is not, so they refuse smearing or tetrahedra on a
+composition that is not all-metallic until you set `is_metal=metal` or the
+run is on fixed occupations, which `is_metal=non_metal` alone does not give
+the runs described below (see
+[the phonon tasks](science.md#check-the-phonon-tasks)).
 A non-metal gets `fixed` only where both spin channels hold a whole number of
 electrons: an even electron count without spin polarization (with or without
 spin-orbit coupling), any count on a spin-polarized spin-orbit run, or a
@@ -174,6 +199,21 @@ heuristic`; see `goldilocks settings` for each key's actual sources).
   `tot_magnetization = 0` for a compensated `magnetic_ordering`, and a
   collinear band task refuses one you set (see
   [the band structure path](science.md#check-the-band-structure-path)).
+- A phonon task holds its first step's k-mesh against its q-point mesh after
+  every k tier: a mesh the request did not set is raised, to the next
+  multiple of each q-axis with smearing or tetrahedra and to at least it with
+  fixed occupations, and a `k_grid`, `k_index` or `k_distance` you set is
+  used as given, with `phonon.k_grid_coarser_than_q` or
+  `phonon.k_grid_not_commensurate` where it falls short. `q_grid` wins over
+  `q_distance` (the `q_sampling.grid_and_distance_conflict` info warning
+  fires if both are given). The phonon tasks' protocol values,
+  `forc_conv_thr` 1e-4 Ry/Bohr for their relaxation (aiida-quantumespresso's
+  pw `base.yaml`), `q_distance` 0.3 Å⁻¹ and the ph.x settings (its ph
+  `base.yaml`), and `dos_q_distance` 0.10 Å⁻¹, read `heuristic` with the
+  protocol named in `source_note`, and a value you set replaces each one
+  alone. The relaxation's `forc_conv_thr` has no ML or LLM tier: a value you
+  set wins over the protocol, which wins over Quantum ESPRESSO's 1e-3, and
+  one looser than 1e-4 gets the warning `phonon.loose_force_threshold`.
 - `smearing_type` and `degauss` are independent overrides in the
   `occupations` group; `degauss` defaults to `0.01` Ry (the metallic
   cold-smearing default) if smearing is chosen without an explicit value.
@@ -195,6 +235,10 @@ heuristic`; see `goldilocks settings` for each key's actual sources).
   `pseudo_table_id` will make pseudopotential resolution `Unavailable`
   rather than switch tiers (see Defaults above). This is a known current
   gap, not a doc omission.
+- `hubbard_projectors` chooses the projectors of the HUBBARD card when an
+  element gets +U, for every task, and changes nothing without +U; a U value
+  is used unchanged with either projector type (see
+  [Check Hubbard +U](science.md#check-hubbard-u)).
 - `spin_polarized` and `spin_orbit_coupling` are independent settings
   (group `magnetic`) consumed together by one combined advisor,
   `magnetic_config.py`, specifically so that enabling one can never
@@ -238,7 +282,10 @@ otherwise spin-polarized advice produces a collinear `nspin = 2` run.
 it without `nspin = 2`: it is refused before generation together with
 `spin_orbit_coupling`, and ignored with a warning when `spin_polarized` is
 explicitly false. A collinear `band` task refuses it too, since `bands.x`
-stops on it. A noncollinear run with fixed occupations needs no
+stops on it, and so does a phonon task with smearing or tetrahedra, since
+ph.x refuses the two Fermi energies it gives there. The phonon tasks also
+refuse `spin_orbit_coupling` together with a Hubbard U, since ph.x's DFPT+U
+treats collinear spins only. A noncollinear run with fixed occupations needs no
 `tot_magnetization`; its moments come from `starting_magnetization`. A
 magnetic noncollinear run also writes `angle1`/`angle2` for every species:
 the direction of `moment_direction`, a lattice direction of the uploaded

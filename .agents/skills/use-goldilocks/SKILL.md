@@ -1,14 +1,17 @@
 ---
 name: use-goldilocks
-description: Use goldilocks-core quickly for DFT input recommendation workflows. Trigger when running or scripting recommendations, extracting parameters from structures, generating or publishing Quantum ESPRESSO inputs (SCF, DOS, band structure, relaxation), or manually writing inputs from Goldilocks-selected Records.
+description: Use goldilocks-core quickly for DFT input recommendation workflows. Trigger when running or scripting recommendations, extracting parameters from structures, generating or publishing Quantum ESPRESSO inputs (SCF, DOS, band structure, relaxation, phonons), or manually writing inputs from Goldilocks-selected Records.
 ---
 
 # Use Goldilocks
 
 Use the canonical capabilities, structure inspection, explain and run
-operations. Core prepares Quantum ESPRESSO inputs for five tasks:
+operations. Core prepares Quantum ESPRESSO inputs for eight tasks:
 `scf_single_point` (scf), `dos` (scf, nscf, `dos.x`), `band` (scf, `pw.x`
-along a high-symmetry path, `bands.x`), `relax` and `vc-relax`.
+along a high-symmetry path, `bands.x`), `relax`, `vc-relax`, and the phonon
+tasks `phonon`, `relax-phonon` and `vc-relax-phonon` (an scf, relax or
+vc-relax, then `d3hess.x` under DFT-D3, `ph.x` on a q-point mesh, `q2r.x`
+and `matdyn.x` for the phonon DOS).
 
 Fresh installations must install the runtime assets first: run
 `goldilocks assets install default` once, or pass `--fetch-missing`, before any
@@ -33,9 +36,10 @@ Analysis + Advice + Kmesh + Select + Generate -> DFT Input Data
 ```
 
 Each task has five service functions, `advise`, `check`, `generate`,
-`render_submission` and `to_bundle_input`, suffixed `_dos`, `_band` or
-`_relax` for those tasks; `goldilocks_core.service.TASK_PHASES[task]` holds
-them by task name.
+`render_submission` and `to_bundle_input`, suffixed `_dos`, `_band`,
+`_relax` or `_phonon` for those tasks (the three phonon tasks share one set,
+`advise_phonon(..., task=...)`); `goldilocks_core.service.TASK_PHASES[task]`
+holds them by task name, with the task bound.
 
 ## Inputs to identify
 
@@ -68,6 +72,7 @@ uv run goldilocks capabilities --json
 uv run goldilocks inspect STRUCTURE --json
 uv run goldilocks explain STRUCTURE --task band --json
 uv run goldilocks run STRUCTURE --task band --out RUN_DIR --json
+uv run goldilocks explain STRUCTURE --task relax-phonon --json
 ```
 
 HTTP exposes `/capabilities`, `/inspect`, `/explain` and `/run`; local stdio
@@ -83,5 +88,9 @@ For prepared input data, report the Structure Source, functional, target
 code/Task, k-grid and shift, pseudopotentials and cutoffs, smearing, spin/SOC,
 convergence controls, for a `band` task the path (`bands_k_path`: its
 `lattice_type`, `n_kpoints` and `primitive_cells`, above 1 for folded bands),
-factual warnings, generated paths, and publication path.
+for a phonon task the q-point mesh (`q_sampling`: `mesh`, `n_irr_q`, `work`),
+the first step's k-mesh raised against it, any FFT grid written for ph.x
+(`fft_grid.written`) and the `blocking` findings, factual warnings, generated
+paths, and publication path. A stopped phonon job resumes with
+`sbatch --export=ALL,GOLDILOCKS_FROM_STEP=ph submit.sh`.
 Core prepares inputs; it does not run DFT.

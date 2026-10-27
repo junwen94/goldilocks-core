@@ -2,8 +2,10 @@
 
 Goldilocks suggests starting inputs for a Quantum ESPRESSO calculation --
 self-consistent-field (SCF), density of states (DOS), band structure (`band`),
-relaxation (`relax`), or variable-cell relaxation (`vc-relax`). It does not
-establish that your energy, forces, or other properties are converged.
+relaxation (`relax`), variable-cell relaxation (`vc-relax`), or phonons with
+their density of states (`phonon`, `relax-phonon`, `vc-relax-phonon`). It
+does not establish that your energy, forces, or other properties are
+converged.
 Review the choices below before running a calculation, then test the
 settings against the accuracy your work needs.
 
@@ -37,7 +39,11 @@ actual `metal` result -- still defaults to smearing, not fixed occupations,
 because assuming "fixed" on an undetected metal risks silent
 non-convergence. A confident `non_metal` result is reachable via a human
 override (`--set is_metal=non_metal`), the ML classifier, or an LLM override.
-Neither the heuristic nor the ML model determines a band structure.
+Neither the heuristic nor the ML model determines a band structure. The
+phonon tasks refuse smearing or tetrahedra on a composition that is not
+all-metallic unless you set `is_metal=metal`, since ph.x treats such a run as
+a metal, which an insulator is not: an insulator needs fixed occupations (see
+[the phonon tasks](#check-the-phonon-tasks)).
 
 Fixed occupations fill whole bands in each spin channel: pw.x puts
 (nelec + `tot_magnetization`)/2 electrons in the spin-up channel and
@@ -133,7 +139,9 @@ even where the point group does not map it onto itself.
 Setting either one only affects k-point selection; it does not change the
 separate `is_metal` heuristic used elsewhere (e.g. by occupations). A `band`
 task's bands step runs no mesh but a path of high-symmetry lines (see
-[the band structure path](#check-the-band-structure-path)).
+[the band structure path](#check-the-band-structure-path)), and a phonon
+task raises its first step's mesh against its q-point mesh (see
+[the phonon tasks](#check-the-phonon-tasks)).
 
 ## Check the written cell
 
@@ -496,7 +504,9 @@ DFT-D3 has them only for PBE and PBEsol. With any other functional, LDA
 included, a low-dimensional structure gets no correction and the warning
 `vdw.d3bj_unavailable_for_functional`, and Goldilocks refuses an explicit
 `use_vdw=true` setting before generating the input. pw.x would otherwise stop
-at startup with "functional name unknown".
+at startup with "functional name unknown". The phonon tasks run D3 from
+two-body terms only, the terms of the Hessian ph.x reads (see
+[the phonon tasks](#check-the-phonon-tasks)).
 
 The classification builds a bond graph and assigns dimensionality with
 Larsen's connectivity-rank algorithm. Two atoms are bonded when they are
@@ -544,7 +554,9 @@ electron density lies within half the cell along every axis, which 5 Å of
 vacuum does not guarantee, so check the box size. pw.x computes no stress under
 Martyna-Tuckerman: the input then omits `tstress`, and Goldilocks refuses a
 `vc-relax`. Use `relax` for an isolated system, or set `isolation='periodic'`
-for a periodic one.
+for a periodic one. The phonon tasks refuse `isolated` altogether, since
+ph.x does not implement Martyna-Tuckerman (see
+[the phonon tasks](#check-the-phonon-tasks)).
 
 `isolation='slab'` is Quantum ESPRESSO's 2D Coulomb truncation (Sohier,
 Calandra and Mauri, Phys. Rev. B 96, 075448 (2017)), which computes energies,
@@ -599,7 +611,8 @@ transition metal, lanthanide, or actinide with O or F, the Materials Project
 screening rule -- and never with a hybrid functional. Each element in the
 built-in table below then gets its Dudarev U_eff (U - J, in eV) on its 3d,
 4d, 5d, 4f, or 5f shell, written as one `U <species>-<manifold> <value>`
-line per species under `HUBBARD (ortho-atomic)`:
+line per species under `HUBBARD (ortho-atomic)`, or `HUBBARD (atomic)` with
+`hubbard_projectors=atomic` (below):
 
 | Source                              | U_eff (eV)                                                                         |
 | ----------------------------------- | ---------------------------------------------------------------------------------- |
@@ -620,9 +633,10 @@ names the element and the setting to use (for Ac, why no setting can apply
 one). When no element gets a U, the input has no HUBBARD card.
 
 These values come from different codes and fits, and none was derived with
-the ortho-atomic projectors the generated input uses: every built-in U
-carries a `hubbard.projector_mismatch` warning that lists the VASP-derived
-values. Every applied U, built-in or from `u_by_element`, carries a
+the ortho-atomic projectors the generated input uses by default: every
+built-in U then carries a `hubbard.projector_mismatch` warning that lists
+the VASP-derived values.
+Every applied U, built-in or from `u_by_element`, carries a
 `hubbard.starting_ns_eigenvalue_missing` warning, since +U calculations can
 converge to a metastable occupation matrix and Goldilocks supplies no
 initial guess; a `u_by_element` value gets no projector warning, because
@@ -641,6 +655,23 @@ channel, so pw.x stops on any U for them. `hubbard_needs_correlation=false`
 runs without +U. The `hubbard` record in `goldilocks explain --json` and
 `goldilocks.json` lists every applied U with its `value_source` (`table` or
 `human`), citation, and DOI.
+
+`hubbard_projectors` chooses the projectors the HUBBARD card names, for every
+task: `ortho-atomic`, the default, which Quantum ESPRESSO recommends, or
+`atomic`, the only type with which ph.x computes phonons with a U, so the
+phonon tasks need it with +U (see [the phonon
+tasks](#check-the-phonon-tasks)). pw.x computes forces and stress with either.
+A U value is tied to the projectors it was derived with (Timrov et al., Phys.
+Rev. B 102, 235159 (2020)), so switching projectors changes what a given U
+means; the built-in table is used unchanged with either, and so is a
+`u_by_element` value. The Pr-Yb values were fitted in Quantum ESPRESSO with
+atomic projectors, so with `atomic` they carry no `hubbard.projector_mismatch`
+warning, which then names the VASP-derived and the all-electron (Am, Cm, Bk)
+values and appears only where one of those is applied. A structure relaxed
+with one projector type is not at equilibrium with the other, so relax and
+compute phonons with the same setting. The `hubbard` record holds the type in
+`projectors`, with its source in `field_sources`, and `null` when no element
+gets a U, where the setting changes nothing.
 
 ## Check SCF convergence
 
@@ -674,14 +705,34 @@ needs more than `electron_maxstep` iterations, adjust `mixing_beta` or
 
 ## Check relaxation settings
 
-For `relax` and `vc-relax` tasks, Goldilocks also picks ionic and cell
-relaxation parameters -- `ion_dynamics`, `cell_dofree`, `cell_factor`,
+For `relax` and `vc-relax` tasks, and the relaxation that `relax-phonon` and
+`vc-relax-phonon` run before their phonons, Goldilocks also picks ionic and
+cell relaxation parameters -- `ion_dynamics`, `cell_dofree`, `cell_factor`,
 `forc_conv_thr`, `nstep`, `press`, `press_conv_thr`,
 `trust_radius_ini`/`trust_radius_max`/`trust_radius_min`, `remove_rigid_rot`,
 and `fix_bottom_layers` (fixing the bottom N atomic layers of a slab during
 relaxation). Every default is copied verbatim from Quantum ESPRESSO's own
-documentation, not derived from a model. See `goldilocks settings` for each
-key's group, type, and default.
+documentation, not derived from a model, except the phonon tasks'
+`forc_conv_thr`. See `goldilocks settings` for each key's group, type, and
+default.
+
+The phonon tasks relax to `forc_conv_thr` 1e-4 Ry/Bohr,
+aiida-quantumespresso's balanced pw protocol (fast 1e-3, stringent 0.5e-4),
+ten times tighter than Quantum ESPRESSO's 1e-3, which the `relax` and
+`vc-relax` tasks keep: DFPT takes second derivatives at the relaxed geometry,
+and leftover forces shift the phonon frequencies, soft modes most (see [the
+phonon tasks](#check-the-phonon-tasks)). The `relax` record then reads
+`heuristic`, names the protocol in `source_note` and cites it. A
+`forc_conv_thr` you set is used as given, and one looser than 1e-4 gets the
+warning `phonon.loose_force_threshold`. The other relaxation defaults are the
+same in every task, `nstep` 50 included. The final scf of a vc-relax counts
+against `nstep`: a vc-relax that converges at its last allowed step has none
+left for that scf, and `submit.sh` stops with exit status 3, asking for a
+larger `nstep`. The phonon tasks refuse `fix_bottom_layers`
+(`phonon.fix_bottom_layers_unsupported`, with the remedy of unsetting it):
+pinned atoms keep their forces, while DFPT computes the phonons at an
+equilibrium, where every force is zero. That finding replaces the slab rules
+below for the same setting.
 
 `fix_bottom_layers` counts atomic layers along the slab's vacuum axis, up from
 the upper edge of the vacuum, so a slab that wraps across the cell boundary
@@ -892,6 +943,331 @@ orientation gives: for P2_1/c ZrO2 with a = c, Γ-Y runs along c* in one
 orientation and along a* in another. Every vertex is still a special point
 on the zone boundary.
 
+## Check the phonon tasks
+
+The three phonon tasks compute phonons with density-functional perturbation
+theory (DFPT; Baroni et al., Rev. Mod. Phys. 73, 515 (2001)), Quantum
+ESPRESSO's ph.x, and from them the phonon density of states. They differ
+only in their first step, the pw.x run whose save ph.x reads:
+
+| Task              | Name in the task list        | First step | Geometry ph.x reads                      |
+| ----------------- | ---------------------------- | ---------- | ---------------------------------------- |
+| `phonon`          | Phonon (no relaxation)       | `scf`      | the written cell                         |
+| `relax-phonon`    | Phonon (incl. relaxation)    | `relax`    | the written cell, with relaxed positions |
+| `vc-relax-phonon` | Phonon (incl. vc-relaxation) | `vc-relax` | the relaxed cell and positions           |
+
+Each task runs as one job on one prefix and outdir: the first step, then
+`d3hess.x` under DFT-D3 (below); `ph.x` on a Γ-centred q-point mesh, which
+writes one dynamical matrix per irreducible q-point (`pwscf.dyn1`,
+`pwscf.dyn2`, ..., which `pwscf.dyn0` lists); `q2r.x`, which turns them into
+interatomic force constants (`pwscf.fc`); and `matdyn.x`, which
+interpolates the force constants on a fine mesh into the phonon DOS
+(`pwscf.phdos`). ph.x reads a relaxation's save directly, without a separate
+scf. The first step keeps its pw.x calculation, so everything this page says
+about an scf, a relax or a vc-relax applies to it.
+
+DFPT takes second derivatives of the energy at the geometry it is given, so
+leftover forces shift the frequencies, soft modes most. `phonon` takes the
+written geometry as it is, and its phonon record carries the info notice
+`phonon.relax_first`: relax the structure first with the same settings,
+`hubbard_projectors` included, and `forc_conv_thr` at most 1e-4 Ry/Bohr, or
+use `relax-phonon` or `vc-relax-phonon`, which relax it in the same job, by
+default to 1e-4 Ry/Bohr (see
+[relaxation settings](#check-relaxation-settings)). The scf of `phonon`
+prints the forces and the stress on the written geometry. In
+`vc-relax-phonon` the q-mesh and the k-mesh are decided on the input cell
+and keep their divisions on the relaxed cell, so their spacings change with
+it, and the vc-relax makes one pass: no relaxation follows its final scf on
+the relaxed cell, so check the forces and the stress that scf prints, and
+run the task again from the relaxed structure if they are large
+(aiida-quantumespresso instead repeats the vc-relax until the volume stops
+changing). Its phonon record carries the info notice
+`phonon.vc_relax_input_cell`.
+
+ph.x needs a q-point mesh that every symmetry operation pw.x keeps maps onto
+itself. Unless you set one, the mesh comes from `q_distance`, 0.3 Å⁻¹ with 2π
+included (aiida-quantumespresso's ph protocol, balanced; fast 0.6, stringent
+0.2), on the written cell, as `k_distance` gives the k-mesh (see [k-point
+spacing](conventions.md#k-point-spacing-and-shifts)): one division along each
+vacuum axis, and the larger count on lattice vectors a symmetry operation
+mixes. `q_grid` sets the mesh directly and wins over `q_distance`, with the
+info notice `q_sampling.grid_and_distance_conflict` when both are given. The
+`q_sampling` record holds the mesh, the spacing it came from, `n_irr_q`, the
+irreducible q-points as ph.x counts them under pw.x's operations, and `work`,
+ph.x's own estimate of its run in scf-equivalents: (3 nat + 1) nsym/nsymq
+summed over the irreducible q-points, where nsymq of the nsym operations leave
+the q-point unchanged up to a reciprocal lattice vector. The primitive cell of
+diamond Si gets 7×7×7, 20 q-points and a work of 2401; alpha-U's primitive
+cell 9×9×5, 75 and 2835; graphene 10×10×1, 14 and 700. Zincblende AlAs at
+4×4×4 has 8 q-points and a work of 336, as in Quantum ESPRESSO's PHonon
+example02.
+
+A `q_grid` is refused (`phonon.q_grid_breaks_symmetry`, with the remedy of
+unsetting it) when it has more than one division along a vacuum axis; when
+some operation pw.x keeps does not map it onto itself, on which ph.x stops
+with "q-mesh breaks symmetry", such as alpha-U's per-axis 9×8×5, since a
+mirror turns a_2 into a_1 + a_2; and when it gives different counts to two
+lattice vectors an operation mixes, even where ph.x would accept it.
+Alpha-U's 4×8×4 passes ph.x's test, but a smearing run raises its k-mesh to
+multiples of the q-mesh (below), and 17×17×9 would become 20×24×12, which
+the mirror does not map onto itself; equal counts, such as 8×8×4, are kept.
+q2r.x reads at most 1024 divisions along each axis and 1024 dynamical
+matrices, one per irreducible q-point. A `q_grid` with an entry above 1024,
+or with more than 49152 points, is refused as an invalid setting: an orbit
+holds at most 48 q-points, so a mesh of more than 48 × 1024 points always
+has more than 1024 irreducible ones. A mesh with more than 1024 irreducible
+q-points is refused (`phonon.too_many_q_points`, with the remedy of
+unsetting `q_grid` and `q_distance`): `q_distance` 0.1 gives alpha-U
+26×26×13, with 1281 of them. A mesh built from a `q_distance` with more
+than 49152 points, or more than 1024 divisions along an axis, is refused
+without its q-points being counted, as for the 101×101×101 that 0.02 Å⁻¹
+gives the primitive cell of Si.
+
+A slab whose vacuum vector is not perpendicular to its periodic axes can
+keep symmetry operations that turn the vacuum vector into one with an
+in-plane component, which a mesh with a single division along the vacuum
+axis can fail. When the mesh built from the spacing fails ph.x's test this
+way, the `q_sampling` record is blocked, naming the vacuum axis: upload the
+slab with its vacuum vector perpendicular to the periodic axes.
+
+The first step's k-mesh comes from the usual tiers (see [k-point
+sampling](#check-k-point-sampling)), and is then held against the q-mesh:
+QRF95 predicts the spacing at which scf total energies converge to 1 meV/atom,
+and DFPT asks two more things of k. With smearing or `tetrahedra_opt`, each
+k-axis is raised to the next multiple of its q-axis, so that every q-point is
+a difference of k-points, without which the phonons of a metal converge very
+slowly in k (Quantum ESPRESSO's PHonon user guide). With fixed occupations,
+each k-axis is raised to at least its q-axis, since a q-mesh denser than the
+k-mesh can give spurious acoustic frequencies near Γ (Petretto et al., Comput.
+Mater. Sci. 144, 331 (2018)). QRF95's 12×12×12 for bcc Fe becomes 22×22×22
+against its 11×11×11 q-mesh, and its 4×4×4 for rock-salt NaCl becomes 7×7×7. A
+raised `k_sampling` record carries the info notice `phonon.k_mesh_raised` and
+names the raise in `source_note`; it keeps the evidence and the shift of the
+tier that decided the starting mesh, such as QRF95's prediction, and has no
+`k_distance`, since no single spacing gives the raised mesh.
+
+`n_irr_k`, `npool` and the job follow the raised mesh, and in the relaxation
+tasks every ionic step runs on it. On 83 periodic structures of an end-to-end
+test set, the raise is estimated to make a whole phonon run, the scf and ph.x,
+cost a median 2.26 times as much as on the unraised mesh: 2.56 times with
+smearing, 1.95 with fixed occupations. A `k_grid`, `k_index` or `k_distance`
+you set is used as given, with the warning `phonon.k_grid_coarser_than_q`
+where it is coarser than the q-mesh along an axis and, with smearing or
+tetrahedra, `phonon.k_grid_not_commensurate` where it is not a multiple of it.
+A run with smearing or tetrahedra on a structure that holds a lanthanide or an
+actinide gets the info notice `phonon.lanthanide_actinide_k`: if it is a
+metal, Nascimento et al. advise `k_distance` 0.10 Å⁻¹ for metals of that kind
+(npj Comput. Mater. (2026), doi:10.1038/s41524-026-02097-8). The smearing is
+the same as for the other tasks, cold at 0.01 Ry by default.
+
+ph.x symmetrizes in real space and stops with "FFT grid incompatible with
+symmetry" unless every operation pw.x keeps maps the dense FFT grid onto
+itself, a test pw.x never runs. A rotation that mixes lattice vectors of
+different lengths can fail it, as in a centred lattice written in its
+primitive basis or an antiferromagnetic supercell: pw.x's own grid for
+alpha-U's primitive cell at its default cutoffs, 40×45×64, is not mapped
+onto itself by the mirror that turns a_2 into a_1 + a_2. Goldilocks
+reproduces pw.x's grid and ph.x's test on the written cell (the `fft_grid`
+record: `pw_grid`, `compatible`). Where ph.x would refuse pw.x's grid, the
+first step writes `nr1`, `nr2` and `nr3` (`written`): of the grids ph.x
+accepts that are at least pw.x's own along each axis, have no prime factor
+above 5 and are multiples of the fractional translations' factors, the one
+with the fewest points. Alpha-U gets 45×45×64, 1.12 times the points;
+La2CuO4's primitive cell 120×120×120 for 64×64×120, 3.52 times; the
+antiferromagnetic NiO cell 64×64×64 for 40×64×40, 2.56 times. pw.x uses
+them as given, for the smooth grid too when `ecutrho` is 4 × `ecutwfc`,
+keeps them through every ionic step of a fixed-cell relaxation and stores
+them in the save ph.x reads. The record's `source_note` gives the ratio of
+points; the job's memory estimate does not include the written grid yet,
+since it sizes pw.x on its own.
+
+A vc-relax's final scf drops `nr1`-`nr3` and rebuilds pw.x's own grid for
+the relaxed cell, so `vc-relax-phonon` writes none. That grid passes ph.x's
+test on every symmetric strain of a cell whose mixed lattice vectors are
+pairs that some operation exchanges, with equal fractional-translation
+factors. A cell with a mixed pair that is not such a pair is fragile
+(`fft_grid.fragile`, with the pairs in `fragile_axes`): a strain can give
+pw.x's own grid counts on which ph.x stops. The fragile cells include the
+primitive cells of alpha-U, alpha-S and La2CuO4, a MnPS3 monolayer, and the
+antiferromagnetic cells of Ni, NiO, MnO, Fe2O3 and UO2. `vc-relax-phonon`
+is refused on a fragile cell (`phonon.vc_relax_fft_grid_unsupported`)
+whether or not pw.x's grid passes on the input cell, since the MnPS3
+monolayer's passes under some strains and fails under others, and with no
+remedy, since no setting keeps `nr1`-`nr3` through the final scf. Use
+`relax-phonon`, which relaxes the atoms in the written cell and keeps a grid
+written for ph.x, or run the `vc-relax` task and then the `phonon` task on
+the relaxed structure.
+
+ph.x takes the DFT-D3 part of the dynamical matrices (see
+[dispersion](#check-dispersion-and-dimensionality)) from a Hessian that
+`d3hess.x` computes from the first step's save into `out/pwscf.hess`, so
+under DFT-D3 the d3hess step runs before ph.x. d3hess.x builds that Hessian
+from two-body terms only, while pw.x includes D3's three-body terms by
+default, so the phonon tasks' first step writes `dftd3_threebody = .false.`:
+the energy, the forces and any relaxation use the same two-body D3 as the
+dynamical matrices. The phonon record carries the info notice
+`phonon.d3_two_body`. The `relax` and `vc-relax` tasks keep the three-body
+terms, so a geometry they relaxed is not at this equilibrium: relax with
+`relax-phonon` or `vc-relax-phonon` instead. Quantum ESPRESSO 7.3's CMake
+build does not build d3hess.x (its Makefile build and 7.5's CMake build do),
+so check that your installation has it.
+
+ph.x treats a run on smearing or tetrahedra as a metal. Only with fixed
+occupations does it compute the high-frequency dielectric constant and the
+Born effective charges at Γ, from which q2r.x and matdyn.x build the
+long-range part of a polar insulator's force constants, which splits its LO
+and TO modes (Quantum ESPRESSO 7.3 `PHonon/PH/prepare_q.f90`). And at q = 0
+it shifts the Fermi energy by the charge each perturbation induces divided
+by the density of states at the Fermi energy (`PHonon/PH/solve_linter.f90`,
+`LR_Modules/efermi_shift.f90`), which with smearing is nearly zero when the
+Fermi energy lies in a gap: a wurtzite ZnO `relax-phonon` run at the
+defaults, on smearing, completed its relaxation, and then ph.x diverged at
+its first q-point, Γ. Unless you confirm a metal, such an insulator can pass
+for a metal: the classifier's threshold is set to catch 97% of metals (its
+model card), for the k-point sampling a missed metal would undersample, so
+it calls many insulators metals, among them SrTiO3, TiO2, ZnO, ThO2, La2O3,
+LiCoO2, bulk MoS2, a CrI3 monolayer and Bi2Se3, and it scores correlated
+oxides such as NiO, UO2, MnO and CeO2 high whatever the threshold; the
+heuristic never says `non_metal`. So a phonon task whose first step runs on
+smearing or `tetrahedra_opt` on a composition that is not all-metallic is
+refused (`phonon.metallicity_unconfirmed`) until you set `is_metal=metal` or
+the first step runs on fixed occupations. `is_metal=non_metal` passes only
+where it puts the first step on fixed occupations (see
+[occupations](#check-electronic-occupations)), so the refusal says why the
+run is not on them, names what to set, and offers only remedies that resolve
+it, with `is_metal=metal` for a metal in every case:
+
+- Where fixed occupations can run, the insulator's remedy is
+  `is_metal=non_metal`. If you set `occupations` yourself, `is_metal` does
+  not change it, and the remedy is `occupations=fixed`.
+- A collinear spin-polarized run takes fixed occupations only with an integer
+  `tot_magnetization` of the electron count's parity, or the 0 of an
+  antiferromagnetic ordering compensated by symmetry. A magnetic insulator
+  without one needs its moment, which only you can give, so the message names
+  `tot_magnetization` and no remedy sets it. For a material without magnetic
+  moments the refusal also offers `is_magnetic=non_magnetic`, where that runs
+  it without spin polarization on fixed occupations: not where your request
+  or the LLM decides the spin polarization, nor where a Hubbard U acts on an
+  odd d or f count, such as Mn2+ d5 in MnO or Cu2+ d9 in La2CuO4, which keeps
+  the run spin-polarized (see
+  [magnetism](#check-magnetism-and-spin-orbit-coupling)), nor where the
+  electron count is odd. A U on an even count, such as NiO's Ni2+ d8 or
+  LiCoO2's Co3+ d6, leaves that answer to decide. Ferromagnetic
+  NiO and MnO at the default ordering, CrI3, EuO, GdI2, solid O2, and MoS2,
+  WSe2 and PtSe2 monolayers, which the `is_magnetic` heuristic
+  spin-polarizes, stay on smearing for this reason.
+- Without spin polarization an odd electron count, such as TiN's or LaB6's,
+  leaves a band half filled, as in a metal, which fixed occupations cannot
+  describe; a magnetic insulator with one needs spin polarization and, on a
+  collinear run, its moment.
+- If you set `occupations=fixed` yourself on a run that cannot take them for
+  one of these reasons, the same refusal replaces that of the occupations
+  rules, whose remedy, smearing, needs `is_metal=metal` here: for a metal it
+  offers `is_metal=metal` with `occupations=smearing`, and with your
+  `tot_magnetization` unset, which ph.x refuses on smearing.
+
+A run on fixed occupations, such as one the classifier calls a non-metal,
+and an all-metallic composition need no answer, and the other tasks take the
+classifier's answer as before.
+
+A slab with `isolation='periodic'` and fixed occupations gets the warning
+`phonon.slab_lo_to_needs_2d_truncation`: q2r.x and matdyn.x would build its
+long-range term in the 3D form, which for a two-dimensional material depends
+on the vacuum width. With `isolation='slab'` (see
+[boundary conditions](#check-boundary-conditions-and-vacuum)) they write
+`loto_2d` and take the 2D form (Sohier et al., Phys. Rev. B 96, 075448
+(2017)).
+
+ph.x computes phonons with a Hubbard U only with atomic projectors, so a
+phonon task with +U needs `hubbard_projectors=atomic` (see
+[Hubbard +U](#check-hubbard-u)) and is otherwise refused
+(`phonon.hubbard_projectors_unsupported`, with the remedies
+`hubbard_projectors=atomic` and `hubbard_needs_correlation=false`). Its
+DFPT+U treats collinear spins only, so a U with spin-orbit coupling is
+refused, with or without magnetic moments
+(`phonon.noncollinear_hubbard_unsupported`, with the remedies
+`spin_orbit_coupling=false` and no +U). Quantum ESPRESSO's PHonon examples
+describe phonons with a Hubbard U, and those of magnetic systems with
+spin-orbit coupling, as experimental, and such runs get the warnings
+`phonon.hubbard_experimental` (Floris et al., Phys. Rev. B 101, 064305
+(2020)) and `phonon.magnetic_noncollinear_experimental` (Urru and Dal Corso,
+Phys. Rev. B 100, 045115 (2019)). A `tot_magnetization` on a collinear run
+with smearing or tetrahedra gives the scf two Fermi energies, which ph.x
+refuses, so it is refused too (`phonon.pinned_moment_with_smearing`), with
+the remedy of unsetting it, or `occupations=fixed` for an integer moment of
+the electron count's parity. With `occupations=fixed`, a moment that is not
+an integer of that parity is refused as in the other tasks on an all-metallic
+composition or with `is_metal=metal`, and the remedy, smearing, unsets it
+too; otherwise the metallicity refusal above replaces it.
+
+`isolation='isolated'`, a molecule or cluster in a box, is refused with no
+remedy (`phonon.isolated_boundary_unsupported`). ph.x does not implement the
+Martyna-Tuckerman correction: Quantum ESPRESSO 7.3's ph.x drops it and
+computes a periodic array of copies, and 7.5's applies it only in part. A
+molecule's vibrations need a Γ-only calculation with dynmat.x's
+`asr='zero-dim'`, which these tasks do not set up. In `vc-relax-phonon` this
+refusal replaces that of a vc-relax on an isolated system, whose remedy, the
+`relax` task, would not help. `fix_bottom_layers` is refused in the relaxation
+tasks (see [relaxation settings](#check-relaxation-settings)), and the
+`vc-relax` task's own rules apply to `vc-relax-phonon` unchanged.
+
+ph.x converges its linear response to `tr2_ph` 1e-18, mixing with
+`alpha_mix(1)` 0.4 over `nmix_ph` 8 iterations: aiida-quantumespresso's ph
+protocol, balanced, whose fast and stringent `tr2_ph` are 1e-16 and 1e-20;
+Quantum ESPRESSO's own defaults are 1e-12, 0.7 and 4. A value you set must
+pass ph.x's own checks, `tr2_ph` > 0 and 0 ≤ `alpha_mix` ≤ 1, and `nmix_ph`
+must be at least 1. ph.x runs on the whole allocation with the first step's
+`-npool` and `-ndiag` and no images, always with `recover` on. q2r.x and
+matdyn.x apply the acoustic sum rule `asr`: `crystal`, matdyn.x's optimized
+correction of the force constants by projection, or `simple`, which corrects
+only their diagonal. The projection holds (18 nat + 29) arrays of
+9 nat² N_q numbers, N_q being the points of the q-mesh: 80.9 MB for the
+4-atom antiferromagnetic NiO cell on its 9×9×9 mesh, and about 1.7 GB for
+a 28-atom cell on a 3×4×5 mesh. matdyn.x runs as one task, so `asr` is
+`crystal` unless the projection would not fit one task's share of a node's
+memory on the job's partition (`mem_per_node_gb` / `cores_per_node`: 4000 MB
+on SCARF, 250 GB over 64 cores); then it is `simple`, with the info notice
+`phonon.asr_simple_fallback` on the `q2r` record, and `asr=crystal` keeps
+the projection. q2r.x, matdyn.x and d3hess.x each run on one task. matdyn.x
+interpolates the phonon DOS on a Γ-centred mesh of `dos_q_distance`
+0.10 Å⁻¹, the dos task's nscf spacing (aiida-quantumespresso's `pdos.yaml`),
+built as the q-mesh is (the primitive cell of Si gets 21×21×21, graphene
+30×30×1), with tetrahedra and every 1 cm⁻¹. It only interpolates, so a fine
+mesh is cheap. `pwscf.phdos` lists the frequency in cm⁻¹, the total DOS and
+each atom's projection.
+
+No input of a phonon task carries `max_seconds`. The job record's
+`max_seconds_by_step` is empty, and `timer_seconds`, 95% of the walltime,
+is when the job timer of `submit.sh` creates `pwscf.EXIT` in the working
+directory: pw.x and ph.x look for that file there first, delete it and stop
+cleanly, so the relaxation takes the time it needs and ph.x the rest. The
+script deletes a leftover `pwscf.EXIT` before the first step, since pw.x
+would stop at once on it, and stops the timer when it ends. d3hess.x, q2r.x
+and matdyn.x never look for the file: one created while they run stops the
+next pw.x or ph.x step at once, or is deleted by the next job. A pw.x step
+stopped there cannot resume, since Goldilocks writes no pw.x restart input,
+and its message says to raise `walltime_h`.
+
+ph.x saves its progress after every irreducible representation, and every
+ph.in sets `recover`. `submit.sh` passes the ph step only when ph.x exited
+with 0 and wrote a complete dynamical matrix for every q-point `pwscf.dyn0`
+lists: its exit code alone says nothing, since ph.x stopped during the
+non-scf calculation of a q-point exits with 0. Otherwise the script names
+why it stopped and the q-points without a matrix, and prints the command
+that resumes the job at the ph step (see
+[submit and resume a phonon job](cli.md#submit-and-resume-a-phonon-job)).
+The steps before it are skipped: rerunning the relaxation would rewrite the
+save that ph.x's data belongs to, at a geometry equal to the first only
+within the thresholds, and the dynamical matrices would mix two ground
+states. For the same reason a job that starts at the first step deletes
+`out/_ph0` and `pwscf.dyn*` first, ph.x's data from any earlier run, which
+ph.x would otherwise resume from after checking only its flags and q-mesh.
+
+ph.x's memory is not estimated. The job is sized on the first step's pw.x
+estimate, as the job record's `source_note` says, and ph.x also holds arrays
+that estimate leaves out, such as projections for each of its k-points, so
+a large cell can need more memory than the job requests.
+
 ## Read the reasons and warnings
 
 Every analysis fact and every advisor decision -- occupations, k-point
@@ -906,7 +1282,8 @@ analysis -- both use this same shape.
 
 A decision that applies several settings (the magnetic decision,
 occupations, k-point sampling, Hubbard +U, convergence, relaxation, the
-`dos.x` settings) also carries `field_sources`, one source per setting it
+`dos.x` settings, and a phonon task's q-point mesh, ph.x, q2r.x and
+phonon-DOS settings) also carries `field_sources`, one source per setting it
 applied, keyed by the setting's override name: `human` (or `llm`) for a value
 that tier set, otherwise the tier that chose it. The record's `source` is the
 highest of them, so `mixing_beta=0.3` alone makes `convergence` `human` while
@@ -916,7 +1293,8 @@ setting the decision did not apply has no entry and cannot make the record
 `human`: a `degauss` under fixed occupations, a `smearing_type` on a `dos`
 task's `tetrahedra_opt` nscf step, or a `magnetic_ordering` that an explicit
 `spin_polarized=false` ignores. Hubbard's switch is keyed `needs_correlation`,
-its override field, though `--set` calls it `hubbard_needs_correlation`. A
+its override field, though `--set` calls it `hubbard_needs_correlation`, and
+`hubbard_projectors` has an entry only when a U is applied. A
 pinned `pseudo_table_id` makes `pseudo_table` `human`. The other records that
 apply several settings (`cutoffs`, `job`, `nbnd`, `parallelisation`, `vdw`)
 carry one `source` and no `field_sources`: their `human` means the request set
@@ -932,7 +1310,11 @@ automatically selected `pseudo_table` names `functional` and `magnetic`,
 `relativistic` names `magnetic`, `pseudopotentials` names
 `pseudo_table`, a `band` task's `bands_k_path` names `magnetic`, whose cell
 it reads, and its `bands_occupations` names `occupations`, the scf step's
-decision it follows. A non-metal's `occupations` also names the records that
+decision it follows. A phonon task's `q_sampling` and `phonon_dos` name
+`magnetic`, whose cell they mesh, `fft_grid` names `cutoffs` and `magnetic`,
+and `q2r` names `magnetic`, `q_sampling` and `boundary`, and also `job` when
+the default `asr` was weighed against the job's partition. A non-metal's
+`occupations` also names the records that
 decided whether fixed occupations can run: `magnetic`, and `electron_count`
 where its parity was tested. An `occupations` that pins a `tot_magnetization`
 names `magnetic` too, whichever tier chose the occupations (a requested
@@ -945,7 +1327,13 @@ follow `derived_from` to find that. `human` only ever means a value set in the
 request: a `dos` task's nscf protocol values (`nscf_k_sampling`'s k_distance,
 `nscf_occupations`) read `heuristic`, with `source_note` naming the protocol,
 and so do a `band` task's bands-step defaults (`bands_nbnd`, and
-`bands_k_path`'s `k_path_distance`).
+`bands_k_path`'s `k_path_distance`) and a phonon task's protocol values: the
+relaxation's `forc_conv_thr` 1e-4, `q_distance` 0.3, the ph.x settings and
+`dos_q_distance`. A `k_sampling` the phonon rule raised keeps the source of
+the tier that decided its starting mesh (`ml` for QRF95's `k_distance`), and
+names the raise in `source_note`, though its `k_distance` is `null`. A phonon
+task's `job` record names its job timer in `source_note`, and says there that
+ph.x's memory is not estimated.
 Per-decision warnings live inside that decision's own value (e.g.
 `job.warnings`, `cutoffs.warnings`), and every run, whatever its task, also
 carries one aggregated top-level `warnings` list: every record's warnings, in
@@ -954,7 +1342,9 @@ request's routing notices (a setting given without a step that reached several
 steps), under the `record` `overrides`. A `dos` task's nscf step keeps its
 own, under `nscf_`-prefixed records, and a `band` task's bands step under
 `bands_`-prefixed ones: a notice on `nscf_parallelisation` is about the nscf
-step's npool, not the scf step's.
+step's npool, not the scf step's. A phonon task's steps have records of their
+own names (`q_sampling`, `phonon`, `q2r`, `phonon_dos`), so their warnings
+name those.
 
 A resolved record also carries the rest of its provenance: `source_note`,
 the advisor's rationale where it gives one (such as why a molecule gets a
@@ -970,7 +1360,9 @@ Each model warning, such as the is_magnetic classifier's "has not been
 externally validated", is also in the top-level `warnings` list as
 `<record>.model_warning`. A bundle's `CITATIONS.md` and the manifest's
 `citations` list every record's citations: the selected pseudopotential table,
-every model that decided a record, and the source of a `band` task's path
-for a bulk crystal or a slab. `CITATIONS.md` also names the table's
+every model that decided a record, the source of a `band` task's path
+for a bulk crystal or a slab, and, for a phonon task, aiida-quantumespresso's
+protocols (Huber et al., npj Comput. Mater. 7, 136 (2021)) where their
+defaults are used and DFPT (Baroni et al.). `CITATIONS.md` also names the table's
 licence file under `licences/`, which lists SSSP's per-family references. Read analysis and selection warnings
 as well as advice; do not treat a `resolved` status as scientific validation.
