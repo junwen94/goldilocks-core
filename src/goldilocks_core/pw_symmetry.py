@@ -33,6 +33,13 @@ group. Diamond Si's primitive cell (MC3D mc3d-42058) keeps 4 of 48
 operations there, and pw.x 7.5 ran 282 k-points of its 10x10x10 mesh where
 spglib's full group gives 47.
 
+**Grids.** pw.x makes each FFT grid length a multiple of its axis'
+``fft_factors``, which the fractional translations ``sgam_at`` finds set,
+so that every translation maps grid points onto grid points.
+``mixing_axis_pairs`` names the pairs of lattice axes a kept rotation
+mixes: ph.x's tests of the FFT grid and of the q-mesh can fail only on
+those pairs (``pw_fft``).
+
 **The written frame.** ``pw_frame`` writes the cell in the frame, of those
 below, where pw.x keeps the most operations (``FRAME_TOLERANCE``) -- its
 whole point group on each of the 84 structures of the 2026-10-19 batch --
@@ -294,6 +301,34 @@ def irreducible_kpoint_count(
         is_time_reversal=rotations.time_reversal,
     )
     return len(np.unique(mapping))
+
+
+def fft_factors(structure: Structure) -> tuple[int, int, int]:
+    """``sgam_at``'s ``fft_fact`` for ``structure`` as written, its sites
+    typed by species: per lattice axis, the least common multiple of n over
+    the operations pw.x finds with a fractional translation component of
+    +-1/n along that axis, before a magnetic noncollinear run drops some of
+    them (QE 7.3 ``PW/src/symm_base.f90:514,562-572``). pw.x makes each FFT
+    grid length a multiple of it; (1, 1, 1) without fractional translations,
+    as in a supercell."""
+    operations = _operations(
+        structure.lattice.matrix, structure.frac_coords, _types(structure)
+    )
+    factors = [1, 1, 1]
+    for _rotation, translation, _landing in operations:
+        for axis, component in enumerate(np.abs(translation)):
+            if component > _TRANSLATION_TOLERANCE:
+                factors[axis] = math.lcm(factors[axis], round(1.0 / component))
+    return factors[0], factors[1], factors[2]
+
+
+def mixing_axis_pairs(rotations: PwRotations) -> tuple[tuple[int, int], ...]:
+    """The ordered pairs (i, j), i != j, of lattice axes that some operation
+    in ``rotations`` mixes: W[j, i] != 0, so it turns a_i into a vector with
+    a component along a_j. Sorted; empty when every operation maps each
+    lattice vector onto plus or minus itself."""
+    mixed = np.any(rotations.rotations != 0, axis=0)
+    return tuple((i, j) for i in range(3) for j in range(3) if i != j and mixed[j, i])
 
 
 def pw_frame(structure: Structure) -> tuple[Structure, PwFrame]:

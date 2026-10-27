@@ -96,6 +96,8 @@ from dataclasses import dataclass
 
 from pymatgen.core import Lattice
 
+from goldilocks_core.pw_fft import good_fft_order
+
 _BOHR_PER_ANGSTROM = 1.8897259886
 _COMPLEX = 16
 _REAL = 8
@@ -404,22 +406,7 @@ def _sphere_count(volume_bohr3: float, ecut_ry: float) -> int:
 
 def _fft_grid(lengths_bohr: tuple[float, ...], ecut_ry: float) -> tuple[int, int, int]:
     nr1, nr2, nr3 = (
-        _good_fft_order(2 * math.floor(math.sqrt(ecut_ry) * length / (2 * math.pi)) + 1)
+        good_fft_order(2 * math.floor(math.sqrt(ecut_ry) * length / (2 * math.pi)) + 1)
         for length in lengths_bohr
     )
     return nr1, nr2, nr3
-
-
-def _good_fft_order(n: int) -> int:
-    """The smallest n' >= n with no prime factor above 5 (FFTW builds,
-    ``fft_support.f90`` allowed/good_fft_order)."""
-    while not _five_smooth(n):
-        n += 1
-    return n
-
-
-def _five_smooth(n: int) -> bool:
-    for factor in (2, 3, 5):
-        while n % factor == 0:
-            n //= factor
-    return n == 1
