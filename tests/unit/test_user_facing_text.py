@@ -282,6 +282,16 @@ _TRIGGERS = {
 """One ``check_all`` or ``with_phonon_findings`` call per catalogued code
 that returns exactly that finding."""
 
+_OTHER_OCCURRENCES = {
+    "phonon.isolated_boundary_unsupported": lambda: _phonon(
+        boundary=_resolved(BoundaryFacts("periodic")),
+        magnetic=written_cell(carbon_pair_in_a_box()),
+    ),
+}
+"""A call per catalogued code that returns exactly that finding, worded for
+another occurrence than its ``_TRIGGERS`` call's: a box under an isolation
+other than 'isolated'."""
+
 
 @pytest.mark.parametrize(
     "warning",
@@ -302,13 +312,21 @@ def test_every_catalogued_finding_has_a_trigger() -> None:
     assert set(_TRIGGERS) == {finding.code for finding in FINDING_CATALOGUE}
 
 
-@pytest.mark.parametrize("code", list(_TRIGGERS))
-def test_each_finding_the_gate_returns_reads_as_user_text(code: str) -> None:
-    report: CheckReport = _TRIGGERS[code]()
-
+def _reads_as_user_text(code: str, report: CheckReport) -> None:
+    """``report`` holds exactly one finding, of ``code``, in user text."""
     (finding,) = report.blocking
     assert finding.code == code
     assert _internal(finding.message) == []
+
+
+@pytest.mark.parametrize("code", list(_TRIGGERS))
+def test_each_finding_the_gate_returns_reads_as_user_text(code: str) -> None:
+    _reads_as_user_text(code, _TRIGGERS[code]())
+
+
+@pytest.mark.parametrize("code", list(_OTHER_OCCURRENCES))
+def test_other_occurrences_of_a_finding_read_as_user_text(code: str) -> None:
+    _reads_as_user_text(code, _OTHER_OCCURRENCES[code]())
 
 
 def test_the_isolated_heuristic_explains_itself_without_design_ids() -> None:

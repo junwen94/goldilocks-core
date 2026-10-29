@@ -245,10 +245,9 @@ beyond q2r.x's limits, `fix_bottom_layers` and smearing or tetrahedra on a
 composition that is not all-metallic unless `is_metal=metal` is set (a
 requested `occupations=fixed` the run cannot take is refused under the same
 code, and for a metal needs `is_metal=metal` with `occupations=smearing`), and,
-with
-no remedy, `isolation='isolated'` and `vc-relax-phonon` on a fragile cell,
-where the FFT grid the vc-relax rebuilds can fail ph.x's symmetry test
-(`relax-phonon` runs there). The metallicity refusal
+with no remedy, a molecule or cluster in a box, whatever `isolation`, and
+`vc-relax-phonon` on a fragile cell, where the FFT grid the vc-relax rebuilds
+can fail ph.x's symmetry test (`relax-phonon` runs there). The metallicity refusal
 (`phonon.metallicity_unconfirmed`) is the user's call: the classifier calls
 many insulators metals, and ph.x treats a run on smearing as a metal, so ask
 whether the material is a metal (`is_metal=metal`) or an insulator rather than

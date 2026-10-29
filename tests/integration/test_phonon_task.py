@@ -791,6 +791,23 @@ def test_a_molecule_in_a_box_gets_one_finding_in_vc_relax_phonon(store) -> None:
     assert _codes_of(report) == ["phonon.isolated_boundary_unsupported"]
 
 
+@pytest.mark.parametrize("task", [task for task, _ in _PHONON_TASKS])
+def test_a_periodic_molecule_in_a_box_gets_one_finding_in_each_phonon_task(
+    store, task
+) -> None:
+    """The same carbon pair with isolation=periodic: ph.x would compute a
+    periodic array of copies of the pair, and a molecule has no phonon
+    dispersion, so each phonon task refuses it with one finding and no
+    remedy."""
+    assignments = {**_NON_METAL, "is_magnetic": "non_magnetic", "isolation": "periodic"}
+
+    _, report = _task(task, carbon_pair_in_a_box(), store, assignments)
+
+    assert _codes_of(report) == ["phonon.isolated_boundary_unsupported"]
+    assert report.blocking[0].remedies == ()
+    assert "with isolation=periodic" in report.blocking[0].message
+
+
 def test_magnetic_afm_nickel_oxide_with_spin_orbit_and_a_hubbard_u_is_refused(
     store,
 ) -> None:

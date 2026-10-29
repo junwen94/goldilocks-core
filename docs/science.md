@@ -554,8 +554,9 @@ electron density lies within half the cell along every axis, which 5 Å of
 vacuum does not guarantee, so check the box size. pw.x computes no stress under
 Martyna-Tuckerman: the input then omits `tstress`, and Goldilocks refuses a
 `vc-relax`. Use `relax` for an isolated system, or set `isolation='periodic'`
-for a periodic one. The phonon tasks refuse `isolated` altogether, since
-ph.x does not implement Martyna-Tuckerman (see
+for a periodic one. The phonon tasks refuse a molecule or cluster in a box
+under any `isolation`: ph.x does not implement Martyna-Tuckerman, and
+otherwise computes a periodic array of copies (see
 [the phonon tasks](#check-the-phonon-tasks)).
 
 `isolation='slab'` is Quantum ESPRESSO's 2D Coulomb truncation (Sohier,
@@ -1200,16 +1201,22 @@ an integer of that parity is refused as in the other tasks on an all-metallic
 composition or with `is_metal=metal`, and the remedy, smearing, unsets it
 too; otherwise the metallicity refusal above replaces it.
 
-`isolation='isolated'`, a molecule or cluster in a box, is refused with no
-remedy (`phonon.isolated_boundary_unsupported`). ph.x does not implement the
-Martyna-Tuckerman correction: Quantum ESPRESSO 7.3's ph.x drops it and
-computes a periodic array of copies, and 7.5's applies it only in part. A
-molecule's vibrations need a Γ-only calculation with dynmat.x's
-`asr='zero-dim'`, which these tasks do not set up. In `vc-relax-phonon` this
-refusal replaces that of a vc-relax on an isolated system, whose remedy, the
-`relax` task, would not help. `fix_bottom_layers` is refused in the relaxation
-tasks (see [relaxation settings](#check-relaxation-settings)), and the
-`vc-relax` task's own rules apply to `vc-relax-phonon` unchanged.
+A molecule or cluster in a box, a written cell with vacuum along all three
+lattice vectors, is refused with no remedy, whatever `isolation`
+(`phonon.isolated_boundary_unsupported`). ph.x does not implement the
+Martyna-Tuckerman correction of `isolation='isolated'`: Quantum ESPRESSO
+7.3's ph.x drops it and computes a periodic array of copies, and 7.5's
+applies it only in part. Under any other `isolation` ph.x computes such an
+array by design, whose phonons include the interactions between the copies,
+while a molecule has no phonon dispersion. A molecule's vibrations need a
+Γ-only calculation with dynmat.x's `asr='zero-dim'`, which these tasks do
+not set up. In `vc-relax-phonon` this refusal replaces those of a vc-relax on
+an isolated system and of a 2D `cell_dofree` on a box, whose advice, the
+`relax` task, would not help, and under `isolation='slab'` that of the 2D
+truncation on such a cell, whose remedy, `isolation='periodic'`, is refused
+here too. `fix_bottom_layers` is refused in the relaxation tasks (see
+[relaxation settings](#check-relaxation-settings)), and the `vc-relax` task's
+own rules apply to `vc-relax-phonon` unchanged.
 
 ph.x converges its linear response to `tr2_ph` 1e-18, mixing with
 `alpha_mix(1)` 0.4 over `nmix_ph` 8 iterations: aiida-quantumespresso's ph

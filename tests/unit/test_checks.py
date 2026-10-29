@@ -1770,6 +1770,108 @@ def test_an_isolated_vc_relax_phonon_gives_one_finding() -> None:
     assert report.blocking == (_PHONON_ISOLATED,)
 
 
+@pytest.mark.parametrize("purpose", _PHONON_PURPOSES)
+def test_a_periodic_molecule_in_a_box_is_refused_in_a_phonon_task(
+    purpose: str,
+) -> None:
+    """Under isolation=periodic ph.x would compute a periodic array of copies
+    of the molecule, whose phonons include the interactions between them, and
+    a molecule has no phonon dispersion: a box is refused whatever its
+    isolation, with no remedy, as under 'isolated'."""
+    boundary = _boundary("periodic", source="human")
+    magnetic = written_cell(carbon_pair_in_a_box())
+
+    report = with_phonon_findings(
+        check_all(boundary=boundary, magnetic=magnetic, purpose=purpose),
+        purpose=purpose,
+        boundary=boundary,
+        magnetic=magnetic,
+    )
+
+    assert report.blocking == (
+        Finding(
+            code="phonon.isolated_boundary_unsupported",
+            message=(
+                "A molecule or cluster in a box (vacuum along a, b and c) has no "
+                "phonon dispersion, and with isolation=periodic ph.x would compute "
+                "a periodic array of copies, whose phonons include the interactions "
+                "between them. A molecule's vibrations need a Gamma-only "
+                "calculation, ph.x at Gamma and then dynmat.x with asr='zero-dim', "
+                "which the phonon tasks do not do."
+            ),
+            fields=("isolation",),
+        ),
+    )
+
+
+def test_a_slab_isolation_on_a_box_gets_only_the_phonon_finding() -> None:
+    """The 2D-truncation rule's remedy, isolation=periodic, leaves the box
+    refused in a phonon task, so the phonon finding replaces it."""
+    boundary = _boundary("slab", source="human")
+    magnetic = written_cell(carbon_pair_in_a_box())
+    first = check_all(boundary=boundary, magnetic=magnetic)
+
+    report = with_phonon_findings(
+        first, purpose="scf", boundary=boundary, magnetic=magnetic
+    )
+
+    assert [finding.code for finding in first.blocking] == [
+        "boundary.slab_unsuited_to_2d_truncation"
+    ]
+    (finding,) = report.blocking
+    assert (finding.code, finding.remedies) == (
+        "phonon.isolated_boundary_unsupported",
+        (),
+    )
+    assert "and with isolation=slab ph.x would compute a periodic array" in (
+        finding.message
+    )
+
+
+@pytest.mark.parametrize("isolation", ["periodic", "slab", "isolated"])
+def test_a_2d_cell_dofree_on_a_box_gets_only_the_phonon_finding(
+    isolation: str,
+) -> None:
+    """The 2D cell constraint's refusal on a box advises the relax task,
+    which does not help a phonon run, so in vc-relax-phonon the phonon
+    finding replaces it, whatever the isolation."""
+    boundary = _boundary(isolation, source="human")
+    magnetic = written_cell(carbon_pair_in_a_box())
+    relax = _vc_relax_with_cell_dofree("2Dxy")
+    first = check_all(
+        boundary=boundary, magnetic=magnetic, relax=relax, purpose="vc-relax"
+    )
+
+    report = with_phonon_findings(
+        first, purpose="vc-relax", boundary=boundary, magnetic=magnetic, relax=relax
+    )
+
+    assert "relax.two_d_cell_dofree_needs_xy_frame" in [
+        finding.code for finding in first.blocking
+    ]
+    assert [finding.code for finding in report.blocking] == [
+        "phonon.isolated_boundary_unsupported"
+    ]
+
+
+@pytest.mark.parametrize(
+    "build",
+    [mc3d_42058_silicon, graphene_monolayer, carbon_chain],
+    ids=lambda build: build.__name__,
+)
+def test_a_cell_with_vacuum_along_fewer_axes_than_a_box_passes(build) -> None:
+    """Bulk, a slab and a wire, periodic along at least one lattice vector:
+    ph.x computes their phonons under isolation=periodic."""
+    report = with_phonon_findings(
+        CheckReport(),
+        purpose="scf",
+        boundary=_boundary("periodic"),
+        magnetic=written_cell(build()),
+    )
+
+    assert report.ok
+
+
 def _occupations(occupations: str, tot_magnetization: float | None):
     """``occupations`` pinning ``tot_magnetization``, as requested."""
     smearing = occupations == "smearing"

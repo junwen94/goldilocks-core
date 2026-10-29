@@ -154,18 +154,23 @@ since the other's advice does not help a phonon run.
     without moments, and in 7.3 with them, ph.x would run and give wrong
     phonons.
 
-11. ``isolation='isolated'`` on a written cell with vacuum along a, b and c:
-    ph.x implements no nonperiodic boundary (``PHonon/PH/phonon.f90:36-41``).
-    QE 7.3 restores only the 2D flag from the save
-    (``PW/src/pw_restart_new.f90:1341-1345``), so a molecule in a box gets
-    the phonons of a periodic array of copies, and 7.5 applies
-    Martyna-Tuckerman to the response Hartree potential only. A molecule's
-    modes need a Gamma-only calculation (ph.x at Gamma, then dynmat.x with
-    ``asr='zero-dim'``), which these tasks do not do, so there is no remedy.
-    In vc-relax-phonon this replaces ``boundary.isolated_forbids_vc_relax``,
-    whose advice, the relax task, does not help a phonon run. On a cell
-    without that vacuum the vacuum rule refuses 'isolated' already, offering
-    isolation=periodic.
+11. A written cell with vacuum along a, b and c, a molecule or cluster in a
+    box, whatever ``isolation``: ph.x implements no nonperiodic boundary
+    (``PHonon/PH/phonon.f90:36-41``). Under 'isolated', QE 7.3 restores only
+    the 2D flag from the save (``PW/src/pw_restart_new.f90:1341-1345``), so
+    the box gets the phonons of a periodic array of copies, and 7.5 applies
+    Martyna-Tuckerman to the response Hartree potential only; under any
+    other isolation ph.x computes such an array by design, whose phonons
+    include the interactions between the copies, while a molecule has no
+    phonon dispersion. A molecule's modes need a Gamma-only calculation
+    (ph.x at Gamma, then dynmat.x with ``asr='zero-dim'``), which these
+    tasks do not do, so there is no remedy. This replaces
+    ``boundary.isolated_forbids_vc_relax`` and, for a 2D ``cell_dofree``,
+    ``relax.two_d_cell_dofree_needs_xy_frame`` in vc-relax-phonon, whose
+    advice on a box, the relax task, does not help a phonon run, and
+    ``boundary.slab_unsuited_to_2d_truncation`` under 'slab', whose remedy,
+    isolation=periodic, is refused here too. On a cell without that vacuum
+    the vacuum rule refuses 'isolated' already, offering isolation=periodic.
 
 12. A ``tot_magnetization`` on a collinear run with smearing or tetrahedra:
     the moment gives the scf two Fermi energies (QE 7.3
@@ -565,20 +570,23 @@ _PHONON_NONCOLLINEAR_HUBBARD = Finding(
     fields=("spin_orbit_coupling", "hubbard_needs_correlation"),
     remedies=({"spin_orbit_coupling": False}, _NO_U),
 )
+_MOLECULAR_VIBRATIONS = (
+    "A molecule's vibrations need a Gamma-only calculation, ph.x at Gamma and "
+    "then dynmat.x with asr='zero-dim', which the phonon tasks do not do."
+)
 _PHONON_ISOLATED = Finding(
     code="phonon.isolated_boundary_unsupported",
     message=(
         "isolation=isolated writes Martyna-Tuckerman, which ph.x does not "
         "implement: Quantum ESPRESSO 7.3's ph.x drops it, treating the molecule or "
         "cluster in the box as a periodic array of copies, and 7.5's applies it "
-        "only in part. A molecule's vibrations need a Gamma-only calculation, ph.x "
-        "at Gamma and then dynmat.x with asr='zero-dim', which the phonon tasks do "
-        "not do."
+        f"only in part. {_MOLECULAR_VIBRATIONS}"
     ),
     fields=("isolation",),
 )
-"""No remedy: isolation=periodic would compute a periodic array of copies,
-which no setting turns into a molecule's vibrations (rule 11 of the module
+"""A molecule or cluster in a box, with the message of isolation=isolated;
+under any other isolation the rule words its own. No remedy: no isolation
+or other setting gives ph.x a molecule's vibrations (rule 11 of the module
 docstring)."""
 _PHONON_PINNED_MOMENT = Finding(
     code="phonon.pinned_moment_with_smearing",
@@ -722,7 +730,11 @@ and a generic message; a rule returns its entry with the occurrence's
 message, less any remedy that would not hold for it (module docstring)."""
 
 _REPLACED_BY_PHONON = {
-    _PHONON_ISOLATED.code: (_ISOLATED_VC_RELAX.code,),
+    _PHONON_ISOLATED.code: (
+        _ISOLATED_VC_RELAX.code,
+        _TWO_D_CELL_DOFREE_FRAME.code,
+        _SLAB_UNSUITED.code,
+    ),
     _PHONON_FIX_BOTTOM_LAYERS.code: (
         _FIX_BOTTOM_LAYERS_WITHOUT_SLAB.code,
         _FIX_BOTTOM_LAYERS_EXCEEDS.code,
@@ -903,7 +915,7 @@ def with_phonon_findings(
     rule_findings = (
         _phonon_needs_atomic_hubbard_projectors(hubbard),
         _phonon_refuses_noncollinear_hubbard(hubbard, magnetic),
-        _phonon_refuses_isolated_boundary(boundary, magnetic),
+        _phonon_refuses_a_molecule_in_a_box(boundary, magnetic),
         _phonon_refuses_two_fermi_energies(occupations, magnetic, electron_count),
         _phonon_q_mesh_within_ph_x_and_q2r_x(q_sampling),
         _vc_relax_phonon_refuses_fragile_cell(fft_grid, purpose),
@@ -1579,20 +1591,30 @@ def _phonon_refuses_noncollinear_hubbard(
     )
 
 
-def _phonon_refuses_isolated_boundary(
+def _phonon_refuses_a_molecule_in_a_box(
     boundary: FieldState[BoundaryFacts] | None,
     magnetic: FieldState[MagneticConfigFacts] | None,
 ) -> Finding | None:
     """Rule 11 of this module's docstring: on the written cell with vacuum
-    along a, b and c that 'isolated' needs; ``_isolation_matches_written_cell``
-    refuses it on any other."""
+    along a, b and c, whatever its isolation, which the message names.
+    'isolated' needs that vacuum (``_isolation_matches_written_cell`` refuses
+    it on any other cell), and gets the catalogue message."""
     if boundary is None or magnetic is None or not (boundary.ok and magnetic.ok):
-        return None
-    if boundary.value.isolation != "isolated":
         return None
     if len(vacuum_axes(magnetic.value.cell)) != 3:
         return None
-    return _PHONON_ISOLATED
+    isolation = boundary.value.isolation
+    if isolation == "isolated":
+        return _PHONON_ISOLATED
+    return replace(
+        _PHONON_ISOLATED,
+        message=(
+            "A molecule or cluster in a box (vacuum along a, b and c) has no "
+            f"phonon dispersion, and with isolation={isolation} ph.x would "
+            "compute a periodic array of copies, whose phonons include the "
+            f"interactions between them. {_MOLECULAR_VIBRATIONS}"
+        ),
+    )
 
 
 def _phonon_refuses_two_fermi_energies(
