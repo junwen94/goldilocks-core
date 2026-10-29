@@ -31,6 +31,13 @@ from goldilocks_core.service._dos import (
     to_bundle_input_dos,
 )
 from goldilocks_core.service._generate import generate
+from goldilocks_core.service._phonon import (
+    advise_phonon,
+    check_phonon,
+    generate_phonon,
+    render_submission_phonon,
+    to_bundle_input_phonon,
+)
 from goldilocks_core.service._pipeline import advise, check
 from goldilocks_core.service._relax import (
     advise_relax,
@@ -46,7 +53,8 @@ from goldilocks_core.types import CalcTask
 class TaskPhases:
     """One task's service functions, in the order ``run`` calls them. Every
     function after ``advise`` takes the advice that task's ``advise``
-    returns (``Advice``, ``DosAdvice``, ``BandAdvice`` or ``RelaxAdvice``):
+    returns (``Advice``, ``DosAdvice``, ``BandAdvice``, ``RelaxAdvice`` or
+    ``PhononAdvice``):
 
     - ``advise(structure, *, code, hpc, overrides, store, fetch_missing)``:
       the advice;
@@ -93,6 +101,28 @@ TASK_PHASES: Mapping[CalcTask, TaskPhases] = {
         render_submission_relax,
         to_bundle_input_relax,
     ),
+    "phonon": TaskPhases(
+        partial(advise_phonon, task="phonon"),
+        check_phonon,
+        generate_phonon,
+        render_submission_phonon,
+        to_bundle_input_phonon,
+    ),
+    "relax-phonon": TaskPhases(
+        partial(advise_phonon, task="relax-phonon"),
+        check_phonon,
+        generate_phonon,
+        render_submission_phonon,
+        to_bundle_input_phonon,
+    ),
+    "vc-relax-phonon": TaskPhases(
+        partial(advise_phonon, task="vc-relax-phonon"),
+        check_phonon,
+        generate_phonon,
+        render_submission_phonon,
+        to_bundle_input_phonon,
+    ),
 }
 """One row per ``types.CalcTask``. The ``relax`` and ``vc-relax`` rows bind
-``advise_relax``'s ``calculation`` to their own task."""
+``advise_relax``'s ``calculation`` to their own task, and the three phonon
+rows ``advise_phonon``'s ``task``, which decides their first pw.x step."""

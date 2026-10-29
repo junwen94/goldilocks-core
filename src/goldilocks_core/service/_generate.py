@@ -62,6 +62,8 @@ def generate(
     ctx: SharedContext | None = None,
     purpose: Literal["scf", "nscf", "bands", "relax", "vc-relax"] = "scf",
     relax: RelaxOptions | VcRelaxOptions | None = None,
+    fft_grid: tuple[int, int, int] | None = None,
+    dftd3_threebody: bool | None = None,
 ) -> tuple[Step, ...]:
     """Delivery: raises ``AdviceIncomplete`` if ``report`` is not ``ok``,
     per the "generate() refuses iff a needed field is unavailable/blocked"
@@ -77,16 +79,28 @@ def generate(
     written along its band path (``PathStepAdvice``), every other step on
     its k-mesh; each writer refuses settings without the k-points it
     renders. ``max_seconds`` is the advised step's own share of the task's
-    walltime (``ResourceStepAdvice.max_seconds``, #169).
+    walltime (``ResourceStepAdvice.max_seconds``, #169), ``None`` when the
+    task runs a job timer instead (#215), and the scf and relaxation
+    writers then write none.
 
-    ``relax`` (v2 epic 10, #10): only ``service/_relax.py`` ever passes
-    this -- it is threaded onto ``PwSettings.relax`` and dispatches to
-    ``write_qe_relax`` instead of ``write_qe_scf`` whenever ``purpose``
-    is ``"relax"``/``"vc-relax"``. Reusing this function rather than a
-    parallel ``generate_relax`` duplicating the ``SystemSettings``/
-    ``PwSettings`` construction above: nothing about assembling those
-    two differs between an scf step and a relax step, only which
-    writer gets called and what ``PwSettings.relax`` holds.
+    ``relax`` (v2 epic 10, #10): only ``service/_relax.py`` and
+    ``service/_phonon.py`` (#215) ever pass this -- it is threaded onto
+    ``PwSettings.relax`` and dispatches to ``write_qe_relax`` instead of
+    ``write_qe_scf`` whenever ``purpose`` is ``"relax"``/``"vc-relax"``.
+    Reusing this function rather than a parallel ``generate_relax``
+    duplicating the ``SystemSettings``/``PwSettings`` construction above:
+    nothing about assembling those two differs between an scf step and a
+    relax step, only which writer gets called and what ``PwSettings.relax``
+    holds.
+
+    ``fft_grid`` and ``dftd3_threebody`` (#215): the phonon tasks' first
+    step writes the dense FFT grid ph.x accepts as nr1-nr3 where it would
+    refuse pw.x's own (``FftGridDecision.written``), and, with DFT-D3,
+    ``dftd3_threebody = .false.``, so that its energy, forces and any
+    relaxation use the two-body D3 of d3hess.x's Hessian. Both are stored
+    on ``PwSettings``, whose ``dfpt_system_keywords`` the scf and relaxation
+    writers add to ``&SYSTEM``; ``None``, every other caller's, writes
+    neither.
     """
     if not report.ok:
         raise AdviceIncomplete(report)
@@ -112,6 +126,8 @@ def generate(
         parallel=advice.step.resources.parallelisation.value,
         max_seconds=advice.step.resources.max_seconds,
         relax=relax,
+        fft_grid=fft_grid,
+        dftd3_threebody=dftd3_threebody,
     )
     shared_ctx = ctx or default_shared_context()
     if purpose == "bands":

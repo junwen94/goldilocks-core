@@ -25,13 +25,21 @@ list (QE 7.3 ``PW/src/symm_base.f90``):
 ``pw_rotations`` applies exactly these rules to a structure, typed by its
 species: on the simulated cell these are the species pw.x is given, one per
 element and starting-magnetization class (``advisors/species_split.py``).
-``irreducible_kpoint_count`` reduces a k-point mesh by what it keeps, as
-pw.x's ``kpoint_grid`` does, so the count is the number of k-points pw.x
-runs, not that of the crystal's full space group: a cell in pymatgen's
-frame (c along z, a in the xz plane) shows pw.x only part of its point
-group. Diamond Si's primitive cell (MC3D mc3d-42058) keeps 4 of 48
-operations there, and pw.x 7.5 ran 282 k-points of its 10x10x10 mesh where
-spglib's full group gives 47.
+``irreducible_kpoints`` reduces a k-point mesh by what it keeps, as
+pw.x's ``kpoint_grid`` does, to one point of each orbit (ph.x reduces its
+q-point mesh the same way), and ``irreducible_kpoint_count`` counts them:
+the number of k-points pw.x runs, not that of the crystal's full space
+group. A cell in pymatgen's frame (c along z, a in the xz plane) shows
+pw.x only part of its point group: diamond Si's primitive cell (MC3D
+mc3d-42058) keeps 4 of 48 operations there, and pw.x 7.5 ran 282 k-points
+of its 10x10x10 mesh where spglib's full group gives 47.
+
+**Grids.** pw.x makes each FFT grid length a multiple of its axis'
+``fft_factors``, which the fractional translations ``sgam_at`` finds set,
+so that every translation maps grid points onto grid points.
+``mixing_axis_pairs`` names the pairs of lattice axes a kept rotation
+mixes: ph.x's tests of the FFT grid and of the q-mesh can fail only on
+those pairs (``pw_fft``, ``advisors/q_sampling.py``).
 
 **The written frame.** ``pw_frame`` writes the cell in the frame, of those
 below, where pw.x keeps the most operations (``FRAME_TOLERANCE``) -- its
@@ -269,15 +277,17 @@ def pw_rotations(
     )
 
 
-def irreducible_kpoint_count(
+def irreducible_kpoints(
     rotations: PwRotations,
     mesh: tuple[int, int, int],
     shift: tuple[int, int, int],
-) -> int:
-    """The k-points pw.x runs of the Monkhorst-Pack ``mesh`` with ``shift``
-    under ``rotations``: spglib's ``get_stabilized_reciprocal_mesh``
-    orbits, where a time-reversed operation acts on k as -W and time
-    reversal pairs k with -k only when ``rotations.time_reversal``."""
+) -> np.ndarray:
+    """One k-point of each orbit pw.x reduces the Monkhorst-Pack ``mesh``
+    with ``shift`` to under ``rotations``, in crystal coordinates of the
+    reciprocal lattice vectors, one row each: spglib's
+    ``get_stabilized_reciprocal_mesh`` orbits, where a time-reversed
+    operation acts on k as -W and time reversal pairs k with -k only when
+    ``rotations.time_reversal``."""
     k_rotations = np.unique(
         [
             -rotation if reversed_ else rotation
@@ -287,13 +297,51 @@ def irreducible_kpoint_count(
         ],
         axis=0,
     )
-    mapping, _grid = spglib.get_stabilized_reciprocal_mesh(
+    mapping, grid = spglib.get_stabilized_reciprocal_mesh(
         mesh,
         np.asarray(k_rotations, dtype="intc"),
         is_shift=shift,
         is_time_reversal=rotations.time_reversal,
     )
-    return len(np.unique(mapping))
+    return (2 * grid[np.unique(mapping)] + np.asarray(shift)) / (2 * np.asarray(mesh))
+
+
+def irreducible_kpoint_count(
+    rotations: PwRotations,
+    mesh: tuple[int, int, int],
+    shift: tuple[int, int, int],
+) -> int:
+    """The number of k-points pw.x runs of the Monkhorst-Pack ``mesh`` with
+    ``shift`` under ``rotations``: one per orbit (``irreducible_kpoints``)."""
+    return len(irreducible_kpoints(rotations, mesh, shift))
+
+
+def fft_factors(structure: Structure) -> tuple[int, int, int]:
+    """``sgam_at``'s ``fft_fact`` for ``structure`` as written, its sites
+    typed by species: per lattice axis, the least common multiple of n over
+    the operations pw.x finds with a fractional translation component of
+    +-1/n along that axis, before a magnetic noncollinear run drops some of
+    them (QE 7.3 ``PW/src/symm_base.f90:514,562-572``). pw.x makes each FFT
+    grid length a multiple of it; (1, 1, 1) without fractional translations,
+    as in a supercell."""
+    operations = _operations(
+        structure.lattice.matrix, structure.frac_coords, _types(structure)
+    )
+    factors = [1, 1, 1]
+    for _rotation, translation, _landing in operations:
+        for axis, component in enumerate(np.abs(translation)):
+            if component > _TRANSLATION_TOLERANCE:
+                factors[axis] = math.lcm(factors[axis], round(1.0 / component))
+    return factors[0], factors[1], factors[2]
+
+
+def mixing_axis_pairs(rotations: PwRotations) -> tuple[tuple[int, int], ...]:
+    """The ordered pairs (i, j), i != j, of lattice axes that some operation
+    in ``rotations`` mixes: W[j, i] != 0, so it turns a_i into a vector with
+    a component along a_j. Sorted; empty when every operation maps each
+    lattice vector onto plus or minus itself."""
+    mixed = np.any(rotations.rotations != 0, axis=0)
+    return tuple((i, j) for i in range(3) for j in range(3) if i != j and mixed[j, i])
 
 
 def pw_frame(structure: Structure) -> tuple[Structure, PwFrame]:

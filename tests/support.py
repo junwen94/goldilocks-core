@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from pymatgen.core import Lattice, Structure
+from pymatgen.core import Element, Lattice, Species, Structure
 from pymatgen.core.surface import Slab, SlabGenerator
 
 from goldilocks_core.advisors.magnetic_config import (
@@ -48,7 +48,7 @@ from goldilocks_core.advisors.magnetic_config import (
     magnetic_cell,
     magnetic_config,
 )
-from goldilocks_core.analysis.geometry import GeometryFacts, SlabGeometry
+from goldilocks_core.analysis.geometry import GeometryFacts, SlabGeometry, vacuum_axes
 from goldilocks_core.assets.records import AssetFile, AssetSpec
 from goldilocks_core.assets.runtime import statuses
 from goldilocks_core.assets.store import AssetStore, asset_root
@@ -57,12 +57,14 @@ from goldilocks_core.inputs.structure import (
     StructureSourceDocument,
     normalize_structure,
 )
+from goldilocks_core.pw_symmetry import pw_frame
 from goldilocks_core.resolution import Provenance, Resolved
 
 if TYPE_CHECKING:
     from goldilocks_core.analysis.geometry import Dimensionality, LatticeAxis
     from goldilocks_core.analysis.is_magnetic import Magnetism
     from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
+    from goldilocks_core.pw_symmetry import PwRotations
     from goldilocks_core.resolution import FieldState
     from goldilocks_core.types import RelativisticTreatment
 
@@ -762,6 +764,18 @@ loop_
 """
 
 
+def rock_salt(
+    cation: str, anion: str, a: float, *, primitive: bool = True
+) -> Structure:
+    """``cation`` and ``anion`` on rock salt (Fm-3m, lattice constant ``a`` in
+    A), in the 2-atom primitive cell or, with ``primitive=False``, the 8-atom
+    conventional one."""
+    cell = Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(a), [cation, anion], [[0, 0, 0], [0.5, 0.5, 0.5]]
+    )
+    return cell.get_primitive_structure() if primitive else cell
+
+
 def uranium_nitride() -> Structure:
     """UN (rock salt, Fm-3m), Materials Project mp-1865, as MP serves it:
     the fcc primitive cell, whose three reciprocal lengths, equal by
@@ -791,6 +805,29 @@ def fcc_copper() -> Structure:
     return Structure.from_spacegroup("Fm-3m", Lattice.cubic(3.61), ["Cu"], [[0, 0, 0]])
 
 
+QE_BOHR_ANGSTROM = 0.529177210903
+"""QE 7.3's bohr radius in A (``Modules/constants.f90``), which converts
+celldm(1) of QE's example inputs."""
+
+
+def qe_fcc_lattice(celldm: float) -> Lattice:
+    """QE's ibrav = 2 lattice for celldm(1) in bohr."""
+    half = celldm * QE_BOHR_ANGSTROM / 2
+    return Lattice([[-half, 0, half], [0, half, half], [-half, half, 0]])
+
+
+def aluminium_arsenide() -> Structure:
+    """QE 7.3 PHonon example02's zincblende AlAs: ibrav = 2, celldm(1)
+    10.50, Al at the origin and As at (1/4, 1/4, 1/4) alat."""
+    quarter = 10.50 * QE_BOHR_ANGSTROM / 4
+    return Structure(
+        qe_fcc_lattice(10.50),
+        ["Al", "As"],
+        [[0, 0, 0], [quarter, quarter, quarter]],
+        coords_are_cartesian=True,
+    )
+
+
 def rutile_titanium_dioxide() -> Structure:
     """Rutile TiO2 (P4_2/mnm, a = 4.594 A, c = 2.959 A, O at u = 0.3053)."""
     return Structure.from_spacegroup(
@@ -798,6 +835,17 @@ def rutile_titanium_dioxide() -> Structure:
         Lattice.tetragonal(4.594, 2.959),
         ["Ti", "O"],
         [[0, 0, 0], [0.3053, 0.3053, 0]],
+    )
+
+
+def wurtzite_zinc_oxide() -> Structure:
+    """Wurtzite ZnO (P6_3mc, a = 3.250 A, c = 5.207 A, u = 0.382): an
+    insulator that the installed metallicity classifier calls a metal."""
+    return Structure.from_spacegroup(
+        "P6_3mc",
+        Lattice.hexagonal(3.250, 5.207),
+        ["Zn", "O"],
+        [[1 / 3, 2 / 3, 0], [1 / 3, 2 / 3, 0.382]],
     )
 
 
@@ -1020,6 +1068,356 @@ def tilted_straddling_molybdenum_disulfide() -> Structure:
         cartesian,
         coords_are_cartesian=True,
         to_unit_cell=True,
+    )
+
+
+def written_alpha_uranium() -> Structure:
+    """``alpha_uranium`` as goldilocks writes it by default: ``pw_frame``
+    only idealizes it, by 3e-6 A, keeping its orientation and primitive
+    basis."""
+    return pw_frame(alpha_uranium())[0]
+
+
+def written_silicon() -> Structure:
+    """``mc3d_42058_silicon`` as goldilocks writes it by default: ``pw_frame``
+    turns its cubic axes onto x, y and z, where pw.x keeps all 48
+    operations."""
+    return pw_frame(mc3d_42058_silicon())[0]
+
+
+def _written(
+    lattice: list[list[float]],
+    sites: list[tuple[str, float | None, tuple[float, float, float]]],
+) -> Structure:
+    """A cell as goldilocks writes it (the simulated cell of
+    ``records.magnetic``, framed by ``pw_symmetry.pw_frame``), from its
+    lattice rows in A and its sites as (element, starting-magnetization
+    class or None, fractional coordinates). Each class is a species of its
+    own, as ``advisors/species_split.py`` builds them. The cells built
+    with it below were taken from goldilocks at the band task's merge
+    (8829358) for structures of the 2026-10-19 batch, rounded to 1e-12, so
+    that tests need neither the CIF nor the magnetic enumeration."""
+    return Structure(
+        Lattice(lattice),
+        [
+            Element(symbol) if spin is None else Species(symbol, spin=spin)
+            for symbol, spin, _ in sites
+        ],
+        [coordinates for _, _, coordinates in sites],
+    )
+
+
+def written_bcc_iron() -> Structure:
+    """bcc Fe, MC3D mc3d-17673, written by default: the spin-polarized
+    1-atom primitive cell with its cubic axes on x, y and z."""
+    return _written(
+        [
+            [1.394432230543, -1.394432230543, -1.394432230543],
+            [-1.394432230543, 1.394432230543, -1.394432230543],
+            [1.394432230543, 1.394432230543, 1.394432230543],
+        ],
+        [("Fe", 1.0, (0.0, 0.0, 0.0))],
+    )
+
+
+def written_sodium_chloride() -> Structure:
+    """Rock-salt NaCl, MC3D mc3d-76777, written by default: the 2-atom fcc
+    primitive cell with its cubic axes on x, y and z."""
+    return _written(
+        [
+            [2.805213303632, 0.0, 2.805213303632],
+            [2.805213303632, 2.805213303632, 0.0],
+            [0.0, 2.805213303632, 2.805213303632],
+        ],
+        [("Na", None, (0.0, 0.0, 0.0)), ("Cl", None, (0.5, 0.5, 0.5))],
+    )
+
+
+def written_gallium_arsenide() -> Structure:
+    """Zincblende GaAs, MC3D mc3d-13434, written by default: the 2-atom fcc
+    primitive cell with its cubic axes on x, y and z."""
+    return _written(
+        [
+            [2.827626365794, -2.827626365794, 0.0],
+            [2.827626365794, 0.0, 2.827626365794],
+            [0.0, -2.827626365794, 2.827626365794],
+        ],
+        [
+            ("Ga", None, (0.0, 0.0, 0.0)),
+            ("As", None, (0.749999999982, 0.749999999982, 0.750000000018)),
+        ],
+    )
+
+
+def written_boron_nitride_monolayer() -> Structure:
+    """The hBN monolayer, MC2D mc2d-04b28fdc, written by default: a along x,
+    the sheet in the xy plane, 20 A high along c."""
+    return _written(
+        [
+            [2.50930018, 0.0, 0.0],
+            [-1.25465009, 2.173117701601, 0.0],
+            [0.0, 0.0, 20.0],
+        ],
+        [
+            ("B", None, (0.333333333333, 0.666666666667, 0.5)),
+            ("N", None, (0.666666666667, 0.333333333333, 0.5)),
+        ],
+    )
+
+
+def written_lanthanum_cuprate() -> Structure:
+    """T-La2CuO4 (I4/mmm), Materials Project mp-19735, written by default
+    (spin-polarized, one species per element): the 7-atom body-centred
+    primitive cell, a = b = 3.81 A on x and y, c = 7.14 A."""
+    return _written(
+        [
+            [3.813804, 0.0, 0.0],
+            [0.0, 3.813804, 0.0],
+            [-1.906902, -1.906902, 6.612450996404],
+        ],
+        [
+            ("La", 1.0, (0.360893, 0.360893, 0.721786)),
+            ("La", 1.0, (0.639107, 0.639107, 0.278214)),
+            ("Cu", 1.0, (0.0, 0.0, 0.0)),
+            ("O", 1.0, (0.0, 0.5, 0.0)),
+            ("O", 1.0, (0.5, 0.0, 0.0)),
+            ("O", 1.0, (0.186226, 0.186226, 0.372452)),
+            ("O", 1.0, (0.813774, 0.813774, 0.627548)),
+        ],
+    )
+
+
+def written_manganese_thiophosphate_monolayer() -> Structure:
+    """The MnPS3 monolayer, MC2D mc2d-9ffd1741, written by default
+    (spin-polarized, one species per element): idealized to its four
+    operations, a = 5.66 A along x and b = 5.82 A at 60.9 degrees from it,
+    the sheet in the xy plane."""
+    return _written(
+        [
+            [5.65873239, 0.0, 0.0],
+            [2.829366195, 5.088206724238, 0.0],
+            [0.0, 0.0, 22.94442368],
+        ],
+        [
+            ("Mn", 1.0, (0.1772961325, 0.645407735, 0.5000002)),
+            ("Mn", 1.0, (0.8227038675, 0.354592265, 0.5000002)),
+            ("P", 1.0, (0.5023951125, 1.0, 0.45296376)),
+            ("P", 1.0, (0.4976048875, 0.0, 0.54703664)),
+            ("S", 1.0, (0.8655777775, 1.0, 0.440237235)),
+            ("S", 1.0, (0.5046158675, 0.642731645, 0.4358927775)),
+            ("S", 1.0, (0.1473475125, 0.357268355, 0.4358927775)),
+            ("S", 1.0, (0.1344222225, 0.0, 0.559763165)),
+            ("S", 1.0, (0.4953841325, 0.357268355, 0.5641076225)),
+            ("S", 1.0, (0.8526524875, 0.642731645, 0.5641076225)),
+        ],
+    )
+
+
+def written_alpha_sulfur() -> Structure:
+    """alpha-S (Fddd), MC3D mc3d-4618, written by default: the 32-atom
+    face-centred primitive cell, a = 13.75, b = 13.25 and c = 8.35 A."""
+    return _written(
+        [
+            [0.0, -6.459813815012, 12.141720392067],
+            [-5.296773895398, 0.0, 12.141720392067],
+            [-5.296773895398, -6.459813815012, 0.0],
+        ],
+        [
+            ("S", None, (0.671075704951, 0.477743487444, 0.484997022277)),
+            ("S", None, (0.765002977723, 0.883816214673, 0.578924295049)),
+            ("S", None, (0.484997022277, 0.366183785327, 0.671075704951)),
+            ("S", None, (0.883816214673, 0.765002977723, 0.772256512556)),
+            ("S", None, (0.366183785327, 0.484997022277, 0.477743487444)),
+            ("S", None, (0.772256512556, 0.578924295049, 0.883816214673)),
+            ("S", None, (0.477743487444, 0.671075704951, 0.366183785327)),
+            ("S", None, (0.578924295049, 0.772256512556, 0.765002977723)),
+            ("S", None, (0.900416385977, 0.355071410257, 0.314065185351)),
+            ("S", None, (0.935934814649, 0.819552981585, 0.349583614023)),
+            ("S", None, (0.314065185351, 0.430447018415, 0.900416385977)),
+            ("S", None, (0.819552981577, 0.935934814657, 0.894928589735)),
+            ("S", None, (0.430447018415, 0.314065185351, 0.355071410257)),
+            ("S", None, (0.894928589735, 0.349583614031, 0.819552981577)),
+            ("S", None, (0.355071410257, 0.900416385977, 0.430447018415)),
+            ("S", None, (0.349583614023, 0.894928589743, 0.935934814649)),
+            ("S", None, (0.949399063091, 0.454280072258, 0.361899618252)),
+            ("S", None, (0.888100381748, 0.015578753602, 0.300600936909)),
+            ("S", None, (0.361899618252, 0.234421246398, 0.949399063091)),
+            ("S", None, (0.015578753585, 0.888100381765, 0.795719927743)),
+            ("S", None, (0.234421246398, 0.361899618252, 0.454280072258)),
+            ("S", None, (0.795719927734, 0.300600936916, 0.015578753594)),
+            ("S", None, (0.454280072258, 0.949399063091, 0.234421246398)),
+            ("S", None, (0.300600936899, 0.795719927751, 0.888100381757)),
+            ("S", None, (0.877347444399, 0.634241249704, 0.188568769379)),
+            ("S", None, (0.061431230621, 0.950157463483, 0.372652555601)),
+            ("S", None, (0.188568769379, 0.299842536517, 0.877347444399)),
+            ("S", None, (0.950157463483, 0.061431230621, 0.615758750296)),
+            ("S", None, (0.299842536517, 0.188568769379, 0.634241249704)),
+            ("S", None, (0.615758750296, 0.372652555601, 0.950157463483)),
+            ("S", None, (0.634241249704, 0.877347444399, 0.299842536517)),
+            ("S", None, (0.372652555601, 0.615758750296, 0.061431230621)),
+        ],
+    )
+
+
+def written_afm_nickel_oxide() -> Structure:
+    """Rock-salt NiO, MC3D mc3d-29856, written with magnetic_ordering=afm:
+    4 atoms, the two Ni with opposite moments, a = c = 2.89 A and
+    b = 5.01 A."""
+    return _written(
+        [
+            [-1.446684388624, 2.505730863613, 0.0],
+            [-1.446684388624, 0.835243621204, 4.724851427971],
+            [1.446684388624, 2.505730863613, 0.0],
+        ],
+        [
+            ("Ni", 1.0, (0.0, 0.0, 0.0)),
+            ("Ni", -1.0, (0.0, 0.5, 0.5)),
+            ("O", 0.0, (0.5, 0.25, 0.75)),
+            ("O", 0.0, (0.5, 0.75, 0.25)),
+        ],
+    )
+
+
+def written_afm_manganese_oxide() -> Structure:
+    """Rock-salt MnO, MC3D mc3d-14218, written with magnetic_ordering=afm:
+    4 atoms, the two Mn with opposite moments, a = b = 3.07 A and
+    c = 5.31 A."""
+    return _written(
+        [
+            [1.53373905321, 2.656513965712, 0.0],
+            [-3.06747810642, 0.0, 0.0],
+            [1.53373905321, 0.885504655237, 5.009170771924],
+        ],
+        [
+            ("Mn", 1.0, (0.0, 0.0, 0.0)),
+            ("Mn", -1.0, (0.5, 0.5, 0.5)),
+            ("O", 0.0, (0.25, 0.75, 0.25)),
+            ("O", 0.0, (0.75, 0.25, 0.75)),
+        ],
+    )
+
+
+def written_afm_nickel() -> Structure:
+    """fcc Ni, MC3D mc3d-4988, written with magnetic_ordering=afm: 2 atoms
+    with opposite moments, a = c = 2.45 A and b = 4.24 A."""
+    return _written(
+        [
+            [-1.224045949109, 2.120109774656, 0.0],
+            [0.0, -1.413406516437, 3.997717329384],
+            [1.224045949109, 2.120109774656, 0.0],
+        ],
+        [("Ni", 1.0, (0.0, 0.0, 0.0)), ("Ni", -1.0, (0.5, 0.5, 0.5))],
+    )
+
+
+def written_afm_hematite() -> Structure:
+    """Corundum Fe2O3, MC3D mc3d-44692, written with magnetic_ordering=afm:
+    10 atoms, two Fe with each moment, a = c = 4.70 A and b = 5.18 A."""
+    return _written(
+        [
+            [-2.3513156913, 4.072598241965, 0.0],
+            [2.3513156913, 1.357532747322, 4.414390845306],
+            [2.3513156913, 4.072598241965, 0.0],
+        ],
+        [
+            ("Fe", 1.0, (0.345305649413, 0.035916948239, 0.309388701174)),
+            ("Fe", 1.0, (0.845305649413, 0.535916948239, 0.309388701174)),
+            ("Fe", -1.0, (0.154694350579, 0.464083051738, 0.690611298841)),
+            ("Fe", -1.0, (0.654694350579, 0.964083051738, 0.690611298841)),
+            ("O", 0.0, (0.935872550565, 0.749999999989, 0.814127449439)),
+            ("O", 0.0, (0.750000000003, 0.250000000011, 0.814127449423)),
+            ("O", 0.0, (0.564127449427, 0.749999999989, 0.500000000007)),
+            ("O", 0.0, (0.064127449414, 0.250000000011, 0.185872550582)),
+            ("O", 0.0, (0.250000000009, 0.749999999989, 0.185872550589)),
+            ("O", 0.0, (0.435872550573, 0.250000000011, 0.499999999993)),
+        ],
+    )
+
+
+def written_afm_uranium_dioxide() -> Structure:
+    """Fluorite UO2, Materials Project mp-1597, written with
+    magnetic_ordering=afm: 6 atoms, the two U with opposite moments,
+    a = c = 3.86 A and b = 6.68 A."""
+    return _written(
+        [
+            [-1.92828374, 3.339885409089, 0.0],
+            [0.0, -2.226590272726, 6.297748323074],
+            [3.85656748, 0.0, 0.0],
+        ],
+        [
+            ("U", -1.0, (0.5, 0.75, 0.25)),
+            ("U", 1.0, (0.5, 0.25, 0.75)),
+            ("O", 0.0, (0.75, 0.625, 0.875)),
+            ("O", 0.0, (0.75, 0.125, 0.375)),
+            ("O", 0.0, (0.25, 0.875, 0.625)),
+            ("O", 0.0, (0.25, 0.375, 0.125)),
+        ],
+    )
+
+
+def written_magnetic_cell(structure: Structure) -> Resolved[MagneticCell]:
+    """``structure``, a cell as goldilocks writes it (``_written``), as the
+    resolved simulated cell of a collinear run in its own basis, for
+    advisors that read the written cell: spin-polarized when its species
+    carry starting-magnetization classes, with the ordering
+    ``magnetic_ordering=afm`` applies when some class is negative, as in the
+    antiferromagnetic cells above, otherwise the input kept."""
+    spins = [getattr(site.specie, "spin", None) for site in structure]
+    spin_polarized = any(spin is not None for spin in spins)
+    if any(spin is not None and spin < 0 for spin in spins):
+        ordering = OrderingRecord(
+            requested="afm", applied="afm-1", criterion="smallest_cell"
+        )
+    else:
+        ordering = OrderingRecord(
+            requested=None, applied="fm" if spin_polarized else None
+        )
+    cell = MagneticCell(
+        structure=structure,
+        spin_polarized=spin_polarized,
+        spin_orbit_enabled=False,
+        magnetic_elements=(),
+        ordering=ordering,
+        cell_in_input_basis=((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+        tot_magnetization=None,
+    )
+    return Resolved(cell, Provenance(source="heuristic"))
+
+
+ISOTROPIC_STRAINS = (-0.03, -0.02, -0.01, -0.005, 0.005, 0.01, 0.02, 0.03)
+"""The isotropic strains ``symmetric_strains`` starts with."""
+_RANDOM_STRAIN_SIZES = (0.01, 0.02, 0.03)
+_RANDOM_STRAINS_PER_SIZE = 8
+
+
+def symmetric_strains(structure: Structure, rotations: PwRotations) -> list[np.ndarray]:
+    """Cartesian strain tensors that keep every operation in ``rotations``,
+    as a vc-relax does: isotropic ones of +-0.5, 1, 2 and 3%, and eight
+    random ones each of 1, 2 and 3% (seeded), averaged over the operations
+    so that each maps the strained lattice onto itself. A slab, written with
+    its vacuum along c and its plane in xy, is strained in its plane only,
+    as cell_dofree='2Dxy' relaxes it."""
+    lattice = structure.lattice.matrix
+    cartesian = [lattice.T @ w @ np.linalg.inv(lattice.T) for w in rotations.rotations]
+    plane = np.diag([1.0, 1.0, 0.0]) if vacuum_axes(structure) == ("c",) else np.eye(3)
+    strains = [size * plane for size in ISOTROPIC_STRAINS]
+    generator = np.random.default_rng(215)
+    for size in _RANDOM_STRAIN_SIZES:
+        for _ in range(_RANDOM_STRAINS_PER_SIZE):
+            raw = generator.uniform(-1.0, 1.0, (3, 3))
+            raw = plane @ (raw + raw.T) @ plane
+            averaged = sum(r @ raw @ r.T for r in cartesian) / len(cartesian)
+            strains.append(averaged * size / np.abs(np.linalg.eigvalsh(averaged)).max())
+    return strains
+
+
+def strained(structure: Structure, strain: np.ndarray) -> Structure:
+    """``structure`` with every lattice vector a turned into (1 + strain) a,
+    its fractional coordinates kept."""
+    return Structure(
+        structure.lattice.matrix @ (np.eye(3) + strain).T,
+        structure.species,
+        structure.frac_coords,
     )
 
 

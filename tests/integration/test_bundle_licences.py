@@ -7,8 +7,8 @@ contains ``licences/<table-id>.txt``: byte for byte the installed table's
 licence and references, or the importer's CC BY 4.0 notice for PseudoDojo),
 listed in ``goldilocks.json``'s ``files`` with role ``licence`` and named by
 ``CITATIONS.md``. A port of v1's ``test_input_data_publication.py``
-assertion, for scf, dos, band and relax, published as a directory and as an
-archive, on offline SSSP- and PseudoDojo-shaped tables.
+assertion, for scf, dos, band, relax and relax-phonon, published as a
+directory and as an archive, on offline SSSP- and PseudoDojo-shaped tables.
 """
 
 from __future__ import annotations
@@ -96,13 +96,24 @@ def _assert_ships_licence(
     assert f"\n- `{path}`\n" in files["README.md"].decode("utf-8")
 
 
-@pytest.mark.parametrize("task", ["scf_single_point", "dos", "band", "relax"])
+_OVERRIDES = {"relax-phonon": {"is_metal": "non_metal"}}
+"""The request of a task that needs one for Si: is_metal=non_metal, which puts
+the first step on fixed occupations, as a phonon task needs for a composition
+that is not all-metallic unless the user confirms a metal."""
+
+
+@pytest.mark.parametrize(
+    "task", ["scf_single_point", "dos", "band", "relax", "relax-phonon"]
+)
 def test_every_published_bundle_ships_its_table_licence(
     installed_licence, task, tmp_path
 ) -> None:
     table_id, licence = installed_licence
     document = ComputeRequestDocument(
-        structure_content=mc3d_42058_silicon().to(fmt="cif"), hpc="scarf", task=task
+        structure_content=mc3d_42058_silicon().to(fmt="cif"),
+        hpc="scarf",
+        task=task,
+        overrides=_OVERRIDES.get(task, {}),
     )
 
     summary, bundle_input = _handlers.run(document)

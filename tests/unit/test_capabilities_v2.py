@@ -26,6 +26,9 @@ from goldilocks_core.service import (
     JobOverrides,
     KPathOverrides,
     KpointsOverrides,
+    PhononDosOverrides,
+    PhOverrides,
+    Q2rOverrides,
     RelaxOverrides,
     ResourceOverrides,
     RunOverrides,
@@ -33,7 +36,17 @@ from goldilocks_core.service import (
 )
 from goldilocks_core.set_overrides import build_overrides
 
-_ALL_TASKS = ["scf_single_point", "dos", "band", "relax", "vc-relax"]
+_ALL_TASKS = [
+    "scf_single_point",
+    "dos",
+    "band",
+    "relax",
+    "vc-relax",
+    "phonon",
+    "relax-phonon",
+    "vc-relax-phonon",
+]
+_PHONON_TASKS = ["phonon", "relax-phonon", "vc-relax-phonon"]
 
 
 def _install_every_model(monkeypatch, root) -> None:
@@ -93,6 +106,9 @@ def _expected_setting_field_count() -> int:
         RelaxOverrides,
         DosOverrides,
         KPathOverrides,
+        PhOverrides,
+        Q2rOverrides,
+        PhononDosOverrides,
     ):
         hints = typing.get_type_hints(cls)
         for name, annotation in hints.items():
@@ -130,7 +146,7 @@ class TestTopLevelShape:
 
     def test_vocabulary_version_is_the_module_constant(self) -> None:
         """'2': isolation replaced assume_isolated (#161)."""
-        assert capabilities()["vocabulary_version"] == VOCABULARY_VERSION == "2"
+        assert capabilities()["vocabulary_version"] == VOCABULARY_VERSION == "3"
 
     def test_sources_is_the_closed_priority_order(self) -> None:
         assert (
@@ -244,18 +260,47 @@ class TestTopLevelShape:
                 "k_path",
             )
 
+    def test_warnings_catalogue_lists_the_phonon_notices(self) -> None:
+        """#215: the phonon tasks' notices are published under the record
+        that carries each, so a frontend can filter on them before any run
+        has emitted them; the k-mesh and force-threshold codes keep their
+        phonon prefix."""
+        by_code = {entry["code"]: entry for entry in capabilities()["warnings"]}
+
+        for code, level, category in (
+            ("phonon.relax_first", "info", "phonon"),
+            ("phonon.vc_relax_input_cell", "info", "phonon"),
+            ("phonon.slab_lo_to_needs_2d_truncation", "warning", "phonon"),
+            ("phonon.magnetic_noncollinear_experimental", "warning", "phonon"),
+            ("phonon.hubbard_experimental", "warning", "phonon"),
+            ("phonon.d3_two_body", "info", "phonon"),
+            ("phonon.loose_force_threshold", "warning", "relax"),
+            ("phonon.asr_simple_fallback", "info", "q2r"),
+            ("phonon.k_mesh_raised", "info", "k_sampling"),
+            ("phonon.k_grid_coarser_than_q", "warning", "k_sampling"),
+            ("phonon.k_grid_not_commensurate", "warning", "k_sampling"),
+            ("phonon.lanthanide_actinide_k", "info", "k_sampling"),
+            ("q_sampling.grid_and_distance_conflict", "info", "q_sampling"),
+        ):
+            assert (by_code[code]["level"], by_code[code]["category"]) == (
+                level,
+                category,
+            ), code
+
     def test_codes_and_tasks_reflect_only_what_actually_runs(self) -> None:
         """v2 epic 9 (#9, #28): ``dos`` joined ``scf_single_point`` once
         the delivery layers actually routed it, not before -- this list
         names every task a caller can request today, no more, no less.
-        ``relax``/``vc-relax`` joined the same way in v2 epic 10 (#10), and
-        ``band`` with its scf, pw.x bands and bands.x steps (#118)."""
+        ``relax``/``vc-relax`` joined the same way in v2 epic 10 (#10),
+        ``band`` with its scf, pw.x bands and bands.x steps (#118), and the
+        three phonon tasks with their first pw.x step, ph.x, q2r.x and
+        matdyn.x (#215)."""
         caps = capabilities()
         assert caps["codes"] == [
             {
                 "id": "quantum_espresso",
                 "name": "Quantum ESPRESSO",
-                "tasks": ["scf_single_point", "dos", "band", "relax", "vc-relax"],
+                "tasks": _ALL_TASKS,
             }
         ]
         assert [task["id"] for task in caps["tasks"]] == _ALL_TASKS
@@ -273,6 +318,32 @@ class TestTopLevelShape:
         assert by_id["relax"]["step_count"] == 1
         assert by_id["vc-relax"]["executables"] == ["pw.x"]
         assert by_id["vc-relax"]["step_count"] == 1
+
+    def test_the_phonon_tasks_name_their_relaxation_and_their_defaults(
+        self,
+    ) -> None:
+        """#215: each phonon task runs its first pw.x step, then ph.x, q2r.x
+        and matdyn.x, with d3hess.x for DFT-D3; its description names the
+        q-mesh protocol and, for the two relaxations, the force threshold's."""
+        by_id = {task["id"]: task for task in capabilities()["tasks"]}
+
+        assert [by_id[task]["name"] for task in _PHONON_TASKS] == [
+            "Phonon (no relaxation)",
+            "Phonon (incl. relaxation)",
+            "Phonon (incl. vc-relaxation)",
+        ]
+        for task in _PHONON_TASKS:
+            entry = by_id[task]
+            assert entry["executables"] == ["pw.x", "ph.x", "q2r.x", "matdyn.x"]
+            assert entry["step_count"] == 4
+            assert entry["codes"] == ["quantum_espresso"]
+            for term in ("d3hess.x", "q_distance 0.3", "ph protocol"):
+                assert term in entry["description"], (task, term)
+            assert ("forc_conv_thr 1e-4" in entry["description"]) is (
+                task != "phonon"
+            ), task
+        assert "relax-phonon" in by_id["phonon"]["description"]
+        assert "relax-phonon" in by_id["vc-relax-phonon"]["description"]
 
 
 class TestSettingsCompleteness:
@@ -321,6 +392,19 @@ class TestSettingsCompleteness:
         expected = "pseudopotential_tables.functional"
         assert settings["functional"]["enum_from"] == expected
         assert settings["functional"]["default"] == "PBEsol"
+
+    def test_hubbard_projectors_is_one_system_choice_for_every_task(self) -> None:
+        settings = {s["key"]: s for s in capabilities()["settings"]}
+
+        projectors = settings["hubbard_projectors"]
+        assert (projectors["type"], projectors["enum"]) == (
+            "string",
+            ["atomic", "ortho-atomic"],
+        )
+        assert projectors["default"] == "ortho-atomic"
+        assert (projectors["group"], projectors["scope"]) == ("hubbard", "system")
+        assert projectors["tasks"] == _ALL_TASKS
+        assert (projectors["steps"], projectors["programs"]) == (None, None)
 
     def test_occupations_enum_matches_the_literal_type(self) -> None:
         settings = {s["key"]: s for s in capabilities()["settings"]}
@@ -483,19 +567,90 @@ class TestSettingApplicability:
             assert settings[key]["programs"] == ["pw.x"], key
 
     def test_relaxation_settings_apply_to_the_relax_tasks_only(self) -> None:
+        """A relax-phonon or vc-relax-phonon task's first step is a relax or
+        vc-relax step, so its settings reach it (#215)."""
         settings = self._settings()
 
         for key in ("nstep", "ion_dynamics", "fix_bottom_layers", "etot_conv_thr"):
             assert settings[key]["steps"] == ["relax", "vc-relax"], key
-            assert settings[key]["tasks"] == ["relax", "vc-relax"], key
+            assert settings[key]["tasks"] == [
+                "relax",
+                "vc-relax",
+                "relax-phonon",
+                "vc-relax-phonon",
+            ], key
 
     def test_cell_settings_apply_to_vc_relax_only(self) -> None:
         settings = self._settings()
 
         for key in ("press", "cell_dofree", "press_conv_thr", "cell_factor"):
             assert settings[key]["steps"] == ["vc-relax"], key
-            assert settings[key]["tasks"] == ["vc-relax"], key
+            assert settings[key]["tasks"] == ["vc-relax", "vc-relax-phonon"], key
             assert settings[key]["programs"] == ["pw.x"], key
+
+    def test_the_phonon_steps_settings_are_published_on_their_steps(self) -> None:
+        """#215: the q-mesh and ph.x's linear-response settings on the ph
+        step, the acoustic sum rule on the q2r step and the DOS spacing on
+        the phonon_dos step, each for the three phonon tasks, read by the
+        program that runs that step and resolved in that step's record."""
+        settings = self._settings()
+
+        inverse_angstrom = "1/Angstrom"
+        for key, group, step, program, default in (
+            ("q_grid", "q_sampling", "ph", "ph.x", None),
+            ("q_distance", "q_sampling", "ph", "ph.x", 0.3),
+            ("tr2_ph", "phonon", "ph", "ph.x", 1e-18),
+            ("alpha_mix", "phonon", "ph", "ph.x", 0.4),
+            ("nmix_ph", "phonon", "ph", "ph.x", 8),
+            ("asr", "q2r", "q2r", "q2r.x", None),
+            ("dos_q_distance", "phonon_dos", "phonon_dos", "matdyn.x", 0.1),
+        ):
+            setting = settings[key]
+            assert (setting["group"], setting["scope"]) == (group, "per_step"), key
+            assert (setting["steps"], setting["programs"]) == ([step], [program])
+            assert setting["tasks"] == _PHONON_TASKS, key
+            assert setting.get("default") == default, key
+            assert setting["structure_specific"] is (key == "q_grid"), key
+        assert [settings[key]["unit"] for key in ("q_distance", "dos_q_distance")] == [
+            inverse_angstrom,
+            inverse_angstrom,
+        ]
+        for key in ("q_grid", "tr2_ph", "alpha_mix", "nmix_ph", "asr"):
+            assert settings[key]["unit"] is None, key
+        assert (settings["q_grid"]["type"], settings["q_grid"]["items"]) == (
+            "array",
+            "integer",
+        )
+        assert (settings["q_grid"]["minItems"], settings["q_grid"]["maxItems"]) == (
+            3,
+            3,
+        )
+        assert settings["nmix_ph"]["type"] == "integer"
+        assert (settings["asr"]["type"], settings["asr"]["enum"]) == (
+            "string",
+            ["crystal", "simple"],
+        )
+
+    def test_the_force_threshold_has_one_default_per_kind_of_task(self) -> None:
+        """#215: QE's 1e-3 for the relax and vc-relax tasks, 1e-4 for the
+        phonon tasks' relaxation, so no single default is published."""
+        forc_conv_thr = self._settings()["forc_conv_thr"]
+
+        assert "default" not in forc_conv_thr
+        for term in ("1e-3", "1e-4", "relax-phonon", "vc-relax-phonon"):
+            assert term in forc_conv_thr["description"], term
+
+    def test_the_walltime_and_fix_bottom_layers_texts_name_the_phonon_tasks(
+        self,
+    ) -> None:
+        """#215: a phonon job runs a timer in place of max_seconds, and the
+        phonon tasks refuse fix_bottom_layers."""
+        settings = self._settings()
+
+        walltime = settings["walltime_h"]["description"]
+        for term in ("max_seconds", "job timer", "<prefix>.EXIT", "95%"):
+            assert term in walltime, term
+        assert "phonon tasks refuse it" in settings["fix_bottom_layers"]["description"]
 
     def test_dos_x_settings_are_published_on_the_dos_step(self) -> None:
         settings = self._settings()
@@ -563,6 +718,7 @@ class TestStructureSpecific:
             "isolation",
             "fix_bottom_layers",
             "emin",
+            "q_grid",
         ):
             assert settings[key]["structure_specific"] is True, key
 
@@ -579,6 +735,11 @@ class TestStructureSpecific:
             "k_distance",
             "smearing_type",
             "delta_e",
+            "hubbard_projectors",
+            "q_distance",
+            "tr2_ph",
+            "asr",
+            "dos_q_distance",
         ):
             assert settings[key]["structure_specific"] is False, key
 
@@ -624,6 +785,12 @@ class TestResolvedIn:
             "npool",
             "press",
             "delta_e",
+            "q_distance",
+            "tr2_ph",
+            "alpha_mix",
+            "nmix_ph",
+            "asr",
+            "dos_q_distance",
         ):
             setting = settings[key]
             expected = {"record": setting["group"], "path": [key]}
@@ -654,6 +821,14 @@ class TestResolvedIn:
         }
         assert settings["k_grid"]["resolved_in"] == {
             "record": "k_sampling",
+            "path": ["mesh"],
+        }
+        assert settings["hubbard_projectors"]["resolved_in"] == {
+            "record": "hubbard",
+            "path": ["projectors"],
+        }
+        assert settings["q_grid"]["resolved_in"] == {
+            "record": "q_sampling",
             "path": ["mesh"],
         }
 

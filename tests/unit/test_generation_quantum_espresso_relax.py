@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import pytest
-from support import carbon_pair_in_a_box, graphene_monolayer
+from support import (
+    carbon_pair_in_a_box,
+    graphene_monolayer,
+    graphite,
+    written_alpha_sulfur,
+)
 
 from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.convergence import ConvergenceDecision
@@ -315,14 +322,65 @@ def test_max_seconds_comes_from_the_steps_own_settings(
     assert _line_with(content, "max_seconds") == "   max_seconds      = 13680"
 
 
-def test_missing_max_seconds_raises_same_as_scf(
+def test_a_step_without_a_max_seconds_share_writes_none(
     diamond_silicon, pseudo_metadata_factory
 ) -> None:
+    """#215: as in scf.in, a relaxation of a task that runs a job timer has
+    no share (PwSettings.max_seconds None) and relax.in carries none."""
     system = _system(diamond_silicon, pseudo_metadata_factory)
     step = _step(relax=RelaxOptions(), max_seconds=None)
 
-    with pytest.raises(GenerationError, match="max_seconds"):
-        write_qe_relax(system, step, _CTX, "relax")
+    content = write_qe_relax(system, step, _CTX, "relax")[0].files["relax.in"]
+
+    assert "max_seconds" not in content
+    assert _line_with(content, "calculation") == "   calculation      = 'relax'"
+
+
+def test_relax_in_carries_the_grid_ph_x_accepts_and_two_body_d3(
+    pseudo_metadata_factory,
+) -> None:
+    """relax-phonon's relaxation is the step ph.x reads (#215). Molecular
+    alpha-S runs DFT-D3, and at 256 Ry pw.x's own grid, 144x128x96, is one
+    ph.x refuses: relax.in writes 144x144x144, which pw.x keeps through the
+    relaxation into the save, and two-body D3, as d3hess.x's Hessian."""
+    system = dataclasses.replace(
+        _system(written_alpha_sulfur(), pseudo_metadata_factory),
+        cutoffs=CutoffsDecision(ecutwfc_ry=32.0, ecutrho_ry=256.0),
+        vdw=VdwFacts(use_vdw=True, method="d3bj"),
+    )
+    step = dataclasses.replace(
+        _step(relax=RelaxOptions(forc_conv_thr=1e-4), max_seconds=None),
+        fft_grid=(144, 144, 144),
+        dftd3_threebody=False,
+    )
+
+    content = write_qe_relax(system, step, _CTX, "relax")[0].files["relax.in"]
+
+    assert [_line_with(content, f"nr{axis}") for axis in (1, 2, 3)] == [
+        f"   nr{axis}              = 144" for axis in (1, 2, 3)
+    ]
+    assert _line_with(content, "dftd3_threebody") == "   dftd3_threebody  = .false."
+    assert _line_with(content, "vdw_corr") == "   vdw_corr         = 'grimme-d3'"
+
+
+def test_vc_relax_in_carries_two_body_d3_without_a_grid(
+    pseudo_metadata_factory,
+) -> None:
+    """A vc-relax's final scf rebuilds pw.x's own grid for the relaxed cell,
+    so vc-relax-phonon writes none, but its D3 is the two-body one (#215)."""
+    system = dataclasses.replace(
+        _system(graphite(), pseudo_metadata_factory),
+        vdw=VdwFacts(use_vdw=True, method="d3bj"),
+    )
+    step = dataclasses.replace(
+        _step(relax=VcRelaxOptions(forc_conv_thr=1e-4), max_seconds=None),
+        dftd3_threebody=False,
+    )
+
+    content = write_qe_relax(system, step, _CTX, "vc-relax")[0].files["vc-relax.in"]
+
+    assert _line_with(content, "dftd3_threebody") == "   dftd3_threebody  = .false."
+    assert "nr1" not in content
 
 
 def _silicon_slab():
@@ -479,7 +537,9 @@ def test_u_values_render_the_qe_hubbard_card(
     system = _system(
         silicon_structure,
         pseudo_metadata_factory,
-        hubbard=HubbardUDecision(u_values=(HubbardU("Si", "3p", 3.0, "human"),)),
+        hubbard=HubbardUDecision(
+            u_values=(HubbardU("Si", "3p", 3.0, "human"),), projectors="ortho-atomic"
+        ),
     )
     step = _step(relax=RelaxOptions())
 

@@ -192,6 +192,44 @@ class TestToolCalls:
             assert name in files, name
         assert "bands_k_path" in result.structured_content["records"]
 
+    @pytest.mark.parametrize(
+        ("task", "first_step"),
+        [("phonon", "scf"), ("relax-phonon", "relax"), ("vc-relax-phonon", "vc-relax")],
+    )
+    def test_explain_and_run_tools_route_each_phonon_task(
+        self, silicon_fixture_table, silicon_cif: str, task: str, first_step: str
+    ) -> None:
+        """#215: each phonon task reaches the shared handlers through the real
+        MCP transport: explain finds nothing to refuse in Si set to a
+        non-metal, which a phonon task needs on smearing without a model to
+        decide it, and run generates the first pw.x step, ph.x, q2r.x and
+        matdyn.x inputs, with the decisions laid out under the ph, q2r and
+        phonon_dos steps as explain lays them out."""
+        server = create_server()
+        document = {
+            "structure_content": silicon_cif,
+            "hpc": "scarf",
+            "task": task,
+            "overrides": {"is_metal": "non_metal"},
+        }
+
+        explained = asyncio.run(server.call_tool("explain", {"document": document}))
+        result = asyncio.run(server.call_tool("run", {"document": document}))
+
+        assert (explained.is_error, result.is_error) == (False, False)
+        assert explained.structured_content["blocking"] == []
+        files = result.structured_content["files"]
+        for name in (f"{first_step}.in", "ph.in", "q2r.in", "phonon_dos.in"):
+            assert name in files, name
+        layout = result.structured_content["layout"]
+        assert layout == explained.structured_content["layout"]
+        assert [step["name"] for step in layout["steps"]] == [
+            first_step,
+            "ph",
+            "q2r",
+            "phonon_dos",
+        ]
+
     def test_run_tool_relax_task_generates_relax_in(
         self, real_assets, silicon_cif: str
     ) -> None:
@@ -360,5 +398,5 @@ class TestPerStepOverrides:
 
         assert str(excinfo.value).endswith(
             "'press' does not apply to task 'scf_single_point'; "
-            "it applies to task vc-relax"
+            "it applies to tasks vc-relax, vc-relax-phonon"
         )

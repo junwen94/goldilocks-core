@@ -18,8 +18,9 @@ protocol for it (``StepProtocol``, ``_step_protocol.py``: the dos task's
 nscf mesh and occupations) reaches ``occupations``, ``k_sampling`` and
 ``nbnd`` as a tier of its own, below the request (#174), and can withhold
 a compensated ordering's moment from ``occupations`` (the band task's scf,
-#118). ``nbnd`` also reads the step's purpose, which words its moment
-warning.
+#118). A phonon task's first step also has ``k_sampling`` raise its mesh
+against the ph step's q-mesh, as the step's occupations require (#215).
+``nbnd`` also reads the step's purpose, which words its moment warning.
 
 **Every structural input is the simulated cell** (``system.cell``, #128):
 ``k_sampling`` and ``n_irr_k`` mesh its reciprocal lattice -- ``n_irr_k``
@@ -172,6 +173,7 @@ def _cell_sampling(
         overrides.k_sampling,
         overrides.k_sampling_llm,
         protocol=protocol.k_sampling,
+        phonon=protocol.phonon_k,
     )
     return (
         k_sampling_state,

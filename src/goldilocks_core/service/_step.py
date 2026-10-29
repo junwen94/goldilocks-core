@@ -24,7 +24,9 @@ with the occupations of the task's ``scf`` step, which runs before it.
 routed per step by ``set_overrides.build_overrides``, so each field holds
 only settings that apply to its step: ``kpoints``/``resources`` on a pw.x
 step, ``relax`` on a relax or vc-relax step, ``k_path`` on a bands step,
-``dos`` on the dos.x step.
+``dos`` on the dos.x step. ``ph``, ``q2r`` and ``phonon_dos`` are the
+settings of a phonon task's ph.x, q2r.x and matdyn.x steps (#215), which
+``_phonon_steps.py`` reads.
 A setting given without a step that lands on more than one step raises
 ``applies_to_multiple_steps``, declared here beside the bags it fills.
 """
@@ -37,6 +39,12 @@ from dataclasses import dataclass, field
 from goldilocks_core.advisors.dos import DosHumanInput, DosLlmInput
 from goldilocks_core.advisors.job_resources import JobHumanInput, JobLlmInput
 from goldilocks_core.advisors.k_path import KPathHumanInput
+from goldilocks_core.advisors.phonon import (
+    PhononDosHumanInput,
+    PhononHumanInput,
+    Q2rHumanInput,
+)
+from goldilocks_core.advisors.q_sampling import QSamplingHumanInput
 from goldilocks_core.advisors.relax import RelaxHumanInput, RelaxLlmInput
 from goldilocks_core.inputs.hpc import HpcProfile
 from goldilocks_core.resolution import FieldState, Warning
@@ -114,6 +122,32 @@ class KPathOverrides:
 
 
 @dataclass(frozen=True, slots=True)
+class PhOverrides:
+    """The ph.x step's own settings (#215): its q-point mesh
+    (``advisors/q_sampling.py``) and its linear-response settings
+    (``advisors/phonon.py``)."""
+
+    q_sampling: QSamplingHumanInput | None = None
+    phonon: PhononHumanInput | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Q2rOverrides:
+    """The q2r.x step's own setting (#215): the acoustic sum rule q2r.x and
+    matdyn.x apply (``advisors/phonon.py``)."""
+
+    q2r: Q2rHumanInput | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PhononDosOverrides:
+    """The matdyn.x step's own setting (#215): the spacing of its
+    phonon-DOS mesh (``advisors/phonon.py``)."""
+
+    phonon_dos: PhononDosHumanInput | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class StepOverrides:
     """One step's request overrides (module docstring)."""
 
@@ -122,6 +156,9 @@ class StepOverrides:
     relax: RelaxOverrides = field(default_factory=RelaxOverrides)
     dos: DosOverrides = field(default_factory=DosOverrides)
     k_path: KPathOverrides = field(default_factory=KPathOverrides)
+    ph: PhOverrides = field(default_factory=PhOverrides)
+    q2r: Q2rOverrides = field(default_factory=Q2rOverrides)
+    phonon_dos: PhononDosOverrides = field(default_factory=PhononDosOverrides)
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,7 +198,10 @@ def steps_advice(
     in ``protocols`` (by purpose; a step without one has none, #174), and
     its purpose words its band count's moment warning (#118). A ``bands``
     step gets its band path and the ``scf`` step's occupations, so an
-    ``scf`` entry must precede it (``_step_kpath.py``)."""
+    ``scf`` entry must precede it (``_step_kpath.py``). A job timer is the
+    task's: whichever step's protocol declares one
+    (``StepProtocol.job_timer``), the job runs it in place of every step's
+    ``max_seconds`` share (#215)."""
     electronic: dict[str, ElectronicStepAdvice | PathStepAdvice] = {}
     for purpose, step in steps.items():
         protocol = protocols.get(purpose, StepProtocol())
@@ -186,6 +226,14 @@ def steps_advice(
         job_human,
         job_llm,
         {purpose: step.resources.parallelisation for purpose, step in steps.items()},
+        timer=next(
+            (
+                protocol.job_timer
+                for protocol in protocols.values()
+                if protocol.job_timer is not None
+            ),
+            None,
+        ),
     )
     return {
         purpose: StepAdvice(kpoints=electronic[purpose], resources=resources[purpose])

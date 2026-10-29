@@ -14,13 +14,26 @@ PACKAGE = "goldilocks_core"
 ROOT = Path(__file__).resolve().parents[1]
 LIMITS = {
     # + advisors.k_path for the band path notices (#118)
-    "advisors.warning_catalogue": (13, 24),
-    "checks": (13, 24),  # + advisors.vdw_method, functionals for the D3(BJ) rule (#141)
+    # + advisors.q_sampling and advisors.phonon for the phonon tasks' notices (#215)
+    "advisors.warning_catalogue": (15, 24),
+    # + advisors.vdw_method, functionals for the D3(BJ) rule (#141)
+    # + advisors.hubbard_u, q_sampling and fft_grid for the phonon findings (#215)
+    # + analysis.is_metal for the phonon tasks' metallicity rule (#215)
+    # + advisors.occupations.fixed_occupations_run, so that rule offers fixed
+    #   occupations where the occupations rule gives them (#215)
+    # + advisors.magnetic_config.unpolarized_if_non_magnetic, so that it offers
+    #   is_magnetic=non_magnetic exactly where the spin rules then give none (#215)
+    "checks": (17, 31),
     "cli.core": (11, 16),  # + cli._output.command_stdout (#183)
     "server.http": (5, 12),
     "server.mcp": (5, 10),
     "service._system": (13, 23),
     "service._dos": (16, 26),
+    # + advisors.q_sampling, advisors.phonon for the phonon steps' override bags (#215)
+    "service._step": (14, 25),
+    "service._tasks": (8, 26),  # + service._phonon's five phase functions (#215)
+    # the phonon tasks' phase functions, like service._dos (#215)
+    "service._phonon": (14, 27),
 }
 DEFAULT_LIMIT = (12, 24)
 

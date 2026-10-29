@@ -6,8 +6,9 @@ heuristic (``_heuristic``).
 
 The heuristic asserts ``metal`` only for a composition made entirely of
 metallic elements by pymatgen's ``Element.is_metal`` (elements and
-intermetallics). Any non-metal element leaves it ``Unavailable``: whether a
-compound with non-metals conducts depends on its band filling, so
+intermetallics; ``all_metallic``, which the phonon tasks' metallicity rule
+in ``checks.py`` reads too). Any non-metal element leaves it ``Unavailable``:
+whether a compound with non-metals conducts depends on its band filling, so
 insulating NaCl, MgO and ZnO and metallic RuO2, ReO3, TiN, LaNiO3 and CrO2
 look alike to composition (#164). This reverses stfc/goldilocks-core#175,
 which stripped common anions and asked whether the remaining elements were
@@ -82,16 +83,27 @@ def _ml_is_metal(structure: Structure) -> MlPrediction | None:
         return None
 
 
+def all_metallic(structure: Structure) -> bool:
+    """Whether every element of ``structure`` is metallic by pymatgen's
+    ``Element.is_metal``, species split by spin read as their element: the
+    compositions the heuristic calls ``metal`` (module docstring)."""
+    return not _non_metals(structure)
+
+
+def _non_metals(structure: Structure) -> list[str]:
+    """The symbols of ``structure``'s non-metal elements, sorted."""
+    elements = sorted({e.symbol for e in structure.composition.elements})
+    return [symbol for symbol in elements if not Element(symbol).is_metal]
+
+
 def _heuristic(structure: Structure) -> FieldState[Metallicity]:
     """``metal`` when every element is metallic, otherwise ``Unavailable``
     naming the non-metal elements."""
-    elements = sorted({e.symbol for e in structure.composition.elements})
-    non_metals = [symbol for symbol in elements if not Element(symbol).is_metal]
-    if non_metals:
-        listed = ", ".join(non_metals)
-        return Unavailable(
-            reason=f"composition contains non-metal elements ({listed}); whether "
-            "such a compound conducts depends on its band filling, which "
-            "composition alone cannot settle"
-        )
-    return Resolved("metal", Provenance(source="heuristic"))
+    if all_metallic(structure):
+        return Resolved("metal", Provenance(source="heuristic"))
+    listed = ", ".join(_non_metals(structure))
+    return Unavailable(
+        reason=f"composition contains non-metal elements ({listed}); whether "
+        "such a compound conducts depends on its band filling, which "
+        "composition alone cannot settle"
+    )

@@ -172,11 +172,13 @@ print(inspection["canonical_cif"])
 
 ## Generate a multi-step task
 
-Two tasks run more than one Quantum ESPRESSO step: `dos` (an scf, a denser
-nscf pass and `dos.x`) and `band` (an scf, `pw.x` along a band path and
-`bands.x`). Each has its own five functions, named after the task
-(`advise_dos` ... `to_bundle_input_dos`, `advise_band` ...
-`to_bundle_input_band`), which advise the task's `pw.x` steps together, then
+Five tasks run more than one Quantum ESPRESSO step: `dos` (an scf, a denser
+nscf pass and `dos.x`), `band` (an scf, `pw.x` along a band path and
+`bands.x`) and the three phonon tasks (an scf, a relax or a vc-relax, then
+`ph.x`, `q2r.x` and `matdyn.x`). Each has its own five functions, named
+after the task (`advise_dos` ... `to_bundle_input_dos`, `advise_band` ...
+`to_bundle_input_band`; the phonon tasks share `advise_phonon` ...
+`to_bundle_input_phonon`), which advise the task's steps together, then
 generate one input per step. `TASK_PHASES` in `goldilocks_core.service`
 holds every task's five functions by task name, as the CLI, HTTP and MCP
 look them up.
@@ -289,6 +291,30 @@ cell, so `primitive_cells` is 4 and `bands_k_path` carries the
 points of the primitive cell's zone appear together. Upload a primitive cell
 for unfolded bands. See [the band structure path](science.md#check-the-band-structure-path)
 for slabs, wires, magnets and what the path does not cover.
+
+### Phonons
+
+`advise_phonon(silicon, task="relax-phonon", hpc=hpc, overrides=...)`
+advises a phonon task: `task` is `phonon`, `relax-phonon` or
+`vc-relax-phonon`, and the overrides come from `build_overrides(...,
+task="relax-phonon")` for the same task. `check_phonon`, `generate_phonon`,
+`render_submission_phonon` and `to_bundle_input_phonon` take the
+`PhononAdvice` it returns, as the dos functions take a `DosAdvice`, and
+`TASK_PHASES["relax-phonon"]` holds all five with the task bound.
+`generate_phonon` returns the first `pw.x` step (`scf`, `relax` or
+`vc-relax`), `d3hess` under DFT-D3, then `ph`, `q2r` and `phonon_dos`.
+
+The advice's `records()` keys the first step's records and the task's one
+`job` unprefixed, as for a single `pw.x` step, with `fft_grid`, the dense FFT
+grid ph.x accepts, and, for a relaxation, `relax`; then `q_sampling` and
+`phonon` (the ph step), `q2r` and `phonon_dos`. `PhononAdvice.first` is the
+first step's own `Advice`. Its k-mesh is raised against the q-mesh unless the
+request sets it, and a relaxation converges to `forc_conv_thr` 1e-4 Ry/Bohr
+unless the request sets that. A phonon job splits no walltime between its
+steps: `job.max_seconds_by_step` is empty, and `job.timer_seconds`, 95% of the
+walltime, is when the submission script's timer stops pw.x or ph.x cleanly.
+See [the phonon tasks](science.md#check-the-phonon-tasks) for the q-mesh, the
+refusals and how a stopped job resumes.
 
 See [Recommendations](science.md) to interpret other settings, or
 [Architecture](architecture.md) to extend the computation workflow.

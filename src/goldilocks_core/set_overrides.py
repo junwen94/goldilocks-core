@@ -26,8 +26,10 @@ P1/P5: validate identically, fail the same way, regardless of caller.
 **Routed per task** (#154). ``build_overrides(assignments, task=...)`` is
 the only interpreter of ``steps.<step>.<key>``; the steps of a task are
 ``plan.expand_task``'s purposes (``scf``; ``relax``; ``vc-relax``; ``scf``,
-``nscf``, ``dos``; ``scf``, ``bands``, ``bands_x``), and each setting
-declares the steps it applies to (``capabilities.SettingBinding.steps``):
+``nscf``, ``dos``; ``scf``, ``bands``, ``bands_x``; and ``scf``, ``relax`` or
+``vc-relax``, then ``ph``, ``q2r``, ``phonon_dos`` for the phonon tasks), and
+each setting declares the steps it applies to
+(``capabilities.SettingBinding.steps``):
 
 - analysis and system settings describe the system, and job settings the
   task's one allocation: they are set once per task, flat.
@@ -35,13 +37,16 @@ declares the steps it applies to (``capabilities.SettingBinding.steps``):
   with an ``overrides.applies_to_multiple_steps`` notice when that is more
   than one (a dos task's ``k_grid`` reaches its scf and nscf steps, a band
   task's ``nbnd`` its scf and bands steps, and its ``k_grid`` its scf step
-  only); ``steps.<step>.<key>`` lands on that step only and beats the flat
-  value there.
+  only; a phonon task's first step is its only pw.x step, so its pw.x
+  settings land there alone, and ``q_grid`` reaches its ph step);
+  ``steps.<step>.<key>`` lands on that step only and beats the flat value
+  there.
 - a setting that applies to no step of the task (``press`` on an scf), a
-  task-level setting given per step, a step the task does not have, a
-  setting given without a step that the request also sets by step for every
-  step it applies to, and a task that does not exist are refused with
-  ``InvalidSetting``: nothing a request sets is dropped.
+  task-level setting given per step, a step the task does not have
+  (``steps.scf.*`` in relax-phonon), a setting given without a step that the
+  request also sets by step for every step it applies to, and a task that
+  does not exist are refused with ``InvalidSetting``: nothing a request sets
+  is dropped.
 """
 
 from __future__ import annotations
@@ -62,6 +67,9 @@ from goldilocks_core.service import (
     JobOverrides,
     KPathOverrides,
     KpointsOverrides,
+    PhononDosOverrides,
+    PhOverrides,
+    Q2rOverrides,
     RelaxOverrides,
     ResourceOverrides,
     RunOverrides,
@@ -77,6 +85,9 @@ _STEP_CLASSES = {
     "relax": RelaxOverrides,
     "dos": DosOverrides,
     "k_path": KPathOverrides,
+    "ph": PhOverrides,
+    "q2r": Q2rOverrides,
+    "phonon_dos": PhononDosOverrides,
 }
 """``StepOverrides``' fields, by the binding branch whose settings fill them."""
 

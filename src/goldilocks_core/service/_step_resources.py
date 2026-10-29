@@ -8,12 +8,13 @@ one after another in one allocation, so ``task_resources`` makes one
 ``job_resources`` call over every step (#169): it sizes the allocation
 on pw.x's memory per process for the layout each step will run (#148)
 and gives each step its own ``max_seconds`` share of the walltime, which
-the step's ``ResourceStepAdvice`` carries for ``generate()``. Each
-step's ``parallelisation`` then reads that job's ``ntasks`` and the
-step's own k-point/spin pairs (``n_irr_k`` -- a bands step's is every
-point of its band path, #118 -- and the magnetic decision's spin
-layout) -- ``job_resources`` evaluates that same function for each
-candidate ``ntasks`` rather than reading its output (see
+the step's ``ResourceStepAdvice`` carries for ``generate()`` -- unless a
+step's protocol runs a job timer for the task instead, when no step gets
+one (#215). Each step's ``parallelisation`` then reads that job's
+``ntasks`` and the step's own k-point/spin pairs (``n_irr_k`` -- a bands
+step's is every point of its band path, #118 -- and the magnetic
+decision's spin layout) -- ``job_resources`` evaluates that same function
+for each candidate ``ntasks`` rather than reading its output (see
 ``advisors/job_resources.py``'s own module note on false circularity).
 ``JobOverrides`` (partition, nodes, ntasks, walltime, account) are
 task-level, one per request; ``ResourceOverrides`` (``npool``/``ndiag``)
@@ -47,6 +48,7 @@ from goldilocks_core.advisors.job_resources import (
     JobHumanInput,
     JobLlmInput,
     JobStep,
+    JobTimerProtocol,
     job_resources,
 )
 from goldilocks_core.advisors.parallelisation import (
@@ -90,7 +92,7 @@ class ResourceStepAdvice:
     every step of the task), the step's own ``parallelisation``, and its
     ``max_seconds`` share of the job's walltime
     (``JobDecision.max_seconds_by_step``), ``None`` while the job is not
-    resolved."""
+    resolved or when it runs a timer instead (``JobDecision.timer_seconds``)."""
 
     job: FieldState[JobDecision]
     parallelisation: FieldState[ParallelisationDecision]
@@ -110,11 +112,13 @@ def task_resources(
     job_human: JobHumanInput | None,
     job_llm: JobLlmInput | None,
     parallelisation_human: Mapping[str, ParallelisationHumanInput | None],
+    timer: JobTimerProtocol | None = None,
 ) -> dict[str, ResourceStepAdvice]:
     """Each step's resources, keyed like ``electronic`` (purpose -> the
     step's electronic advice, a mesh step's or a bands step's): one job
-    from ``job_human``/``job_llm``, and each step's npool/ndiag from
-    ``parallelisation_human[purpose]``."""
+    from ``job_human``/``job_llm``, running the task protocol's ``timer``
+    in place of the steps' ``max_seconds`` shares when one is given, and
+    each step's npool/ndiag from ``parallelisation_human[purpose]``."""
     unresolved = next(
         (
             state
@@ -148,7 +152,7 @@ def task_resources(
         )
         for purpose, step in electronic.items()
     }
-    job = job_resources(steps, hpc, job_human, job_llm)
+    job = job_resources(steps, hpc, job_human, job_llm, timer)
     return {
         purpose: _step_resources(
             job, purpose, pairs[purpose], parallelisation_human[purpose]
@@ -244,6 +248,8 @@ def _step_resources(
     n_kpoint_spin: int,
     human: ParallelisationHumanInput | None,
 ) -> ResourceStepAdvice:
+    """The step's layout and its share, none under a job timer; a job that
+    splits the walltime holds a share for every step it was sized over."""
     if not job.ok:
         return ResourceStepAdvice(
             job=job, parallelisation=Blocked(by=blocked_by(job)), max_seconds=None
@@ -251,5 +257,9 @@ def _step_resources(
     return ResourceStepAdvice(
         job=job,
         parallelisation=parallelisation(job.value.ntasks, n_kpoint_spin, human),
-        max_seconds=job.value.max_seconds_by_step[purpose],
+        max_seconds=(
+            None
+            if job.value.timer_seconds is not None
+            else job.value.max_seconds_by_step[purpose]
+        ),
     )

@@ -4,10 +4,13 @@ import dataclasses
 from typing import get_args
 
 import pytest
+from pydantic import ValidationError
 from pymatgen.core import Lattice, Structure
 from support import (
+    alpha_uranium,
     carbon_chain,
     carbon_pair_in_a_box,
+    framed_magnetic_cell,
     graphene_monolayer,
     graphene_with_c_tilted,
     graphene_with_vacuum_along_a,
@@ -16,23 +19,35 @@ from support import (
     mc3d_42058_silicon,
     molybdenum_disulfide_monolayer,
     rhombohedral_bismuth_selenide,
+    rock_salt,
     rotated_about_x,
+    rutile_titanium_dioxide,
+    uranium_nitride,
     with_vacuum_along,
+    written_bcc_iron,
     written_cell,
 )
 
 from goldilocks_core.advisors.boundary import BoundaryFacts
+from goldilocks_core.advisors.cutoffs import CutoffsDecision
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
+from goldilocks_core.advisors.fft_grid import FftGridDecision, fft_grid
+from goldilocks_core.advisors.hubbard_u import HubbardU, HubbardUDecision
 from goldilocks_core.advisors.job_resources import JobDecision
 from goldilocks_core.advisors.magnetic_config import (
     MagneticConfigFacts,
+    MagneticConfigHumanInput,
     OrderingRecord,
+    magnetic_cell,
+    magnetic_config,
 )
 from goldilocks_core.advisors.nbnd import NbndDecision
-from goldilocks_core.advisors.occupations import OccupationsDecision
+from goldilocks_core.advisors.occupations import Occupations, OccupationsDecision
 from goldilocks_core.advisors.parallelisation import ParallelisationDecision
+from goldilocks_core.advisors.q_sampling import QSamplingHumanInput, q_sampling
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
-from goldilocks_core.advisors.vdw_method import VdwFacts
+from goldilocks_core.advisors.vdw_method import VdwFacts, VdwMethodHumanInput
+from goldilocks_core.assets.pseudopotentials.registry import load_tables
 from goldilocks_core.capabilities import bindings, capabilities
 from goldilocks_core.checks import (
     FINDING_CATALOGUE,
@@ -40,6 +55,7 @@ from goldilocks_core.checks import (
     Finding,
     check_all,
     collect_blocked,
+    with_phonon_findings,
 )
 from goldilocks_core.pw_symmetry import pw_frame
 from goldilocks_core.resolution import Blocked, Provenance, Resolved, Unavailable
@@ -1573,6 +1589,1285 @@ def test_the_k_point_limit_admits_40000_and_reads_the_bands_step_only() -> None:
     assert blocked.blocking == _blocked("job undecided")
 
 
+def _hubbard(projectors: str | None) -> Resolved[HubbardUDecision]:
+    """A Hubbard U on Ni written with ``projectors``, or no U for ``None``,
+    as ``advisors.hubbard_u`` decides them: no projectors without a U."""
+    u_values = () if projectors is None else (HubbardU("Ni", "3d", 6.2, "table"),)
+    return Resolved(
+        HubbardUDecision(u_values=u_values, projectors=projectors),
+        Provenance(source="heuristic"),
+    )
+
+
+_PHONON_PURPOSES = ("scf", "relax", "vc-relax")
+"""The first steps of the phonon, relax-phonon and vc-relax-phonon tasks."""
+
+
+@pytest.mark.parametrize("purpose", _PHONON_PURPOSES)
+def test_a_hubbard_u_on_ortho_atomic_projectors_is_refused_in_a_phonon_task(
+    purpose: str,
+) -> None:
+    """ph.x runs DFPT+U only with atomic projectors (QE 7.3
+    PHonon/PH/phq_readin.f90:766-767), whichever pw.x step it reads."""
+    report = with_phonon_findings(
+        CheckReport(), purpose=purpose, hubbard=_hubbard("ortho-atomic")
+    )
+
+    assert report.blocking == (
+        Finding(
+            code="phonon.hubbard_projectors_unsupported",
+            message=(
+                "The Hubbard U on Ni is written with ortho-atomic projectors, but "
+                "ph.x computes phonons with a Hubbard U only for atomic ones and "
+                "stops with 'The phonon code for this Hubbard projectors type is not "
+                "implemented'. Set hubbard_projectors=atomic, or "
+                "hubbard_needs_correlation=false for no +U. A U value is tied to the "
+                "projectors it was derived with, so the same U with atomic "
+                "projectors is a different correction."
+            ),
+            fields=("hubbard_projectors", "hubbard_needs_correlation"),
+            remedies=(
+                {"hubbard_projectors": "atomic"},
+                {"hubbard_needs_correlation": False},
+            ),
+        ),
+    )
+
+
+def test_atomic_projectors_or_no_hubbard_u_pass_in_a_phonon_task() -> None:
+    for hubbard in (_hubbard("atomic"), _hubbard(None)):
+        assert with_phonon_findings(CheckReport(), purpose="scf", hubbard=hubbard).ok
+
+
+@pytest.mark.parametrize(
+    "spin_polarized", [True, False], ids=["with-moments", "without-moments"]
+)
+def test_spin_orbit_coupling_with_a_hubbard_u_is_refused_in_a_phonon_task(
+    spin_polarized: bool,
+) -> None:
+    """ph.x's DFPT+U arrays and projections hold one spinor component (QE 7.3
+    PHonon/PH/allocate_phq.f90:166-167, dnsq_scf.f90:130). QE 7.5 stops on a
+    magnetic noncollinear run (phq_readin.f90:777-778), but not on one
+    without moments, as is_magnetic=non_magnetic with spin_orbit_coupling
+    gives, which it would get wrong."""
+    report = with_phonon_findings(
+        CheckReport(),
+        purpose="scf",
+        hubbard=_hubbard("atomic"),
+        magnetic=_magnetic(spin_polarized, spin_orbit_enabled=True),
+    )
+
+    assert report.blocking == (
+        Finding(
+            code="phonon.noncollinear_hubbard_unsupported",
+            message=(
+                "The phonon tasks cannot combine spin_orbit_coupling with the "
+                "Hubbard U on Ni: ph.x computes phonons with a Hubbard U for "
+                "collinear spins only, so a noncollinear run would stop or give "
+                "wrong phonons. Set spin_orbit_coupling=false, or "
+                "hubbard_needs_correlation=false for no +U."
+            ),
+            fields=("spin_orbit_coupling", "hubbard_needs_correlation"),
+            remedies=(
+                {"spin_orbit_coupling": False},
+                {"hubbard_needs_correlation": False},
+            ),
+        ),
+    )
+
+
+def test_a_collinear_hubbard_u_or_spin_orbit_without_one_passes() -> None:
+    assert with_phonon_findings(
+        CheckReport(),
+        purpose="scf",
+        hubbard=_hubbard("atomic"),
+        magnetic=_magnetic(True),
+    ).ok
+    assert with_phonon_findings(
+        CheckReport(),
+        purpose="scf",
+        hubbard=_hubbard(None),
+        magnetic=_magnetic(True, spin_orbit_enabled=True),
+    ).ok
+
+
+def test_spin_orbit_with_an_ortho_atomic_hubbard_u_names_both_causes() -> None:
+    """Atomic projectors alone leave the spin-orbit refusal; no U clears both."""
+    report = with_phonon_findings(
+        CheckReport(),
+        purpose="scf",
+        hubbard=_hubbard("ortho-atomic"),
+        magnetic=_magnetic(False, spin_orbit_enabled=True),
+    )
+
+    assert [finding.code for finding in report.blocking] == [
+        "phonon.hubbard_projectors_unsupported",
+        "phonon.noncollinear_hubbard_unsupported",
+    ]
+
+
+_PHONON_ISOLATED = Finding(
+    code="phonon.isolated_boundary_unsupported",
+    message=(
+        "isolation=isolated writes Martyna-Tuckerman, which ph.x does not "
+        "implement: Quantum ESPRESSO 7.3's ph.x drops it, treating the molecule or "
+        "cluster in the box as a periodic array of copies, and 7.5's applies it "
+        "only in part. A molecule's vibrations need a Gamma-only calculation, ph.x "
+        "at Gamma and then dynmat.x with asr='zero-dim', which the phonon tasks do "
+        "not do."
+    ),
+    fields=("isolation",),
+)
+
+
+@pytest.mark.parametrize("purpose", _PHONON_PURPOSES)
+def test_a_molecule_in_a_box_is_refused_in_a_phonon_task(purpose: str) -> None:
+    """ph.x implements no nonperiodic boundary (QE 7.3 PHonon/PH/phonon.f90:
+    36-41); 7.3 restores only the 2D flag from the save
+    (PW/src/pw_restart_new.f90:1341-1345). No setting gives a molecule's
+    vibrations, so there is no remedy."""
+    report = with_phonon_findings(
+        CheckReport(),
+        purpose=purpose,
+        boundary=_boundary("isolated"),
+        magnetic=written_cell(carbon_pair_in_a_box()),
+    )
+
+    assert report.blocking == (_PHONON_ISOLATED,)
+
+
+def test_isolated_on_a_periodic_cell_is_left_to_the_vacuum_rule() -> None:
+    """There isolation=periodic is the remedy, which the vacuum rule offers."""
+    boundary = _boundary("isolated", source="human")
+    magnetic = written_cell(mc3d_42058_silicon())
+
+    report = with_phonon_findings(
+        check_all(boundary=boundary, magnetic=magnetic),
+        purpose="scf",
+        boundary=boundary,
+        magnetic=magnetic,
+    )
+
+    assert [finding.code for finding in report.blocking] == [
+        "boundary.isolated_needs_vacuum"
+    ]
+
+
+def test_an_isolated_vc_relax_phonon_gives_one_finding() -> None:
+    """The vc-relax rule's advice, the relax task, does not help a phonon
+    run; the phonon finding replaces it."""
+    boundary = _boundary("isolated")
+    magnetic = written_cell(carbon_pair_in_a_box())
+    first = check_all(boundary=boundary, magnetic=magnetic, purpose="vc-relax")
+
+    report = with_phonon_findings(
+        first, purpose="vc-relax", boundary=boundary, magnetic=magnetic
+    )
+
+    assert [finding.code for finding in first.blocking] == [
+        "boundary.isolated_forbids_vc_relax"
+    ]
+    assert report.blocking == (_PHONON_ISOLATED,)
+
+
+def _occupations(occupations: str, tot_magnetization: float | None):
+    """``occupations`` pinning ``tot_magnetization``, as requested."""
+    smearing = occupations == "smearing"
+    return Resolved(
+        OccupationsDecision(
+            occupations=occupations,
+            smearing_type="cold" if smearing else None,
+            degauss=0.01 if smearing else None,
+            tot_magnetization=tot_magnetization,
+        ),
+        Provenance(source="human"),
+    )
+
+
+_TWO_FERMI_ENERGIES = (
+    "gives the scf two Fermi energies, which ph.x refuses on smearing or "
+    "tetrahedra: it stops with 'The phonon code with two fermi energies is not "
+    "available for metals'. Unset tot_magnetization"
+)
+
+
+@pytest.mark.parametrize("occupations", ["smearing", "tetrahedra_opt"])
+def test_a_pinned_moment_on_smearing_or_tetrahedra_is_refused(occupations: str) -> None:
+    """Any tot_magnetization gives the scf two Fermi energies (QE 7.3
+    PW/src/input.f90:758), which ph.x refuses with smearing or tetrahedra
+    (PHonon/PH/phq_readin.f90:856-858). An integer moment of the electron
+    count's parity runs on fixed occupations instead."""
+    report = with_phonon_findings(
+        CheckReport(),
+        purpose="relax",
+        occupations=_occupations(occupations, 2.0),
+        magnetic=_magnetic(True),
+        electron_count=_electron_count(16.0),
+    )
+
+    assert report.blocking == (
+        Finding(
+            code="phonon.pinned_moment_with_smearing",
+            message=(
+                f"tot_magnetization=2 with occupations={occupations} "
+                f"{_TWO_FERMI_ENERGIES}, or set occupations=fixed, which this "
+                "integer moment of the electron count's parity allows."
+            ),
+            fields=("occupations", "tot_magnetization"),
+            remedies=({"tot_magnetization": None}, {"occupations": "fixed"}),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("tot_magnetization", "electron_count"),
+    [(2.0, _electron_count(15.0)), (2.5, _electron_count(16.0)), (2.0, None)],
+    ids=["odd-count", "non-integer-moment", "unknown-count"],
+)
+def test_fixed_occupations_are_offered_only_for_a_moment_they_run_with(
+    tot_magnetization: float, electron_count
+) -> None:
+    """Fixed occupations need an integer moment of the electron count's
+    parity (rule 2 of the gate), so the remedy is offered only for one."""
+    report = with_phonon_findings(
+        CheckReport(),
+        purpose="scf",
+        occupations=_occupations("smearing", tot_magnetization),
+        magnetic=_magnetic(True),
+        electron_count=electron_count,
+    )
+
+    (finding,) = report.blocking
+    assert finding.remedies == ({"tot_magnetization": None},)
+    assert finding.message == (
+        f"tot_magnetization={tot_magnetization:g} with occupations=smearing "
+        f"{_TWO_FERMI_ENERGIES}."
+    )
+
+
+def test_a_moment_on_fixed_occupations_or_smearing_without_one_passes() -> None:
+    """A noncollinear run takes no tot_magnetization (QE 7.3
+    PW/src/input.f90:761-762), so its moment is never written."""
+    for occupations, magnetic in (
+        (_occupations("fixed", 2.0), _magnetic(True)),
+        (_occupations("smearing", None), _magnetic(True)),
+        (_occupations("smearing", 2.0), _magnetic(True, spin_orbit_enabled=True)),
+    ):
+        report = with_phonon_findings(
+            CheckReport(),
+            purpose="scf",
+            occupations=occupations,
+            magnetic=magnetic,
+            electron_count=_electron_count(16.0),
+        )
+
+        assert report.ok, occupations
+
+
+def _alpha_uranium_q_grid(q_grid: tuple[int, int, int]):
+    """The q record of a request ``q_grid`` on alpha-U's written cell."""
+    return q_sampling(
+        framed_magnetic_cell(alpha_uranium()), QSamplingHumanInput(q_grid=q_grid)
+    )
+
+
+@pytest.mark.parametrize(
+    "q_grid", [(9, 8, 5), (4, 8, 4)], ids=["not-invariant", "unequal-mixed-axes"]
+)
+def test_a_q_grid_that_breaks_symmetry_is_refused(q_grid: tuple[int, int, int]) -> None:
+    """The q record's refusal (advisors/q_sampling.py), worded with its
+    cause: alpha-U's mirror maps 9x8x5 off itself, and 4x8x4, which ph.x
+    accepts, would give a raised k-mesh that it maps off itself."""
+    q = _alpha_uranium_q_grid(q_grid)
+
+    report = with_phonon_findings(CheckReport(), purpose="scf", q_sampling=q)
+
+    assert report.blocking == (
+        Finding(
+            code="phonon.q_grid_breaks_symmetry",
+            message=f"{q.value.refusal.cause}. Unset q_grid for the default q-mesh.",
+            fields=("q_grid",),
+            remedies=({"q_grid": None},),
+        ),
+    )
+
+
+def test_a_q_mesh_beyond_q2r_x_is_refused() -> None:
+    """36x36x36 on alpha-U has 6517 irreducible q-points, and q2r.x reads at
+    most 1024 dynamical matrices (QE 7.3 PHonon/PH/do_q2r.f90:138-139)."""
+    q = _alpha_uranium_q_grid((36, 36, 36))
+
+    report = with_phonon_findings(CheckReport(), purpose="scf", q_sampling=q)
+
+    assert report.blocking == (
+        Finding(
+            code="phonon.too_many_q_points",
+            message=(
+                f"The phonon run would stop in q2r.x: {q.value.refusal.cause}. Unset "
+                "q_grid and q_distance for the default q-mesh, or set a coarser one."
+            ),
+            fields=("q_grid", "q_distance"),
+            remedies=({"q_grid": None, "q_distance": None},),
+        ),
+    )
+    assert "6517 irreducible q-points" in report.blocking[0].message
+
+
+def test_an_accepted_q_mesh_passes() -> None:
+    q = _alpha_uranium_q_grid((8, 8, 4))
+
+    assert with_phonon_findings(CheckReport(), purpose="scf", q_sampling=q).ok
+
+
+def _alpha_uranium_fft_grid(first_step: str):
+    """alpha-U's FFT-grid record at 480 Ry: pw.x's 40x45x64 fails ph.x's
+    test, and the mirror that mixes b with a, which no operation exchanges,
+    makes the cell fragile (tests/unit/test_advisors_fft_grid.py)."""
+    cutoffs = Resolved(
+        CutoffsDecision(ecutwfc_ry=60.0, ecutrho_ry=480.0), Provenance(source="human")
+    )
+    return fft_grid(framed_magnetic_cell(alpha_uranium()), cutoffs, first_step)
+
+
+_FINAL_SCF = (
+    "The vc-relax's final scf rebuilds that grid for the relaxed cell, so no grid "
+    "written for ph.x reaches it. Use relax-phonon, which relaxes the atoms in the "
+    "written cell and keeps a grid written for ph.x, or run the vc-relax task and "
+    "then the phonon task on the relaxed structure."
+)
+
+
+def test_a_fragile_cell_is_refused_in_vc_relax_phonon() -> None:
+    """A vc-relax's final scf rebuilds pw.x's own grid for the relaxed cell
+    and drops nr1-nr3 (QE 7.3 PW/src/run_pwscf.f90:404-405), so no override
+    gives ph.x a grid it accepts (PHonon/PH/phq_setup.f90:211-212)."""
+    report = with_phonon_findings(
+        CheckReport(), purpose="vc-relax", fft_grid=_alpha_uranium_fft_grid("vc-relax")
+    )
+
+    assert report.blocking == (
+        Finding(
+            code="phonon.vc_relax_fft_grid_unsupported",
+            message=(
+                "vc-relax-phonon cannot run on this cell: pw.x's own FFT grid for "
+                "it, 40x45x64, is not mapped onto itself by the symmetry operations "
+                "pw.x keeps, which mix lattice vectors a and b, so ph.x would stop "
+                f"with 'FFT grid incompatible with symmetry'. {_FINAL_SCF}"
+            ),
+            fields=("cell_dofree",),
+        ),
+    )
+
+
+def test_a_fragile_cell_whose_grid_ph_x_accepts_is_refused_too() -> None:
+    """pw.x's own grid can pass on the input cell, as MnPS3's does at some
+    strains, and fail on the relaxed one: the refusal tests the structure."""
+    decision = FftGridDecision(
+        pw_grid=(75, 75, 288),
+        compatible=True,
+        written=None,
+        fragile_axes=(("b", "a"),),
+        fragile=True,
+    )
+
+    report = with_phonon_findings(
+        CheckReport(),
+        purpose="vc-relax",
+        fft_grid=Resolved(decision, Provenance(source="heuristic")),
+    )
+
+    assert _only(report).message == (
+        "vc-relax-phonon cannot run on this cell: the symmetry operations pw.x "
+        "keeps mix lattice vectors a and b, so a strained cell can give pw.x's own "
+        "FFT grid counts on which ph.x stops with 'FFT grid incompatible with "
+        f"symmetry'. {_FINAL_SCF}"
+    )
+
+
+@pytest.mark.parametrize("purpose", ["scf", "relax"])
+def test_a_fragile_cell_passes_where_the_written_grid_reaches_ph_x(
+    purpose: str,
+) -> None:
+    """The scf and the fixed-cell relaxation write nr1-nr3, and pw.x keeps
+    them into the save ph.x reads."""
+    fft = _alpha_uranium_fft_grid(purpose)
+
+    assert fft.value.written == (45, 45, 64)
+    assert with_phonon_findings(CheckReport(), purpose=purpose, fft_grid=fft).ok
+
+
+def test_a_cell_that_is_not_fragile_passes_in_vc_relax_phonon() -> None:
+    cutoffs = Resolved(
+        CutoffsDecision(ecutwfc_ry=30.0, ecutrho_ry=240.0), Provenance(source="human")
+    )
+    fft = fft_grid(framed_magnetic_cell(mc3d_42058_silicon()), cutoffs, "vc-relax")
+
+    assert with_phonon_findings(CheckReport(), purpose="vc-relax", fft_grid=fft).ok
+
+
+_PHONON_FIX_BOTTOM_LAYERS = Finding(
+    code="phonon.fix_bottom_layers_unsupported",
+    message=(
+        "fix_bottom_layers=1 pins atoms in the relaxation, so they keep leftover "
+        "forces, while ph.x computes the phonons as second derivatives at an "
+        "equilibrium, where every force is zero. Unset fix_bottom_layers."
+    ),
+    fields=("fix_bottom_layers",),
+    remedies=({"fix_bottom_layers": None},),
+)
+
+
+@pytest.mark.parametrize(
+    "relax",
+    [
+        Resolved(RelaxOptions(fix_bottom_layers=1), Provenance(source="human")),
+        Resolved(VcRelaxOptions(fix_bottom_layers=1), Provenance(source="human")),
+    ],
+    ids=["relax-phonon", "vc-relax-phonon"],
+)
+def test_fix_bottom_layers_is_refused_in_the_phonon_relaxations(relax) -> None:
+    """DFPT takes second derivatives at an equilibrium, which pinned atoms
+    are not at; the slab passes the slab rules."""
+    purpose = "vc-relax" if isinstance(relax.value, VcRelaxOptions) else "relax"
+    magnetic = written_cell(molybdenum_disulfide_monolayer())
+
+    report = with_phonon_findings(
+        check_all(relax=relax, magnetic=magnetic, purpose=purpose),
+        purpose=purpose,
+        relax=relax,
+        magnetic=magnetic,
+    )
+
+    assert report.blocking == (_PHONON_FIX_BOTTOM_LAYERS,)
+
+
+@pytest.mark.parametrize(
+    ("count", "structure", "replaced"),
+    [
+        (1, graphite, "relax.fix_bottom_layers_needs_slab"),
+        (4, molybdenum_disulfide_monolayer, "relax.fix_bottom_layers_exceeds_layers"),
+    ],
+    ids=["no-slab", "too-many-layers"],
+)
+def test_fix_bottom_layers_the_slab_rules_refuse_gives_one_finding(
+    count: int, structure, replaced: str
+) -> None:
+    """The slab rules' remedy, unsetting fix_bottom_layers, is the phonon
+    finding's, which replaces them."""
+    relax = _relax_with_fix_bottom_layers(count)
+    magnetic = written_cell(structure())
+    first = check_all(relax=relax, magnetic=magnetic, purpose="relax")
+
+    report = with_phonon_findings(
+        first, purpose="relax", relax=relax, magnetic=magnetic
+    )
+
+    assert [finding.code for finding in first.blocking] == [replaced]
+    assert [finding.code for finding in report.blocking] == [
+        "phonon.fix_bottom_layers_unsupported"
+    ]
+
+
+def test_a_relaxation_without_fix_bottom_layers_passes() -> None:
+    assert with_phonon_findings(
+        CheckReport(), purpose="relax", relax=_relax_with_fix_bottom_layers(None)
+    ).ok
+
+
+def _first_step_occupations(
+    occupations: str,
+    source: str = "heuristic",
+    tot_magnetization: float | None = None,
+):
+    """``occupations``, chosen by the is_metal rule (``heuristic``) or set by
+    the request (``human``), with the request's moment, if any."""
+    smearing = occupations == "smearing"
+    return Resolved(
+        OccupationsDecision(
+            occupations=occupations,
+            smearing_type="cold" if smearing else None,
+            degauss=0.01 if smearing else None,
+            tot_magnetization=tot_magnetization,
+        ),
+        Provenance.from_field_sources({"occupations": source}),
+    )
+
+
+def _metallicity(value: str | None, source: str = "ml"):
+    """The is_metal fact, ``value`` from ``source``, or for ``None`` the
+    heuristic's answer to a compound with a non-metal element."""
+    if value is None:
+        return Unavailable(reason="composition contains non-metal elements (O)")
+    return Resolved(value, Provenance(source=source))
+
+
+def _spin(
+    structure: Structure,
+    magnetism: str = "magnetic",
+    *,
+    hubbard: Resolved[HubbardUDecision] | None = None,
+    **settings: object,
+):
+    """``structure``'s magnetic decision as the service makes it
+    (``magnetic_cell``, then ``magnetic_config``): ``magnetism`` is the
+    is_magnetic fact, ``hubbard`` the Hubbard decision and ``settings`` the
+    request's magnetic overrides."""
+    cell = magnetic_cell(
+        structure,
+        Resolved(magnetism, Provenance(source="heuristic")),
+        MagneticConfigHumanInput(**settings),
+        hubbard=hubbard,
+    )
+    return magnetic_config(cell)
+
+
+def _metallicity_finding(report: CheckReport) -> Finding:
+    """``report``'s metallicity finding, after checking that it names only
+    catalogued fields and remedies and that each remedy changes only its
+    fields (module docstring of checks.py)."""
+    (finding,) = (
+        finding
+        for finding in report.blocking
+        if finding.code == "phonon.metallicity_unconfirmed"
+    )
+    (catalogued,) = (entry for entry in FINDING_CATALOGUE if entry.code == finding.code)
+    assert [field for field in catalogued.fields if field in finding.fields] == list(
+        finding.fields
+    )
+    for remedy in finding.remedies:
+        assert remedy in catalogued.remedies
+        assert set(remedy) <= set(finding.fields)
+    return finding
+
+
+_RUTILE = written_cell(rutile_titanium_dioxide())
+_RUTILE_ELECTRONS = _electron_count(48.0)
+_MOS2_MONOLAYER = _spin(molybdenum_disulfide_monolayer())
+_MOS2_ELECTRONS = _electron_count(26.0)
+_TITANIUM_NITRIDE = written_cell(rock_salt("Ti", "N", 4.24))
+_TITANIUM_NITRIDE_ELECTRONS = _electron_count(17.0)
+_PH_X_ON_SMEARING = (
+    "ph.x treats a run on smearing or tetrahedra as a metal: it computes the "
+    "dielectric constant and the Born effective charges, which give a polar "
+    "insulator its LO-TO splitting, only with fixed occupations, and at q = 0 it "
+    "shifts the Fermi energy by the induced charge divided by the density of "
+    "states at the Fermi energy, which with smearing is nearly zero when the Fermi "
+    "energy lies in a gap, so an insulator's response can diverge at Gamma."
+)
+_CLASSIFIER_THRESHOLD = (
+    "The metallicity classifier is tuned to miss few metals, which k-point sampling "
+    "needs, so it calls many insulators metals, and composition alone cannot tell "
+    "them apart."
+)
+_NO_MOMENT = (
+    "fixed occupations on a collinear spin-polarized run need an integer "
+    "tot_magnetization of the electron count's parity, and this run has none"
+)
+_ODD_COUNT = (
+    "without spin polarization fixed occupations cannot fill its odd electron "
+    "count, which leaves a band half filled, as in a metal"
+)
+_METAL = {"is_metal": "metal"}
+
+
+def _opening(occupations: str = "smearing") -> str:
+    return (
+        "The phonon tasks need this structure on fixed occupations, or confirmed as "
+        f"a metal: it runs on occupations={occupations}, and its composition is not "
+        f"all-metallic, so it may be an insulator. {_PH_X_ON_SMEARING}"
+    )
+
+
+def _keeps(occupations: str = "smearing") -> str:
+    return f"; for a metal set is_metal=metal, which keeps occupations={occupations}."
+
+
+def _magnetic_insulator(setting: str = "is_metal=non_metal") -> str:
+    return (
+        f"For a magnetic insulator set {setting} with tot_magnetization, its "
+        "integer moment in Bohr magnetons per cell"
+    )
+
+
+def _odd_insulator(setting: str = "is_metal=non_metal") -> str:
+    return (
+        f"For a magnetic insulator set {setting} with spin_polarized=true and, on "
+        "a collinear run, its integer moment as tot_magnetization, odd like the "
+        "electron count"
+    )
+
+
+def _held(obstacle: str) -> dict[str, str]:
+    """Why each is_metal fact leaves a run that ``obstacle`` keeps off fixed
+    occupations on smearing: undecided, classified a non-metal or set to one
+    by the user."""
+    return {
+        "undecided": (
+            f"{_CLASSIFIER_THRESHOLD} Setting is_metal=non_metal alone would keep "
+            f"occupations=smearing: {obstacle}."
+        ),
+        "classified-non-metal": (
+            "It is classified as a non-metal, but it stays on occupations=smearing: "
+            f"{obstacle}."
+        ),
+        "user-non-metal": (
+            f"With is_metal=non_metal it stays on occupations=smearing: {obstacle}."
+        ),
+    }
+
+
+_FACTS = {
+    "undecided": _metallicity(None),
+    "classified-non-metal": _metallicity("non_metal"),
+    "user-non-metal": _metallicity("non_metal", "human"),
+}
+"""An is_metal fact that is not the user's metal, by the ids of ``_held``."""
+
+
+@pytest.mark.parametrize("purpose", _PHONON_PURPOSES)
+@pytest.mark.parametrize(
+    "is_metal",
+    [_metallicity(None), _metallicity("metal"), _metallicity("metal", "llm")],
+    ids=["undecided", "classified-metal", "llm-metal"],
+)
+def test_a_composition_that_is_not_all_metallic_on_smearing_needs_an_answer(
+    purpose: str, is_metal
+) -> None:
+    """Rutile TiO2 on smearing, which the is_metal rule gives a metal and an
+    undecided structure: ph.x treats the run as a metal. It computes the
+    dielectric constant and the Born effective charges only with fixed
+    occupations (QE 7.3 PHonon/PH/prepare_q.f90:141-160), and at q = 0 it
+    shifts the Fermi energy by the induced charge over the density of states
+    at the Fermi energy (PHonon/PH/solve_linter.f90:228, :430-437;
+    LR_Modules/efermi_shift.f90:98-99), nearly zero in an insulator's gap. The
+    classifier calls TiO2 a metal, so no answer but the user's is taken, and
+    with its even electron count is_metal=non_metal runs it on fixed
+    occupations: the remedies are the two answers."""
+    report = with_phonon_findings(
+        CheckReport(),
+        purpose=purpose,
+        occupations=_first_step_occupations("smearing"),
+        is_metal=is_metal,
+        electron_count=_RUTILE_ELECTRONS,
+        magnetic=_RUTILE,
+    )
+
+    assert report.blocking == (
+        Finding(
+            code="phonon.metallicity_unconfirmed",
+            message=(
+                f"{_opening()} {_CLASSIFIER_THRESHOLD} For an insulator set "
+                f"is_metal=non_metal, which runs it on fixed occupations{_keeps()}"
+            ),
+            fields=("is_metal",),
+            remedies=({"is_metal": "non_metal"}, _METAL),
+        ),
+    )
+    _metallicity_finding(report)
+
+
+@pytest.mark.parametrize(
+    ("spin", "electrons", "moment"),
+    [
+        (
+            lambda: _spin(rock_salt("Ni", "O", 4.17), magnetic_ordering="afm"),
+            48.0,
+            None,
+        ),
+        (
+            lambda: _spin(molybdenum_disulfide_monolayer(), tot_magnetization=2),
+            26.0,
+            2.0,
+        ),
+    ],
+    ids=["compensated", "requested-moment"],
+)
+def test_a_collinear_run_with_a_moment_fixed_occupations_take_needs_is_metal_only(
+    spin, electrons: float, moment: float | None
+) -> None:
+    """NiO on its antiferromagnetic ordering, the 4-atom AFM-II cell, which
+    is compensated by symmetry, takes the 0 of fixed occupations with its even
+    electron count, and a MoS2 monolayer the requested 2 Bohr magnetons of its
+    count's parity, which on smearing is refused on its own: is_metal=non_metal
+    puts either on fixed occupations, so the message names no moment."""
+    magnetic = spin()
+    report = with_phonon_findings(
+        CheckReport(),
+        purpose="scf",
+        occupations=_first_step_occupations("smearing", tot_magnetization=moment),
+        is_metal=_metallicity("metal"),
+        electron_count=_electron_count(electrons),
+        magnetic=magnetic,
+    )
+
+    finding = _metallicity_finding(report)
+    assert magnetic.value.spin_mode == "collinear"
+    assert finding.remedies == ({"is_metal": "non_metal"}, _METAL)
+    assert finding.message == (
+        f"{_opening()} {_CLASSIFIER_THRESHOLD} For an insulator set "
+        f"is_metal=non_metal, which runs it on fixed occupations{_keeps()}"
+    )
+
+
+_NICKEL_OXIDE = _spin(rock_salt("Ni", "O", 4.17))
+
+
+@pytest.mark.parametrize("fact", list(_FACTS))
+@pytest.mark.parametrize(
+    ("magnetic", "electrons", "hubbard"),
+    [
+        (_MOS2_MONOLAYER, _MOS2_ELECTRONS, None),
+        (_NICKEL_OXIDE, _electron_count(24.0), _hubbard("atomic")),
+    ],
+    ids=["monolayer", "nickel-oxide-even-shell"],
+)
+def test_a_collinear_run_without_a_moment_needs_one_or_no_spin_polarization(
+    magnetic, electrons, hubbard, fact: str
+) -> None:
+    """A MoS2 monolayer and ferromagnetic NiO, which the is_magnetic
+    heuristic spin-polarizes (Mo4+ is d2, Ni2+ d8): a collinear
+    spin-polarized run takes fixed occupations only with an integer
+    tot_magnetization of the electron count's parity (QE 7.3
+    PW/src/input.f90:764-781), so is_metal=non_metal, the user's or the
+    classifier's, keeps the smearing, on which ph.x diverged at Gamma for
+    ZnO. The message names the moment, which only the user can give, and
+    offers is_magnetic=non_magnetic for a material without moments: its spin
+    polarization follows that fact, NiO's U acts on an even d count, which
+    leaves it so, and the 26 and 24 electrons fill whole bands without spin
+    polarization."""
+    report = with_phonon_findings(
+        CheckReport(),
+        purpose="relax",
+        occupations=_first_step_occupations("smearing"),
+        is_metal=_FACTS[fact],
+        electron_count=electrons,
+        magnetic=magnetic,
+        hubbard=hubbard,
+    )
+
+    assert report.blocking == (
+        Finding(
+            code="phonon.metallicity_unconfirmed",
+            message=(
+                f"{_opening()} {_held(_NO_MOMENT)[fact]} {_magnetic_insulator()}; "
+                "for one without magnetic moments set is_metal=non_metal and "
+                f"is_magnetic=non_magnetic{_keeps()}"
+            ),
+            fields=("is_metal", "is_magnetic", "tot_magnetization"),
+            remedies=(
+                {"is_metal": "non_metal", "is_magnetic": "non_magnetic"},
+                _METAL,
+            ),
+        ),
+    )
+    _metallicity_finding(report)
+
+
+_MANGANESE_U = Resolved(
+    HubbardUDecision(
+        u_values=(HubbardU("Mn", "3d", 3.9, "table"),), projectors="atomic"
+    ),
+    Provenance(source="heuristic"),
+)
+
+
+@pytest.mark.parametrize(
+    ("magnetic", "hubbard", "electrons", "fact", "moment"),
+    [
+        (
+            _spin(rock_salt("Mn", "O", 4.445, primitive=False)),
+            _MANGANESE_U,
+            84.0,
+            "user-non-metal",
+            None,
+        ),
+        (
+            _spin(
+                rock_salt("Mn", "O", 4.445, primitive=False),
+                "non_magnetic",
+                hubbard=_MANGANESE_U,
+            ),
+            _MANGANESE_U,
+            84.0,
+            "undecided",
+            None,
+        ),
+        (
+            _spin(molybdenum_disulfide_monolayer(), tot_magnetization=2.5),
+            None,
+            26.0,
+            "classified-non-metal",
+            2.5,
+        ),
+        (_spin(uranium_nitride()), None, 19.0, "undecided", None),
+    ],
+    ids=[
+        "manganese-oxide-u",
+        "manganese-oxide-odd-shell",
+        "requested-moment",
+        "odd-uranium-nitride",
+    ],
+)
+def test_no_spin_polarization_is_offered_where_is_magnetic_would_not_give_it(
+    magnetic, hubbard, electrons: float, fact: str, moment: float | None
+) -> None:
+    """Collinear runs on smearing that is_magnetic=non_magnetic would not put
+    on fixed occupations: ferromagnetic MnO, set to a non-metal, with a U on
+    its d5 shell, an odd count, which keeps a run spin-polarized whatever
+    is_magnetic says, so its 84 electrons stay spin-polarized; MnO
+    spin-polarized by that U over a non-magnetic answer; a MoS2 monolayer
+    with a requested tot_magnetization, which the message names, whose spin
+    the request decides; and UN, whose 19 electrons cannot fill whole bands
+    without spin polarization. The message names the moment, and the only
+    remedy is is_metal=metal."""
+    report = with_phonon_findings(
+        CheckReport(),
+        purpose="scf",
+        occupations=_first_step_occupations("smearing", tot_magnetization=moment),
+        is_metal=_FACTS[fact],
+        electron_count=_electron_count(electrons),
+        magnetic=magnetic,
+        hubbard=hubbard,
+    )
+
+    finding = _metallicity_finding(report)
+    obstacle = (
+        _NO_MOMENT
+        if moment is None
+        else _NO_MOMENT.replace(
+            "and this run has none", f"which tot_magnetization={moment:g} is not"
+        )
+    )
+    assert magnetic.value.spin_mode == "collinear"
+    assert (finding.fields, finding.remedies) == (
+        ("is_metal", "tot_magnetization"),
+        (_METAL,),
+    )
+    assert finding.message == (
+        f"{_opening()} {_held(obstacle)[fact]} {_magnetic_insulator()}{_keeps()}"
+    )
+
+
+@pytest.mark.parametrize("fact", list(_FACTS))
+def test_an_odd_electron_count_without_spin_polarization_needs_a_metal(
+    fact: str,
+) -> None:
+    """Rock-salt TiN, 17 electrons without spin polarization: fixed
+    occupations fill doubly occupied bands (QE 7.3 PW/src/iweights.f90),
+    which leave one half filled, so is_metal=non_metal keeps the smearing. A
+    magnetic insulator would need spin polarization and its moment, which the
+    message names, so the only remedy is is_metal=metal."""
+    report = with_phonon_findings(
+        CheckReport(),
+        purpose="vc-relax",
+        occupations=_first_step_occupations("smearing"),
+        is_metal=_FACTS[fact],
+        electron_count=_TITANIUM_NITRIDE_ELECTRONS,
+        magnetic=_TITANIUM_NITRIDE,
+    )
+
+    assert report.blocking == (
+        Finding(
+            code="phonon.metallicity_unconfirmed",
+            message=(
+                f"{_opening()} {_held(_ODD_COUNT)[fact]} {_odd_insulator()}{_keeps()}"
+            ),
+            fields=("is_metal", "spin_polarized", "tot_magnetization"),
+            remedies=(_METAL,),
+        ),
+    )
+    _metallicity_finding(report)
+
+
+@pytest.mark.parametrize("non_metal", [False, True], ids=["undecided", "non-metal"])
+@pytest.mark.parametrize("occupations", ["smearing", "tetrahedra_opt"])
+def test_occupations_the_request_sets_need_occupations_fixed_for_an_insulator(
+    occupations: str, non_metal: bool
+) -> None:
+    """is_metal does not change occupations the request sets, so rutile's
+    insulator remedy is occupations=fixed, whose even electron count fixed
+    occupations fill, whether or not the user set is_metal=non_metal."""
+    report = with_phonon_findings(
+        CheckReport(),
+        purpose="relax",
+        occupations=_first_step_occupations(occupations, source="human"),
+        is_metal=_FACTS["user-non-metal" if non_metal else "undecided"],
+        electron_count=_RUTILE_ELECTRONS,
+        magnetic=_RUTILE,
+    )
+
+    assert report.blocking == (
+        Finding(
+            code="phonon.metallicity_unconfirmed",
+            message=(
+                f"{_opening(occupations)} The request sets occupations={occupations}, "
+                "which is_metal does not change. For an insulator set "
+                f"occupations=fixed{_keeps(occupations)}"
+            ),
+            fields=("is_metal", "occupations"),
+            remedies=({"occupations": "fixed"}, _METAL),
+        ),
+    )
+    _metallicity_finding(report)
+
+
+_REQUESTED = {
+    "monolayer": (
+        "smearing",
+        _MOS2_MONOLAYER,
+        26.0,
+        _NO_MOMENT,
+        (
+            f"{_magnetic_insulator('occupations=fixed')}; for one without magnetic "
+            "moments set occupations=fixed and is_magnetic=non_magnetic"
+        ),
+        ("is_metal", "occupations", "is_magnetic", "tot_magnetization"),
+        ({"occupations": "fixed", "is_magnetic": "non_magnetic"}, _METAL),
+    ),
+    "odd-count": (
+        "tetrahedra_opt",
+        _TITANIUM_NITRIDE,
+        17.0,
+        _ODD_COUNT,
+        _odd_insulator("occupations=fixed"),
+        ("is_metal", "occupations", "spin_polarized", "tot_magnetization"),
+        (_METAL,),
+    ),
+}
+"""Per case: the requested occupations, the run's spin, its electron count,
+why occupations=fixed alone would be refused, what an insulator sets, and
+the finding's fields and remedies."""
+
+
+@pytest.mark.parametrize("case", list(_REQUESTED))
+def test_requested_occupations_that_fixed_occupations_cannot_replace_say_why(
+    case: str,
+) -> None:
+    """occupations=fixed alone would be refused on a collinear MoS2 monolayer
+    without a moment, and on TiN's odd count: the message says why, and the
+    insulator remedy adds is_magnetic=non_magnetic where that gives fixed
+    occupations."""
+    occupations, magnetic, electrons, obstacle, insulator, fields, remedies = (
+        _REQUESTED[case]
+    )
+    report = with_phonon_findings(
+        CheckReport(),
+        purpose="scf",
+        occupations=_first_step_occupations(occupations, source="human"),
+        is_metal=_metallicity(None),
+        electron_count=_electron_count(electrons),
+        magnetic=magnetic,
+    )
+
+    assert report.blocking == (
+        Finding(
+            code="phonon.metallicity_unconfirmed",
+            message=(
+                f"{_opening(occupations)} The request sets occupations={occupations}, "
+                "which is_metal does not change, and setting occupations=fixed alone "
+                f"would be refused: {obstacle}. {insulator}{_keeps(occupations)}"
+            ),
+            fields=fields,
+            remedies=remedies,
+        ),
+    )
+    _metallicity_finding(report)
+
+
+_REQUESTED_MONOLAYER_MOMENT = _spin(
+    molybdenum_disulfide_monolayer(), tot_magnetization=2.5
+)
+_REFUSED_FIXED = {
+    "monolayer": (
+        _MOS2_MONOLAYER,
+        26.0,
+        None,
+        "occupations.fixed_needs_tot_magnetization",
+        _NO_MOMENT,
+        (
+            f"{_magnetic_insulator('occupations=fixed')}; for one without magnetic "
+            "moments set occupations=fixed and is_magnetic=non_magnetic"
+        ),
+        "for a metal set is_metal=metal and occupations=smearing",
+        ("is_metal", "occupations", "is_magnetic", "tot_magnetization"),
+        (
+            {"occupations": "fixed", "is_magnetic": "non_magnetic"},
+            {"occupations": "smearing", "is_metal": "metal"},
+        ),
+    ),
+    "odd-count": (
+        _TITANIUM_NITRIDE,
+        17.0,
+        None,
+        "occupations.fixed_needs_even_electron_count",
+        _ODD_COUNT,
+        _odd_insulator("occupations=fixed"),
+        "for a metal set is_metal=metal and occupations=smearing",
+        ("is_metal", "occupations", "spin_polarized", "tot_magnetization"),
+        ({"occupations": "smearing", "is_metal": "metal"},),
+    ),
+    "requested-moment": (
+        _REQUESTED_MONOLAYER_MOMENT,
+        26.0,
+        2.5,
+        "occupations.fixed_needs_integer_tot_magnetization",
+        _NO_MOMENT.replace(
+            "and this run has none", "which tot_magnetization=2.5 is not"
+        ),
+        _magnetic_insulator("occupations=fixed"),
+        (
+            "for a metal set is_metal=metal and occupations=smearing, and unset "
+            "tot_magnetization, which ph.x refuses on smearing"
+        ),
+        ("is_metal", "occupations", "tot_magnetization"),
+        (
+            {
+                "occupations": "smearing",
+                "is_metal": "metal",
+                "tot_magnetization": None,
+            },
+        ),
+    ),
+}
+"""Per case: the run's spin, its electron count and requested moment, the
+occupations refusal the metallicity one replaces, why fixed occupations
+cannot run, what an insulator and a metal set, and the finding's fields and
+remedies."""
+
+
+@pytest.mark.parametrize("fact", list(_FACTS))
+@pytest.mark.parametrize("case", list(_REFUSED_FIXED))
+def test_a_requested_fixed_the_run_cannot_take_needs_an_insulator_or_a_metal(
+    case: str, fact: str
+) -> None:
+    """occupations=fixed on a collinear MoS2 monolayer without a moment or
+    with a requested 2.5 Bohr magnetons, and on TiN's odd count, which fixed
+    occupations cannot take: the occupations rule's remedy, smearing, runs a
+    composition that is not all-metallic in a phonon task only as a confirmed
+    metal, so the metallicity refusal replaces it, whatever is_metal says
+    short of the user's metal. It says why fixed occupations cannot run and
+    what an insulator sets, and the metal's remedy sets smearing too, with
+    the requested moment unset, which ph.x refuses on smearing."""
+    (
+        magnetic,
+        electrons,
+        moment,
+        replaced,
+        obstacle,
+        insulator,
+        metal,
+        fields,
+        remedies,
+    ) = _REFUSED_FIXED[case]
+    occupations = _first_step_occupations(
+        "fixed", source="human", tot_magnetization=moment
+    )
+    first = check_all(
+        occupations=occupations,
+        magnetic=magnetic,
+        electron_count=_electron_count(electrons),
+        purpose="scf",
+    )
+
+    report = with_phonon_findings(
+        first,
+        purpose="scf",
+        occupations=occupations,
+        is_metal=_FACTS[fact],
+        electron_count=_electron_count(electrons),
+        magnetic=magnetic,
+    )
+
+    assert [finding.code for finding in first.blocking] == [replaced]
+    assert report.blocking == (
+        Finding(
+            code="phonon.metallicity_unconfirmed",
+            message=(
+                "The phonon tasks need this structure on fixed occupations, or "
+                "confirmed as a metal: the request sets occupations=fixed, which "
+                "this run cannot take, and its composition is not all-metallic, so "
+                f"it may be an insulator. {_PH_X_ON_SMEARING} Fixed occupations are "
+                f"refused here: {obstacle}. {insulator}; {metal}."
+            ),
+            fields=fields,
+            remedies=remedies,
+        ),
+    )
+    _metallicity_finding(report)
+
+
+_USER_METAL = _metallicity("metal", "human")
+_UNPINNED_ON_SMEARING = (
+    " A phonon task also needs tot_magnetization unset with occupations=smearing: "
+    "ph.x refuses the two Fermi energies a pinned moment gives there."
+)
+
+
+@pytest.mark.parametrize(
+    ("magnetic", "is_metal", "electrons", "moment", "code"),
+    [
+        (
+            _spin(written_bcc_iron(), tot_magnetization=2.5),
+            _metallicity("metal"),
+            16.0,
+            2.5,
+            "occupations.fixed_needs_integer_tot_magnetization",
+        ),
+        (
+            _spin(written_bcc_iron(), tot_magnetization=3),
+            _metallicity("metal"),
+            16.0,
+            3.0,
+            "occupations.fixed_tot_magnetization_parity",
+        ),
+        (
+            _REQUESTED_MONOLAYER_MOMENT,
+            _USER_METAL,
+            26.0,
+            2.5,
+            "occupations.fixed_needs_integer_tot_magnetization",
+        ),
+    ],
+    ids=["all-metallic", "all-metallic-parity", "user-metal"],
+)
+def test_a_moment_fixed_occupations_cannot_take_is_unset_with_smearing(
+    magnetic, is_metal, electrons: float, moment: float, code: str
+) -> None:
+    """bcc Fe, every element a metal, with a requested 2.5 or 3 Bohr
+    magnetons, which fixed occupations of its 16 electrons cannot take, and a
+    MoS2 monolayer with 2.5 that the user confirms a metal: the occupations
+    rule's refusal stands in a phonon task, but its remedy, smearing, would
+    keep the moment, which ph.x refuses on smearing (QE 7.3
+    PHonon/PH/phq_readin.f90:856-858), so there it unsets the moment too."""
+    occupations = _first_step_occupations(
+        "fixed", source="human", tot_magnetization=moment
+    )
+    first = check_all(
+        occupations=occupations,
+        magnetic=magnetic,
+        electron_count=_electron_count(electrons),
+        purpose="relax",
+    )
+
+    report = with_phonon_findings(
+        first,
+        purpose="relax",
+        occupations=occupations,
+        is_metal=is_metal,
+        electron_count=_electron_count(electrons),
+        magnetic=magnetic,
+    )
+
+    (refused,) = first.blocking
+    assert (refused.code, refused.remedies) == (code, ({"occupations": "smearing"},))
+    assert report.blocking == (
+        dataclasses.replace(
+            refused,
+            message=f"{refused.message}{_UNPINNED_ON_SMEARING}",
+            remedies=({"occupations": "smearing", "tot_magnetization": None},),
+        ),
+    )
+
+
+def test_without_a_requested_moment_the_occupations_refusal_stands_as_it_is() -> None:
+    """bcc Fe on occupations=fixed without a moment: the occupations rule's
+    remedy, smearing, keeps no moment and needs no answer on a composition
+    with every element a metal, so a phonon task keeps its refusal."""
+    magnetic = _spin(written_bcc_iron())
+    occupations = _first_step_occupations("fixed", source="human")
+    first = check_all(
+        occupations=occupations,
+        magnetic=magnetic,
+        electron_count=_electron_count(16.0),
+        purpose="vc-relax",
+    )
+
+    report = with_phonon_findings(
+        first,
+        purpose="vc-relax",
+        occupations=occupations,
+        is_metal=_metallicity("metal"),
+        electron_count=_electron_count(16.0),
+        magnetic=magnetic,
+    )
+
+    assert [finding.code for finding in first.blocking] == [
+        "occupations.fixed_needs_tot_magnetization"
+    ]
+    assert report.blocking == first.blocking
+
+
+@pytest.mark.parametrize(
+    ("occupations", "is_metal", "magnetic", "electrons"),
+    [
+        (_first_step_occupations("fixed"), _metallicity(None), _RUTILE, 48.0),
+        (
+            _first_step_occupations("smearing"),
+            _metallicity("metal"),
+            written_cell(written_bcc_iron()),
+            16.0,
+        ),
+        (_first_step_occupations("smearing"), _USER_METAL, _RUTILE, 48.0),
+        (_first_step_occupations("smearing"), _USER_METAL, _MOS2_MONOLAYER, 26.0),
+        (_first_step_occupations("smearing"), _USER_METAL, _TITANIUM_NITRIDE, 17.0),
+        (
+            _first_step_occupations("tetrahedra_opt", source="human"),
+            _USER_METAL,
+            _RUTILE,
+            48.0,
+        ),
+    ],
+    ids=[
+        "fixed-occupations",
+        "all-metallic",
+        "user-metal",
+        "user-metal-collinear",
+        "user-metal-odd-count",
+        "user-metal-requested-occupations",
+    ],
+)
+def test_fixed_occupations_an_all_metallic_composition_or_a_user_metal_pass(
+    occupations, is_metal, magnetic, electrons: float
+) -> None:
+    """Fixed occupations give ph.x the dielectric response; bcc Fe has no
+    non-metal element; and the user's is_metal=metal is taken on any run."""
+    for purpose in _PHONON_PURPOSES:
+        assert with_phonon_findings(
+            CheckReport(),
+            purpose=purpose,
+            occupations=occupations,
+            is_metal=is_metal,
+            electron_count=_electron_count(electrons),
+            magnetic=magnetic,
+        ).ok, purpose
+
+
+def test_a_blocked_phonon_record_surfaces_its_root_cause() -> None:
+    """A blocked record of the phonon steps, given or named, reaches the
+    report once, as its root cause, after the first step's findings."""
+    first = check_all(job=_job(64), parallel=_parallel(7))
+
+    report = with_phonon_findings(
+        first,
+        Blocked(by="no written cell"),
+        purpose="scf",
+        q_sampling=Blocked(by="the q-mesh is not symmetric"),
+        fft_grid=Blocked(by="no written cell"),
+    )
+
+    assert report.blocking == (
+        *first.blocking,
+        *_blocked("no written cell", "the q-mesh is not symmetric"),
+    )
+
+
+def test_a_phonon_task_with_nothing_to_refuse_keeps_the_first_step_s_report() -> None:
+    first = check_all(job=_job(64), parallel=_parallel(7))
+
+    assert with_phonon_findings(first, purpose="scf").blocking == first.blocking
+    assert with_phonon_findings(CheckReport(), purpose="vc-relax").ok
+
+
 def test_every_finding_code_is_catalogued_once() -> None:
     codes = [finding.code for finding in FINDING_CATALOGUE]
 
@@ -1640,3 +2935,42 @@ def test_a_cartesian_cell_constraint_on_a_turned_slab_is_cleared_not_set() -> No
         "relax.cartesian_cell_dofree_on_rotated_cell",
     ]
     assert report.blocking[1].remedies == ({"cell_dofree": None},)
+
+
+def test_every_fully_relativistic_table_is_norm_conserving() -> None:
+    """ph.x stops on PAW in a noncollinear magnetic run (QE 7.3
+    PHonon/PH/phq_readin.f90:806-807), so the phonon tasks would need a
+    refusal for it; none is reachable while spin-orbit coupling, which takes
+    a fully relativistic table, only finds PseudoDojo norm-conserving ones."""
+    tables = [table for table in load_tables().values() if table.relativistic == "full"]
+
+    assert tables
+    for table in tables:
+        assert table.provider == "pseudodojo", table.id
+        assert table.upstream_table.startswith("nc-fr-"), table.id
+
+
+def test_every_table_functional_is_one_ph_x_computes_phonons_for() -> None:
+    """ph.x stops on meta-GGA and hybrid functionals (QE 7.3
+    PHonon/PH/phq_readin.f90:793-797). The written input sets no input_dft, so
+    pw.x and ph.x take the functional of the table's pseudopotentials."""
+    functionals = {table.functional for table in load_tables().values()}
+
+    assert functionals <= {"LDA", "PBE", "PBEsol"}
+
+
+def test_no_occupations_value_is_bloechl_tetrahedra() -> None:
+    """ph.x stops on tetrahedra with the Bloechl correction, 'DFPT with the
+    Blochl correction is not implemented' (QE 7.3
+    PHonon/PH/phq_readin.f90:955-956); tetrahedra_opt runs."""
+    assert "tetrahedra" not in get_args(Occupations)
+    assert "tetrahedra_opt" in get_args(Occupations)
+
+
+@pytest.mark.parametrize("method", ["ts", "mbd"])
+def test_no_dispersion_ph_x_lacks_can_be_requested(method: str) -> None:
+    """ph.x stops on Tkatchenko-Scheffler dispersion (QE 7.3
+    PHonon/PH/phq_readin.f90:788-789) and has no term for many-body
+    dispersion in the dynamical matrix; D3(BJ) is the one method offered."""
+    with pytest.raises(ValidationError):
+        VdwMethodHumanInput(method=method)

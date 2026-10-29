@@ -3,7 +3,9 @@
 New in v2 (v2 epic 6, #6); no v1 precedent. Per
 goldilocks-core-design.md's own summary (line 4007): "``check_all`` is
 the sole gateway for cross-parameter constraints, and also the boundary
-between ``advise`` and ``generate``." Every advisor in this codebase
+between ``advise`` and ``generate``." For the phonon tasks that gateway
+is ``check_all`` followed by ``with_phonon_findings``, which adds their
+own rules to its report (rules 9-17 below). Every advisor in this codebase
 degrades field-by-field (``Resolved``/``Unavailable``/``Blocked``)
 instead of refusing a request, and only a fault (such as a worker process
 that dies) raises; a runnable input is only refused here, by returning a
@@ -129,6 +131,136 @@ is now where that decision belongs.
    ``k_path_distance`` never comes near it; only a distance near its lower
    bound on a cell with lattice vectors shorter than about 1.4 Angstrom can.
 
+**The phonon tasks' rules** (#215). ``with_phonon_findings`` takes the
+``check_all`` report of a phonon task's first step, the scf, relax or
+vc-relax whose save ph.x reads, and adds the ``Blocked`` records of the
+phonon steps and rules 9-17. Unless a rule names a task, it applies to all
+three and reads the first step's occupations, moment, boundary and Hubbard
+settings and its is_metal fact. Where a phonon rule and a ``check_all`` rule
+share a root cause, only the phonon finding is kept (rules 11, 16 and 17),
+since the other's advice does not help a phonon run.
+
+9. A Hubbard U written with projectors other than atomic: ph.x computes
+   phonons with a Hubbard U (DFPT+U) only on atomic ones (QE 7.3
+   ``PHonon/PH/phq_readin.f90:766-767``). A task cannot switch them on its
+   own, since a structure relaxed with one projector type is not at
+   equilibrium with the other, so ``hubbard_projectors=atomic`` is the
+   remedy, and so is no U.
+
+10. Spin-orbit coupling with a Hubbard U, with or without magnetic moments:
+    ph.x's DFPT+U arrays and projections hold one spinor component (QE 7.3
+    ``PHonon/PH/allocate_phq.f90:166-167``, ``dnsq_scf.f90:130``). QE 7.5
+    stops on a magnetic noncollinear run (``phq_readin.f90:777-778``);
+    without moments, and in 7.3 with them, ph.x would run and give wrong
+    phonons.
+
+11. ``isolation='isolated'`` on a written cell with vacuum along a, b and c:
+    ph.x implements no nonperiodic boundary (``PHonon/PH/phonon.f90:36-41``).
+    QE 7.3 restores only the 2D flag from the save
+    (``PW/src/pw_restart_new.f90:1341-1345``), so a molecule in a box gets
+    the phonons of a periodic array of copies, and 7.5 applies
+    Martyna-Tuckerman to the response Hartree potential only. A molecule's
+    modes need a Gamma-only calculation (ph.x at Gamma, then dynmat.x with
+    ``asr='zero-dim'``), which these tasks do not do, so there is no remedy.
+    In vc-relax-phonon this replaces ``boundary.isolated_forbids_vc_relax``,
+    whose advice, the relax task, does not help a phonon run. On a cell
+    without that vacuum the vacuum rule refuses 'isolated' already, offering
+    isolation=periodic.
+
+12. A ``tot_magnetization`` on a collinear run with smearing or tetrahedra:
+    the moment gives the scf two Fermi energies (QE 7.3
+    ``PW/src/input.f90:758``), which ph.x refuses unless the occupations are
+    fixed (``phq_readin.f90:856-858``). Fixed occupations are offered only
+    for an integer moment of the electron count's parity, which rule 2
+    needs. Where rule 2 refuses a requested moment on fixed occupations (not
+    an integer, or not of that parity), its remedy, smearing, would keep the
+    moment, so in a phonon task it unsets the moment too, unless rule 17
+    replaces that finding.
+
+13. A ``q_grid`` the q record refuses as breaking symmetry
+    (``advisors/q_sampling.py``): more than one division along a vacuum axis,
+    a mesh an operation pw.x keeps does not map onto itself, on which ph.x
+    stops, or unequal counts on two axes an operation mixes, which the phonon
+    k-mesh raised against it can break. A mesh built from a spacing that is
+    not symmetric is a ``Blocked`` q record instead: no q setting fixes it.
+
+14. A q-mesh beyond q2r.x's limits: it reads at most 1024 dynamical
+    matrices, one per irreducible q-point, and 1024 divisions along each
+    axis (``PHonon/PH/do_q2r.f90:135-139``). The q record refuses a mesh
+    with more irreducible q-points, and a mesh built from a spacing with more
+    divisions or more than 49152 points, which always has more; a ``q_grid``
+    is held within the divisions and the points at input.
+
+15. vc-relax-phonon on a fragile cell (``advisors/fft_grid.py``): ph.x stops
+    on a dense FFT grid an operation pw.x keeps does not map onto itself
+    (``PHonon/PH/phq_setup.f90:211-212``), which pw.x's own grid can be on a
+    fragile cell, and a vc-relax's final scf rebuilds pw.x's own grid for the
+    relaxed cell, dropping the nr1-nr3 the scf and relax first steps write
+    for ph.x (``PW/src/run_pwscf.f90:404-405``). No setting keeps them
+    through that scf, so there is no remedy: the message names relax-phonon,
+    which keeps the cell and writes the grid, and the vc-relax task followed
+    by the phonon task on the relaxed structure. ``cell_dofree``, the setting
+    of the variable-cell relaxation, is the field the finding concerns. No
+    value of it lifts the refusal, but every finding except
+    ``advice.blocked`` names a setting, the control the Workbench shows it
+    at.
+
+16. ``fix_bottom_layers`` in relax-phonon or vc-relax-phonon: pinned atoms
+    keep their forces, and DFPT takes second derivatives at an equilibrium,
+    where every force is zero. This replaces the slab rules of
+    ``fix_bottom_layers`` (``relax.fix_bottom_layers_needs_slab``,
+    ``relax.fix_bottom_layers_exceeds_layers``), whose remedy, unsetting it,
+    is the same.
+
+17. A first step on smearing or ``tetrahedra_opt``, or on fixed occupations
+    it cannot take, whose composition is not all-metallic
+    (``analysis.is_metal.all_metallic``), unless the user set
+    ``is_metal=metal``: the material may be an insulator, which ph.x treats
+    as a metal on smearing or tetrahedra. It computes the dielectric constant
+    and the Born effective charges, from which q2r.x and matdyn.x build a
+    polar insulator's LO-TO splitting, only with fixed occupations (QE 7.3
+    ``PHonon/PH/prepare_q.f90:141-160``), and at q = 0 it shifts the Fermi
+    energy by the induced charge divided by the density of states at the
+    Fermi energy (``PHonon/PH/solve_linter.f90:228``, ``:430-437``;
+    ``LR_Modules/efermi_shift.f90:98-99``), which with smearing is nearly
+    zero when the Fermi energy lies in a gap, so the response can diverge at
+    Gamma. The classifier's threshold is set to miss few metals, for the
+    k-point sampling a missed metal would undersample, so it calls many
+    insulators metals, and the heuristic never says non_metal (#164): a
+    classified or undecided is_metal is no answer here, and nor is the
+    user's non_metal on a run it leaves on smearing. So the run passes on
+    fixed occupations or as a confirmed metal. Besides ``is_metal=metal`` the
+    finding offers what puts an insulator on fixed occupations by the
+    occupations rule (``advisors/occupations.py``'s
+    ``fixed_occupations_run``): ``is_metal=non_metal``, or
+    ``occupations=fixed`` where the request sets the occupations, which
+    is_metal does not change. A collinear spin-polarized run takes them only
+    with an integer ``tot_magnetization`` of the electron count's parity, the
+    request's or the 0 of a compensated ordering: without one the message
+    names ``tot_magnetization``, and adds ``is_magnetic=non_magnetic`` for a
+    material without moments where that answer gives fixed occupations -- the
+    spin polarization follows the is_magnetic fact, no Hubbard U acts on an
+    odd d or f count, which keeps a run spin-polarized whatever is_magnetic
+    says (``advisors/magnetic_config.py``'s ``unpolarized_if_non_magnetic``),
+    and the count without spin polarization is even. Without spin
+    polarization an odd electron count leaves a band half filled, as in a
+    metal, and a magnetic insulator with it needs spin polarization and, on a
+    collinear run, its moment, which the message names. A requested
+    ``occupations=fixed`` the run cannot take for these reasons is refused
+    here too, in place of rules 2 and 3, whose remedy, smearing, needs a
+    confirmed metal on such a composition: the metal's remedy is then
+    ``is_metal=metal`` with ``occupations=smearing``, and with a requested
+    moment unset, which rule 12 refuses on smearing. An occurrence names only
+    the settings its message asks for.
+
+Other inputs ph.x refuses or cannot handle need no rule, since no request
+reaches them: a hybrid or meta-GGA functional (every table's functional is
+LDA, PBE or PBEsol, and pw.x takes the functional from the
+pseudopotentials), TS or MBD dispersion (D3(BJ) is the only method),
+Bloechl tetrahedra (``tetrahedra_opt`` is the only tetrahedron method) and
+PAW in a noncollinear magnetic run (every fully relativistic table is
+norm-conserving). Tests guard each.
+
 **Findings, not prose (#151).** Every refusal is a ``Finding``: a code
 from ``FINDING_CATALOGUE``, the setting keys it concerns (``fields``, as
 ``capabilities()`` names them), a user-facing ``message`` and its
@@ -136,7 +268,9 @@ from ``FINDING_CATALOGUE``, the setting keys it concerns (``fields``, as
 value clears that override). A catalogue entry fixes a code's fields and
 remedies; each rule fills in the message of its occurrence, and drops a
 remedy that would not hold for it (cell_dofree=all for a cell with vacuum,
-which it would relax too). A value only the user can choose (a
+which it would relax too) or that another task needs (rule 2's smearing with
+the moment unset, a phonon task's), and rule 17 a field its message does not
+ask for. A value only the user can choose (a
 ``tot_magnetization``) is named in the message, never guessed in a remedy.
 A ``Blocked`` chain reaches the gate as ``advice.blocked`` with its root
 cause and no remedy: a refusal that needs one must be a named rule here.
@@ -159,22 +293,30 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field, replace
+from typing import Literal
 
 from pymatgen.core import Structure
 
 from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.electron_count import ElectronCountDecision
+from goldilocks_core.advisors.fft_grid import FftGridDecision
+from goldilocks_core.advisors.hubbard_u import HubbardUDecision
 from goldilocks_core.advisors.job_resources import JobDecision
-from goldilocks_core.advisors.magnetic_config import MagneticConfigFacts
+from goldilocks_core.advisors.magnetic_config import (
+    MagneticConfigFacts,
+    unpolarized_if_non_magnetic,
+)
 from goldilocks_core.advisors.nbnd import NbndDecision, band_floors
 from goldilocks_core.advisors.occupations import (
     OccupationsDecision,
+    fixed_occupations_run,
     whole_spin_channels,
 )
 from goldilocks_core.advisors.parallelisation import (
     ParallelisationDecision,
     diag_grid_side,
 )
+from goldilocks_core.advisors.q_sampling import QSamplingDecision
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions, wire_period
 from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.analysis.geometry import (
@@ -184,6 +326,7 @@ from goldilocks_core.analysis.geometry import (
     two_d_truncation_obstacles,
     vacuum_axes,
 )
+from goldilocks_core.analysis.is_metal import Metallicity, all_metallic
 from goldilocks_core.functionals import D3BJ_FUNCTIONALS, has_d3bj_parameters
 from goldilocks_core.plan import SCF_LIKE_PURPOSES
 from goldilocks_core.resolution import Blocked, FieldState
@@ -226,6 +369,10 @@ class Finding:
 
 
 _SMEARING = {"occupations": "smearing"}
+_UNPINNED = {"tot_magnetization": None}
+_UNPINNED_SMEARING = {**_SMEARING, **_UNPINNED}
+"""Smearing without the requested moment, which ph.x refuses there (rule 12
+of the module docstring)."""
 _PERIODIC = {"isolation": "periodic"}
 _PW_X_MAX_KPOINTS = 40000
 """pw.x's npk, the most k-points it holds (rule 8 of the module docstring)."""
@@ -255,8 +402,11 @@ _NON_INTEGER_TOT_MAGNETIZATION = Finding(
         "tot_magnetization."
     ),
     fields=_MOMENT_FIELDS,
-    remedies=(_SMEARING,),
+    remedies=(_SMEARING, _UNPINNED_SMEARING),
 )
+"""Smearing keeps the requested moment, and in a phonon task, where ph.x
+refuses a moment on smearing, it is unset too (rule 12 of the module
+docstring)."""
 _TOT_MAGNETIZATION_PARITY = Finding(
     code="occupations.fixed_tot_magnetization_parity",
     message=(
@@ -264,8 +414,9 @@ _TOT_MAGNETIZATION_PARITY = Finding(
         "electron count."
     ),
     fields=_MOMENT_FIELDS,
-    remedies=(_SMEARING,),
+    remedies=(_SMEARING, _UNPINNED_SMEARING),
 )
+"""The remedies of ``_NON_INTEGER_TOT_MAGNETIZATION``, for the same reason."""
 _ODD_ELECTRON_COUNT = Finding(
     code="occupations.fixed_needs_even_electron_count",
     message=(
@@ -395,6 +546,145 @@ _FIX_BOTTOM_LAYERS_EXCEEDS = Finding(
     fields=("fix_bottom_layers",),
     remedies=({"fix_bottom_layers": None},),
 )
+_NO_U = {"hubbard_needs_correlation": False}
+_PHONON_HUBBARD_PROJECTORS = Finding(
+    code="phonon.hubbard_projectors_unsupported",
+    message=(
+        "The phonon tasks need hubbard_projectors=atomic with a Hubbard U: ph.x "
+        "computes phonons with a Hubbard U only for atomic projectors."
+    ),
+    fields=("hubbard_projectors", "hubbard_needs_correlation"),
+    remedies=({"hubbard_projectors": "atomic"}, _NO_U),
+)
+_PHONON_NONCOLLINEAR_HUBBARD = Finding(
+    code="phonon.noncollinear_hubbard_unsupported",
+    message=(
+        "The phonon tasks cannot combine spin_orbit_coupling with a Hubbard U: "
+        "ph.x computes phonons with a Hubbard U for collinear spins only."
+    ),
+    fields=("spin_orbit_coupling", "hubbard_needs_correlation"),
+    remedies=({"spin_orbit_coupling": False}, _NO_U),
+)
+_PHONON_ISOLATED = Finding(
+    code="phonon.isolated_boundary_unsupported",
+    message=(
+        "isolation=isolated writes Martyna-Tuckerman, which ph.x does not "
+        "implement: Quantum ESPRESSO 7.3's ph.x drops it, treating the molecule or "
+        "cluster in the box as a periodic array of copies, and 7.5's applies it "
+        "only in part. A molecule's vibrations need a Gamma-only calculation, ph.x "
+        "at Gamma and then dynmat.x with asr='zero-dim', which the phonon tasks do "
+        "not do."
+    ),
+    fields=("isolation",),
+)
+"""No remedy: isolation=periodic would compute a periodic array of copies,
+which no setting turns into a molecule's vibrations (rule 11 of the module
+docstring)."""
+_PHONON_PINNED_MOMENT = Finding(
+    code="phonon.pinned_moment_with_smearing",
+    message=(
+        "The phonon tasks cannot pin tot_magnetization on smearing or tetrahedra: "
+        "ph.x refuses the two Fermi energies it gives there."
+    ),
+    fields=_MOMENT_FIELDS,
+    remedies=(_UNPINNED, {"occupations": "fixed"}),
+)
+"""occupations=fixed only for a moment fixed occupations run with (rule 12
+of the module docstring)."""
+_PHONON_Q_GRID_SYMMETRY = Finding(
+    code="phonon.q_grid_breaks_symmetry",
+    message=(
+        "q_grid must be a mesh every symmetry operation maps onto itself, with "
+        "one division along each vacuum axis and equal counts on the axes an "
+        "operation mixes."
+    ),
+    fields=("q_grid",),
+    remedies=({"q_grid": None},),
+)
+_PHONON_TOO_MANY_Q_POINTS = Finding(
+    code="phonon.too_many_q_points",
+    message=(
+        "The q-mesh is beyond q2r.x's limits: at most 1024 divisions along each "
+        "axis and 1024 irreducible q-points."
+    ),
+    fields=("q_grid", "q_distance"),
+    remedies=({"q_grid": None, "q_distance": None},),
+)
+_PHONON_VC_RELAX_FFT_GRID = Finding(
+    code="phonon.vc_relax_fft_grid_unsupported",
+    message=(
+        "vc-relax-phonon cannot run on a cell whose FFT grid, rebuilt by the "
+        "vc-relax for the relaxed cell, ph.x can refuse; use relax-phonon."
+    ),
+    fields=("cell_dofree",),
+)
+"""No remedy: no setting keeps a written grid through a vc-relax's final scf
+(rule 15 of the module docstring)."""
+_PHONON_FIX_BOTTOM_LAYERS = Finding(
+    code="phonon.fix_bottom_layers_unsupported",
+    message="The phonon tasks cannot pin atoms with fix_bottom_layers.",
+    fields=("fix_bottom_layers",),
+    remedies=({"fix_bottom_layers": None},),
+)
+_NON_METAL = {"is_metal": "non_metal"}
+_FIXED = {"occupations": "fixed"}
+_NON_MAGNETIC = {"is_magnetic": "non_magnetic"}
+_METAL = {"is_metal": "metal"}
+_METAL_ON_SMEARING = {**_SMEARING, **_METAL}
+_UNPINNED_METAL_ON_SMEARING = {**_UNPINNED_SMEARING, **_METAL}
+_PHONON_METALLICITY_UNCONFIRMED = Finding(
+    code="phonon.metallicity_unconfirmed",
+    message=(
+        "The phonon tasks run a composition that is not all-metallic on smearing "
+        "or tetrahedra, which ph.x treats as a metal, only as a confirmed metal: an "
+        "insulator gets no LO-TO splitting there, and its response can diverge at "
+        "Gamma. For a metal set is_metal=metal; put an insulator on fixed "
+        "occupations."
+    ),
+    fields=(
+        "is_metal",
+        "occupations",
+        "is_magnetic",
+        "spin_polarized",
+        "tot_magnetization",
+    ),
+    remedies=(
+        _NON_METAL,
+        {**_NON_METAL, **_NON_MAGNETIC},
+        _FIXED,
+        {**_FIXED, **_NON_MAGNETIC},
+        _METAL,
+        _METAL_ON_SMEARING,
+        _UNPINNED_METAL_ON_SMEARING,
+    ),
+)
+"""Only the user can say whether the material is an insulator, and an
+occurrence offers the patches that put one on fixed occupations for it, with
+the patch that confirms a metal: is_metal=metal, with smearing in place of a
+requested occupations=fixed the run cannot take, and the requested moment
+unset there. It names only the settings its message asks for (rule 17 of the
+module docstring)."""
+_PH_X_TREATS_SMEARING_AS_METAL = (
+    "ph.x treats a run on smearing or tetrahedra as a metal: it computes the "
+    "dielectric constant and the Born effective charges, which give a polar "
+    "insulator its LO-TO splitting, only with fixed occupations, and at q = 0 it "
+    "shifts the Fermi energy by the induced charge divided by the density of "
+    "states at the Fermi energy, which with smearing is nearly zero when the Fermi "
+    "energy lies in a gap, so an insulator's response can diverge at Gamma."
+)
+_CLASSIFIER_CALLS_INSULATORS_METALS = (
+    "The metallicity classifier is tuned to miss few metals, which k-point sampling "
+    "needs, so it calls many insulators metals, and composition alone cannot tell "
+    "them apart."
+)
+_FIXED_NEEDS_MOMENT = (
+    "fixed occupations on a collinear spin-polarized run need an integer "
+    "tot_magnetization of the electron count's parity"
+)
+_ODD_WITHOUT_SPIN = (
+    "without spin polarization fixed occupations cannot fill its odd electron "
+    "count, which leaves a band half filled, as in a metal"
+)
 
 FINDING_CATALOGUE = (
     _BLOCKED,
@@ -417,10 +707,40 @@ FINDING_CATALOGUE = (
     _FIX_BOTTOM_LAYERS_EXCEEDS,
     _NPOOL,
     _NDIAG,
+    _PHONON_HUBBARD_PROJECTORS,
+    _PHONON_NONCOLLINEAR_HUBBARD,
+    _PHONON_ISOLATED,
+    _PHONON_PINNED_MOMENT,
+    _PHONON_Q_GRID_SYMMETRY,
+    _PHONON_TOO_MANY_Q_POINTS,
+    _PHONON_VC_RELAX_FFT_GRID,
+    _PHONON_FIX_BOTTOM_LAYERS,
+    _PHONON_METALLICITY_UNCONFIRMED,
 )
 """Every finding the gate can return, with its code's fields and remedies
 and a generic message; a rule returns its entry with the occurrence's
 message, less any remedy that would not hold for it (module docstring)."""
+
+_REPLACED_BY_PHONON = {
+    _PHONON_ISOLATED.code: (_ISOLATED_VC_RELAX.code,),
+    _PHONON_FIX_BOTTOM_LAYERS.code: (
+        _FIX_BOTTOM_LAYERS_WITHOUT_SLAB.code,
+        _FIX_BOTTOM_LAYERS_EXCEEDS.code,
+    ),
+    _PHONON_METALLICITY_UNCONFIRMED.code: (
+        _MISSING_TOT_MAGNETIZATION.code,
+        _NON_INTEGER_TOT_MAGNETIZATION.code,
+        _TOT_MAGNETIZATION_PARITY.code,
+        _ODD_ELECTRON_COUNT.code,
+    ),
+}
+"""The ``check_all`` findings a phonon finding replaces, for the same root
+cause (rules 11, 16 and 17 of the module docstring)."""
+_KEEPING_THE_MOMENT = frozenset(
+    {_NON_INTEGER_TOT_MAGNETIZATION.code, _TOT_MAGNETIZATION_PARITY.code}
+)
+"""The ``check_all`` findings of a requested moment fixed occupations cannot
+take, whose smearing remedy keeps it (rule 12 of the module docstring)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -537,6 +857,97 @@ def check_all(
     )
 
 
+def with_phonon_findings(
+    report: CheckReport,
+    *field_states: FieldState[object],
+    purpose: Literal["scf", "relax", "vc-relax"],
+    occupations: FieldState[OccupationsDecision] | None = None,
+    is_metal: FieldState[Metallicity] | None = None,
+    electron_count: FieldState[ElectronCountDecision] | None = None,
+    magnetic: FieldState[MagneticConfigFacts] | None = None,
+    boundary: FieldState[BoundaryFacts] | None = None,
+    relax: FieldState[RelaxOptions | VcRelaxOptions] | None = None,
+    hubbard: FieldState[HubbardUDecision] | None = None,
+    q_sampling: FieldState[QSamplingDecision] | None = None,
+    fft_grid: FieldState[FftGridDecision] | None = None,
+) -> CheckReport:
+    """The gate of a phonon task: ``report``, the ``check_all`` report of its
+    first step (``purpose``, the scf, relax or vc-relax ph.x reads), with the
+    phonon tasks' rules added (rules 9-17 of the module docstring).
+
+    ``field_states`` are the phonon steps' records; any that are ``Blocked``
+    land in the report through ``collect_blocked``. The named states opt
+    into the rules and are folded into that scan too, as ``check_all`` folds
+    its own: the first step's ``occupations``, its ``is_metal`` fact,
+    ``electron_count``, ``magnetic`` (the written cell and its spin),
+    ``boundary``, ``relax`` (``None`` for an scf) and ``hubbard``, the ph
+    step's ``q_sampling`` and the first step's ``fft_grid``. A finding of
+    ``report`` that a phonon finding replaces, for the same root cause, is
+    dropped (``_REPLACED_BY_PHONON``), and one whose smearing remedy would
+    keep a requested moment unsets it (``_unpinned_with_smearing``)."""
+    optional = tuple(
+        state
+        for state in (
+            occupations,
+            is_metal,
+            electron_count,
+            magnetic,
+            boundary,
+            relax,
+            hubbard,
+            q_sampling,
+            fft_grid,
+        )
+        if state is not None
+    )
+    rule_findings = (
+        _phonon_needs_atomic_hubbard_projectors(hubbard),
+        _phonon_refuses_noncollinear_hubbard(hubbard, magnetic),
+        _phonon_refuses_isolated_boundary(boundary, magnetic),
+        _phonon_refuses_two_fermi_energies(occupations, magnetic, electron_count),
+        _phonon_q_mesh_within_ph_x_and_q2r_x(q_sampling),
+        _vc_relax_phonon_refuses_fragile_cell(fft_grid, purpose),
+        _phonon_refuses_fix_bottom_layers(relax),
+        _phonon_needs_confirmed_metallicity(
+            occupations, is_metal, electron_count, magnetic, hubbard
+        ),
+    )
+    found = tuple(finding for finding in rule_findings if finding is not None)
+    replaced = {
+        code for finding in found for code in _REPLACED_BY_PHONON.get(finding.code, ())
+    }
+    return CheckReport(
+        blocking=(
+            *(
+                _unpinned_with_smearing(finding)
+                for finding in report.blocking
+                if finding.code not in replaced
+            ),
+            *collect_blocked(*field_states, *optional),
+            *found,
+        )
+    )
+
+
+def _unpinned_with_smearing(finding: Finding) -> Finding:
+    """``finding`` of a phonon task's first step, with rule 12 of this
+    module's docstring applied to its remedy: a requested moment that fixed
+    occupations cannot take is unset with the smearing that replaces them,
+    since ph.x refuses a moment on smearing. Any other finding is returned
+    as it is."""
+    if finding.code not in _KEEPING_THE_MOMENT:
+        return finding
+    return replace(
+        finding,
+        message=(
+            f"{finding.message} A phonon task also needs tot_magnetization unset "
+            "with occupations=smearing: ph.x refuses the two Fermi energies a "
+            "pinned moment gives there."
+        ),
+        remedies=(_UNPINNED_SMEARING,),
+    )
+
+
 def _fixed_occupations_needs_integer_moment(
     occupations: FieldState[OccupationsDecision] | None,
     magnetic: FieldState[MagneticConfigFacts] | None,
@@ -564,6 +975,7 @@ def _fixed_occupations_needs_integer_moment(
                 "occupations=smearing, or an integer tot_magnetization of the "
                 "electron count's parity."
             ),
+            remedies=(_SMEARING,),
         )
     # nelup = (nelec + tot) / 2, neldw = (nelec - tot) / 2 (#70): both need
     # to be integers, which needs tot_magnetization and nelec to share
@@ -585,6 +997,7 @@ def _fixed_occupations_needs_integer_moment(
                 "occupations=smearing, or a tot_magnetization of the electron "
                 "count's parity."
             ),
+            remedies=(_SMEARING,),
         )
     return None
 
@@ -826,7 +1239,7 @@ def _isolated_needs_vacuum_along_every_axis(cell: Structure) -> Finding | None:
     axes = vacuum_axes(cell)
     if len(axes) == 3:
         return None
-    found = f"vacuum only along {_along(axes)}" if axes else "no vacuum"
+    found = f"vacuum only along {_listed(axes)}" if axes else "no vacuum"
     return replace(
         _ISOLATED_WITHOUT_VACUUM,
         message=(
@@ -1032,13 +1445,13 @@ def _xy_frame_obstacles(
         found.append("a or b out of the xy plane")
     axes = vacuum_axes(cell)
     if axes not in allowed_vacuum:
-        found.append(f"vacuum along {_along(axes)}" if axes else "no vacuum")
+        found.append(f"vacuum along {_listed(axes)}" if axes else "no vacuum")
     return found
 
 
-def _along(axes: tuple[LatticeAxis, ...]) -> str:
-    """'c', 'a and b' or 'a, b and c'."""
-    *rest, last = axes
+def _listed(names: tuple[str, ...]) -> str:
+    """``names`` as an English list: 'c', 'a and b' or 'a, b and c'."""
+    *rest, last = names
     return f"{', '.join(rest)} and {last}" if rest else last
 
 
@@ -1112,4 +1525,396 @@ def _no_single_slab(cell: Structure) -> str:
     axes = vacuum_axes(cell)
     if len(axes) == 1:
         return f"more than one vacuum gap along {axes[0]}, so more than one slab"
-    return f"vacuum along {_along(axes)}" if axes else "no vacuum"
+    return f"vacuum along {_listed(axes)}" if axes else "no vacuum"
+
+
+def _u_elements(hubbard: HubbardUDecision) -> str:
+    """The elements ``hubbard`` gives a U, as an English list."""
+    return _listed(tuple(entry.element for entry in hubbard.u_values))
+
+
+def _phonon_needs_atomic_hubbard_projectors(
+    hubbard: FieldState[HubbardUDecision] | None,
+) -> Finding | None:
+    """Rule 9 of this module's docstring: a decision with a U names its
+    projectors, ``None`` exactly when there is no U."""
+    if hubbard is None or not hubbard.ok:
+        return None
+    decision = hubbard.value
+    if not decision.u_values or decision.projectors == "atomic":
+        return None
+    return replace(
+        _PHONON_HUBBARD_PROJECTORS,
+        message=(
+            f"The Hubbard U on {_u_elements(decision)} is written with "
+            f"{decision.projectors} projectors, but ph.x computes phonons with a "
+            "Hubbard U only for atomic ones and stops with 'The phonon code for "
+            "this Hubbard projectors type is not implemented'. Set "
+            "hubbard_projectors=atomic, or hubbard_needs_correlation=false for no "
+            "+U. A U value is tied to the projectors it was derived with, so the "
+            "same U with atomic projectors is a different correction."
+        ),
+    )
+
+
+def _phonon_refuses_noncollinear_hubbard(
+    hubbard: FieldState[HubbardUDecision] | None,
+    magnetic: FieldState[MagneticConfigFacts] | None,
+) -> Finding | None:
+    """Rule 10 of this module's docstring, with or without magnetic
+    moments."""
+    if hubbard is None or magnetic is None or not (hubbard.ok and magnetic.ok):
+        return None
+    if not hubbard.value.u_values or magnetic.value.spin_mode != "noncollinear":
+        return None
+    return replace(
+        _PHONON_NONCOLLINEAR_HUBBARD,
+        message=(
+            "The phonon tasks cannot combine spin_orbit_coupling with the Hubbard "
+            f"U on {_u_elements(hubbard.value)}: ph.x computes phonons with a "
+            "Hubbard U for collinear spins only, so a noncollinear run would stop "
+            "or give wrong phonons. Set spin_orbit_coupling=false, or "
+            "hubbard_needs_correlation=false for no +U."
+        ),
+    )
+
+
+def _phonon_refuses_isolated_boundary(
+    boundary: FieldState[BoundaryFacts] | None,
+    magnetic: FieldState[MagneticConfigFacts] | None,
+) -> Finding | None:
+    """Rule 11 of this module's docstring: on the written cell with vacuum
+    along a, b and c that 'isolated' needs; ``_isolation_matches_written_cell``
+    refuses it on any other."""
+    if boundary is None or magnetic is None or not (boundary.ok and magnetic.ok):
+        return None
+    if boundary.value.isolation != "isolated":
+        return None
+    if len(vacuum_axes(magnetic.value.cell)) != 3:
+        return None
+    return _PHONON_ISOLATED
+
+
+def _phonon_refuses_two_fermi_energies(
+    occupations: FieldState[OccupationsDecision] | None,
+    magnetic: FieldState[MagneticConfigFacts] | None,
+    electron_count: FieldState[ElectronCountDecision] | None,
+) -> Finding | None:
+    """Rule 12 of this module's docstring: the moment the occupations
+    decision pins, which the writer renders only for a collinear run
+    (#138). Fixed occupations are offered only for a moment that passes
+    rule 2, an integer of the electron count's parity."""
+    if occupations is None or magnetic is None:
+        return None
+    if not (occupations.ok and magnetic.ok):
+        return None  # already surfaced via collect_blocked, or genuinely unknown
+    chosen = occupations.value.occupations
+    tot = occupations.value.tot_magnetization
+    if chosen == "fixed" or tot is None or magnetic.value.spin_mode != "collinear":
+        return None
+    fixed_runs = (
+        tot == int(tot)
+        and electron_count is not None
+        and electron_count.ok
+        and whole_spin_channels(electron_count.value.nelec, tot)
+    )
+    fixed = (
+        ", or set occupations=fixed, which this integer moment of the electron "
+        "count's parity allows"
+        if fixed_runs
+        else ""
+    )
+    return replace(
+        _PHONON_PINNED_MOMENT,
+        message=(
+            f"tot_magnetization={tot:.10g} with occupations={chosen} gives the scf "
+            "two Fermi energies, which ph.x refuses on smearing or tetrahedra: it "
+            "stops with 'The phonon code with two fermi energies is not available "
+            f"for metals'. Unset tot_magnetization{fixed}."
+        ),
+        remedies=_PHONON_PINNED_MOMENT.remedies if fixed_runs else (_UNPINNED,),
+    )
+
+
+def _phonon_q_mesh_within_ph_x_and_q2r_x(
+    q_sampling: FieldState[QSamplingDecision] | None,
+) -> Finding | None:
+    """Rules 13 and 14 of this module's docstring: the q record's refusal,
+    with its cause."""
+    if q_sampling is None or not q_sampling.ok or q_sampling.value.refusal is None:
+        return None
+    refusal = q_sampling.value.refusal
+    if refusal.kind == "breaks_symmetry":
+        return replace(
+            _PHONON_Q_GRID_SYMMETRY,
+            message=f"{refusal.cause}. Unset q_grid for the default q-mesh.",
+        )
+    return replace(
+        _PHONON_TOO_MANY_Q_POINTS,
+        message=(
+            f"The phonon run would stop in q2r.x: {refusal.cause}. Unset q_grid "
+            "and q_distance for the default q-mesh, or set a coarser one."
+        ),
+    )
+
+
+def _vc_relax_phonon_refuses_fragile_cell(
+    fft_grid: FieldState[FftGridDecision] | None, purpose: str
+) -> Finding | None:
+    """Rule 15 of this module's docstring: on a fragile cell, whether or not
+    pw.x's own grid passes on the input cell, since the vc-relax's final scf
+    builds it for the relaxed one."""
+    if purpose != "vc-relax" or fft_grid is None or not fft_grid.ok:
+        return None
+    decision = fft_grid.value
+    if not decision.fragile:
+        return None
+    axes = _listed(
+        tuple(sorted({axis for pair in decision.fragile_axes for axis in pair}))
+    )
+    if decision.compatible:
+        refused = (
+            f"the symmetry operations pw.x keeps mix lattice vectors {axes}, so a "
+            "strained cell can give pw.x's own FFT grid counts on which ph.x stops "
+            "with 'FFT grid incompatible with symmetry'"
+        )
+    else:
+        grid = "x".join(str(count) for count in decision.pw_grid)
+        refused = (
+            f"pw.x's own FFT grid for it, {grid}, is not mapped onto itself by the "
+            f"symmetry operations pw.x keeps, which mix lattice vectors {axes}, so "
+            "ph.x would stop with 'FFT grid incompatible with symmetry'"
+        )
+    return replace(
+        _PHONON_VC_RELAX_FFT_GRID,
+        message=(
+            f"vc-relax-phonon cannot run on this cell: {refused}. The vc-relax's "
+            "final scf rebuilds that grid for the relaxed cell, so no grid written "
+            "for ph.x reaches it. Use relax-phonon, which relaxes the atoms in the "
+            "written cell and keeps a grid written for ph.x, or run the vc-relax "
+            "task and then the phonon task on the relaxed structure."
+        ),
+    )
+
+
+def _phonon_refuses_fix_bottom_layers(
+    relax: FieldState[RelaxOptions | VcRelaxOptions] | None,
+) -> Finding | None:
+    """Rule 16 of this module's docstring, on any cell: the slab rules'
+    findings for the same setting are dropped (``_REPLACED_BY_PHONON``)."""
+    if relax is None or not relax.ok or relax.value.fix_bottom_layers is None:
+        return None
+    return replace(
+        _PHONON_FIX_BOTTOM_LAYERS,
+        message=(
+            f"fix_bottom_layers={relax.value.fix_bottom_layers} pins atoms in the "
+            "relaxation, so they keep leftover forces, while ph.x computes the "
+            "phonons as second derivatives at an equilibrium, where every force is "
+            "zero. Unset fix_bottom_layers."
+        ),
+    )
+
+
+def _phonon_needs_confirmed_metallicity(
+    occupations: FieldState[OccupationsDecision] | None,
+    is_metal: FieldState[Metallicity] | None,
+    electron_count: FieldState[ElectronCountDecision] | None,
+    magnetic: FieldState[MagneticConfigFacts] | None,
+    hubbard: FieldState[HubbardUDecision] | None,
+) -> Finding | None:
+    """Rule 17 of this module's docstring, on the written cell's composition,
+    whoever chose the occupations: of the is_metal facts only the user's metal
+    passes, and of fixed occupations only those the run takes; a requested
+    occupations=fixed it cannot take is refused here in place of rules 2 and 3
+    (``_REPLACED_BY_PHONON``). The finding gives why the run is not on fixed
+    occupations (``_not_on_fixed``), what an insulator sets
+    (``_insulator_route``) and what a metal sets (``_metal_route``), and names
+    the settings the message asks for."""
+    if occupations is None or is_metal is None or magnetic is None:
+        return None
+    if not (occupations.ok and magnetic.ok):
+        return None  # already surfaced via collect_blocked, or genuinely unknown
+    chosen = occupations.value.occupations
+    on_fixed = chosen == "fixed" and fixed_occupations_run(magnetic, electron_count)
+    if on_fixed or all_metallic(magnetic.value.cell):
+        return None
+    answer = is_metal.value if is_metal.ok and is_metal.source == "human" else None
+    if answer == "metal":
+        return None
+    sources = occupations.provenance.field_sources or {}
+    requested = sources.get("occupations", "heuristic") != "heuristic"
+    route = _insulator_route(magnetic, electron_count, hubbard, requested=requested)
+    why = _not_on_fixed(
+        chosen,
+        route.obstacle,
+        requested=requested,
+        answer=answer,
+        classified_non_metal=is_metal.ok and is_metal.value == "non_metal",
+    )
+    metal, metal_remedy = _metal_route(chosen, magnetic)
+    runs = (
+        "the request sets occupations=fixed, which this run cannot take"
+        if chosen == "fixed"
+        else f"it runs on occupations={chosen}"
+    )
+    asked = {
+        "is_metal",
+        *route.fields,
+        *metal_remedy,
+        *(("occupations",) if requested else ()),
+    }
+    return replace(
+        _PHONON_METALLICITY_UNCONFIRMED,
+        message=(
+            "The phonon tasks need this structure on fixed occupations, or "
+            f"confirmed as a metal: {runs}, and its composition is not "
+            "all-metallic, so it may be an insulator. "
+            f"{_PH_X_TREATS_SMEARING_AS_METAL} {why} {route.advice}; {metal}."
+        ),
+        fields=tuple(
+            name for name in _PHONON_METALLICITY_UNCONFIRMED.fields if name in asked
+        ),
+        remedies=(*route.remedies, metal_remedy),
+    )
+
+
+def _metal_route(
+    chosen: str, magnetic: FieldState[MagneticConfigFacts]
+) -> tuple[str, dict[str, object]]:
+    """Rule 17's advice for a metal on ``chosen`` occupations, and its patch:
+    is_metal=metal, which keeps smearing or tetrahedra; in place of a
+    requested occupations=fixed the run cannot take, with smearing, and with
+    the request's moment unset, which ph.x refuses on smearing (rule 12)."""
+    if chosen != "fixed":
+        advice = f"for a metal set is_metal=metal, which keeps occupations={chosen}"
+        return advice, _METAL
+    smearing = "for a metal set is_metal=metal and occupations=smearing"
+    if magnetic.value.tot_magnetization is None:
+        return smearing, _METAL_ON_SMEARING
+    return (
+        f"{smearing}, and unset tot_magnetization, which ph.x refuses on smearing",
+        _UNPINNED_METAL_ON_SMEARING,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _InsulatorRoute:
+    """How rule 17's insulator reaches fixed occupations: ``obstacle``, why
+    they do not run as the run stands (``None`` where they do); ``advice``,
+    what an insulator sets; ``remedies``, the complete patches among that;
+    ``fields``, the settings ``advice`` names besides is_metal and the
+    requested occupations."""
+
+    obstacle: str | None
+    advice: str
+    remedies: tuple[dict[str, object], ...]
+    fields: tuple[str, ...]
+
+
+def _insulator_route(
+    magnetic: FieldState[MagneticConfigFacts],
+    electron_count: FieldState[ElectronCountDecision] | None,
+    hubbard: FieldState[HubbardUDecision] | None,
+    *,
+    requested: bool,
+) -> _InsulatorRoute:
+    """Rule 17's route to fixed occupations for an insulator on ``magnetic``'s
+    spin, by the occupations rule (``fixed_occupations_run``):
+    is_metal=non_metal, or occupations=fixed where the request sets the
+    occupations, which is_metal does not change. A collinear run without a
+    moment fixed occupations take needs tot_magnetization as well, named, or,
+    where it gives fixed occupations, is_magnetic=non_magnetic
+    (``_non_magnetic_runs_fixed``); an odd electron count without spin
+    polarization needs spin polarization and, on a collinear run, the moment,
+    named."""
+    setting = "occupations=fixed" if requested else "is_metal=non_metal"
+    patch = _FIXED if requested else _NON_METAL
+    if fixed_occupations_run(magnetic, electron_count):
+        runs = "" if requested else ", which runs it on fixed occupations"
+        return _InsulatorRoute(
+            None, f"For an insulator set {setting}{runs}", (patch,), ()
+        )
+    if magnetic.value.spin_mode != "collinear":
+        return _InsulatorRoute(
+            _ODD_WITHOUT_SPIN,
+            f"For a magnetic insulator set {setting} with spin_polarized=true and, "
+            "on a collinear run, its integer moment as tot_magnetization, odd like "
+            "the electron count",
+            (),
+            ("spin_polarized", "tot_magnetization"),
+        )
+    tot = magnetic.value.tot_magnetization
+    lacking = (
+        "and this run has none"
+        if tot is None
+        else f"which tot_magnetization={tot:.10g} is not"
+    )
+    obstacle = f"{_FIXED_NEEDS_MOMENT}, {lacking}"
+    moment = (
+        f"For a magnetic insulator set {setting} with tot_magnetization, its "
+        "integer moment in Bohr magnetons per cell"
+    )
+    if not _non_magnetic_runs_fixed(magnetic, electron_count, hubbard):
+        return _InsulatorRoute(obstacle, moment, (), ("tot_magnetization",))
+    return _InsulatorRoute(
+        obstacle,
+        f"{moment}; for one without magnetic moments set {setting} and "
+        "is_magnetic=non_magnetic",
+        ({**patch, **_NON_MAGNETIC},),
+        ("is_magnetic", "tot_magnetization"),
+    )
+
+
+def _non_magnetic_runs_fixed(
+    magnetic: FieldState[MagneticConfigFacts],
+    electron_count: FieldState[ElectronCountDecision] | None,
+    hubbard: FieldState[HubbardUDecision] | None,
+) -> bool:
+    """Whether is_magnetic=non_magnetic puts a collinear run on fixed
+    occupations: that answer gives it no spin polarization, as it does unless
+    the request or the llm decides the spin polarization or a Hubbard U acts
+    on an odd d or f count (``advisors/magnetic_config.py``'s
+    ``unpolarized_if_non_magnetic``), and fixed occupations run on the
+    electron count without spin polarization."""
+    # Without a magnetic record the run reads as spin-unpolarized.
+    unpolarized_runs = fixed_occupations_run(None, electron_count)
+    return unpolarized_runs and unpolarized_if_non_magnetic(magnetic, hubbard)
+
+
+def _not_on_fixed(
+    chosen: str,
+    obstacle: str | None,
+    *,
+    requested: bool,
+    answer: str | None,
+    classified_non_metal: bool,
+) -> str:
+    """Rule 17's reason that a run on ``chosen`` occupations is not on fixed
+    ones it takes: the ``obstacle`` that refuses a requested occupations=fixed;
+    the request's other occupations, which is_metal does not change, with the
+    ``obstacle`` that would refuse occupations=fixed; otherwise, the
+    classifier's threshold where is_metal=non_metal would give fixed
+    occupations, and the ``obstacle`` that keeps the user's non_metal
+    (``answer``), the classifier's or any other fact on ``chosen``."""
+    if chosen == "fixed":
+        return f"Fixed occupations are refused here: {obstacle}."
+    if requested:
+        why = f"The request sets occupations={chosen}, which is_metal does not change"
+        if obstacle is None:
+            return f"{why}."
+        return (
+            f"{why}, and setting occupations=fixed alone would be refused: {obstacle}."
+        )
+    if obstacle is None:
+        return _CLASSIFIER_CALLS_INSULATORS_METALS
+    if answer == "non_metal":
+        return f"With is_metal=non_metal it stays on occupations={chosen}: {obstacle}."
+    if classified_non_metal:
+        return (
+            f"It is classified as a non-metal, but it stays on occupations={chosen}: "
+            f"{obstacle}."
+        )
+    return (
+        f"{_CLASSIFIER_CALLS_INSULATORS_METALS} Setting is_metal=non_metal alone "
+        f"would keep occupations={chosen}: {obstacle}."
+    )

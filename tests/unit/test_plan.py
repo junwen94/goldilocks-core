@@ -48,6 +48,26 @@ def test_vc_relax_expands_to_exactly_one_step() -> None:
     assert steps == (PlannedStep(purpose="vc-relax", program="pw.x"),)
 
 
+@pytest.mark.parametrize(
+    ("task", "first_step"),
+    [("phonon", "scf"), ("relax-phonon", "relax"), ("vc-relax-phonon", "vc-relax")],
+)
+def test_a_phonon_task_expands_to_its_first_pw_x_step_then_ph_q2r_and_matdyn(
+    task: CalcTask, first_step: str
+) -> None:
+    """#215: ph.x reads the save of the first pw.x step, which keeps its own
+    purpose, q2r.x ph.x's dynamical matrices and matdyn.x q2r.x's force
+    constants. d3hess.x has no row: the writer inserts it for DFT-D3."""
+    steps = expand_task(task)
+
+    assert steps == (
+        PlannedStep(purpose=first_step, program="pw.x"),
+        PlannedStep(purpose="ph", program="ph.x"),
+        PlannedStep(purpose="q2r", program="q2r.x"),
+        PlannedStep(purpose="phonon_dos", program="matdyn.x"),
+    )
+
+
 def test_every_task_expands_to_steps_with_distinct_purposes() -> None:
     """A request scopes a setting to a step by its purpose
     (``steps.<purpose>.<key>``), so no two steps of one task share one."""

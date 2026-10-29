@@ -1,4 +1,4 @@
-"""relax: ion/cell relaxation parameters, for relax/vc-relax tasks.
+"""relax: ion/cell relaxation parameters of a relax or vc-relax step.
 
 ``RelaxOptions``/``VcRelaxOptions`` (the typed fields) landed in v2 epic
 7 (#7); this epic (v2 epic 10, #10) adds the actual decision cascade
@@ -9,6 +9,19 @@ epic 10's job"). Every default is copied verbatim from QE's own
 ``INPUT_PW.txt`` (re-downloaded and checked 2026-09-14, not carried over
 from memory or the design doc's own prose), not invented or "improved"
 with unvalidated numbers.
+
+**A task's protocol can set ``forc_conv_thr``** (#215). The phonon tasks
+relax to aiida-quantumespresso's balanced 1e-4 Ry/Bohr
+(``workflows/protocols/pw/base.yaml``; fast 1e-3, stringent 0.5e-4), ten
+times tighter than QE's default, because DFPT takes second derivatives at
+the geometry it is given and leftover forces shift the frequencies. That
+value is the task's (``RelaxProtocol``, carried on
+``service/_step_protocol.py``'s ``StepProtocol``), not this module's
+default: it ranks below a request's ``forc_conv_thr`` and above QE's
+default, and, as a threshold, has no llm tier. Its record reads
+``heuristic``, with the protocol's note and citations. A request value is
+used as given, and one looser than the protocol's carries the protocol's
+warning. The relax and vc-relax tasks give no protocol and keep QE's 1e-3.
 
 **``fix_bottom_layers`` (#44, split out of this epic then implemented
 separately):** human-only (``RelaxHumanInput`` only, no ``RelaxLlmInput``
@@ -170,7 +183,8 @@ leaves a period off that axis unrelaxed."""
 class RelaxOptions:  # calculation ∈ {relax, vc-relax}
     ion_dynamics: IonDynamics = "bfgs"
     forc_conv_thr: float = _FORC_CONV_THR_DEFAULT
-    """a.u. (Ry/Bohr). QE's own official INPUT_PW default."""
+    """a.u. (Ry/Bohr). Defaults to QE's own official INPUT_PW value; a
+    task's protocol can set its own (``RelaxProtocol``)."""
     etot_conv_thr: float = 1.0e-5
     """a.u. Not this module's own default -- ``relax_settings`` always
     overwrites this with the caller's already-resolved
@@ -250,12 +264,29 @@ class RelaxLlmInput(LlmInput):
     press: float | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class RelaxProtocol:
+    """A task protocol's force threshold for its relaxation step (#215),
+    such as the phonon tasks' 1e-4 Ry/Bohr: ranked below a request's
+    ``forc_conv_thr`` and above QE's default (module docstring). Not a
+    request value, so its record reads ``heuristic``, with ``note`` as its
+    ``source_note`` and ``citations`` as its citations. A request value
+    looser than ``forc_conv_thr`` is kept and carries ``loose_warning``."""
+
+    forc_conv_thr: float
+    """a.u. (Ry/Bohr), as ``RelaxHumanInput.forc_conv_thr``."""
+    note: str
+    citations: tuple[str, ...]
+    loose_warning: Warning
+
+
 def relax_settings(
     calculation: Literal["relax", "vc-relax"],
     convergence: FieldState[ConvergenceDecision],
     geometry: FieldState[GeometryFacts] | None = None,
     human: RelaxHumanInput | None = None,
     llm: RelaxLlmInput | None = None,
+    protocol: RelaxProtocol | None = None,
 ) -> FieldState[RelaxOptions | VcRelaxOptions]:
     """``etot_conv_thr`` makes this ``Blocked`` whenever ``convergence``
     itself is not ``Resolved`` -- there is no fallback constant, per
@@ -263,6 +294,11 @@ def relax_settings(
     ``convergence``, not recomputed. A vc-relax is also ``Blocked`` when
     ``geometry`` gives the cell no default ``cell_dofree`` and no human or
     llm value is set (a wire, or a slab outside the xy frame).
+
+    ``forc_conv_thr`` is the request's, else the task ``protocol``'s, else
+    QE's default (module docstring). The protocol's value reads
+    ``heuristic`` and puts the protocol's note and citations on the record;
+    a request value looser than the protocol's carries its warning.
 
     ``field_sources`` has one entry per field of the decision, so only a
     setting the decision applied can make the record ``human`` (#173; a
@@ -278,10 +314,13 @@ def relax_settings(
     etot_conv_thr_source = convergence_field_sources.get(
         "etot_conv_thr", convergence.source
     )
+    forc_conv_thr, warnings, protocol_provenance = _forc_conv_thr(
+        human.forc_conv_thr, protocol
+    )
 
     base_kwargs: dict[str, object] = {
         "ion_dynamics": _pick(human.ion_dynamics, llm.ion_dynamics, "bfgs"),
-        "forc_conv_thr": _pick(human.forc_conv_thr, None, _FORC_CONV_THR_DEFAULT),
+        "forc_conv_thr": forc_conv_thr,
         "etot_conv_thr": convergence.value.etot_conv_thr,
         "nstep": _pick(human.nstep, llm.nstep, _NSTEP_DEFAULT),
         "trust_radius_max": _pick(
@@ -295,6 +334,7 @@ def relax_settings(
         ),
         "remove_rigid_rot": _pick(human.remove_rigid_rot, llm.remove_rigid_rot, False),
         "fix_bottom_layers": _pick(human.fix_bottom_layers, None, None),
+        "warnings": warnings,
     }
 
     if calculation == "vc-relax":
@@ -317,7 +357,28 @@ def relax_settings(
         fields=[field.name for field in fields(decision) if field.name != "warnings"],
         decided={"etot_conv_thr": etot_conv_thr_source},
     )
-    return Resolved(decision, Provenance.from_field_sources(field_sources))
+    return Resolved(
+        decision, Provenance.from_field_sources(field_sources, **protocol_provenance)
+    )
+
+
+def _forc_conv_thr(
+    human_value: float | None, protocol: RelaxProtocol | None
+) -> tuple[float, tuple[Warning, ...], dict[str, object]]:
+    """``forc_conv_thr`` with the warnings it carries (``protocol``'s
+    ``loose_warning`` for a request value strictly looser than the
+    protocol's) and the provenance fields it adds (``protocol``'s note and
+    citations when the protocol's value is used)."""
+    if protocol is None:
+        return _pick(human_value, None, _FORC_CONV_THR_DEFAULT), (), {}
+    if human_value is None:
+        return (
+            protocol.forc_conv_thr,
+            (),
+            {"source_note": protocol.note, "citations": protocol.citations},
+        )
+    loose = human_value > protocol.forc_conv_thr
+    return human_value, (protocol.loose_warning,) if loose else (), {}
 
 
 def _resolve_cell_dofree(

@@ -31,13 +31,14 @@ for a memory-only preview instead. Use `uv run goldilocks --help` or a
 subcommand's `--help` for full syntax.
 
 `run` and `explain` share the same seven flags: the `structure` path,
-`--code`, `--task {scf_single_point,dos,band,relax,vc-relax}`, `--hpc`, `--set
-KEY=VALUE` (repeatable), `--config FILE.toml`, and `--json`; both also accept
-`--fetch-missing`, and only `run` additionally accepts `-o/--out`. `--task` is
-validated against the five listed choices; `--code` is passed through
-unchecked — only `quantum_espresso` is a registered code today, so an
-unrecognised `--code` silently produces a Quantum-ESPRESSO-shaped bundle
-instead of failing.
+`--code`,
+`--task {scf_single_point,dos,band,relax,vc-relax,phonon,relax-phonon,vc-relax-phonon}`,
+`--hpc`, `--set KEY=VALUE` (repeatable), `--config FILE.toml`, and `--json`;
+both also accept `--fetch-missing`, and only `run` additionally accepts
+`-o/--out`. `--task` is validated against the eight listed choices; `--code`
+is passed through unchecked — only `quantum_espresso` is a registered code
+today, so an unrecognised `--code` silently produces a Quantum-ESPRESSO-shaped
+bundle instead of failing.
 
 `uv run goldilocks capabilities --json` dumps the same full payload HTTP's
 `GET /capabilities` and the MCP `capabilities` tool return: `codes`, `tasks`
@@ -98,13 +99,16 @@ each record's tier and step: `analysis` (what the structure alone decides),
 `system` (what every step shares), then `steps`, one `{"name", "records"}`
 per step of the task in run order -- the task's one `job` with its first step,
 a `dos` task's nscf decisions under their `nscf_` names, a `band` task's
-bands-step decisions under their `bands_` names. Every record is in
-exactly one list. `warnings` holds every record's warnings, for every task,
-each as `{"code", "level", "category", "message", "record"}`, where `record`
-names the record it came from (`nscf_parallelisation` for a `dos` task's nscf
-step, `bands_parallelisation` for a `band` task's bands step), then the
-request's routing notices under the `record` `overrides`
-(below); `goldilocks.json` carries the same list.
+bands-step decisions under their `bands_` names, and a phonon task's
+`fft_grid` (and, for a relaxation, `relax`) with its first step, then
+`q_sampling` and `phonon` under `ph`, `q2r` under `q2r` and `phonon_dos`
+under `phonon_dos`. Every record is in exactly one list. `warnings` holds
+every record's warnings, for every task, each as `{"code", "level",
+"category", "message", "record"}`, where `record` names the record it came
+from (`nscf_parallelisation` for a `dos` task's nscf step,
+`bands_parallelisation` for a `band` task's bands step), then the request's
+routing notices under the `record` `overrides` (below); `goldilocks.json`
+carries the same list.
 
 `--json` output and the published `goldilocks.json` are strict JSON: a value
 with no finite number is `null`, never `Infinity` or `NaN`. For example, the
@@ -146,14 +150,23 @@ its type, default, and description; a selection of commonly used keys:
 | `conv_thr`, `mixing_beta`, `electron_maxstep` | SCF energy-convergence threshold, density-mixing factor, max SCF iterations |
 | `u_by_element`                      | Hubbard U_eff per element in eV, replacing the built-in table, e.g. `--set 'u_by_element={"Ti": 4.0}'` |
 | `hubbard_needs_correlation`         | `false` runs without Hubbard +U; `true` applies the built-in U table  |
+| `hubbard_projectors`                | Projectors of the HUBBARD card when an element gets +U: `ortho-atomic` (default) or `atomic`, the only type the phonon tasks run +U with; see [Hubbard +U](science.md#check-hubbard-u) |
+| `forc_conv_thr`                     | Force threshold of a relaxation in Ry/Bohr: Quantum ESPRESSO's 1e-3 for `relax` and `vc-relax`, 1e-4 for the relaxation of `relax-phonon` and `vc-relax-phonon`, where a looser value gets a warning |
 | `delta_e`, `emin`, `emax`, `broadening`, `ngauss` | `dos.x` settings of the `dos` task: energy step and window in eV, broadening in Ry, broadening function (`-99`, `-1`, `0`..`10`; `dos.x` reads it only with a broadening width, so it needs `broadening` unless the nscf step uses smearing) |
 | `k_path_distance`                   | Largest spacing between neighbouring points of a `band` task's high-symmetry path, in 1/Å with 2π included (default 0.025); see [the band structure path](science.md#check-the-band-structure-path) |
+| `q_grid`, `q_distance`              | A phonon task's ph.x q-point mesh: an explicit Γ-centred mesh, e.g. `--set 'q_grid=[4,4,4]'`, or a spacing in 1/Å with 2π included (default 0.3); see [the phonon tasks](science.md#check-the-phonon-tasks) |
+| `tr2_ph`, `alpha_mix`, `nmix_ph`    | ph.x's linear-response threshold, mixing factor and number of mixed iterations (defaults 1e-18, 0.4 and 8) |
+| `asr`                               | Acoustic sum rule of q2r.x and matdyn.x: `crystal` (default, falling back to `simple` with a notice where its memory would not fit one task) or `simple` |
+| `dos_q_distance`                    | Spacing of the mesh matdyn.x interpolates a phonon task's phonon DOS on, in 1/Å with 2π included (default 0.10) |
 
 Each setting applies to the steps that read it, and `goldilocks settings
 --json` lists them (`tasks`, `steps`, `scope`). A task's steps are named by
 purpose: `scf` (`scf_single_point`); `relax`; `vc-relax`; `scf`, `nscf`,
-`dos` (`--task dos`); and `scf`, `bands`, `bands_x` (`--task band`: pw.x
-with `calculation='bands'`, then `bands.x`).
+`dos` (`--task dos`); `scf`, `bands`, `bands_x` (`--task band`: pw.x
+with `calculation='bands'`, then `bands.x`); and `scf`, `relax` or
+`vc-relax`, then `ph`, `q2r`, `phonon_dos` (`--task phonon`,
+`relax-phonon` and `vc-relax-phonon`: the first pw.x step, then ph.x,
+q2r.x and matdyn.x, with `d3hess.x` before ph.x under DFT-D3).
 
 - A step setting given as `KEY=VALUE` reaches every step of the task it
   applies to. On a `dos` task, `k_grid` sets both the scf and the nscf step,
@@ -170,6 +183,14 @@ with `calculation='bands'`, then `bands.x`).
   only, without a notice, and `k_path_distance` sets its bands step only.
   `nbnd`, `extra_bands`, `conv_thr`, `npool` and `ndiag` reach both pw.x
   steps, with the notice.
+- A phonon task's first step is its only pw.x step, so the pw.x settings
+  (the k-mesh, occupations, SCF-loop, `conv_thr`, `nbnd`, `npool` and
+  `ndiag` settings) set it without a notice, and ph.x runs with its
+  `npool` and `ndiag`. The relaxation settings reach the first step of
+  `relax-phonon` and `vc-relax-phonon`. `q_grid`, `q_distance`, `tr2_ph`,
+  `alpha_mix` and `nmix_ph` set the `ph` step, `asr` the `q2r` step and
+  `dos_q_distance` the `phonon_dos` step. `d3hess.x` takes no setting and
+  is not a step a key can name.
 - `steps.<step>.KEY=VALUE` sets one step only and wins over the plain key for
   that step: `--task dos --set 'k_grid=[10,10,10]' --set
   'steps.nscf.k_grid=[30,30,30]'` gives the scf 10×10×10 and the nscf
@@ -182,12 +203,16 @@ with `calculation='bands'`, then `bands.x`).
   `walltime_h`, `account`) the one allocation all of a task's steps run in:
   both are set once per task, and `steps.<step>.` is refused for them.
 - A setting no step of the task reads is refused (exit 2, HTTP 422): `press`
-  and `cell_dofree` apply to `vc-relax` only, `nstep` and `etot_conv_thr` to
-  `relax` and `vc-relax`, the `dos.x` settings to `dos`, and
-  `k_path_distance` to `band`. So is `steps.<step>.KEY` for a step that does
-  not read it, such as `steps.nscf.mixing_beta`, `steps.bands.k_grid` or
-  `steps.bands.occupations`, and any `steps.bands_x.KEY`: `bands.x` takes no
-  setting.
+  and `cell_dofree` apply to a `vc-relax` step only (the `vc-relax` and
+  `vc-relax-phonon` tasks), `nstep`, `etot_conv_thr` and `forc_conv_thr` to
+  `relax` and `vc-relax` steps, the `dos.x` settings to `dos`,
+  `k_path_distance` to `band`, and the ph.x, q2r.x and matdyn.x settings to
+  the phonon tasks. So is `steps.<step>.KEY` for a step that does not read
+  it, such as `steps.nscf.mixing_beta`, `steps.bands.k_grid`,
+  `steps.bands.occupations` or `steps.ph.k_grid`, and any
+  `steps.bands_x.KEY`: `bands.x` takes no setting. A step the task does not
+  have is refused too: `steps.scf.KEY` on `relax-phonon`, whose first step
+  is `relax`.
 
 Each setting's `structure_specific` says whether its value is a judgement
 about the structure it was set for — its elements, magnetism, geometry, size
@@ -206,8 +231,10 @@ their group's record under their own name (`conv_thr` in
 `spin_orbit_coupling` in `magnetic.spin_orbit_enabled`, `magnetic_ordering`
 in `magnetic.ordering.applied` (`null` for a run without spin polarization,
 which applies no ordering), `moment_direction` in
-`magnetic.moment_direction.uvw`, `k_grid` in `k_sampling.mesh` and
-`k_path_distance` in `bands_k_path.k_path_distance`. `path` is
+`magnetic.moment_direction.uvw`, `k_grid` in `k_sampling.mesh`,
+`k_path_distance` in `bands_k_path.k_path_distance`, `hubbard_projectors`
+in `hubbard.projectors` (`null` without +U) and `q_grid` in
+`q_sampling.mesh`. `path` is
 `null` where the record holds no value of the setting: `extra_bands` only
 shifts `nbnd`, `nosym` only changes the `n_irr_k` count, and
 `hubbard_needs_correlation` and `u_by_element` decide which U values the
@@ -255,6 +282,46 @@ it. There is still no flag to point `run`/`explain` at a custom
 model file of your own. `uv run goldilocks models --json` reports every
 model, installed or not, so it also confirms whether one you expect to
 be usable actually is.
+
+## Submit and resume a phonon job
+
+A phonon task's `submit.sh` runs all its steps in one job: the first pw.x
+step, `d3hess.x` under DFT-D3, `ph.x`, `q2r.x` and `matdyn.x`. No input
+carries `max_seconds`. Instead the script starts a timer that creates
+`pwscf.EXIT` (`<prefix>.EXIT`) in the working directory at
+`job.timer_seconds`, 95% of `walltime_h`, and pw.x or ph.x, whichever is
+running, stops cleanly there. The script deletes a leftover `pwscf.EXIT`
+before the first step and stops the timer when it ends. The other tasks'
+scripts have no timer: their pw.x inputs keep their `max_seconds` share of
+the walltime (`job.max_seconds_by_step`).
+
+The script checks every step and stops with a `goldilocks:` line on stderr
+when one did not finish. The ph step passes only when ph.x exited with 0 and
+wrote a complete dynamical matrix for every q-point `pwscf.dyn0` lists.
+Otherwise the message names why ph.x stopped (the job timer, a linear system
+that did not converge, or its exit code) and the q-points still without a
+matrix, and the next line gives the command that resumes the job at the ph
+step:
+
+```bash
+sbatch --export=ALL,GOLDILOCKS_FROM_STEP=ph submit.sh
+```
+
+`GOLDILOCKS_FROM_STEP` names the step the job starts at, the first when it
+is unset. It must be one of the job's step names, which the script lists in
+`goldilocks_steps` (`relax d3hess ph q2r phonon_dos` for a `relax-phonon`
+task under DFT-D3); any other value, an empty one too, stops the script
+before a step runs.
+The steps before it are skipped, so a resumed job never repeats the
+relaxation, and ph.x continues from the data its earlier run saved in
+`out/_ph0` and the dynamical matrices it wrote. A job that starts at the
+first step, as a plain `sbatch submit.sh` does, deletes `out/_ph0` and
+`pwscf.dyn*` before it runs anything, since they belong to the save that
+step rewrites. A resumed job starts a new timer on its own walltime. A pw.x
+step the timer stopped cannot resume: its message says to raise
+`walltime_h`. Only the phonon tasks' scripts read `GOLDILOCKS_FROM_STEP`;
+the other tasks ignore it. See
+[running and resuming phonons](science.md#check-the-phonon-tasks) for why.
 
 ## Magnetic orderings
 

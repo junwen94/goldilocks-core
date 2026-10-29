@@ -5,12 +5,19 @@ never fail inside a writer. This runs ``advise``/``check``/``generate``
 end to end over a matrix of correlated compounds on a synthetic
 SSSP-shaped table (so it runs in CI) and asserts, for every scenario and
 task, that ``check`` is ok, that generation succeeds, and that every
-``pw.x`` input carries exactly the expected HUBBARD lines (or no Hubbard
-card at all). Pinning the card means a regression that drops or invents a
-U value fails here, not only one that raises. +U-specific convergence
+``pw.x`` input carries exactly the expected HUBBARD lines under the
+expected projectors (or no Hubbard card at all). Pinning the card means a
+regression that drops or invents a U value fails here, not only one that
+raises. +U-specific convergence
 output follows the same decision (#166): ``mixing_fixed_ns`` appears only
 as the user set it, and a nonzero value carries the frozen-occupation
 warning exactly when a card is rendered.
+
+The phonon tasks run the scenarios their own gate accepts, where a U is
+written on atomic projectors, the only ones ph.x takes, and the first step
+runs on fixed occupations, which a phonon task needs for a compound that is
+not all-metallic unless the user confirms a metal: their first step's pw.x
+input carries the same card.
 
 A request no input can express is refused by ``check`` itself, where
 ``/explain`` shows it, and never reaches a writer: spin-orbit coupling
@@ -114,6 +121,8 @@ class _Scenario:
     hubbard: tuple[str, ...]
     """The exact ``U`` lines of the HUBBARD card; empty means no card."""
     overrides: dict[str, object] = field(default_factory=dict)
+    projectors: str = "ortho-atomic"
+    """The projectors the HUBBARD card's header names."""
 
 
 _SCENARIOS = {
@@ -151,6 +160,26 @@ _SCENARIOS = {
     ),
     "CeO2 no +U": _Scenario(
         lambda: _fluorite("Ce", 5.41), (), {"hubbard_needs_correlation": False}
+    ),
+    # The projectors ph.x requires for DFPT+U, in every pw.x input.
+    "NiO hubbard_projectors atomic": _Scenario(
+        lambda: _rock_salt("Ni", 4.17),
+        ("U  Ni-3d  6.2",),
+        {"hubbard_projectors": "atomic"},
+        projectors="atomic",
+    ),
+    # On fixed occupations, as the phonon tasks need a compound that is not a
+    # confirmed metal: TiO2 as a non-metal, ferromagnetic NiO with its moment.
+    "TiO2 is_metal non_metal": _Scenario(_rutile_tio2, (), {"is_metal": "non_metal"}),
+    "NiO hubbard_projectors atomic, is_metal non_metal, tot_magnetization": _Scenario(
+        lambda: _rock_salt("Ni", 4.17),
+        ("U  Ni-3d  6.2",),
+        {
+            "hubbard_projectors": "atomic",
+            "is_metal": "non_metal",
+            "tot_magnetization": 2,
+        },
+        projectors="atomic",
     ),
     # A user mixing_fixed_ns, flagged only where a U is applied, whatever
     # needs_correlation says (#166): true for ThO2, false for the nitride UN.
@@ -203,7 +232,20 @@ _REFUSALS = {
     ),
 }
 
-_MULTI_TASK_SCENARIOS = ("NiO", "LaCuO3", "TiO2", "NiO is_metal non_metal")
+_MULTI_TASK_SCENARIOS = (
+    "NiO",
+    "LaCuO3",
+    "TiO2",
+    "NiO is_metal non_metal",
+    "NiO hubbard_projectors atomic",
+)
+
+_PHONON_SCENARIOS = (
+    "TiO2 is_metal non_metal",
+    "NiO hubbard_projectors atomic, is_metal non_metal, tot_magnetization",
+)
+"""The scenarios the phonon tasks' gate accepts: no U, or a U on atomic
+projectors, on fixed occupations."""
 
 _FROZEN_NS = "convergence.mixing_fixed_ns_freezes_hubbard_occupations"
 
@@ -255,9 +297,11 @@ def _generate(task: str, scenario: _Scenario, store: AssetStore):
     return advice, phases.generate(advice, report)
 
 
-def _hubbard_lines(content: str) -> tuple[str, ...]:
+def _hubbard_lines(content: str, projectors: str) -> tuple[str, ...]:
+    """The U lines under the HUBBARD card's header, which must name
+    ``projectors``."""
     lines = content.splitlines()
-    start = lines.index("HUBBARD (ortho-atomic)") + 1
+    start = lines.index(f"HUBBARD ({projectors})") + 1
     card = []
     for line in lines[start:]:
         if not line.strip():
@@ -266,11 +310,19 @@ def _hubbard_lines(content: str) -> tuple[str, ...]:
     return tuple(card)
 
 
-_CASES = [pytest.param("scf", name, id=f"scf-{name}") for name in _SCENARIOS] + [
-    pytest.param(task, name, id=f"{task}-{name}")
-    for task in ("relax", "vc-relax", "dos", "band")
-    for name in _MULTI_TASK_SCENARIOS
-]
+_CASES = (
+    [pytest.param("scf", name, id=f"scf-{name}") for name in _SCENARIOS]
+    + [
+        pytest.param(task, name, id=f"{task}-{name}")
+        for task in ("relax", "vc-relax", "dos", "band")
+        for name in _MULTI_TASK_SCENARIOS
+    ]
+    + [
+        pytest.param(task, name, id=f"{task}-{name}")
+        for task in ("phonon", "relax-phonon", "vc-relax-phonon")
+        for name in _PHONON_SCENARIOS
+    ]
+)
 
 
 @pytest.mark.parametrize(("task", "name"), _CASES)
@@ -292,7 +344,7 @@ def test_check_ok_implies_generate_renders_the_expected_hubbard_card(
     for content in pw_inputs:
         assert ("mixing_fixed_ns" in content) is (fixed_ns is not None)
         if scenario.hubbard:
-            assert _hubbard_lines(content) == scenario.hubbard
+            assert _hubbard_lines(content, scenario.projectors) == scenario.hubbard
         else:
             assert "hubbard" not in content.lower()
     codes = {warning["code"] for warning in advice.warnings()}

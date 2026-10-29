@@ -972,7 +972,9 @@ def test_hubbard_record_lists_each_applied_u_with_its_source(
     record = records_document(advice.records())["hubbard"]
     assert record["status"] == "resolved"
     (entry,) = record["value"]["u_values"]
-    assert set(record["value"]) == {"u_values", "warnings"}
+    assert set(record["value"]) == {"u_values", "projectors", "warnings"}
+    assert record["value"]["projectors"] == "ortho-atomic"
+    assert record["field_sources"]["hubbard_projectors"] == "heuristic"
     assert {key: entry[key] for key in ("element", "manifold", "u_ev")} == {
         "element": "Ni",
         "manifold": "3d",

@@ -21,17 +21,41 @@ from goldilocks_core.bundle import bundle_files
 from goldilocks_core.server import _handlers
 from goldilocks_core.server.documents import ComputeRequestDocument
 
-_TASKS = ("scf_single_point", "relax", "vc-relax", "dos", "band")
+_TASKS = (
+    "scf_single_point",
+    "relax",
+    "vc-relax",
+    "dos",
+    "band",
+    "phonon",
+    "relax-phonon",
+    "vc-relax-phonon",
+)
+
+_TASK_OVERRIDES = {
+    "phonon": {"is_metal": "non_metal"},
+    "relax-phonon": {"is_metal": "non_metal", "use_vdw": True},
+    "vc-relax-phonon": {"is_metal": "non_metal"},
+}
+"""The request of each phonon task on this Si cell: is_metal=non_metal, which
+puts its first step on fixed occupations, as a phonon task needs for a
+composition that is not all-metallic unless the user confirms a metal, and
+DFT-D3 for relax-phonon, whose phonon record otherwise carries no notice."""
 
 _TASK_RECORD_WARNINGS = {
-    "dos": "nscf_parallelisation",
-    "band": "bands_parallelisation",
+    "dos": ("nscf_parallelisation", "parallelisation.npool_load_imbalance"),
+    "band": ("bands_parallelisation", "parallelisation.npool_load_imbalance"),
+    "phonon": ("phonon", "phonon.relax_first"),
+    "relax-phonon": ("phonon", "phonon.d3_two_body"),
+    "vc-relax-phonon": ("phonon", "phonon.vc_relax_input_cell"),
 }
-"""A task record that warns on this Si cell, by task: the nscf or bands
-step's npool notice, which #152 lost for the nscf step. Its lists must carry
-it, so the dos and band cases fail instead of passing on the shared records
-alone if the notice goes. The relax record never warns, so relax and
-vc-relax have no such record to check."""
+"""A task record that warns on this Si cell, by task, and one code it
+carries: the nscf or bands step's npool notice, which #152 lost for the nscf
+step, and the ph step's phonon record, which carries the phonon task's
+relax-first notice, relax-phonon's two-body D3 notice and vc-relax-phonon's
+input-cell notice. Its lists must carry it, so these cases fail instead of
+passing on the shared records alone if the notice goes. The relax record
+never warns, so relax and vc-relax have no such record to check."""
 
 
 @pytest.fixture
@@ -65,6 +89,7 @@ def test_top_level_warnings_are_the_union_of_every_record_s(
         structure_content=mc3d_42058_silicon().to(fmt="cif"),
         hpc="scarf",
         task=task,
+        overrides=_TASK_OVERRIDES.get(task, {}),
     )
 
     explained = _handlers.explain(document)
@@ -81,4 +106,6 @@ def test_top_level_warnings_are_the_union_of_every_record_s(
     task_record = _TASK_RECORD_WARNINGS.get(task)
     if task_record is not None:
         for output in (explained, summary, manifest):
-            assert task_record in {warning["record"] for warning in output["warnings"]}
+            assert task_record in {
+                (warning["record"], warning["code"]) for warning in output["warnings"]
+            }

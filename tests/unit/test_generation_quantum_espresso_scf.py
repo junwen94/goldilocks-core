@@ -4,7 +4,12 @@ import dataclasses
 
 import pytest
 from pymatgen.core import Lattice, Species, Structure
-from support import carbon_pair_in_a_box, graphene_monolayer
+from support import (
+    carbon_pair_in_a_box,
+    graphene_monolayer,
+    graphite,
+    written_alpha_uranium,
+)
 
 from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.convergence import ConvergenceDecision
@@ -210,6 +215,8 @@ def test_writes_one_scf_step_with_pure_translated_content(
     assert "nspin" not in content
     assert "vdw_corr" not in content
     assert "disk_io" not in content
+    assert "nr1" not in content
+    assert "dftd3_threebody" not in content
 
 
 @pytest.mark.parametrize("purpose, seconds", [("scf", 6946), ("nscf", 6733)])
@@ -228,6 +235,21 @@ def test_max_seconds_is_the_steps_own_share_of_the_walltime(
     assert [line for line in lines if "max_seconds" in line] == [
         f"   max_seconds      = {seconds}"
     ]
+
+
+def test_a_step_without_a_max_seconds_share_writes_none(
+    diamond_silicon, pseudo_metadata_factory
+) -> None:
+    """#215: a task that runs a job timer gives its steps no share
+    (PwSettings.max_seconds None), so scf.in leaves max_seconds to pw.x's
+    default."""
+    system = _system(diamond_silicon, pseudo_metadata_factory)
+
+    (rendered,) = write_qe_scf(system, _step(max_seconds=None), _CTX)
+
+    content = rendered.files["scf.in"]
+    assert "max_seconds" not in content
+    assert "calculation      = 'scf'" in content
 
 
 @pytest.mark.parametrize("purpose", ["scf", "nscf"])
@@ -635,6 +657,56 @@ def test_vdw_method_translates_to_qe_keyword(
 
     assert "vdw_corr         = 'grimme-d3'" in content
     assert "dftd3_version    = 4" in content
+    assert "dftd3_threebody" not in content
+
+
+def _system_namelist(content: str) -> list[str]:
+    return content.split("&SYSTEM\n")[1].split("\n/\n")[0].splitlines()
+
+
+def test_the_phonon_first_step_writes_the_grid_ph_x_accepts_as_nr1_nr3(
+    pseudo_metadata_factory,
+) -> None:
+    """At 480 Ry pw.x's own dense grid for alpha-U, 40x45x64, is one ph.x
+    refuses; the phonon tasks' scf writes 45x45x64 instead, all three values
+    (#215)."""
+    system = dataclasses.replace(
+        _system(written_alpha_uranium(), pseudo_metadata_factory),
+        cutoffs=CutoffsDecision(ecutwfc_ry=60.0, ecutrho_ry=480.0),
+    )
+    step = dataclasses.replace(_step(max_seconds=None), fft_grid=(45, 45, 64))
+
+    content = write_qe_scf(system, step, _CTX)[0].files["scf.in"]
+
+    assert [line for line in _system_namelist(content) if " nr" in line] == [
+        "   nr1              = 45",
+        "   nr2              = 45",
+        "   nr3              = 64",
+    ]
+    assert "dftd3_threebody" not in content
+
+
+def test_two_body_d3_turns_the_three_body_terms_off(
+    pseudo_metadata_factory,
+) -> None:
+    """d3hess.x builds the D3 Hessian from two-body terms only, so the phonon
+    tasks' scf of layered graphite writes dftd3_threebody = .false. beside
+    its DFT-D3 keywords (#215)."""
+    system = _system(
+        graphite(),
+        pseudo_metadata_factory,
+        vdw=VdwFacts(use_vdw=True, method="d3bj"),
+    )
+    step = dataclasses.replace(_step(max_seconds=None), dftd3_threebody=False)
+
+    content = write_qe_scf(system, step, _CTX)[0].files["scf.in"]
+
+    assert {
+        "   vdw_corr         = 'grimme-d3'",
+        "   dftd3_version    = 4",
+        "   dftd3_threebody  = .false.",
+    } <= set(_system_namelist(content))
+    assert "nr1" not in content
 
 
 def test_a_periodic_boundary_writes_tstress_and_no_assume_isolated(
@@ -739,9 +811,10 @@ def test_explicit_mixing_fixed_ns_is_written(pseudo_metadata_factory) -> None:
 def _hubbard_card(content: str) -> list[str]:
     """The HUBBARD card's lines, header first; [] when there is none."""
     lines = content.splitlines()
-    if "HUBBARD (ortho-atomic)" not in lines:
+    starts = [index for index, line in enumerate(lines) if line.startswith("HUBBARD")]
+    if not starts:
         return []
-    start = lines.index("HUBBARD (ortho-atomic)")
+    (start,) = starts
     card = []
     for line in lines[start:]:
         if not line.strip():
@@ -768,12 +841,33 @@ def test_u_values_render_the_qe_hubbard_card(
     system = _system(
         silicon_structure,
         pseudo_metadata_factory,
-        hubbard=HubbardUDecision(u_values=(HubbardU("Si", "3p", 3.0, "human"),)),
+        hubbard=HubbardUDecision(
+            u_values=(HubbardU("Si", "3p", 3.0, "human"),), projectors="ortho-atomic"
+        ),
     )
 
     content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
 
     assert _hubbard_card(content) == ["HUBBARD (ortho-atomic)", "  U  Si-3p  3"]
+
+
+def test_the_hubbard_card_names_the_decision_s_projectors(
+    pseudo_metadata_factory,
+) -> None:
+    """ph.x runs DFPT+U only with atomic projectors
+    (PHonon/PH/phq_readin.f90:766-767), so the card's header writes the
+    projectors the decision resolved, not a fixed ortho-atomic."""
+    system = _system(
+        _nickel_oxide(),
+        pseudo_metadata_factory,
+        hubbard=HubbardUDecision(
+            u_values=(HubbardU("Ni", "3d", 6.2, "table"),), projectors="atomic"
+        ),
+    )
+
+    content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
+
+    assert _hubbard_card(content) == ["HUBBARD (atomic)", "  U  Ni-3d  6.2"]
 
 
 def test_no_u_values_render_no_hubbard_card(pseudo_metadata_factory) -> None:
@@ -793,7 +887,9 @@ def test_only_elements_with_a_u_value_get_a_hubbard_line(
     system = _system(
         _nickel_oxide(),
         pseudo_metadata_factory,
-        hubbard=HubbardUDecision(u_values=(HubbardU("Ni", "3d", 6.2, "table"),)),
+        hubbard=HubbardUDecision(
+            u_values=(HubbardU("Ni", "3d", 6.2, "table"),), projectors="ortho-atomic"
+        ),
     )
 
     content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
@@ -827,7 +923,8 @@ def test_each_species_of_a_split_element_gets_the_element_s_u_line(
             u_values=(
                 HubbardU("Fe", "3d", 5.3, "table"),
                 HubbardU("O", "2p", 1.5, "human"),
-            )
+            ),
+            projectors="ortho-atomic",
         ),
     )
 
@@ -862,7 +959,9 @@ def test_cif_site_labels_render_one_line_per_qe_species(
     system = _system(
         cell,
         pseudo_metadata_factory,
-        hubbard=HubbardUDecision(u_values=(HubbardU("V", "3d", 3.25, "table"),)),
+        hubbard=HubbardUDecision(
+            u_values=(HubbardU("V", "3d", 3.25, "table"),), projectors="ortho-atomic"
+        ),
     )
 
     content = write_qe_scf(system, _step(), _CTX)[0].files["scf.in"]
@@ -872,8 +971,7 @@ def test_cif_site_labels_render_one_line_per_qe_species(
 
 
 @pytest.mark.parametrize(
-    "field",
-    ["occupations", "k_sampling", "nbnd", "convergence", "parallel", "max_seconds"],
+    "field", ["occupations", "k_sampling", "nbnd", "convergence", "parallel"]
 )
 def test_missing_required_step_setting_raises_generation_error(
     silicon_structure, pseudo_metadata_factory, field

@@ -28,7 +28,11 @@ published ``goldilocks.json`` sha256 no longer describes the bytes
 actually run (goldilocks-core-design.md:1230-1237, publication
 guarantee 3). The allocation itself (``nodes``/``ntasks``/
 ``walltime_h``/``partition``) is ``submission/slurm.py``'s concern, not
-this writer's.
+this writer's. A step without a share (``None``: its task runs a job
+timer instead, ``JobDecision.timer_seconds``, #215) is written without
+``max_seconds``, so pw.x keeps its default of 1e7 s (QE 7.3
+``Modules/input_parameters.f90:174``, ``PW/src/input.f90:1266``) and
+stops at the timer's stop file instead.
 
 Structure always comes from ``system.magnetic.cell``, the simulated cell,
 never a separately-passed ``Structure`` -- goldilocks-qe-pw-parameter-audit
@@ -84,14 +88,22 @@ Si's 48 operations, so it ran six times the k-points ``n_irr_k`` counted.
 the only Hubbard parameter ``HubbardUDecision`` models, is keyed by
 atomic *type* (species label) plus its Hubbard manifold, e.g.
 ``U Mn-3d 5.0``. ``hubbard_lines`` renders one such line per species
-label whose element has a U value, and no card when none does, so every
-resolved Hubbard decision renders (#135).
+label whose element has a U value, under the projector type the decision
+names, and no card when none does, so every resolved Hubbard decision
+renders (#135).
 
 **Shared with the bands writer (#118).** ``generation/quantum_espresso/
 bands.py`` renders ``bands.in`` with this module's namelist and card
 helpers, so its species and every keyword that defines the Hamiltonian
 repeat ``scf.in``'s, and writes its ``K_POINTS crystal_b`` rows with
 ``format_float``; only that card is its own.
+
+**The phonon tasks' first step (#215).** ``system_keywords`` adds
+``PwSettings.dfpt_system_keywords``: nr1-nr3, the dense FFT grid ph.x
+accepts where it would refuse pw.x's own, and ``dftd3_threebody =
+.false.``, so that the energy and forces use the two-body D3 of d3hess.x's
+Hessian. ``relax.py`` shares ``system_keywords``, so relax.in and
+vc-relax.in carry them too; no other task sets them.
 
 **Still not in this epic's scope, on purpose:**
 
@@ -189,7 +201,6 @@ def write_qe_scf(
         ("nbnd", step.nbnd),
         ("convergence", step.convergence),
         ("parallel", step.parallel),
-        ("max_seconds", step.max_seconds),
     ):
         if value is None:
             raise GenerationError(
@@ -278,19 +289,22 @@ def control_keywords(
     step: PwSettings,
     purpose: Literal["scf", "nscf", "bands", "relax", "vc-relax"],
 ) -> dict[str, object]:
-    """``&CONTROL`` keywords. ``tstress`` is written unless ``boundary`` is
-    'isolated': pw.x computes no stress under Martyna-Tuckerman and clears
-    the flag (QE 7.3 PW/src/input.f90:1361-1365), even for vc-relax, where
-    input.f90:646 switches it on. Under '2D', 'slab', it computes the stress
-    in a two-dimensional framework (PW/Doc/INPUT_PW.def:1655-1675)."""
+    """``&CONTROL`` keywords. ``max_seconds`` is written only when the step
+    has a share of the walltime (module docstring). ``tstress`` is written
+    unless ``boundary`` is 'isolated': pw.x computes no stress under
+    Martyna-Tuckerman and clears the flag (QE 7.3 PW/src/input.f90:1361-1365),
+    even for vc-relax, where input.f90:646 switches it on. Under '2D', 'slab',
+    it computes the stress in a two-dimensional framework
+    (PW/Doc/INPUT_PW.def:1655-1675)."""
     keywords: dict[str, object] = {
         "calculation": purpose,
         "prefix": ctx.prefix,
         "outdir": ctx.outdir,
         "pseudo_dir": ctx.pseudo_dir,
         "tprnfor": True,
-        "max_seconds": step.max_seconds,
     }
+    if step.max_seconds is not None:
+        keywords["max_seconds"] = step.max_seconds
     if boundary.isolation != "isolated":
         keywords["tstress"] = True
     if step.relax is not None:
@@ -320,6 +334,7 @@ def system_keywords(
         "ecutwfc": system.cutoffs.ecutwfc_ry,
         "ecutrho": system.cutoffs.ecutrho_ry,
         "nbnd": step.nbnd.nbnd,
+        **step.dfpt_system_keywords,
     }
     keywords.update(_occupations_keywords(step))
     keywords.update(_magnetic_keywords(system, step, species_index))
@@ -469,9 +484,10 @@ def hubbard_lines(
     ``ATOMIC_SPECIES`` uses. Returns ``[]`` when no species gets +U: QE
     stops on a HUBBARD card without a positive value
     (Modules/read_cards.f90 ``card_hubbard``).
-    ``ortho-atomic`` is QE's recommended projector (Doc/Hubbard_input.tex:
-    "It is recommended to use ortho-atomic whenever possible"); nothing
-    upstream chooses another, so it is a fixed literal like ``ibrav = 0``."""
+    The header names ``system.hubbard.projectors``, the projector type the
+    Hubbard advisor resolved: ``ortho-atomic``, which QE recommends
+    (Doc/Hubbard_input.tex:141), unless the request asks for ``atomic``,
+    the only type ph.x accepts (PHonon/PH/phq_readin.f90:766-767)."""
     entries = {entry.element: entry for entry in system.hubbard.u_values}
     lines = [
         f"  U  {label}-{entries[element].manifold}  "
@@ -481,7 +497,7 @@ def hubbard_lines(
     ]
     if not lines:
         return []
-    return ["\n".join(["HUBBARD (ortho-atomic)", *lines]) + "\n"]
+    return ["\n".join([f"HUBBARD ({system.hubbard.projectors})", *lines]) + "\n"]
 
 
 def k_points(step: PwSettings) -> str:

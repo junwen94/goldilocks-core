@@ -31,12 +31,16 @@ from pymatgen.core import Lattice, Structure
 from pymatgen.core.surface import SlabGenerator
 from support import (
     INTERNAL_TEXT,
+    antiferromagnetic_nickel_oxide,
     hcp_gadolinium,
     mc3d_42058_silicon,
+    molybdenum_disulfide_monolayer,
+    rock_salt,
     rotated_about_x,
     silicon_dimer_in_a_box,
     sssp_fixture_table_spec,
     with_vacuum_along,
+    wurtzite_zinc_oxide,
 )
 
 from goldilocks_core.analysis.geometry import vacuum_axes
@@ -157,9 +161,100 @@ _TRIGGERS = {
     "occupations.bands_x_refuses_tot_magnetization": _Trigger(
         "band", hcp_gadolinium, {"tot_magnetization": 7}
     ),
+    "phonon.hubbard_projectors_unsupported": _Trigger(
+        "phonon",
+        antiferromagnetic_nickel_oxide,
+        {"is_metal": "non_metal", "magnetic_ordering": "afm"},
+    ),
+    "phonon.noncollinear_hubbard_unsupported": _Trigger(
+        "phonon",
+        antiferromagnetic_nickel_oxide,
+        {
+            "is_metal": "non_metal",
+            "is_magnetic": "non_magnetic",
+            "spin_orbit_coupling": True,
+            "hubbard_projectors": "atomic",
+        },
+    ),
+    "phonon.pinned_moment_with_smearing": _Trigger(
+        "phonon", _example("Fe_bcc.cif"), {"tot_magnetization": 2}
+    ),
+    "phonon.q_grid_breaks_symmetry": _Trigger(
+        "phonon", _diamond_silicon, {"is_metal": "non_metal", "q_grid": [4, 4, 3]}
+    ),
+    "phonon.too_many_q_points": _Trigger(
+        "phonon", _diamond_silicon, {"is_metal": "non_metal", "q_distance": 0.02}
+    ),
+    "phonon.fix_bottom_layers_unsupported": _Trigger(
+        "relax-phonon",
+        _silicon_slab,
+        {"is_metal": "non_metal", "fix_bottom_layers": 1},
+    ),
+    "phonon.metallicity_unconfirmed": _Trigger("phonon", wurtzite_zinc_oxide, {}),
 }
 """A request that blocks with exactly one finding, of that code, per
-catalogued code with remedies."""
+catalogued code with remedies. The phonon tasks' noncollinear one is
+spin-orbit coupling without moments, which ph.x itself does not refuse. A
+phonon task refuses smearing on a structure with a non-metal element unless
+the user confirms a metal, so the other phonon triggers put the insulators on
+fixed occupations, NiO on the 0 of its compensated antiferromagnetic
+ordering; ZnO's without is_metal is the metallicity refusal."""
+
+_METALLICITY_VARIANTS = {
+    "collinear-set-non-metal": _Trigger(
+        "relax-phonon",
+        lambda: rock_salt("Ni", "O", 4.17),
+        {"is_metal": "non_metal", "hubbard_projectors": "atomic"},
+    ),
+    "spin-polarized-monolayer": _Trigger(
+        "relax-phonon", molybdenum_disulfide_monolayer, {}
+    ),
+    "odd-electron-count": _Trigger(
+        "relax-phonon", lambda: rock_salt("Ti", "N", 4.24), {}
+    ),
+    "requested-smearing": _Trigger(
+        "relax-phonon", wurtzite_zinc_oxide, {"occupations": "smearing"}
+    ),
+    "requested-fixed-collinear": _Trigger(
+        "relax-phonon",
+        molybdenum_disulfide_monolayer,
+        {"is_metal": "non_metal", "occupations": "fixed"},
+    ),
+    "requested-fixed-odd-count": _Trigger(
+        "relax-phonon",
+        lambda: rock_salt("Ti", "N", 4.24),
+        {"is_metal": "non_metal", "occupations": "fixed"},
+    ),
+    "requested-fixed-moment": _Trigger(
+        "relax-phonon",
+        wurtzite_zinc_oxide,
+        {"occupations": "fixed", "tot_magnetization": 2.5},
+    ),
+}
+"""Requests the metallicity refusal offers other remedies for than ZnO's
+answers: ferromagnetic NiO set to a non-metal and a MoS2 monolayer the
+heuristic spin-polarizes, collinear runs without a moment; TiN, whose odd
+electron count fixed occupations cannot fill without spin polarization; ZnO
+on the smearing its request sets; and requested fixed occupations these runs
+cannot take, the monolayer's and TiN's, and ZnO's with a moment that is not
+an integer, which the metallicity refusal replaces the occupations refusal
+for, since its remedy, smearing, needs a confirmed metal there."""
+
+_PHONON_MOMENT_TRIGGERS = {
+    "occupations.fixed_needs_integer_tot_magnetization": _Trigger(
+        "phonon",
+        _example("Fe_bcc.cif"),
+        {"occupations": "fixed", "tot_magnetization": 2.5},
+    ),
+    "occupations.fixed_tot_magnetization_parity": _Trigger(
+        "phonon",
+        _example("Fe_bcc.cif"),
+        {"occupations": "fixed", "tot_magnetization": 3},
+    ),
+}
+"""The occupations refusals of a moment fixed occupations cannot take in a
+phonon task on bcc Fe, whose remedy, smearing, unsets the moment there,
+which ph.x refuses on smearing."""
 
 _UNREACHABLE = {"k_path.too_many_kpoints"}
 """Catalogued codes with remedies that no real request reaches: a band path
@@ -170,15 +265,33 @@ gives. tests/unit/test_checks.py triggers it on the gate directly."""
 
 @pytest.fixture
 def store(tmp_path, monkeypatch) -> AssetStore:
-    """The default PBEsol table for every element here, and an LDA one for
-    Si, the functional without D3(BJ) parameters."""
+    """The default PBEsol table for every element here, an LDA one for Si,
+    the functional without D3(BJ) parameters, and a fully relativistic one
+    for NiO with spin-orbit coupling."""
     scalar = sssp_fixture_table_spec(
-        tmp_path / "scalar", {"Al": 3.0, "Fe": 16.0, "Gd": 18.0, "Pt": 10.0, "Si": 4.0}
+        tmp_path / "scalar",
+        {
+            "Al": 3.0,
+            "Fe": 16.0,
+            "Gd": 18.0,
+            "Mo": 14.0,
+            "N": 5.0,
+            "Ni": 18.0,
+            "O": 6.0,
+            "Pt": 10.0,
+            "S": 6.0,
+            "Si": 4.0,
+            "Ti": 12.0,
+            "Zn": 20.0,
+        },
     )
     lda_spec, lda_table = sssp_fixture_table_spec(
         tmp_path / "lda", {"Si": 4.0}, functional="LDA"
     )
-    tables = (scalar, (lda_spec, dataclasses.replace(lda_table, default=False)))
+    full = sssp_fixture_table_spec(
+        tmp_path / "full", {"Ni": 18.0, "O": 6.0}, relativistic="full"
+    )
+    tables = (scalar, (lda_spec, dataclasses.replace(lda_table, default=False)), full)
     monkeypatch.setattr(
         "goldilocks_core.service._pseudo.load_tables",
         lambda *_args, **_kwargs: {table.id: table for _, table in tables},
@@ -233,10 +346,11 @@ def test_every_finding_with_remedies_has_a_trigger() -> None:
     }
 
 
-@pytest.mark.parametrize("code", list(_TRIGGERS))
-def test_each_remedy_makes_the_request_runnable(code: str, store: AssetStore) -> None:
-    trigger = _TRIGGERS[code]
-
+def _each_remedy_makes_it_runnable(
+    code: str, trigger: _Trigger, store: AssetStore
+) -> None:
+    """``trigger`` blocks with exactly one finding, of ``code``, and each of
+    its remedies makes the request generate."""
     report, _ = _run(trigger, trigger.overrides, store)
 
     (finding,) = report.blocking
@@ -248,6 +362,29 @@ def test_each_remedy_makes_the_request_runnable(code: str, store: AssetStore) ->
         assert patched.ok, (remedy, _messages(patched))
         assert any(step.executable == "pw.x" for step in steps), remedy
         assert _holds_the_vacuum(trigger, steps), remedy
+
+
+@pytest.mark.parametrize("code", list(_TRIGGERS))
+def test_each_remedy_makes_the_request_runnable(code: str, store: AssetStore) -> None:
+    _each_remedy_makes_it_runnable(code, _TRIGGERS[code], store)
+
+
+@pytest.mark.parametrize("variant", list(_METALLICITY_VARIANTS))
+def test_each_metallicity_remedy_makes_the_request_runnable(
+    variant: str, store: AssetStore
+) -> None:
+    """Each remedy of the metallicity refusal, whichever the request makes it
+    offer, resolves it."""
+    _each_remedy_makes_it_runnable(
+        "phonon.metallicity_unconfirmed", _METALLICITY_VARIANTS[variant], store
+    )
+
+
+@pytest.mark.parametrize("code", list(_PHONON_MOMENT_TRIGGERS))
+def test_in_a_phonon_task_each_remedy_of_a_moment_refusal_makes_it_runnable(
+    code: str, store: AssetStore
+) -> None:
+    _each_remedy_makes_it_runnable(code, _PHONON_MOMENT_TRIGGERS[code], store)
 
 
 def test_the_odd_count_remedies_hold_where_spin_polarization_alone_fails(

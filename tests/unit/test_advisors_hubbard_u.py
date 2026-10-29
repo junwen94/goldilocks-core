@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import pytest
 from pymatgen.core import Lattice, Structure
 from pymatgen.core.periodic_table import Element
@@ -354,6 +356,109 @@ def test_projector_mismatch_warning_names_the_vasp_derived_values() -> None:
     assert "Gd" not in message
 
 
+_TOPSAKAL_ELEMENTS = frozenset(
+    symbol for symbol, row in _CITED_U_TABLE.items() if row[3] == _TOPSAKAL[1]
+)
+
+
+@pytest.mark.parametrize(
+    ("projectors", "codes"),
+    [
+        pytest.param("ortho-atomic", (_PROJECTOR, _STARTING_NS), id="ortho-atomic"),
+        pytest.param("atomic", (_STARTING_NS,), id="atomic"),
+    ],
+)
+def test_topsakal_wentzcovitch_values_match_atomic_projectors_only(
+    projectors: str, codes: tuple[str, ...]
+) -> None:
+    """Topsakal & Wentzcovitch fitted the Pr-Yb values on the rare-earth
+    nitrides in Quantum ESPRESSO with atomic projectors, so NdN's built-in U
+    carries the mismatch warning under ortho-atomic projectors only."""
+    state = _hubbard(
+        _rock_salt("Nd", "N"),
+        human=HubbardUHumanInput(needs_correlation=True, hubbard_projectors=projectors),
+    )
+
+    assert [entry.element for entry in state.value.u_values] == ["Nd"]
+    assert state.value.projectors == projectors
+    assert _codes(state) == codes
+
+
+def test_the_atomic_projector_mismatch_leaves_out_the_matching_values() -> None:
+    """Under atomic projectors the warning names the VASP-derived and
+    all-electron values, never the Pr-Yb ones fitted with those projectors."""
+    state = _hubbard(
+        _rock_salt("Ni"), human=HubbardUHumanInput(hubbard_projectors="atomic")
+    )
+
+    message = _warning(state, _PROJECTOR).message
+    assert "atomic projectors this input uses" in message
+    assert "ortho-atomic" not in message
+    assert "V, Cr, Mn, Fe, Co, Ni, Cu, Mo, W, Ce, Pa, U, Np, Pu" in message
+    assert "Am, Cm, Bk" in message
+    assert _TOPSAKAL_ELEMENTS.isdisjoint(re.findall(r"\b[A-Z][a-z]?\b", message))
+
+
+def test_an_applied_u_uses_ortho_atomic_projectors_by_default() -> None:
+    state = _hubbard(_rock_salt("Ni"))
+
+    assert state.value.projectors == "ortho-atomic"
+    assert state.provenance.field_sources == {
+        "needs_correlation": "heuristic",
+        "hubbard_projectors": "heuristic",
+    }
+
+
+def test_requested_atomic_projectors_apply_with_the_u_and_read_human() -> None:
+    state = _hubbard(
+        _rock_salt("Ni"), human=HubbardUHumanInput(hubbard_projectors="atomic")
+    )
+
+    assert [entry.element for entry in state.value.u_values] == ["Ni"]
+    assert state.value.projectors == "atomic"
+    assert state.provenance.field_sources == {
+        "needs_correlation": "heuristic",
+        "hubbard_projectors": "human",
+    }
+    assert state.source == "human"
+    assert state.provenance.derived_from == ("needs_correlation",)
+
+
+@pytest.mark.parametrize(
+    ("structure", "functional", "human"),
+    [
+        pytest.param(_rock_salt("Ti"), "PBEsol", {}, id="TiO-no-u"),
+        pytest.param(_rock_salt("Ni"), HYBRID_FUNCTIONAL, {}, id="NiO-hybrid"),
+        pytest.param(
+            _rock_salt("Ni"),
+            "PBEsol",
+            {"needs_correlation": False},
+            id="NiO-human-off",
+        ),
+        pytest.param(
+            _rock_salt("Ni"),
+            "PBEsol",
+            {"u_by_element": {"Fe": 5.0}},
+            id="NiO-user-absent-only",
+        ),
+    ],
+)
+def test_a_decision_without_a_u_has_no_projectors(
+    structure: Structure, functional: str, human: dict
+) -> None:
+    """No HUBBARD card is written, so a requested projector is not applied
+    and has no field source."""
+    state = _hubbard(
+        structure,
+        functional,
+        human=HubbardUHumanInput(hubbard_projectors="atomic", **human),
+    )
+
+    assert state.value.u_values == ()
+    assert state.value.projectors is None
+    assert "hubbard_projectors" not in state.provenance.field_sources
+
+
 def test_hybrid_functional_suppresses_plus_u_regardless_of_composition() -> None:
     """goldilocks-core-design.md:2626-2627's cross-parameter rule."""
     state = _hubbard(_rock_salt("Ni"), HYBRID_FUNCTIONAL)
@@ -482,14 +587,14 @@ def test_a_hybrid_functional_names_the_functional_over_any_request() -> None:
         ),
         (
             {"human": HubbardUHumanInput(u_by_element={"Ni": 5.0})},
-            {"u_by_element": "human"},
+            {"u_by_element": "human", "hubbard_projectors": "heuristic"},
         ),
         (
             {
                 "human": HubbardUHumanInput(needs_correlation=True),
                 "llm": HubbardULlmInput(needs_correlation=False),
             },
-            {"needs_correlation": "human"},
+            {"needs_correlation": "human", "hubbard_projectors": "heuristic"},
         ),
         (
             {"llm": HubbardULlmInput(needs_correlation=False)},
