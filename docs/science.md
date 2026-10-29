@@ -3,9 +3,9 @@
 Goldilocks suggests starting inputs for a Quantum ESPRESSO calculation --
 self-consistent-field (SCF), density of states (DOS), band structure (`band`),
 relaxation (`relax`), variable-cell relaxation (`vc-relax`), or phonons with
-their density of states (`phonon`, `relax-phonon`, `vc-relax-phonon`). It
-does not establish that your energy, forces, or other properties are
-converged.
+their density of states and dispersion (`phonon`, `relax-phonon`,
+`vc-relax-phonon`). It does not establish that your energy, forces, or other
+properties are converged.
 Review the choices below before running a calculation, then test the
 settings against the accuracy your work needs.
 
@@ -869,6 +869,12 @@ so a path with more is refused (`k_path.too_many_kpoints`); only a
 `k_path_distance` near its lower bound, 0.001 Å⁻¹, on a cell with lattice
 vectors shorter than about 1.4 Å reaches that.
 
+The phonon tasks' `dispersion` step follows the same path on the same
+written cell, at the same `k_path_distance`, with the same notices, and
+publishes it under the same name, `k_path`, as matdyn.x runs it (see
+[the phonon tasks](#check-the-phonon-tasks)); pw.x's limit does not apply
+there.
+
 A band structure shows empty bands, so unless you set `nbnd` the bands step
 computes three times the occupied bands (aiida-quantumespresso's
 `bands.yaml`): the largest of int(3 nelec/e) and int(nelec/e) + 4, where e
@@ -948,8 +954,9 @@ on the zone boundary.
 
 The three phonon tasks compute phonons with density-functional perturbation
 theory (DFPT; Baroni et al., Rev. Mod. Phys. 73, 515 (2001)), Quantum
-ESPRESSO's ph.x, and from them the phonon density of states. They differ
-only in their first step, the pw.x run whose save ph.x reads:
+ESPRESSO's ph.x, and from them the phonon density of states and the phonon
+dispersion. They differ only in their first step, the pw.x run whose save
+ph.x reads:
 
 | Task              | Name in the task list        | First step | Geometry ph.x reads                      |
 | ----------------- | ---------------------------- | ---------- | ---------------------------------------- |
@@ -961,11 +968,13 @@ Each task runs as one job on one prefix and outdir: the first step, then
 `d3hess.x` under DFT-D3 (below); `ph.x` on a Γ-centred q-point mesh, which
 writes one dynamical matrix per irreducible q-point (`pwscf.dyn1`,
 `pwscf.dyn2`, ..., which `pwscf.dyn0` lists); `q2r.x`, which turns them into
-interatomic force constants (`pwscf.fc`); and `matdyn.x`, which
-interpolates the force constants on a fine mesh into the phonon DOS
-(`pwscf.phdos`). ph.x reads a relaxation's save directly, without a separate
-scf. The first step keeps its pw.x calculation, so everything this page says
-about an scf, a relax or a vc-relax applies to it.
+interatomic force constants (`pwscf.fc`); `matdyn.x`, which interpolates the
+force constants on a fine mesh into the phonon DOS (`pwscf.phdos`); and
+`matdyn.x` again, which interpolates them along the band task's
+high-symmetry path into the phonon dispersion (`pwscf.freq`, below). ph.x
+reads a relaxation's save directly, without a separate scf. The first step
+keeps its pw.x calculation, so everything this page says about an scf, a
+relax or a vc-relax applies to it.
 
 DFPT takes second derivatives of the energy at the geometry it is given, so
 leftover forces shift the frequencies, soft modes most. `phonon` takes the
@@ -976,14 +985,15 @@ use `relax-phonon` or `vc-relax-phonon`, which relax it in the same job, by
 default to 1e-4 Ry/Bohr (see
 [relaxation settings](#check-relaxation-settings)). The scf of `phonon`
 prints the forces and the stress on the written geometry. In
-`vc-relax-phonon` the q-mesh and the k-mesh are decided on the input cell
-and keep their divisions on the relaxed cell, so their spacings change with
-it, and the vc-relax makes one pass: no relaxation follows its final scf on
-the relaxed cell, so check the forces and the stress that scf prints, and
-run the task again from the relaxed structure if they are large
-(aiida-quantumespresso instead repeats the vc-relax until the volume stops
-changing). Its phonon record carries the info notice
-`phonon.vc_relax_input_cell`.
+`vc-relax-phonon` the q-mesh, the k-mesh and the dispersion path are
+decided on the input cell: the meshes keep their divisions on the relaxed
+cell, so their spacings change with it, and the path keeps its vertices'
+crystal coordinates (see the dispersion, below). The vc-relax makes one
+pass: no relaxation follows its final scf on the relaxed cell, so check the
+forces and the stress that scf prints, and run the task again from the
+relaxed structure if they are large (aiida-quantumespresso instead repeats
+the vc-relax until the volume stops changing). Its phonon record carries the
+info notice `phonon.vc_relax_input_cell`.
 
 ph.x needs a q-point mesh that every symmetry operation pw.x keeps maps onto
 itself. Unless you set one, the mesh comes from `q_distance`, 0.3 Å⁻¹ with 2π
@@ -1243,6 +1253,109 @@ built as the q-mesh is (the primitive cell of Si gets 21×21×21, graphene
 mesh is cheap. `pwscf.phdos` lists the frequency in cm⁻¹, the total DOS and
 each atom's projection.
 
+The `dispersion` step runs matdyn.x again, on the same force constants with
+the same `asr` and `loto_2d`, along the path the `band` task takes on the
+same written cell (see
+[the band structure path](#check-the-band-structure-path)): the same
+vertices and labels, at the same `k_path_distance`, 0.025 Å⁻¹ unless you set
+it, one setting for both tasks. `dispersion.in` lists the path after the
+namelist as the band task's `K_POINTS crystal_b` rows, which matdyn.x, with
+`q_in_band_form` and `q_in_cryst_coord`, expands as pw.x does, in the
+reciprocal vectors of the cell the force constants belong to: the written
+cell, or the relaxed one in `vc-relax-phonon`. matdyn.x reads a label as a
+point only through `ibrav`, which is 0 for every written cell, so the labels
+stay `! label` comments. The step's `k_path` record holds the path as
+matdyn.x runs it, with the band path's notices, of which
+`k_path.magnetic_noncollinear_symmetry` means here only that segments the
+path treats as equivalent may differ: real force constants give
+ω(q) = ω(-q) whatever the moments. A molecule or cluster in a box has no
+dispersion: its `k_path` is unavailable, and the task is refused (above).
+
+On fixed occupations, where ph.x computes the effective charges (above),
+matdyn.x adds their non-analytic term, which splits the LO from the TO
+modes, at every point of the path that is Γ, or another reciprocal lattice
+vector, to within 1e-6, taking the direction of approach from the point
+before, or from the point after for the path's first point and for a point
+whose predecessor is exactly Γ (Quantum ESPRESSO 7.3
+`PHonon/PH/matdyn.f90`). The splitting depends on that direction unless the
+crystal is cubic, so on such a run each Γ inside a branch is listed twice,
+with a count of 0 between, as matdyn.x's own documentation advises for
+low-symmetry crystals: the first copy ends one branch with the direction it
+arrives from, and the second starts the next with the direction it leaves
+along. Γ at the start of the path takes the leaving direction already, and
+Γ at its end, or before a jump, has only the arriving one. A run on smearing
+or tetrahedra, which only a metal gets (above), has no effective charges, and
+under `isolation='slab'` matdyn.x takes the 2D form of the term
+(`loto_2d`), which vanishes at Γ, and does not test for Γ: both run the
+band task's path unchanged. A slab with `isolation='periodic'` on fixed
+occupations gets the 3D term, and Γ listed twice where its path passes
+through Γ, as on a rectangular layer such as phosphorene (see
+`phonon.slab_lo_to_needs_2d_truncation`, above).
+
+matdyn.x reaches a vertex after n steps as x + (1/n · n)(y − x), with 1/n
+rounded, which is exactly Γ only where 1/n · n rounds to exactly 1 in double
+precision. After 49, 98, 103, 107, ... steps it stops about 1e-16 short of
+Γ, at a point that still counts as Γ but where the long-range sum adds the
+term a second time (`PHonon/PH/rigid.f90`), and from which a second copy
+would take the arriving direction again. So on fixed occupations without
+`loto_2d`, each segment into Γ takes the fewest steps, at least its own,
+that land on Γ exactly: 49 becomes 50, and no count up to 4000 gains more
+than 4. This relies on matdyn.x rounding as IEEE double precision does,
+which a GNU build with Quantum ESPRESSO's default flags does; a build with
+value-unsafe floating-point optimizations, such as Intel's default
+floating-point model or `-ffast-math`, can still stop short of Γ. The
+`k_path` record's `source_note` says when the path differs
+from the band task's this way, and its `n_kpoints`, the points matdyn.x
+computes, is then the band path's plus one per Γ listed twice and the steps
+added: the primitive cell of MgO runs 392 points at the defaults, against
+the band task's 391.
+
+In `vc-relax-phonon` the path is built on the input cell, and matdyn.x
+applies its crystal coordinates to the relaxed cell's reciprocal vectors.
+Where the special points have fixed crystal coordinates, as in cubic, fcc,
+bcc, tetragonal, orthorhombic and hexagonal cells, square, rectangular and
+hexagonal layers, and wires, the vertices stay the same points. In BCT,
+ORCF, ORCI, ORCC, RHL, MCL and MCLC cells and centred-rectangular and
+oblique layers, the special points move with the axis ratios and angles, and
+the vertices then lie off them: on the same end-to-end test set, with 12
+antiferromagnetic orderings added, a 2% deviatoric strain moves them at
+most 0.039 Å⁻¹, 1.6 steps at the default
+spacing (antiferromagnetic CrO2's ORCC cell), and changes no cell's
+subtype. A cell near a boundary between two of Setyawan and Curtarolo's
+subtypes can still change subtype, and a triclinic path keeps its
+time-reversal-invariant points, which the relaxed cell's table can name
+differently. The
+`phonon.vc_relax_input_cell` notice says so; for the relaxed cell's own
+path, run the `vc-relax` task, then a phonon task on the relaxed structure.
+
+A conventional cell or a supercell gives folded phonon branches, as it gives
+folded bands (`k_path.folded_bands`). Where such a path reaches a reciprocal
+lattice vector of the written cell other than Γ, matdyn.x counts that point
+as Γ too, but it is not listed twice, since matdyn.x takes the leaving
+direction only after a point that is exactly 0, and the long-range sum can
+add the term there a second time: upload the primitive cell of a polar
+insulator. `asr='crystal'` imposes the three translational sum rules, not
+the rotational ones, so the flexural (ZA) branch of a two-dimensional
+material can dip below zero near Γ, which the closely spaced points of the
+dispersion show and the phonon DOS mesh can miss.
+
+matdyn.x writes the frequencies in cm⁻¹, negative where a mode is imaginary,
+to `pwscf.freq`, in the format plotband.x reads, with each point's Cartesian
+coordinates in units of 2π/alat, and to `pwscf.freq.gp`, one line per point:
+the length along the path, jumps between branches included, then every
+frequency; take the branch ends from `k_path`. It writes no modes (`flvec`
+is blank), which would add 5 + 3 nat (nat + 1) lines per point. The `.freq`
+header gives the number of points in four digits, so plotband.x cannot read
+a path of 10000 points or more, which only a `k_path_distance` near its
+lower bound reaches; `.freq.gp` has no such limit, and no such path is
+refused. matdyn.x holds 96 nat² bytes per point of the path, which the job's
+memory estimate leaves out: 61 MB for Nd2Fe14B's 68 atoms on its 138 points
+at the default spacing, but 4.4 GB for 68 atoms at 9999 points, more than
+one task's share of a SCARF node. The step runs last, so a dispersion that
+does not fit fails the job after ph.x has finished: write `dispersion.in`
+again with a larger `k_path_distance` and run that step alone (see
+[submit and resume a phonon job](cli.md#submit-and-resume-a-phonon-job)).
+
 No input of a phonon task carries `max_seconds`. The job record's
 `max_seconds_by_step` is empty, and `timer_seconds`, 95% of the walltime,
 is when the job timer of `submit.sh` creates `pwscf.EXIT` in the working
@@ -1319,8 +1432,11 @@ automatically selected `pseudo_table` names `functional` and `magnetic`,
 it reads, and its `bands_occupations` names `occupations`, the scf step's
 decision it follows. A phonon task's `q_sampling` and `phonon_dos` name
 `magnetic`, whose cell they mesh, `fft_grid` names `cutoffs` and `magnetic`,
-and `q2r` names `magnetic`, `q_sampling` and `boundary`, and also `job` when
-the default `asr` was weighed against the job's partition. A non-metal's
+`q2r` names `magnetic`, `q_sampling` and `boundary`, and also `job` when
+the default `asr` was weighed against the job's partition, and the
+dispersion step's `k_path` names `magnetic`, `occupations` and `q2r`, whose
+occupations and `loto_2d` decide whether matdyn.x adds the non-analytic
+term. A non-metal's
 `occupations` also names the records that
 decided whether fixed occupations can run: `magnetic`, and `electron_count`
 where its parity was tested. An `occupations` that pins a `tot_magnetization`
@@ -1335,8 +1451,9 @@ request: a `dos` task's nscf protocol values (`nscf_k_sampling`'s k_distance,
 `nscf_occupations`) read `heuristic`, with `source_note` naming the protocol,
 and so do a `band` task's bands-step defaults (`bands_nbnd`, and
 `k_path`'s `k_path_distance`) and a phonon task's protocol values: the
-relaxation's `forc_conv_thr` 1e-4, `q_distance` 0.3, the ph.x settings and
-`dos_q_distance`. A `k_sampling` the phonon rule raised keeps the source of
+relaxation's `forc_conv_thr` 1e-4, `q_distance` 0.3, the ph.x settings,
+`dos_q_distance` and the dispersion's `k_path_distance`. A `k_sampling` the
+phonon rule raised keeps the source of
 the tier that decided its starting mesh (`ml` for QRF95's `k_distance`), and
 names the raise in `source_note`, though its `k_distance` is `null`. A phonon
 task's `job` record names its job timer in `source_note`, and says there that
@@ -1351,7 +1468,8 @@ own, under `nscf_`-prefixed records, and a `band` task's bands step under
 `bands_`-prefixed ones and its path's under `k_path`: a notice on
 `nscf_parallelisation` is about the nscf step's npool, not the scf step's.
 A phonon task's steps have records of their own names (`q_sampling`,
-`phonon`, `q2r`, `phonon_dos`), so their warnings name those.
+`phonon`, `q2r`, `phonon_dos`, and the dispersion step's path under
+`k_path`, as for the band task), so their warnings name those.
 
 A resolved record also carries the rest of its provenance: `source_note`,
 the advisor's rationale where it gives one (such as why a molecule gets a
@@ -1367,8 +1485,9 @@ Each model warning, such as the is_magnetic classifier's "has not been
 externally validated", is also in the top-level `warnings` list as
 `<record>.model_warning`. A bundle's `CITATIONS.md` and the manifest's
 `citations` list every record's citations: the selected pseudopotential table,
-every model that decided a record, the source of a `band` task's path
-for a bulk crystal or a slab, and, for a phonon task, aiida-quantumespresso's
+every model that decided a record, the source of the path of a `band` task
+or of a phonon task's dispersion for a bulk crystal or a slab, and, for a
+phonon task, aiida-quantumespresso's
 protocols (Huber et al., npj Comput. Mater. 7, 136 (2021)) where their
 defaults are used and DFPT (Baroni et al.). `CITATIONS.md` also names the table's
 licence file under `licences/`, which lists SSSP's per-family references. Read analysis and selection warnings

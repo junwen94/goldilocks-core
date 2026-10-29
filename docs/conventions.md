@@ -18,7 +18,7 @@ before trusting a recommendation, see [Check your recommendations](science.md).
 | Density-mixing strength   | Dimensionless | setting `mixing_beta` (group `convergence`)        |
 | SCF iteration limit       | Integer       | setting `electron_maxstep` (group `convergence`)   |
 | Force threshold           | Ry/Bohr       | setting `forc_conv_thr` (group `relax`)            |
-| Phonon frequency          | cm⁻¹          | the phonon DOS (`pwscf.phdos`) and its step, `phonon_dos.delta_e` |
+| Phonon frequency          | cm⁻¹          | the phonon DOS (`pwscf.phdos`) and its step, `phonon_dos.delta_e`; the dispersion (`pwscf.freq`) |
 
 Energies use Quantum ESPRESSO's Rydberg convention, not Hartree: 1 Ha = 2 Ry.
 The SCF threshold controls the estimated self-consistency error; it is not a
@@ -27,11 +27,11 @@ k-point or cutoff convergence tolerance.
 Every setting above is listed by `goldilocks settings` (with its group, type,
 and default) and, once resolved for a structure, shown in the matching record
 from `goldilocks explain`/the published `goldilocks.json` (`k_sampling`,
-a `band` task's `k_path`, a phonon task's `q_sampling` and
-`phonon_dos`, `occupations`, `cutoffs`, `convergence` and `relax`
-respectively). `k_distance` defaults to `0.15` for metals or when
-metallicity is unknown and `0.30` for a confirmed non-metal;
-`k_path_distance` to `0.025`; `q_distance` to `0.3`; `dos_q_distance` to
+the `k_path` of a `band` task or of a phonon task's dispersion, a phonon
+task's `q_sampling` and `phonon_dos`, `occupations`, `cutoffs`,
+`convergence` and `relax` respectively). `k_distance` defaults to `0.15`
+for metals or when metallicity is unknown and `0.30` for a confirmed
+non-metal; `k_path_distance` to `0.025`; `q_distance` to `0.3`; `dos_q_distance` to
 `0.10`; `forc_conv_thr` to `1e-3` Ry/Bohr, or `1e-4` in the phonon tasks'
 relaxation; `degauss` defaults to
 `0.01` Ry for metals; `ecutwfc_ry`/`ecutrho_ry` are decided together by the
@@ -82,7 +82,8 @@ vectors (see [Check the phonon tasks](science.md#check-the-phonon-tasks)).
 ## Band path spacing
 
 A `band` task's bands step runs a path of high-symmetry lines instead of a
-mesh (see [Check the band structure path](science.md#check-the-band-structure-path)).
+mesh (see [Check the band structure path](science.md#check-the-band-structure-path)),
+and a phonon task's dispersion step the same path.
 `k_path_distance` follows `k_distance`'s convention, 2π included. A segment
 of the path of length `L`, measured with the written cell's reciprocal
 vectors (in the plane of a slab), takes
@@ -93,8 +94,14 @@ n = max(1, ceil(round(L / k_path_distance, 5)))
 
 equal steps, so no step is longer than `k_path_distance`. pw.x runs every
 point of the path: the sum over its branches of their steps plus one, per
-spin channel. The default, `0.025` Å⁻¹, is aiida-quantumespresso's
-`bands.yaml` (balanced); the setting's lower bound is `0.001` Å⁻¹.
+spin channel. matdyn.x runs every point of the dispersion's path once, by
+the same sum; on fixed occupations, unless `isolation='slab'`, that path
+lists each Γ inside a branch twice, ending one branch and starting the
+next, and a segment into Γ can take a few more steps (49 becomes 50), so
+that it lands on Γ exactly (see
+[Check the phonon tasks](science.md#check-the-phonon-tasks)). The default,
+`0.025` Å⁻¹, is aiida-quantumespresso's `bands.yaml` (balanced); the
+setting's lower bound is `0.001` Å⁻¹.
 
 ## Defaults
 
@@ -115,6 +122,7 @@ spin channel. The default, `0.025` Å⁻¹, is aiida-quantumespresso's
 | Phonon tasks' first step                      | k-mesh raised against the q-mesh; no `max_seconds`, a job timer at 95% of the walltime |
 | Phonon tasks' ph step                         | `q_distance 0.3` Å⁻¹; `tr2_ph 1e-18`, `alpha_mix(1) 0.4`, `nmix_ph 8` |
 | Phonon tasks' q2r and phonon_dos steps        | `asr` `crystal` (`simple` where it would not fit one task's memory); `dos_q_distance 0.10` Å⁻¹, every 1 cm⁻¹ |
+| Phonon tasks' dispersion step                 | the `band` task's path at `k_path_distance 0.025` Å⁻¹          |
 
 `conv_thr`/`etot_conv_thr` scale with the structure's atom count `nat`, not a
 fixed constant: for Si (`nat=8`) this gives `conv_thr = 1.6e-9` Ry and
@@ -209,7 +217,8 @@ heuristic`; see `goldilocks settings` for each key's actual sources).
   fires if both are given). The phonon tasks' protocol values,
   `forc_conv_thr` 1e-4 Ry/Bohr for their relaxation (aiida-quantumespresso's
   pw `base.yaml`), `q_distance` 0.3 Å⁻¹ and the ph.x settings (its ph
-  `base.yaml`), and `dos_q_distance` 0.10 Å⁻¹, read `heuristic` with the
+  `base.yaml`), `dos_q_distance` 0.10 Å⁻¹, and the dispersion's
+  `k_path_distance` 0.025 Å⁻¹ (its `bands.yaml`), read `heuristic` with the
   protocol named in `source_note`, and a value you set replaces each one
   alone. The relaxation's `forc_conv_thr` has no ML or LLM tier: a value you
   set wins over the protocol, which wins over Quantum ESPRESSO's 1e-3, and

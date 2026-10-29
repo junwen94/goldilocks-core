@@ -71,7 +71,8 @@ A `run` (or `explain`) request follows this path, shown for the
    writer registry. A phonon task's `generate_phonon` writes its first step
    through `generate()`, with the `fft_grid` and `dftd3_threebody` it needs,
    then calls `generation.quantum_espresso.phonon.write_qe_phonon` for the
-   d3hess.x, ph.x, q2r.x and matdyn.x steps.
+   d3hess.x, ph.x and q2r.x steps and the two matdyn.x steps, the phonon DOS
+   and the dispersion.
 5. `service.render_submission(advice, hpc, code, steps)` renders the
    SLURM script via `submission/slurm.py`. Each step is followed by the
    completion check its writer declared (`Step.completion`), and the script
@@ -155,20 +156,26 @@ purpose applies unchanged -- under `phonon_step_protocol`, then
 `service/_phonon_steps.py`'s `phonon_steps_advice` decides the rest on that
 step's `Advice`: the `relax` record of a relaxation, the dense FFT grid ph.x
 accepts (`advisors/fft_grid.py`), the q-point mesh
-(`advisors/q_sampling.py`), and the ph, q2r and phonon_dos steps' records
-(`advisors/phonon.py`). `PhononAdvice.tiers()` puts `relax` and `fft_grid`
-with the first step and the others under the `ph`, `q2r` and `phonon_dos`
-steps. The phonon protocol uses three `StepProtocol` fields. `phonon_k` is
-not a tier: it carries the ph step's q request and constrains the first
-step's k-mesh after every tier (`advisors/k_sampling.py`). `job_timer` is
-task-level: `_step.steps_advice` reads it from whichever step's protocol
-declares it, and the job then sets `timer_seconds` in place of every step's
-`max_seconds` share. `relax` is the relaxation's `forc_conv_thr`, a tier
-above Quantum ESPRESSO's default; `advise_steps` does not read it, so
-`_phonon_steps.py` passes it to `relax_settings` itself. d3hess.x, ph.x, q2r.x and matdyn.x
-have no `advise_steps` advice; `generate_phonon` writes them after the first
-step (`generation/quantum_espresso/phonon.py`), d3hess.x exactly when the
-first step writes DFT-D3, on one `SharedContext`.
+(`advisors/q_sampling.py`), the ph, q2r and phonon_dos steps' records, and
+the dispersion step's path (`advisors/phonon.py`): `dispersion_path` takes
+the band path of the written cell (`advisors/k_path.py`) and, where the
+first step's occupations are fixed and the q2r record has no `loto_2d`,
+lists each Γ inside a branch twice and makes each segment into Γ land on it
+exactly. `PhononAdvice.tiers()` puts `relax` and `fft_grid` with the first
+step and the others under the `ph`, `q2r`, `phonon_dos` and `dispersion`
+steps, the dispersion's path as `k_path`, the name of the band task's bands
+step's path. The phonon protocol uses three `StepProtocol` fields.
+`phonon_k` is not a tier: it carries the ph step's q request and constrains
+the first step's k-mesh after every tier (`advisors/k_sampling.py`).
+`job_timer` is task-level: `_step.steps_advice` reads it from whichever
+step's protocol declares it, and the job then sets `timer_seconds` in place
+of every step's `max_seconds` share. `relax` is the relaxation's
+`forc_conv_thr`, a tier above Quantum ESPRESSO's default; `advise_steps`
+does not read it, so `_phonon_steps.py` passes it to `relax_settings`
+itself. d3hess.x, ph.x, q2r.x and matdyn.x have no `advise_steps` advice;
+`generate_phonon` writes them after the first step
+(`generation/quantum_espresso/phonon.py`), d3hess.x exactly when the first
+step writes DFT-D3, on one `SharedContext`.
 
 ## Understand the pipeline phases
 
@@ -231,7 +238,7 @@ Paths below are relative to `src/goldilocks_core/` unless stated otherwise.
 
 | Area                | Files and responsibility                                                                                                                                                                                                                                                       |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Core types          | `resolution.py`: the `Resolved`/`Unavailable`/`Blocked` tri-state and `Provenance`/`Source`, used everywhere; `steps.py`: `Step`/`SharedContext`, with each step's completion check, stop file and restart data; `step_settings.py`/`system_settings.py`: the settings dataclasses `generate()` builds (`PwSettings`, whose `dfpt_system_keywords` hold a phonon first step's `nr1`-`nr3` and `dftd3_threebody`; `PhSettings`, `Q2rSettings` and `MatdynSettings` for the phonon steps); `plan.py`: `PlannedStep`/`expand_task`, multi-step task planning. There is no centralized `contracts` package any more — importing `goldilocks_core.contracts` is a ruff-banned API; import from the module that defines the name instead. |
+| Core types          | `resolution.py`: the `Resolved`/`Unavailable`/`Blocked` tri-state and `Provenance`/`Source`, used everywhere; `steps.py`: `Step`/`SharedContext`, with each step's completion check, stop file and restart data; `step_settings.py`/`system_settings.py`: the settings dataclasses `generate()` builds (`PwSettings`, whose `dfpt_system_keywords` hold a phonon first step's `nr1`-`nr3` and `dftd3_threebody`; `PhSettings`, `Q2rSettings`, `MatdynSettings` and `DispersionSettings` for the phonon steps); `plan.py`: `PlannedStep`/`expand_task`, multi-step task planning. There is no centralized `contracts` package any more — importing `goldilocks_core.contracts` is a ruff-banned API; import from the module that defines the name instead. |
 | Orchestration       | `service/_pipeline.py`: `advise()`/`check()`, and `advise_steps`, which advises every `pw.x` step of a task with one shared job; `service/_generate.py`: `generate()`, the hard-fail boundary; `service/_dos.py` / `service/_band.py` / `service/_relax.py` / `service/_phonon.py`: the dos, band, relax and phonon task variants; `service/_phonon_steps.py`: what a phonon task decides on its first step's advice; `service/_step_protocol.py`: each task's protocols for its steps; `service/_tasks.py`: `TASK_PHASES`, each task's service functions, which every transport dispatches through; `service/_bundle.py`: submission rendering and bundle assembly; `checks.py`: the sole cross-parameter hard-fail gateway. |
 | Input and discovery | `inputs/structure.py`: structure normalization and inspection; `capabilities.py`: available codes, tasks, settings, pseudopotential tables, HPC profiles, and warnings — reflected from the override dataclasses and advisor warning catalogues, not hand-listed.                                                        |
 | Scientific behavior | `analysis/`: structure facts (`composition.py`, `geometry.py`, `is_magnetic.py`, `is_metal.py`, `local_moments.py`, `needs_correlation.py`, `needs_soc.py`, `symmetry.py`); `advisors/`: the recommendation layer (`boundary.py`, `convergence.py`, `cutoffs.py`, `electron_count.py`, `fft_grid.py`, `functional.py`, `hubbard_u.py`, `job_resources.py`, `k_path.py`, `k_sampling.py`, `magnetic_config.py`, `n_irr_k.py`, `nbnd.py`, `occupations.py`, `parallelisation.py`, `phonon.py`, `pseudo_selection.py`, `q_sampling.py`, `relax.py`, `size.py`, `species_split.py`, `vdw_method.py`, `dos.py`, `warning_catalogue.py`); top-level `kmesh.py`: k-point mesh ladder math, which also meshes a phonon task's q-points and phonon DOS; top-level `pw_symmetry.py`: the symmetry operations pw.x keeps in a cell as written (with which `advisors/n_irr_k.py` counts k-points and `irreducible_kpoints` reduces the q-point mesh) and the frame the cell is written in; top-level `pw_fft.py`: pw.x's dense FFT grid, ph.x's test of it, the grid ph.x accepts and the cells on which pw.x's own grid can fail ph.x. |
@@ -262,9 +269,9 @@ a task:
    a `StepOverrides` field (`service/_step.py`) whose class
    `capabilities._leaves()` walks, with its steps in
    `capabilities._BRANCH_STEPS` and its class in `set_overrides._STEP_CLASSES`,
-   as `KPathOverrides` is for the band task's bands step and `PhOverrides`,
-   `Q2rOverrides` and `PhononDosOverrides` for the phonon tasks' ph, q2r and
-   phonon_dos steps.
+   as `KPathOverrides` is for the band task's bands step and the phonon
+   tasks' dispersion step, and `PhOverrides`, `Q2rOverrides` and
+   `PhononDosOverrides` for the phonon tasks' ph, q2r and phonon_dos steps.
 3. Add a `service/_<task>.py` module. Its `advise_<task>` calls
    `_pipeline.advise_steps` with one entry per `pw.x` step (purpose -> that
    step's `StepOverrides`, from `RunOverrides.for_steps`, in run order) -- one
@@ -274,11 +281,12 @@ a task:
    whose defaults the task sets itself. A step of another program gets its
    records from its own advisors on that advice, as `service/_dos.py` decides
    the `dos.x` settings and `service/_phonon_steps.py` a phonon task's q-point
-   mesh and ph.x, q2r.x and matdyn.x settings. `advise_steps` returns one
-   `Advice` per step, all sharing the same analysis, system advice and job, so
-   the submission script is rendered from that one job, which holds every
-   step's `max_seconds` share, or the timer of a protocol's `job_timer`
-   (`JobDecision.timer_seconds`). `_step.steps_advice` picks each step's
+   mesh, ph.x, q2r.x and matdyn.x settings and dispersion path.
+   `advise_steps` returns one `Advice` per step, all sharing the same
+   analysis, system advice and job, so the submission script is rendered
+   from that one job, which holds every step's `max_seconds` share, or the
+   timer of a protocol's `job_timer` (`JobDecision.timer_seconds`).
+   `_step.steps_advice` picks each step's
    advice by its purpose: a k-mesh (`service/_step_kpoints.py`), or a band
    path for a `bands` step (`service/_step_kpath.py`). Its `check_<task>`
    checks each step with that step's purpose, which `checks.py`'s
@@ -320,10 +328,12 @@ formatting." The writers today cover all eight tasks: `write_qe_scf`,
 band task's `write_qe_bands` and `write_qe_bands_x`
 (`generation/quantum_espresso/bands.py`), and the phonon tasks'
 `write_qe_phonon` (`generation/quantum_espresso/phonon.py`: d3hess.x, ph.x,
-q2r.x and matdyn.x). `write_qe_relax` and `write_qe_bands` render their
-namelists and cards with `scf.py`'s helpers, so `bands.in`, written from the
-same `SystemSettings` as `scf.in`, repeats every keyword of it that defines
-the Hamiltonian. The phonon tasks' first step adds `nr1`-`nr3` and
+q2r.x, and matdyn.x for the phonon DOS and the dispersion, whose path rows
+`bands.py`'s `path_rows` renders, as it does the bands step's
+`K_POINTS crystal_b` card). `write_qe_relax` and `write_qe_bands` render
+their namelists and cards with `scf.py`'s helpers, so `bands.in`, written
+from the same `SystemSettings` as `scf.in`, repeats every keyword of it that
+defines the Hamiltonian. The phonon tasks' first step adds `nr1`-`nr3` and
 `dftd3_threebody` through `PwSettings.dfpt_system_keywords`, which
 `scf.py`'s `system_keywords` unpacks into `&SYSTEM`, so `relax.in` and
 `vc-relax.in` get them too.
@@ -433,7 +443,8 @@ requirements.
   bundles do not contain the models.
 - **Label each record from what its advisor consumed.** The `magnetic`,
   `occupations`, `k_sampling`, `hubbard`, `convergence`, `relax` and `dos`
-  decisions, and a phonon task's `q_sampling`, `phonon`, `q2r` and
+  decisions, the `k_path` of a band task and of a phonon task's dispersion,
+  and a phonon task's `q_sampling`, `phonon`, `q2r` and
   `phonon_dos`, build their `Provenance` with `resolution.field_sources_from` and
   `Provenance.from_field_sources`, from the settings they applied and the
   inputs they read, so a setting reads `human` exactly when the request set
@@ -479,10 +490,10 @@ requirements.
 import ceiling applies to every production owner: 12 project origin modules and
 24 imported symbols by default, with tighter limits for the thin transports
 `cli.core`, `server.http` and `server.mcp`, and raised ones for `checks`,
-`service._system`, `service._dos`, `service._phonon`, `service._step`,
-`service._tasks` and `advisors.warning_catalogue` (the modules whose own
-orchestration or aggregation role needs more imports than the default
-ceiling allows).
+`service._system`, `service._dos`, `service._phonon`,
+`service._phonon_steps`, `service._step`, `service._tasks` and
+`advisors.warning_catalogue` (the modules whose own orchestration or
+aggregation role needs more imports than the default ceiling allows).
 It counts local and type-only imports, resolves re-exports, and counts accessed
 module-alias members. Pure export packages are transparent to consumer counts.
 The same gate runs Ruff's McCabe check: at most 10 per production function,
@@ -533,7 +544,8 @@ analysis tier; the Advisors card shows every other record with the settings
 whose `resolved_in` names it, or read-only after them, a multi-step task's
 per-step records (a `dos` task's `nscf_` records, a `band` task's `bands_`
 records and `k_path`, a phonon task's records of each step, such as its
-first step's `fft_grid`) under their step. Each
+first step's `fft_grid` and its dispersion step's `k_path`) under their
+step. Each
 setting control shows the value its `resolved_in` path leads to, captioned
 with the tier that produced that value: the record's per-setting source, or
 its own source -- except a record-level `human`, which another of the

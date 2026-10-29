@@ -10,8 +10,9 @@ operations. Core prepares Quantum ESPRESSO inputs for eight tasks:
 `scf_single_point` (scf), `dos` (scf, nscf, `dos.x`), `band` (scf, `pw.x`
 along a high-symmetry path, `bands.x`), `relax`, `vc-relax`, and the phonon
 tasks `phonon`, `relax-phonon` and `vc-relax-phonon` (an scf, relax or
-vc-relax, then `d3hess.x` under DFT-D3, `ph.x` on a q-point mesh, `q2r.x`
-and `matdyn.x` for the phonon DOS).
+vc-relax, then `d3hess.x` under DFT-D3, `ph.x` on a q-point mesh, `q2r.x`,
+and `matdyn.x` for the phonon DOS and for the dispersion along the band
+task's path).
 
 Fresh installations must install the runtime assets first: run
 `goldilocks assets install default` once, or pass `--fetch-missing`, before any
@@ -90,7 +91,8 @@ convergence controls, for a `band` task the path (`k_path`: its
 `lattice_type`, `n_kpoints` and `primitive_cells`, above 1 for folded bands),
 for a phonon task the q-point mesh (`q_sampling`: `mesh`, `n_irr_q`, `work`),
 the first step's k-mesh raised against it, any FFT grid written for ph.x
-(`fft_grid.written`) and the `blocking` findings, factual warnings, generated
+(`fft_grid.written`), the dispersion path (`k_path`: its `lattice_type` and
+`n_kpoints`) and the `blocking` findings, factual warnings, generated
 paths, and publication path. A stopped phonon job resumes with
 `sbatch --export=ALL,GOLDILOCKS_FROM_STEP=ph submit.sh`.
 Core prepares inputs; it does not run DFT.
