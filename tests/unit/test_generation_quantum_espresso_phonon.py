@@ -5,7 +5,10 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
+from pymatgen.core import Structure
+from support import graphene_monolayer, mc3d_42058_silicon
 
+from goldilocks_core.advisors.k_path import KPathDecision, PathBranch, PathVertex
 from goldilocks_core.advisors.parallelisation import ParallelisationDecision
 from goldilocks_core.advisors.phonon import (
     PhononDecision,
@@ -14,9 +17,15 @@ from goldilocks_core.advisors.phonon import (
 )
 from goldilocks_core.advisors.q_sampling import QSamplingDecision
 from goldilocks_core.generation.errors import GenerationError
+from goldilocks_core.generation.quantum_espresso.bands import path_rows
 from goldilocks_core.generation.quantum_espresso.namelists import render_namelist
 from goldilocks_core.generation.quantum_espresso.phonon import write_qe_phonon
-from goldilocks_core.step_settings import MatdynSettings, PhSettings, Q2rSettings
+from goldilocks_core.step_settings import (
+    DispersionSettings,
+    MatdynSettings,
+    PhSettings,
+    Q2rSettings,
+)
 from goldilocks_core.steps import (
     DynamicalMatricesCheck,
     SharedContext,
@@ -26,14 +35,78 @@ from goldilocks_core.steps import (
 
 _CTX = SharedContext(prefix="pwscf", outdir="./out", pseudo_dir="./pseudo")
 
+_PhononSettings = tuple[PhSettings, Q2rSettings, MatdynSettings, DispersionSettings]
+
+_GAMMA = PathVertex("Gamma", (0.0, 0.0, 0.0))
+
+
+def _path(
+    cell: Structure,
+    *branches: PathBranch,
+    convention: str,
+    lattice_type: str,
+    space_group: str,
+) -> KPathDecision:
+    return KPathDecision(
+        branches=branches,
+        k_path_distance=0.025,
+        n_kpoints=sum(sum(branch.steps) + 1 for branch in branches),
+        convention=convention,
+        lattice_type=lattice_type,
+        space_group=space_group,
+        primitive_cells=1,
+        cell=cell,
+    )
+
+
+def _split_fcc_path() -> KPathDecision:
+    """The first two branches of diamond Si's path where matdyn.x adds the
+    non-analytic term: Gamma-X-W-K-Gamma, then Gamma-L from the same Gamma."""
+    return _path(
+        mc3d_42058_silicon(),
+        PathBranch(
+            (
+                _GAMMA,
+                PathVertex("X", (-0.5, 0.0, -0.5)),
+                PathVertex("W", (-0.75, -0.25, -0.5)),
+                PathVertex("K", (-0.75, -0.375, -0.375)),
+                _GAMMA,
+            ),
+            (47, 24, 17, 50),
+        ),
+        PathBranch((_GAMMA, PathVertex("L", (-0.5, -0.5, -0.5))), (41,)),
+        convention="setyawan_curtarolo",
+        lattice_type="FCC",
+        space_group="Fd-3m (227)",
+    )
+
+
+def _hex2d_path() -> KPathDecision:
+    """Graphene's Gamma-M-K-Gamma, Gamma only at its ends."""
+    return _path(
+        graphene_monolayer(),
+        PathBranch(
+            (
+                _GAMMA,
+                PathVertex("M", (0.5, 0.0, 0.0)),
+                PathVertex("K", (1 / 3, 1 / 3, 0.0)),
+                _GAMMA,
+            ),
+            (59, 35, 69),
+        ),
+        convention="bravais_2d",
+        lattice_type="HEX2D",
+        space_group="P6/mmm (191)",
+    )
+
 
 def _silicon(
     parallel: ParallelisationDecision | None = None,
-) -> tuple[PhSettings, Q2rSettings, MatdynSettings]:
+) -> _PhononSettings:
     """Diamond Si's phonon steps, as the advisors decide them on its written
     cell: the 7x7x7 q-mesh (20 irreducible q-points, work 2401), the balanced
     ph protocol, asr 'crystal' and the 21x21x21 DOS mesh at 0.10 1/Angstrom;
-    the first step runs 4 pools."""
+    the first step runs 4 pools. The dispersion follows ``_split_fcc_path``."""
     q2r = Q2rDecision(asr="crystal", loto_2d=False, asr_memory_mb=6.12)
     return (
         PhSettings(
@@ -51,12 +124,14 @@ def _silicon(
                 mesh=(21, 21, 21), dos_q_distance=0.1, delta_e=1.0
             ),
         ),
+        DispersionSettings(q2r=q2r, path=_split_fcc_path()),
     )
 
 
-def _graphene() -> tuple[PhSettings, Q2rSettings, MatdynSettings]:
+def _graphene() -> _PhononSettings:
     """Graphene with isolation=slab: the 10x10x1 q-mesh (14 irreducible
-    q-points, work 700), loto_2d and the 30x30x1 DOS mesh."""
+    q-points, work 700), loto_2d, the 30x30x1 DOS mesh and
+    ``_hex2d_path``."""
     q2r = Q2rDecision(asr="crystal", loto_2d=True, asr_memory_mb=1.79)
     return (
         PhSettings(
@@ -73,6 +148,7 @@ def _graphene() -> tuple[PhSettings, Q2rSettings, MatdynSettings]:
                 mesh=(30, 30, 1), dos_q_distance=0.1, delta_e=1.0
             ),
         ),
+        DispersionSettings(q2r=q2r, path=_hex2d_path()),
     )
 
 
@@ -243,34 +319,100 @@ def test_q2r_x_and_matdyn_x_turn_the_matrices_into_a_phonon_dos() -> None:
     )
 
 
+def test_dispersion_in_lists_the_path_after_matdyn_x_s_namelist() -> None:
+    """matdyn.x interpolates q2r.x's force constants, with the same acoustic
+    sum rule, at the points of the rows after its namelist, which it reads as
+    pw.x reads a K_POINTS crystal_b card (``q_in_band_form``,
+    ``q_in_cryst_coord``; QE 7.3 ``PHonon/PH/matdyn.f90:485-501``): the
+    number of rows, then x y z n, with a count of 0 where Gamma ends one
+    branch and its second copy starts the next. It writes the frequencies to
+    <prefix>.freq and <prefix>.freq.gp (``:760-776``); a blank flvec leaves
+    out the modes of every point (``:564-569``)."""
+    steps = write_qe_phonon(*_silicon(), _CTX, d3hess=False)
+
+    assert _step(steps, "dispersion").files["dispersion.in"] == (
+        "&INPUT\n"
+        "   flfrc            = 'pwscf.fc'\n"
+        "   asr              = 'crystal'\n"
+        "   flfrq            = 'pwscf.freq'\n"
+        "   flvec            = ' '\n"
+        "   q_in_band_form   = .true.\n"
+        "   q_in_cryst_coord = .true.\n"
+        "/\n"
+        "  7\n"
+        "  0  0  0  47  ! Gamma\n"
+        "  -0.5  0  -0.5  24  ! X\n"
+        "  -0.75  -0.25  -0.5  17  ! W\n"
+        "  -0.75  -0.375  -0.375  50  ! K\n"
+        "  0  0  0  0  ! Gamma\n"
+        "  0  0  0  41  ! Gamma\n"
+        "  -0.5  -0.5  -0.5  1  ! L\n"
+    )
+
+
+def test_the_dispersion_runs_on_one_task_with_q2r_s_sum_rule() -> None:
+    """Like the phonon DOS, matdyn.x runs on one task and passes on JOB DONE,
+    with no stop file and nothing a rerun resumes from; it applies the sum
+    rule of the q2r record, here the 'simple' fallback."""
+    ph, q2r, matdyn, dispersion = _silicon()
+    simple = Q2rDecision(asr="simple", loto_2d=False, asr_memory_mb=6.12)
+    dispersion = dataclasses.replace(dispersion, q2r=simple)
+
+    steps = write_qe_phonon(ph, q2r, matdyn, dispersion, _CTX, d3hess=False)
+
+    step = _step(steps, "dispersion")
+    assert dataclasses.replace(step, files={}) == Step(
+        name="dispersion",
+        executable="matdyn.x",
+        args=("-in", "dispersion.in"),
+        stdout="dispersion.out",
+        completion=StdoutMarkerCheck("JOB DONE"),
+        ntasks=1,
+    )
+    assert _keywords(step.files["dispersion.in"])["asr"] == "'simple'"
+
+
 def test_a_slab_under_2d_truncation_takes_the_2d_non_analytic_term() -> None:
-    """loto_2d in q2r.x and matdyn.x for isolation=slab, after QE's PHonon
-    example17; the q- and DOS meshes keep one division along the vacuum."""
+    """loto_2d in q2r.x and both matdyn.x runs for isolation=slab, after QE's
+    PHonon example17; the q- and DOS meshes keep one division along the
+    vacuum, and the dispersion lists the path's rows as they are."""
     steps = write_qe_phonon(*_graphene(), _CTX, d3hess=False)
 
     q2r = _keywords(_step(steps, "q2r").files["q2r.in"])
     matdyn = _keywords(_step(steps, "phonon_dos").files["phonon_dos.in"])
     ph = _keywords(_step(steps, "ph").files["ph.in"].split("\n", 1)[1])
-    assert q2r["loto_2d"] == matdyn["loto_2d"] == ".true."
+    namelist, rows = _step(steps, "dispersion").files["dispersion.in"].split("/\n")
+    dispersion = _keywords(namelist)
+    assert q2r["loto_2d"] == matdyn["loto_2d"] == dispersion["loto_2d"] == ".true."
     assert (ph["nq1"], ph["nq2"], ph["nq3"]) == ("10", "10", "1")
     assert (matdyn["nk1"], matdyn["nk2"], matdyn["nk3"]) == ("30", "30", "1")
+    assert rows.splitlines() == path_rows(_hex2d_path())
+    assert rows.splitlines()[0] == "  4"
 
 
 def test_the_steps_run_in_order_on_the_shared_prefix_and_outdir() -> None:
-    """d3hess.x and ph.x read the first step's save and q2r.x ph.x's
-    matrices, so every name the inputs give follows the shared context."""
+    """d3hess.x and ph.x read the first step's save, q2r.x ph.x's matrices
+    and both matdyn.x runs q2r.x's force constants, so every name the inputs
+    give follows the shared context."""
     ctx = SharedContext(prefix="si", outdir="/scratch/run", pseudo_dir="./pseudo")
 
     steps = write_qe_phonon(*_silicon(), ctx, d3hess=True)
 
-    assert [step.name for step in steps] == ["d3hess", "ph", "q2r", "phonon_dos"]
+    assert [step.name for step in steps] == [
+        "d3hess",
+        "ph",
+        "q2r",
+        "phonon_dos",
+        "dispersion",
+    ]
     assert [step.executable for step in steps] == [
         "d3hess.x",
         "ph.x",
         "q2r.x",
         "matdyn.x",
+        "matdyn.x",
     ]
-    d3hess, ph, q2r, phonon_dos = (
+    d3hess, ph, q2r, phonon_dos, dispersion = (
         _keywords(step.files[f"{step.name}.in"].split("&", 1)[1]) for step in steps
     )
     assert d3hess == {"prefix": "'si'", "outdir": "'/scratch/run'"}
@@ -281,6 +423,8 @@ def test_the_steps_run_in_order_on_the_shared_prefix_and_outdir() -> None:
     )
     assert (q2r["fildyn"], q2r["flfrc"]) == ("'si.dyn'", "'si.fc'")
     assert (phonon_dos["flfrc"], phonon_dos["fldos"]) == ("'si.fc'", "'si.phdos'")
+    assert (dispersion["flfrc"], dispersion["flfrq"]) == ("'si.fc'", "'si.freq'")
+    assert not {"dos", "fldos", "nk1", "nk2", "nk3", "deltae"} & dispersion.keys()
     assert steps[1].completion == DynamicalMatricesCheck("si.dyn")
     assert steps[1].stop_file == "si.EXIT"
     assert steps[1].restart_data == ("/scratch/run/_ph0", "si.dyn*")

@@ -324,8 +324,9 @@ class TestTopLevelShape:
         self,
     ) -> None:
         """#215: each phonon task runs its first pw.x step, then ph.x, q2r.x
-        and matdyn.x, with d3hess.x for DFT-D3; its description names the
-        q-mesh protocol and, for the two relaxations, the force threshold's."""
+        and matdyn.x for the phonon DOS and for the dispersion, with d3hess.x
+        for DFT-D3; its description names the q-mesh and path protocols and,
+        for the two relaxations, the force threshold's."""
         by_id = {task["id"]: task for task in capabilities()["tasks"]}
 
         assert [by_id[task]["name"] for task in _PHONON_TASKS] == [
@@ -335,10 +336,22 @@ class TestTopLevelShape:
         ]
         for task in _PHONON_TASKS:
             entry = by_id[task]
-            assert entry["executables"] == ["pw.x", "ph.x", "q2r.x", "matdyn.x"]
-            assert entry["step_count"] == 4
+            assert entry["executables"] == [
+                "pw.x",
+                "ph.x",
+                "q2r.x",
+                "matdyn.x",
+                "matdyn.x",
+            ]
+            assert entry["step_count"] == 5
             assert entry["codes"] == ["quantum_espresso"]
-            for term in ("d3hess.x", "q_distance 0.3", "ph protocol"):
+            for term in (
+                "d3hess.x",
+                "q_distance 0.3",
+                "ph protocol",
+                "dispersion",
+                "k_path_distance 0.025",
+            ):
                 assert term in entry["description"], (task, term)
             assert ("forc_conv_thr 1e-4" in entry["description"]) is (
                 task != "phonon"
@@ -532,7 +545,14 @@ class TestSettingApplicability:
             assert settings[key]["tasks"] == _ALL_TASKS, key
             assert settings[key]["programs"] == ["pw.x"], key
 
-    def test_the_path_spacing_is_published_on_the_bands_step(self) -> None:
+    def test_the_path_spacing_is_published_on_the_bands_and_dispersion_steps(
+        self,
+    ) -> None:
+        """#215: the phonon tasks' dispersion step follows the band task's
+        path, so one spacing serves pw.x's bands step and matdyn.x's
+        dispersion, resolved in each task's k_path record. The description
+        says where the dispersion takes more steps into Gamma than the
+        spacing needs."""
         k_path_distance = self._settings()["k_path_distance"]
 
         assert (k_path_distance["group"], k_path_distance["scope"]) == (
@@ -540,10 +560,10 @@ class TestSettingApplicability:
             "per_step",
         )
         assert (k_path_distance["steps"], k_path_distance["tasks"]) == (
-            ["bands"],
-            ["band"],
+            ["bands", "dispersion"],
+            ["band", *_PHONON_TASKS],
         )
-        assert k_path_distance["programs"] == ["pw.x"]
+        assert k_path_distance["programs"] == ["matdyn.x", "pw.x"]
         assert (k_path_distance["type"], k_path_distance["unit"]) == (
             "number",
             "1/Angstrom",
@@ -553,7 +573,13 @@ class TestSettingApplicability:
             "record": "k_path",
             "path": ["k_path_distance"],
         }
-        assert "2 pi included" in k_path_distance["description"]
+        for term in (
+            "2 pi included",
+            "dispersion",
+            "matdyn.x lands on Gamma exactly",
+            "phonon branches",
+        ):
+            assert term in k_path_distance["description"], term
 
     def test_scf_loop_settings_skip_the_nscf_step(self) -> None:
         """An nscf step runs no SCF loop (QE 7.3 calls non_scf and sets
@@ -593,7 +619,8 @@ class TestSettingApplicability:
         """#215: the q-mesh and ph.x's linear-response settings on the ph
         step, the acoustic sum rule on the q2r step and the DOS spacing on
         the phonon_dos step, each for the three phonon tasks, read by the
-        program that runs that step and resolved in that step's record."""
+        program that runs that step and resolved in that step's record. Both
+        matdyn.x runs apply the q2r step's sum rule."""
         settings = self._settings()
 
         inverse_angstrom = "1/Angstrom"
@@ -631,6 +658,7 @@ class TestSettingApplicability:
             "string",
             ["crystal", "simple"],
         )
+        assert "phonon DOS and the dispersion" in settings["asr"]["description"]
 
     def test_the_force_threshold_has_one_default_per_kind_of_task(self) -> None:
         """#215: QE's 1e-3 for the relax and vc-relax tasks, 1e-4 for the

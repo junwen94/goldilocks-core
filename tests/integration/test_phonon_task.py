@@ -9,22 +9,22 @@ The job: under a job timer no step gets a max_seconds share, and the first
 step's input carries none, while the dos and band tasks still split the
 walltime between their pw.x steps.
 
-The phonon steps: ``phonon_steps_advice`` advises the ph, q2r and phonon_dos
-steps, a relaxation first step's relax record and the first step's FFT grid
-on the advice of a first step under ``phonon_step_protocol``. The overrides
-are routed for the scf, relax or vc-relax task, so the phonon steps keep
-their defaults. The first step's input carries the grid ph.x accepts and
-two-body D3, and the ph.x, q2r.x and matdyn.x inputs follow it on its
-context.
+The phonon steps: ``phonon_steps_advice`` advises the ph, q2r, phonon_dos
+and dispersion steps, a relaxation first step's relax record and the first
+step's FFT grid on the advice of a first step under ``phonon_step_protocol``.
+The overrides are routed for the scf, relax or vc-relax task, so the phonon
+steps keep their defaults. The first step's input carries the grid ph.x
+accepts and two-body D3, and the ph.x, q2r.x and matdyn.x inputs follow it
+on its context.
 
 The tasks: phonon, relax-phonon and vc-relax-phonon through their rows of
 ``service.TASK_PHASES``, from the request to the bundle, against the scf,
-relax and vc-relax tasks for the same request. A phonon task refuses a first
-step on smearing whose composition is not all-metallic unless the user
-confirms a metal, so the requests here put such structures on fixed
-occupations, except in the tests of that refusal: on the synthetic table
-and, where they are installed, on the installed tables and models, whose
-classifier decides is_metal.
+relax and vc-relax tasks for the same request, and the dispersion against
+the band task's path. A phonon task refuses a first step on smearing whose
+composition is not all-metallic unless the user confirms a metal, so the
+requests here put such structures on fixed occupations, except in the tests
+of that refusal: on the synthetic table and, where they are installed, on
+the installed tables and models, whose classifier decides is_metal.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ from pymatgen.core import Lattice, Structure
 from support import (
     alpha_uranium,
     antiferromagnetic_nickel_oxide,
+    carbon_chain,
     carbon_pair_in_a_box,
     fcc_lead,
     in_memory_source,
@@ -50,16 +51,22 @@ from support import (
 )
 
 from goldilocks_core.advisors.job_resources import JobTimerProtocol
+from goldilocks_core.advisors.k_path import KPathDecision
 from goldilocks_core.advisors.k_sampling import PhononKProtocol
-from goldilocks_core.advisors.phonon import AIIDA_PROTOCOLS_CITATION, PHONON_CITATIONS
+from goldilocks_core.advisors.phonon import (
+    AIIDA_PROTOCOLS_CITATION,
+    NO_DISPERSION,
+    PHONON_CITATIONS,
+)
 from goldilocks_core.advisors.q_sampling import QSamplingHumanInput, q_sampling
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.bundle import bundle_files
 from goldilocks_core.checks import CheckReport
+from goldilocks_core.generation.quantum_espresso.bands import path_rows
 from goldilocks_core.generation.quantum_espresso.phonon import write_qe_phonon
 from goldilocks_core.inputs.hpc import load_hpc_profile
-from goldilocks_core.resolution import Warning
+from goldilocks_core.resolution import Blocked, Unavailable, Warning
 from goldilocks_core.service import (
     TASK_PHASES,
     Advice,
@@ -254,7 +261,7 @@ def _phonon(
     the phonon steps advised on it, for a request of ``assignments``."""
     hpc = load_hpc_profile("scarf")
     overrides = build_overrides(assignments or {}, task=_FIRST_STEP_TASKS[first_step])
-    steps = overrides.for_steps((first_step, "ph", "q2r", "phonon_dos"))
+    steps = overrides.for_steps((first_step, "ph", "q2r", "phonon_dos", "dispersion"))
     protocol = phonon_step_protocol(first_step, steps["ph"].ph.q_sampling)
     first = advise_steps(
         structure,
@@ -286,7 +293,7 @@ def test_the_phonon_steps_of_silicon(store) -> None:
     21x21x21. The phonon record carries the phonon task's relax-first notice.
     pw.x's own FFT grid passes ph.x's test, so the first step writes none,
     and the job runs the phonon tasks' timer in place of any max_seconds
-    share."""
+    share. The dispersion step holds the path matdyn.x follows."""
     first, steps = _phonon(mc3d_42058_silicon(), store, "scf")
 
     q = steps.q_sampling.value
@@ -325,6 +332,7 @@ def test_the_phonon_steps_of_silicon(store) -> None:
         "ph": {"q_sampling": steps.q_sampling, "phonon": steps.phonon},
         "q2r": {"q2r": steps.q2r},
         "phonon_dos": {"phonon_dos": steps.phonon_dos},
+        "dispersion": {"k_path": steps.dispersion},
     }
 
 
@@ -428,20 +436,22 @@ def test_dft_d3_turns_the_first_step_s_three_body_terms_off(store) -> None:
 def test_the_phonon_inputs_follow_the_first_step_on_its_context(store) -> None:
     """ph.x, q2r.x and matdyn.x run after the scf on one context: ph.x reads
     its save under the same prefix and outdir with its pools, and q2r.x and
-    matdyn.x read the files named for that prefix."""
+    both matdyn.x runs read the files named for that prefix, the dispersion
+    along the path its record holds."""
     first, steps = _phonon(mc3d_42058_silicon(), store, "scf")
     ctx = SharedContext(prefix="si", outdir="./si-out", pseudo_dir="./pseudo")
 
     (scf,) = generate(first, check(first), ctx=ctx)
-    ph, q2r, dos = write_qe_phonon(
+    ph, q2r, dos, dispersion = write_qe_phonon(
         *phonon_step_settings(steps, first), ctx, d3hess=False
     )
 
-    assert [step.name for step in (scf, ph, q2r, dos)] == [
+    assert [step.name for step in (scf, ph, q2r, dos, dispersion)] == [
         "scf",
         "ph",
         "q2r",
         "phonon_dos",
+        "dispersion",
     ]
     scf_keywords = _keywords(scf.files["scf.in"])
     ph_keywords = _keywords(ph.files["ph.in"])
@@ -471,6 +481,12 @@ def test_the_phonon_inputs_follow_the_first_step_on_its_context(store) -> None:
         "21",
         "21",
     )
+    namelist, rows = dispersion.files["dispersion.in"].split("/\n")
+    assert (_keywords(namelist)["flfrc"], _keywords(namelist)["flfrq"]) == (
+        "'si.fc'",
+        "'si.freq'",
+    )
+    assert rows.splitlines() == path_rows(steps.dispersion.value)
 
 
 _PHONON_TASKS = (
@@ -530,10 +546,11 @@ def test_each_phonon_task_publishes_its_first_step_and_the_phonon_inputs(
     store, task, first_step
 ) -> None:
     """Diamond Si, set to a non-metal: the bundle holds the first step's
-    input, the scf one only for the phonon task, then ph.in, q2r.in and
-    phonon_dos.in, and no d3hess.in without DFT-D3. goldilocks.json names the
-    task, and CITATIONS.md the aiida-quantumespresso protocols and Baroni et
-    al. for the ph step's defaults."""
+    input, the scf one only for the phonon task, then ph.in, q2r.in,
+    phonon_dos.in and dispersion.in, and no d3hess.in without DFT-D3.
+    goldilocks.json names the task, and CITATIONS.md the aiida-quantumespresso
+    protocols and Baroni et al. for the ph step's defaults and Setyawan and
+    Curtarolo for the path."""
     hpc = load_hpc_profile("scarf")
     phases = TASK_PHASES[task]
     structure = mc3d_42058_silicon()
@@ -554,12 +571,15 @@ def test_each_phonon_task_publishes_its_first_step_and_the_phonon_inputs(
     files = {file["path"]: file["content"] for file in bundle_files(bundle_input)}
 
     assert sorted(path for path in files if path.endswith(".in")) == sorted(
-        [f"{first_step}.in", "ph.in", "q2r.in", "phonon_dos.in"]
+        [f"{first_step}.in", "ph.in", "q2r.in", "phonon_dos.in", "dispersion.in"]
     )
     assert "submit.sh" in files
     assert strict_json(files["goldilocks.json"])["request"]["task"] == task
     citations = files["CITATIONS.md"].decode("utf-8")
-    for citation in PHONON_CITATIONS:
+    for citation in (
+        *PHONON_CITATIONS,
+        "Setyawan and Curtarolo, Comput. Mater. Sci. 49, 299 (2010)",
+    ):
         assert f"- {citation}\n" in citations, citation
 
 
@@ -610,10 +630,11 @@ def test_a_request_for_the_phonon_steps_reaches_their_records_and_inputs(
 ) -> None:
     """Diamond Si, set to a non-metal, with a request for each phonon step:
     ph.x's tr2_ph, alpha_mix and nmix_ph, the acoustic sum rule of q2r.x and
-    matdyn.x, and the DOS spacing. The ph, q2r and phonon_dos records take
-    each value from the request, and ph.in, q2r.in and phonon_dos.in carry it:
-    the 0.2 1/A spacing gives an 11x11x11 DOS mesh in place of the default
-    21x21x21."""
+    matdyn.x, the DOS spacing and the path spacing. The ph, q2r, phonon_dos
+    and k_path records take each value from the request, and ph.in, q2r.in,
+    phonon_dos.in and dispersion.in carry it: the 0.2 1/A spacing gives an
+    11x11x11 DOS mesh in place of the default 21x21x21, and at 0.05 1/A
+    Gamma-X takes 24 steps in place of 47."""
     assignments = {
         **_NON_METAL,
         "tr2_ph": 1e-16,
@@ -621,13 +642,16 @@ def test_a_request_for_the_phonon_steps_reaches_their_records_and_inputs(
         "nmix_ph": 12,
         "asr": "simple",
         "dos_q_distance": 0.2,
+        "k_path_distance": 0.05,
     }
 
     advice, report = _task(task, mc3d_42058_silicon(), store, assignments)
 
     assert report.ok, [finding.message for finding in report.blocking]
     records = advice.records()
-    phonon, q2r, dos = (records[name] for name in ("phonon", "q2r", "phonon_dos"))
+    phonon, q2r, dos, path = (
+        records[name] for name in ("phonon", "q2r", "phonon_dos", "k_path")
+    )
     assert (phonon.value.tr2_ph, phonon.value.alpha_mix, phonon.value.nmix_ph) == (
         1e-16,
         0.3,
@@ -638,12 +662,19 @@ def test_a_request_for_the_phonon_steps_reaches_their_records_and_inputs(
         0.2,
         (11, 11, 11),
     )
-    assert [record.provenance.field_sources for record in (phonon, q2r, dos)] == [
+    assert (path.value.k_path_distance, path.value.branches[0].steps[0]) == (
+        0.05,
+        24,
+    )
+    assert [record.provenance.field_sources for record in (phonon, q2r, dos, path)] == [
         {"tr2_ph": "human", "alpha_mix": "human", "nmix_ph": "human"},
         {"asr": "human"},
         {"dos_q_distance": "human"},
+        {"k_path_distance": "human"},
     ]
-    _, ph, q2r_step, dos_step = TASK_PHASES[task].generate(advice, report)
+    _, ph, q2r_step, dos_step, dispersion_step = TASK_PHASES[task].generate(
+        advice, report
+    )
     ph_keywords = _keywords(ph.files["ph.in"])
     assert (
         ph_keywords["tr2_ph"],
@@ -658,6 +689,93 @@ def test_a_request_for_the_phonon_steps_reaches_their_records_and_inputs(
         dos_keywords["nk2"],
         dos_keywords["nk3"],
     ) == ("'simple'", "11", "11", "11")
+    namelist, rows = dispersion_step.files["dispersion.in"].split("/\n")
+    assert _keywords(namelist)["asr"] == "'simple'"
+    assert rows.splitlines() == path_rows(path.value)
+
+
+def _route(path: KPathDecision) -> str:
+    """``path``'s vertex labels, branch by branch."""
+    return " | ".join(
+        "-".join(vertex.label for vertex in branch.vertices) for branch in path.branches
+    )
+
+
+@pytest.mark.parametrize("task", [task for task, _ in _PHONON_TASKS])
+def test_the_dispersion_follows_the_band_task_s_path(store, task) -> None:
+    """Diamond Si confirmed a metal runs its first step on smearing, on which
+    ph.x computes no effective charges, and the dispersion's k_path is the
+    band task's for the same request. As a non-metal, on fixed occupations,
+    matdyn.x adds the non-analytic term, so the same path lists its interior
+    Gamma twice, one point more, and dispersion.in carries those rows."""
+    band, _ = _task("band", mc3d_42058_silicon(), store, {"is_metal": "metal"})
+    metal, _ = _task(task, mc3d_42058_silicon(), store, {"is_metal": "metal"})
+    insulator, report = _task(task, mc3d_42058_silicon(), store, _NON_METAL)
+
+    band_path = band.records()["k_path"].value
+    assert metal.records()["k_path"].value == band_path
+    split = insulator.records()["k_path"]
+    assert _route(band_path) == "Gamma-X-W-K-Gamma-L-U-W-L-K | U-X"
+    assert _route(split.value) == "Gamma-X-W-K-Gamma | Gamma-L-U-W-L-K | U-X"
+    assert split.value.n_kpoints == band_path.n_kpoints + 1 == 307
+    assert split.provenance.derived_from == ("magnetic", "occupations", "q2r")
+    assert "listed twice" in split.provenance.source_note
+    *_, dispersion = TASK_PHASES[task].generate(insulator, report)
+    rows = dispersion.files["dispersion.in"].split("/\n")[1].splitlines()
+    assert rows == path_rows(split.value)
+    gamma = rows.index("  0  0  0  0  ! Gamma")
+    assert rows[gamma - 1 : gamma + 2] == [
+        "  -0.75  -0.375  -0.375  50  ! K",
+        "  0  0  0  0  ! Gamma",
+        "  0  0  0  41  ! Gamma",
+    ]
+
+
+@pytest.mark.parametrize("task", [task for task, _ in _PHONON_TASKS])
+def test_a_conventional_cell_s_phonon_branches_are_noticed_as_folded(
+    store, task
+) -> None:
+    """Rock-salt NaCl in its 8-atom conventional cell, set to a non-metal:
+    the dispersion follows the path of the primitive cell's zone with the
+    band path's notices, so its k_path record says that the phonon branches
+    of 4 primitive cells fold together, with Gamma listed twice on fixed
+    occupations."""
+    advice, report = _task(task, sodium_chloride(), store, _NON_METAL)
+
+    assert report.ok, [finding.message for finding in report.blocking]
+    (folded,) = (
+        warning
+        for warning in advice.warnings()
+        if warning["code"] == "k_path.folded_bands"
+    )
+    assert folded["record"] == "k_path"
+    for term in ("4 primitive cells", "phonon branches"):
+        assert term in folded["message"], term
+    assert "listed twice" in advice.records()["k_path"].provenance.source_note
+
+
+@pytest.mark.parametrize("task", [task for task, _ in _PHONON_TASKS])
+def test_a_disordered_structure_blocks_the_dispersion_without_a_finding_of_its_own(
+    store, task
+) -> None:
+    """The spin-unpolarized Si vacancy, set to a non-metal: its written cell
+    has no dimensionality classification, which blocks q2r and so the
+    dispersion, with that root cause. The gate refuses the run on the causes
+    it gave before the dispersion existed, none of them about the path, and
+    nothing raises."""
+    vacancy = Structure(
+        Lattice.cubic(5.43), [{"Si": 0.5}, "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]]
+    )
+
+    advice, report = _task(
+        task, vacancy, store, {"spin_polarized": False, **_NON_METAL}
+    )
+
+    dispersion = advice.records()["k_path"]
+    assert isinstance(dispersion, Blocked)
+    assert "disordered" in dispersion.root_cause()
+    assert not report.ok
+    assert not any("path" in finding.message for finding in report.blocking)
 
 
 @pytest.mark.parametrize(("task", "first_step"), _PHONON_TASKS)
@@ -681,6 +799,7 @@ def test_dft_d3_inserts_d3hess_and_two_body_d3_in_the_phonon_tasks_only(
         "ph",
         "q2r",
         "phonon_dos",
+        "dispersion",
     ]
     keywords = _keywords(steps[0].files[f"{first_step}.in"])
     assert (keywords["vdw_corr"], keywords["dftd3_threebody"]) == (
@@ -724,8 +843,8 @@ def test_the_phonon_relaxations_converge_forces_ten_times_tighter(
 def test_each_phonon_task_carries_its_own_notices(store, task, first_step) -> None:
     """The relax-first notice only where no relaxation runs, the input-cell
     notice only after a vc-relax, both on the ph step's phonon record; the
-    first step's records keep its own name and the ph, q2r and phonon_dos
-    steps follow it."""
+    first step's records keep its own name and the ph, q2r, phonon_dos and
+    dispersion steps follow it."""
     advice, report = _task(task, mc3d_42058_silicon(), store, _NON_METAL)
 
     assert report.ok, [finding.message for finding in report.blocking]
@@ -743,11 +862,18 @@ def test_each_phonon_task_carries_its_own_notices(store, task, first_step) -> No
         }[task]
     )
     layout = advice.tiers().layout()["steps"]
-    assert [step["name"] for step in layout] == [first_step, "ph", "q2r", "phonon_dos"]
+    assert [step["name"] for step in layout] == [
+        first_step,
+        "ph",
+        "q2r",
+        "phonon_dos",
+        "dispersion",
+    ]
     assert layout[1:] == [
         {"name": "ph", "records": ["q_sampling", "phonon"]},
         {"name": "q2r", "records": ["q2r"]},
         {"name": "phonon_dos", "records": ["phonon_dos"]},
+        {"name": "dispersion", "records": ["k_path"]},
     ]
     assert ("relax" in layout[0]["records"]) is (first_step != "scf")
     assert layout[0]["records"][-1] == "fft_grid"
@@ -798,14 +924,43 @@ def test_a_periodic_molecule_in_a_box_gets_one_finding_in_each_phonon_task(
     """The same carbon pair with isolation=periodic: ph.x would compute a
     periodic array of copies of the pair, and a molecule has no phonon
     dispersion, so each phonon task refuses it with one finding and no
-    remedy."""
+    remedy, and its dispersion record is unavailable, adding none."""
     assignments = {**_NON_METAL, "is_magnetic": "non_magnetic", "isolation": "periodic"}
 
-    _, report = _task(task, carbon_pair_in_a_box(), store, assignments)
+    advice, report = _task(task, carbon_pair_in_a_box(), store, assignments)
 
     assert _codes_of(report) == ["phonon.isolated_boundary_unsupported"]
     assert report.blocking[0].remedies == ()
     assert "with isolation=periodic" in report.blocking[0].message
+    assert advice.records()["k_path"] == Unavailable(reason=NO_DISPERSION)
+
+
+@pytest.mark.parametrize(
+    ("task", "assignments"),
+    [
+        ("phonon", _NON_METAL),
+        ("relax-phonon", _NON_METAL),
+        ("vc-relax-phonon", {**_NON_METAL, "cell_dofree": "epitaxial_ab"}),
+    ],
+    ids=["phonon", "relax-phonon", "vc-relax-phonon"],
+)
+def test_a_wire_s_dispersion_runs_gamma_to_z(store, task, assignments) -> None:
+    """The carbon chain, set to a non-metal, has vacuum along a and b but not
+    c: unlike a box, a wire is periodic along its axis, so each phonon task
+    runs it, vc-relax-phonon with the cell_dofree that relaxes only the
+    period, and its dispersion runs from Gamma to Z along the wire. Gamma
+    starts the path, so it is not listed twice."""
+    advice, report = _task(task, carbon_chain(), store, assignments)
+
+    assert report.ok, [finding.message for finding in report.blocking]
+    path = advice.records()["k_path"].value
+    assert (path.lattice_type, _route(path)) == ("LINE", "Gamma-Z")
+    *_, dispersion = TASK_PHASES[task].generate(advice, report)
+    assert dispersion.files["dispersion.in"].split("/\n")[1].splitlines() == [
+        "  2",
+        "  0  0  0  99  ! Gamma",
+        "  0  0  1  1  ! Z",
+    ]
 
 
 def test_magnetic_afm_nickel_oxide_with_spin_orbit_and_a_hubbard_u_is_refused(

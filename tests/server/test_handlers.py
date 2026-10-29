@@ -224,9 +224,12 @@ class TestExplain:
             ("band", ["scf", "bands"]),
             ("relax", ["relax"]),
             ("vc-relax", ["vc-relax"]),
-            ("phonon", ["scf", "ph", "q2r", "phonon_dos"]),
-            ("relax-phonon", ["relax", "ph", "q2r", "phonon_dos"]),
-            ("vc-relax-phonon", ["vc-relax", "ph", "q2r", "phonon_dos"]),
+            ("phonon", ["scf", "ph", "q2r", "phonon_dos", "dispersion"]),
+            ("relax-phonon", ["relax", "ph", "q2r", "phonon_dos", "dispersion"]),
+            (
+                "vc-relax-phonon",
+                ["vc-relax", "ph", "q2r", "phonon_dos", "dispersion"],
+            ),
         ],
     )
     def test_lays_out_every_record_by_tier_and_step(
@@ -279,6 +282,7 @@ class TestExplain:
             assert ("relax" in by_step[steps[0]]) is (steps[0] != "scf")
             assert by_step["ph"] == ["q_sampling", "phonon"]
             assert (by_step["q2r"], by_step["phonon_dos"]) == (["q2r"], ["phonon_dos"])
+            assert by_step["dispersion"] == ["k_path"]
 
     def test_blocking_names_a_cross_parameter_rule(
         self, real_assets, silicon_cif

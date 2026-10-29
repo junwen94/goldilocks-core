@@ -206,10 +206,11 @@ def test_a_phonon_script_runs_every_step_under_the_job_timer(
 ) -> None:
     """Diamond Si, set to a non-metal, with DFT-D3 and a 4 h walltime: the
     first pw.x step, then d3hess.x, ph.x with the first step's pools, q2r.x
-    and matdyn.x, each named by GOLDILOCKS_FROM_STEP's switch, which a fresh
-    run passes at the first step, deleting ph.x's recover data. No input
-    writes max_seconds: the timer creates pwscf.EXIT at the job's
-    timer_seconds, 95% of the walltime."""
+    and matdyn.x for the phonon DOS and the dispersion, each named by
+    GOLDILOCKS_FROM_STEP's switch, which a fresh run passes at the first
+    step, deleting ph.x's recover data. No input writes max_seconds: the
+    timer creates pwscf.EXIT at the job's timer_seconds, 95% of the
+    walltime."""
     store = _installed_store(tmp_path, monkeypatch)
     hpc = load_hpc_profile("scarf")
     phases = TASK_PHASES[task]
@@ -226,7 +227,7 @@ def test_a_phonon_script_runs_every_step_under_the_job_timer(
     script = phases.render_submission(advice, hpc, "quantum_espresso", steps)
 
     lines = [line.strip() for line in script.splitlines()]
-    names = [first_step, "d3hess", "ph", "q2r", "phonon_dos"]
+    names = [first_step, "d3hess", "ph", "q2r", "phonon_dos", "dispersion"]
     assert [line for line in lines if line.startswith("# ")] == [
         f"# {name}" for name in names
     ]
@@ -254,6 +255,7 @@ def test_a_phonon_script_runs_every_step_under_the_job_timer(
         ("d3hess.x", "d3hess"),
         ("q2r.x", "q2r"),
         ("matdyn.x", "phonon_dos"),
+        ("matdyn.x", "dispersion"),
     ):
         launch = lines.index(
             f"srun --nodes=1 --ntasks=1 {program} -in {name}.in > {name}.out"

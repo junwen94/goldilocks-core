@@ -111,6 +111,7 @@ _RELAX_PHONON = [
     _PH_STEP,
     _one_task_step("q2r", "q2r.x"),
     _one_task_step("phonon_dos", "matdyn.x"),
+    _one_task_step("dispersion", "matdyn.x"),
 ]
 """A relax-phonon task's steps with DFT-D3, as its writers declare them."""
 
@@ -282,7 +283,7 @@ def test_a_phonon_script_starts_a_timer_and_guards_each_checked_step() -> None:
     script = render_slurm_script(_HPC, _TIMER_JOB, "quantum_espresso", _RELAX_PHONON)
 
     lines = script.splitlines()
-    assert 'goldilocks_steps="relax d3hess ph q2r phonon_dos"' in lines
+    assert 'goldilocks_steps="relax d3hess ph q2r phonon_dos dispersion"' in lines
     assert 'goldilocks_from="${GOLDILOCKS_FROM_STEP-relax}"' in lines
     assert (
         'if [ "$goldilocks_from" = "relax" ]; then rm -rf -- ./out/_ph0 pwscf.dyn*; fi'
@@ -688,6 +689,7 @@ def test_a_phonon_job_runs_its_steps_in_order(run_dir: Path) -> None:
         "ph.x",
         "q2r.x",
         "matdyn.x",
+        "matdyn.x",
     ]
 
 
@@ -766,15 +768,24 @@ def _leave_restart_data(run_dir: Path) -> tuple[Path, Path]:
     return recover, matrix
 
 
-def test_goldilocks_from_step_resumes_at_ph_with_its_restart_data(
-    run_dir: Path,
+@pytest.mark.parametrize(
+    ("from_step", "programs"),
+    [
+        ("ph", ["ph.x", "q2r.x", "matdyn.x", "matdyn.x"]),
+        ("dispersion", ["matdyn.x"]),
+    ],
+)
+def test_goldilocks_from_step_resumes_at_a_later_step_with_its_restart_data(
+    run_dir: Path, from_step: str, programs: list[str]
 ) -> None:
+    """At ph, ph.x resumes from its recover data; at the dispersion, matdyn.x
+    alone reruns on q2r.x's force constants."""
     recover, matrix = _leave_restart_data(run_dir)
 
-    result = _submit(run_dir, _RELAX_PHONON, job=_TIMER_JOB, from_step="ph")
+    result = _submit(run_dir, _RELAX_PHONON, job=_TIMER_JOB, from_step=from_step)
 
     assert result.returncode == 0, result.stderr
-    assert _programs_run(run_dir) == ["ph.x", "q2r.x", "matdyn.x"]
+    assert _programs_run(run_dir) == programs
     assert recover.exists()
     assert matrix.exists()
 
@@ -808,7 +819,7 @@ def test_goldilocks_from_step_must_name_one_step(run_dir: Path, from_step: str) 
     assert result.returncode == 1
     assert result.stderr == (
         f"goldilocks: GOLDILOCKS_FROM_STEP='{from_step}' is not one of this job's"
-        " steps: relax d3hess ph q2r phonon_dos\n"
+        " steps: relax d3hess ph q2r phonon_dos dispersion\n"
     )
     assert _programs_run(run_dir) == []
     assert recover.exists()

@@ -1,5 +1,5 @@
-"""phonon: the phonon tasks' ph.x, q2r.x and matdyn.x settings, and the
-notices of a phonon run (#215).
+"""phonon: the phonon tasks' ph.x, q2r.x and matdyn.x settings, the path of
+their dispersion, and the notices of a phonon run (#215).
 
 **ph.x** (``phonon_settings``). tr2_ph 1e-18, alpha_mix(1) 0.4 and nmix_ph
 8, each the default of its own setting, are aiida-quantumespresso's balanced
@@ -79,7 +79,12 @@ A molecule or cluster in a box has no dispersion: its record is
   DFPT takes second derivatives at the geometry it is given, here the
   written one.
 - ``phonon.vc_relax_input_cell``, for vc-relax-phonon: the q- and k-meshes
-  are sized on the input cell, and the vc-relax makes one pass.
+  and the dispersion path are built on the input cell, and the vc-relax
+  makes one pass. matdyn.x applies the path's crystal coordinates to the
+  relaxed cell's reciprocal vectors, which keeps every vertex the same
+  special point except where special points depend on the axis ratios and
+  angles: in BCT, ORCF, ORCI, ORCC, RHL, MCL and MCLC cells and in
+  centred-rectangular and oblique layers.
 - ``phonon.slab_lo_to_needs_2d_truncation``: a slab with periodic boundaries
   and fixed occupations, whose non-analytic term is then the 3D one, which
   depends on the vacuum width.
@@ -234,11 +239,18 @@ VC_RELAX_INPUT_CELL_NOTE = Warning(
     level="info",
     category="phonon",
     message=(
-        "the q-mesh and the k-mesh were sized on the input cell and keep their "
-        "divisions on the relaxed cell, so their spacing changes with it. The "
-        "vc-relax makes one pass: no relaxation follows its final scf on the "
-        "relaxed cell, so check the forces and the stress that scf prints, and "
-        "run the task again from the relaxed structure if they are large."
+        "the q-mesh, the k-mesh and the dispersion path were built on the input "
+        "cell. The meshes keep their divisions on the relaxed cell, so their "
+        "spacing changes with it. The path keeps its vertices' crystal "
+        "coordinates, which matdyn.x applies to the relaxed cell's reciprocal "
+        "vectors: they stay the same special points except in BCT, ORCF, ORCI, "
+        "ORCC, RHL, MCL and MCLC cells and centred-rectangular or oblique "
+        "layers, whose special points move with the axis ratios and angles, "
+        "and a cell near a boundary between Setyawan-Curtarolo subtypes can "
+        "change subtype. The vc-relax makes one pass: no relaxation follows its "
+        "final scf on the relaxed cell, so check the forces and the stress that "
+        "scf prints, and run the task again from the relaxed structure if they "
+        "are large."
     ),
 )
 

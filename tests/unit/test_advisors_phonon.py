@@ -236,6 +236,25 @@ def test_the_relaxation_notice_asks_for_the_same_projectors() -> None:
     assert notice.level == "info"
 
 
+def test_the_input_cell_notice_says_where_the_path_s_vertices_move() -> None:
+    """vc-relax-phonon's dispersion path is built on the input cell too:
+    matdyn.x applies its vertices' crystal coordinates to the relaxed cell's
+    reciprocal vectors, which keeps them special points except in the lattice
+    types whose special points depend on the axis ratios and angles."""
+    (notice,) = _notices("vc-relax")
+
+    for term in (
+        "dispersion path",
+        "crystal coordinates",
+        "matdyn.x",
+        "BCT, ORCF, ORCI, ORCC, RHL, MCL and MCLC",
+        "centred-rectangular or oblique layers",
+        "Setyawan-Curtarolo subtypes",
+    ):
+        assert term in notice.message, term
+    assert not INTERNAL_TEXT.findall(notice.message)
+
+
 def test_a_fixed_periodic_slab_gets_the_2d_lo_to_warning() -> None:
     """Its non-analytic term would be the 3D one, which depends on the
     vacuum width."""

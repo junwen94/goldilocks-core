@@ -5,10 +5,11 @@
 pw.x step, which keeps its own purpose (``plan.expand_task``): an scf for
 ``phonon``, a fixed-cell relax for ``relax-phonon`` and a vc-relax for
 ``vc-relax-phonon``, whose save ph.x reads in place of a separate scf. Then
-``d3hess.x`` for DFT-D3, ``ph.x`` on a q-point mesh, ``q2r.x`` and
-``matdyn.x`` for the phonon DOS run in the same job, on one
-``SharedContext``. ``TASK_PHASES`` binds each task's ``task`` to
-``advise_phonon``; every other function reads it off the advice.
+``d3hess.x`` for DFT-D3, ``ph.x`` on a q-point mesh, ``q2r.x``, and
+``matdyn.x`` for the phonon DOS and for the dispersion along the band task's
+path run in the same job, on one ``SharedContext``. ``TASK_PHASES`` binds
+each task's ``task`` to ``advise_phonon``; every other function reads it off
+the advice.
 
 **The first step is advised as any pw.x step**, by ``advise_steps`` under
 ``phonon_step_protocol`` (``_step_protocol.py``): its k-mesh is constrained
@@ -16,14 +17,14 @@ by the ph step's q-mesh, the job runs a timer in place of any
 ``max_seconds``, and a relaxation converges to the phonon tasks' force
 threshold. ``phonon_steps_advice`` (``_phonon_steps.py``) decides the rest on
 that step's advice: the relax record, the FFT grid ph.x accepts, the
-q-mesh, and the ph, q2r and phonon_dos steps' records.
+q-mesh, and the ph, q2r, phonon_dos and dispersion steps' records.
 
 **Each step gets its own overrides** (#154). ``set_overrides`` routes a
 phonon task's request to its steps: the pw.x settings to the first step,
 which is the task's only pw.x step, so no setting lands on two steps; the
 q-mesh and linear-response settings to ``ph``, the acoustic sum rule to
-``q2r`` and the DOS spacing to ``phonon_dos``. ``steps.scf.*`` is an unknown
-step in the relaxation tasks.
+``q2r``, the DOS spacing to ``phonon_dos`` and the path spacing to
+``dispersion``. ``steps.scf.*`` is an unknown step in the relaxation tasks.
 
 **The gate** is ``check()`` on the first step, with its purpose and relax
 record, followed by ``checks.with_phonon_findings``, which adds the phonon
@@ -92,8 +93,9 @@ class PhononAdvice:
     def tiers(self) -> RecordTiers:
         """``first``'s records, its step named ``first_step`` and holding the
         relax record of a relaxation and ``fft_grid`` too, then the ph step's
-        ``q_sampling`` and ``phonon``, the q2r step's ``q2r`` and the
-        phonon_dos step's ``phonon_dos``. d3hess.x has no records."""
+        ``q_sampling`` and ``phonon``, the q2r step's ``q2r``, the phonon_dos
+        step's ``phonon_dos`` and the dispersion step's ``k_path``. d3hess.x
+        has no records."""
         tiers = self.first.tiers(self.first_step).with_records(
             self.first_step, self.steps.first_step_records()
         )
@@ -178,7 +180,8 @@ def generate_phonon(
     advice: PhononAdvice, report: CheckReport, *, ctx: SharedContext | None = None
 ) -> tuple[Step, ...]:
     """Delivery: the first pw.x step, then d3hess.x for DFT-D3, ph.x, q2r.x
-    and matdyn.x, on one ``SharedContext`` (module docstring). Raises
+    and matdyn.x for the phonon DOS and the dispersion, on one
+    ``SharedContext`` (module docstring). Raises
     ``AdviceIncomplete`` when ``report`` is not ``ok``; ``report`` holds every
     step's findings (``check_phonon``), so the inner ``generate()`` call is
     passed an ``ok`` report."""

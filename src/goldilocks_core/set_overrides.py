@@ -27,8 +27,8 @@ P1/P5: validate identically, fail the same way, regardless of caller.
 the only interpreter of ``steps.<step>.<key>``; the steps of a task are
 ``plan.expand_task``'s purposes (``scf``; ``relax``; ``vc-relax``; ``scf``,
 ``nscf``, ``dos``; ``scf``, ``bands``, ``bands_x``; and ``scf``, ``relax`` or
-``vc-relax``, then ``ph``, ``q2r``, ``phonon_dos`` for the phonon tasks), and
-each setting declares the steps it applies to
+``vc-relax``, then ``ph``, ``q2r``, ``phonon_dos``, ``dispersion`` for the
+phonon tasks), and each setting declares the steps it applies to
 (``capabilities.SettingBinding.steps``):
 
 - analysis and system settings describe the system, and job settings the
@@ -38,7 +38,8 @@ each setting declares the steps it applies to
   than one (a dos task's ``k_grid`` reaches its scf and nscf steps, a band
   task's ``nbnd`` its scf and bands steps, and its ``k_grid`` its scf step
   only; a phonon task's first step is its only pw.x step, so its pw.x
-  settings land there alone, and ``q_grid`` reaches its ph step);
+  settings land there alone, ``q_grid`` reaches its ph step and
+  ``k_path_distance`` its dispersion step);
   ``steps.<step>.<key>`` lands on that step only and beats the flat value
   there.
 - a setting that applies to no step of the task (``press`` on an scf), a

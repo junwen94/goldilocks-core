@@ -203,8 +203,8 @@ class TestToolCalls:
         MCP transport: explain finds nothing to refuse in Si set to a
         non-metal, which a phonon task needs on smearing without a model to
         decide it, and run generates the first pw.x step, ph.x, q2r.x and
-        matdyn.x inputs, with the decisions laid out under the ph, q2r and
-        phonon_dos steps as explain lays them out."""
+        both matdyn.x inputs, with the decisions laid out under the ph, q2r,
+        phonon_dos and dispersion steps as explain lays them out."""
         server = create_server()
         document = {
             "structure_content": silicon_cif,
@@ -219,7 +219,13 @@ class TestToolCalls:
         assert (explained.is_error, result.is_error) == (False, False)
         assert explained.structured_content["blocking"] == []
         files = result.structured_content["files"]
-        for name in (f"{first_step}.in", "ph.in", "q2r.in", "phonon_dos.in"):
+        for name in (
+            f"{first_step}.in",
+            "ph.in",
+            "q2r.in",
+            "phonon_dos.in",
+            "dispersion.in",
+        ):
             assert name in files, name
         layout = result.structured_content["layout"]
         assert layout == explained.structured_content["layout"]
@@ -228,6 +234,7 @@ class TestToolCalls:
             "ph",
             "q2r",
             "phonon_dos",
+            "dispersion",
         ]
 
     def test_run_tool_relax_task_generates_relax_in(

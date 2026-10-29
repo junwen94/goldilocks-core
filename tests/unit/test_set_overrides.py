@@ -641,6 +641,22 @@ class TestTaskRouting:
         )
         assert overrides.warnings == ()
 
+    @pytest.mark.parametrize("task", ["phonon", "relax-phonon", "vc-relax-phonon"])
+    def test_k_path_distance_lands_on_a_phonon_task_s_dispersion_step(
+        self, task: str
+    ) -> None:
+        """#215: the dispersion step follows the band task's path and is the
+        only step of a phonon task that reads its spacing, so a flat value
+        lands there with no notice, as steps.dispersion.k_path_distance
+        does."""
+        flat = build_overrides({"k_path_distance": 0.02}, task=task)
+        scoped = build_overrides({"steps.dispersion.k_path_distance": 0.02}, task=task)
+
+        for overrides in (flat, scoped):
+            assert set(overrides.steps) == {"dispersion"}
+            assert overrides.steps["dispersion"].k_path.k_path.k_path_distance == 0.02
+            assert overrides.warnings == ()
+
     def test_vc_relax_keys_reach_vc_relax_phonon_only(self) -> None:
         """#215: press is a vc-relax setting, so vc-relax-phonon takes it,
         flat or on its vc-relax step, and relax-phonon refuses it."""
@@ -758,7 +774,7 @@ class TestTaskRouting:
                 {"k_path_distance": 0.02},
                 "scf_single_point",
                 "'k_path_distance' does not apply to task 'scf_single_point'; "
-                "it applies to task band",
+                "it applies to tasks band, phonon, relax-phonon, vc-relax-phonon",
                 id="k-path-distance-on-scf",
             ),
             pytest.param(
@@ -795,7 +811,8 @@ class TestTaskRouting:
                 {"steps.scf.k_path_distance": 0.02},
                 "band",
                 "'k_path_distance' does not apply to step 'scf' "
-                "(in 'steps.scf.k_path_distance'); it applies to step bands",
+                "(in 'steps.scf.k_path_distance'); it applies to steps bands, "
+                "dispersion",
                 id="k-path-distance-on-the-scf-step",
             ),
             pytest.param(
@@ -830,14 +847,16 @@ class TestTaskRouting:
                 {"steps.scf.k_grid": [4, 4, 4]},
                 "relax-phonon",
                 "unknown step 'scf' in 'steps.scf.k_grid'; "
-                "task 'relax-phonon' has steps: relax, ph, q2r, phonon_dos",
+                "task 'relax-phonon' has steps: relax, ph, q2r, phonon_dos, "
+                "dispersion",
                 id="scf-step-on-relax-phonon",
             ),
             pytest.param(
                 {"steps.vc-relax.press": 10},
                 "relax-phonon",
                 "unknown step 'vc-relax' in 'steps.vc-relax.press'; "
-                "task 'relax-phonon' has steps: relax, ph, q2r, phonon_dos",
+                "task 'relax-phonon' has steps: relax, ph, q2r, phonon_dos, "
+                "dispersion",
                 id="vc-relax-step-on-relax-phonon",
             ),
             pytest.param(
@@ -847,11 +866,12 @@ class TestTaskRouting:
                 id="delta-e-on-phonon",
             ),
             pytest.param(
-                {"k_path_distance": 0.02},
+                {"steps.phonon_dos.k_path_distance": 0.02},
                 "vc-relax-phonon",
-                "'k_path_distance' does not apply to task 'vc-relax-phonon'; "
-                "it applies to task band",
-                id="k-path-distance-on-vc-relax-phonon",
+                "'k_path_distance' does not apply to step 'phonon_dos' "
+                "(in 'steps.phonon_dos.k_path_distance'); it applies to steps "
+                "bands, dispersion",
+                id="k-path-distance-on-the-phonon-dos-step",
             ),
             pytest.param(
                 {"q_grid": [4, 4, 4]},

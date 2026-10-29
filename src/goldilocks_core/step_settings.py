@@ -21,11 +21,11 @@ given program does not use as ``None`` -- rejected
 ``convergence``) and has nowhere to put what ``dos.x`` actually needs
 (``emin``/``delta_e``/``ngauss``). ``StepSettings`` is instead a tagged
 union (``PwSettings | DosSettings | PhSettings | Q2rSettings |
-MatdynSettings``), dispatched by ordinary ``isinstance``/pattern matching
--- there is no shared base data class for the union members. Resource
-estimates are not settings: no writer reads one, and the job record
-carries pw.x's estimated memory instead (``advisors/job_resources.py``,
-#148).
+MatdynSettings | DispersionSettings``), dispatched by ordinary
+``isinstance``/pattern matching -- there is no shared base data class for
+the union members. Resource estimates are not settings: no writer reads
+one, and the job record carries pw.x's estimated memory instead
+(``advisors/job_resources.py``, #148).
 
 **Only the fields this codebase currently has a producer for are
 required; every other field defaults to `None` rather than forcing a
@@ -40,14 +40,14 @@ epic 10: ``advisors/relax.py``'s ``relax_settings()`` is called by
 ``service/_relax.py`` and threaded into ``generate(relax=...)``, so a
 ``relax``/``vc-relax`` task genuinely constructs a non-``None`` value
 here today. ``DosSettings``'s fields are numbers ``service/_dos.py``
-copies from the dos record. ``PhSettings``, ``Q2rSettings`` and
-``MatdynSettings`` (#215) came after their producers, the q-mesh and
-phonon advisors (``advisors/q_sampling.py``, ``advisors/phonon.py``), so
-every one of their fields is required; ``service/_phonon_steps.py`` builds
-them from those advisors' records (``phonon_step_settings``). Every
-optional field here is expected to become required once its real producer
-exists -- a natural, signature-breaking change at that point, not scope
-creep now.
+copies from the dos record. ``PhSettings``, ``Q2rSettings``,
+``MatdynSettings`` and ``DispersionSettings`` (#215) came after their
+producers, the q-mesh and phonon advisors (``advisors/q_sampling.py``,
+``advisors/phonon.py``), so every one of their fields is required;
+``service/_phonon_steps.py`` builds them from those advisors' records
+(``phonon_step_settings``). Every optional field here is expected to become
+required once its real producer exists -- a natural, signature-breaking
+change at that point, not scope creep now.
 
 ``DosSettings`` existing as its own type with its own ``broadening``
 field (QE calls this ``degauss`` too, in ``dos.x``/``projwfc.x`` --
@@ -170,4 +170,22 @@ class MatdynSettings:
     phonon_dos: PhononDosDecision
 
 
-type StepSettings = PwSettings | DosSettings | PhSettings | Q2rSettings | MatdynSettings
+@dataclass(frozen=True, slots=True)
+class DispersionSettings:
+    """matdyn.x's dispersion: q2r.x's acoustic sum rule and 2D non-analytic
+    term, which matdyn.x applies to the force constants, and the path it
+    follows, the band path as matdyn.x reads it (``advisors/phonon.py``'s
+    ``dispersion_path``)."""
+
+    q2r: Q2rDecision
+    path: KPathDecision
+
+
+type StepSettings = (
+    PwSettings
+    | DosSettings
+    | PhSettings
+    | Q2rSettings
+    | MatdynSettings
+    | DispersionSettings
+)

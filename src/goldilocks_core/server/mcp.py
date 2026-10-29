@@ -138,12 +138,14 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
             "explains a first pw.x step (scf, relax or vc-relax, with its "
             "'fft_grid' decision and, for a relaxation, 'relax'), d3hess.x for "
             "DFT-D3, ph.x on a q-point mesh ('q_sampling' and 'phonon'), q2r.x "
-            "('q2r') and matdyn.x for the phonon DOS ('phonon_dos'). An "
-            "overrides key reaches every step of the task it applies to; "
-            "'steps.<step>.<key>' (steps: scf; relax; vc-relax; scf, nscf, "
-            "dos; scf, bands, bands_x; scf, ph, q2r, phonon_dos; relax, ph, "
-            "q2r, phonon_dos; vc-relax, ph, q2r, phonon_dos) sets one step "
-            "only, and a key no step of the task reads is an error."
+            "('q2r'), matdyn.x for the phonon DOS ('phonon_dos') and matdyn.x "
+            "along the band task's path ('k_path'). An overrides key reaches "
+            "every step of the task it applies to; 'steps.<step>.<key>' "
+            "(steps: scf; relax; vc-relax; scf, nscf, dos; scf, bands, "
+            "bands_x; scf, ph, q2r, phonon_dos, dispersion; relax, ph, q2r, "
+            "phonon_dos, dispersion; vc-relax, ph, q2r, phonon_dos, "
+            "dispersion) sets one step only, and a key no step of the task "
+            "reads is an error."
         )
     )
     async def explain(document: ComputeRequestDocument) -> dict[str, Any]:
@@ -162,10 +164,10 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
             "submission script. task='relax'/'vc-relax' generates one pw.x "
             "input with calculation='relax'/'vc-relax' set accordingly. "
             "task='phonon'/'relax-phonon'/'vc-relax-phonon' generates scf.in, "
-            "relax.in or vc-relax.in, d3hess.in for DFT-D3, ph.in, q2r.in and "
-            "phonon_dos.in, sharing one submission script whose job timer "
-            "stops pw.x or ph.x cleanly near the walltime and whose "
-            "GOLDILOCKS_FROM_STEP variable resumes it from a later step. "
+            "relax.in or vc-relax.in, d3hess.in for DFT-D3, ph.in, q2r.in, "
+            "phonon_dos.in and dispersion.in, sharing one submission script "
+            "whose job timer stops pw.x or ph.x cleanly near the walltime and "
+            "whose GOLDILOCKS_FROM_STEP variable resumes it from a later step. "
             "Overrides are routed to the task's steps as in explain."
         )
     )

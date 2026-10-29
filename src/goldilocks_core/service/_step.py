@@ -23,10 +23,11 @@ with the occupations of the task's ``scf`` step, which runs before it.
 ``StepOverrides`` is one step's request overrides (#154). A request is
 routed per step by ``set_overrides.build_overrides``, so each field holds
 only settings that apply to its step: ``kpoints``/``resources`` on a pw.x
-step, ``relax`` on a relax or vc-relax step, ``k_path`` on a bands step,
-``dos`` on the dos.x step. ``ph``, ``q2r`` and ``phonon_dos`` are the
-settings of a phonon task's ph.x, q2r.x and matdyn.x steps (#215), which
-``_phonon_steps.py`` reads.
+step, ``relax`` on a relax or vc-relax step, ``k_path`` on a bands step or a
+phonon task's dispersion step, ``dos`` on the dos.x step. ``ph``, ``q2r``
+and ``phonon_dos`` are the settings of a phonon task's ph.x, q2r.x and
+phonon-DOS matdyn.x steps (#215), which ``_phonon_steps.py`` reads with the
+dispersion step's ``k_path``.
 A setting given without a step that lands on more than one step raises
 ``applies_to_multiple_steps``, declared here beside the bags it fills.
 """
@@ -115,8 +116,9 @@ class DosOverrides:
 
 @dataclass(frozen=True, slots=True)
 class KPathOverrides:
-    """A bands step's own setting: the spacing of its band path
-    (``advisors/k_path.py``, #118)."""
+    """The setting of a step that follows the band path, a band task's bands
+    step or a phonon task's dispersion step: the spacing of the path
+    (``advisors/k_path.py``, #118, #215)."""
 
     k_path: KPathHumanInput | None = None
 
@@ -141,8 +143,8 @@ class Q2rOverrides:
 
 @dataclass(frozen=True, slots=True)
 class PhononDosOverrides:
-    """The matdyn.x step's own setting (#215): the spacing of its
-    phonon-DOS mesh (``advisors/phonon.py``)."""
+    """The phonon-DOS matdyn.x step's own setting (#215): the spacing of its
+    mesh (``advisors/phonon.py``)."""
 
     phonon_dos: PhononDosHumanInput | None = None
 

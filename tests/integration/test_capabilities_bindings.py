@@ -142,8 +142,8 @@ def test_each_layout_places_every_record_once_by_tier_and_step(
     their nscf_ names, a band task's bands-step path as k_path and its other
     decisions under their bands_ names (bands.x has none), a relaxation's own
     record with its step, and a phonon task's first step with its relax
-    record and FFT grid, then its ph, q2r and phonon_dos steps (d3hess.x has
-    none)."""
+    record and FFT grid, then its ph, q2r and phonon_dos steps and its
+    dispersion step's path as k_path (d3hess.x has none)."""
     facts = {fact["key"] for fact in capabilities()["facts"]}
     for task, response in explained:
         layout = response["layout"]
@@ -180,11 +180,18 @@ def test_each_layout_places_every_record_once_by_tier_and_step(
             assert "relax" in steps[task]
         elif task in _PHONON_FIRST_STEPS:
             first_step = _PHONON_FIRST_STEPS[task]
-            assert list(steps) == [first_step, "ph", "q2r", "phonon_dos"]
+            assert list(steps) == [
+                first_step,
+                "ph",
+                "q2r",
+                "phonon_dos",
+                "dispersion",
+            ]
             assert steps[first_step][-1] == "fft_grid"
             assert ("relax" in steps[first_step]) is (first_step != "scf")
             assert steps["ph"] == ["q_sampling", "phonon"]
             assert (steps["q2r"], steps["phonon_dos"]) == (["q2r"], ["phonon_dos"])
+            assert steps["dispersion"] == ["k_path"]
         else:
             assert list(steps) == ["scf"]
         assert "job" in next(iter(steps.values())), task

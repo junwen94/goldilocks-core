@@ -887,8 +887,8 @@ class TestRunAndExplainAgainstRealAssets:
         self, real_assets: None
     ) -> None:
         """#215: --task vc-relax-phonon routes to advise_phonon: the vc-relax
-        step relaxes to the phonon protocol's 1e-4, and the ph, q2r and
-        phonon_dos steps follow it in the layout."""
+        step relaxes to the phonon protocol's 1e-4, and the ph, q2r,
+        phonon_dos and dispersion steps follow it in the layout."""
         silicon = structure("Si.cif")
 
         completed = _run_cli(
@@ -912,6 +912,7 @@ class TestRunAndExplainAgainstRealAssets:
             "ph",
             "q2r",
             "phonon_dos",
+            "dispersion",
         ]
 
     @pytest.mark.parametrize(
@@ -941,10 +942,13 @@ class TestRunAndExplainAgainstRealAssets:
             "ph.in",
             "q2r.in",
             "phonon_dos.in",
+            "dispersion.in",
             "submit.sh",
         ):
             assert (destination / name).exists(), name
         assert "ldisp            = .true." in (destination / "ph.in").read_text()
+        dispersion = (destination / "dispersion.in").read_text()
+        assert "q_in_band_form   = .true." in dispersion
 
     def test_unknown_task_is_an_operator_error_not_a_silent_fallback(self) -> None:
         silicon = structure("Si.cif")
@@ -1258,7 +1262,8 @@ class TestPerStepOverrides:
                 "relax-phonon",
                 "steps.scf.k_grid=[4,4,4]",
                 "unknown step 'scf' in 'steps.scf.k_grid'; "
-                "task 'relax-phonon' has steps: relax, ph, q2r, phonon_dos",
+                "task 'relax-phonon' has steps: relax, ph, q2r, phonon_dos, "
+                "dispersion",
             ),
             (
                 "dos",

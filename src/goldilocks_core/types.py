@@ -24,8 +24,8 @@ CalcTask = Literal[
 accordingly), unlike ``dos``'s three-step scf/nscf/dos.x sequence.
 ``band`` added #118: scf, pw.x along the band path, then bands.x.
 ``phonon``/``relax-phonon``/``vc-relax-phonon`` added #215: an scf, a
-fixed-cell relax or a vc-relax, then ph.x on a q-point mesh, q2r.x and
-matdyn.x for the phonon DOS."""
+fixed-cell relax or a vc-relax, then ph.x on a q-point mesh, q2r.x, and
+matdyn.x for the phonon DOS and for the dispersion along the band path."""
 
 SmearingType = Literal["gaussian", "mp", "cold", "fd"]
 """QE's short names for its four smearing functions: Gaussian,
