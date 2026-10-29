@@ -36,6 +36,7 @@ from support import (
     monoclinic_zirconia_on_a_rhombic_lattice,
     oblique_carbon_sheet,
     phosphorene,
+    points_along_lines,
     rectangular_graphene,
     rhombohedral_bismuth_selenide,
     right_angled_monoclinic_zirconia,
@@ -500,26 +501,17 @@ def _expanded(card: str) -> tuple[np.ndarray, np.ndarray]:
     """The k-points pw.x generates from a K_POINTS crystal_b ``card``, read
     as QE 7.3 reads it (``Modules/read_cards.f90:761-838``): the number of
     vertices, then for each vertex three coordinates and the nearest integer
-    to a fourth number, the rest of the row unread; a weight w puts w equal
-    steps up to the next vertex, and 0 jumps straight to it
-    (``Modules/generate_k_along_lines.f90``). Also returns, for each pair of
-    consecutive points, whether it is such a jump."""
+    to a fourth number, the rest of the row unread, expanded in crystal
+    coordinates as ``generate_k_along_lines`` expands them
+    (``support.points_along_lines``): a weight w puts w equal steps up to
+    the next vertex, and 0 jumps straight to it. Also returns, for each pair
+    of consecutive points, whether it is such a jump."""
     header, count, *rows = card.splitlines()
     assert header == "K_POINTS crystal_b"
     assert len(rows) == int(count)
     vertices = [np.array([float(value) for value in row.split()[:3]]) for row in rows]
     weights = [round(float(row.split()[3])) for row in rows]
-    points, jumps = [vertices[0]], []
-    for start, end, weight in zip(vertices, vertices[1:], weights, strict=False):
-        if weight == 0:
-            points.append(end)
-            jumps.append(True)
-            continue
-        points.extend(
-            start + step / weight * (end - start) for step in range(1, weight + 1)
-        )
-        jumps.extend([False] * weight)
-    return np.array(points), np.array(jumps)
+    return points_along_lines(vertices, weights)
 
 
 @pytest.mark.parametrize(

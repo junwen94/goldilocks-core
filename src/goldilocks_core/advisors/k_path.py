@@ -80,20 +80,25 @@ back along the segment just taken -- ends the branch at the turning vertex,
 and a new branch starts at that vertex; a branch that starts where the
 previous one ends continues it; a branch left with one vertex is dropped;
 and every vertex at a point takes the first label used there (``_merged``,
-``_first_labels``).
+``_first_labels``). The path thus never repeats a point, as bands.x needs;
+the phonon tasks' dispersion step, which follows it too, repeats Gamma
+where matdyn.x needs that, outside ``k_path()`` (``advisors/phonon.py``'s
+``dispersion_path``).
 
 **Counts.** A segment takes ``ceil(length / k_path_distance)`` equal steps,
 at least one, the quotient rounded to 5 decimals first as ``kmesh`` rounds
 it, so no step is longer than the distance. Lengths are measured with the
 reciprocal vectors of the written lattice after ``_unstacked``, so a slab's
 segments are measured in its plane and a wire's along it. ``n_kpoints`` is
-then the number of points pw.x runs per spin channel
-(``Modules/read_cards.f90:824-827``).
+then the number of points pw.x runs per spin channel on the band task's
+bands step (``Modules/read_cards.f90:824-827``).
 
 **Notices.** ``k_path.folded_bands`` when the written cell holds more than
-one primitive cell. ``k_path.magnetic_noncollinear_symmetry`` for a
-spin-polarized run with spin-orbit coupling: the typing ignores the moment
-directions, and the path assumes E(k) = E(-k), which such a run can break.
+one primitive cell, whose bands or phonon branches the path folds.
+``k_path.magnetic_noncollinear_symmetry`` for a spin-polarized run with
+spin-orbit coupling: the typing ignores the moment directions, so segments
+the path treats as equivalent may differ, and for the bands it assumes
+E(k) = E(-k), which such a run can break.
 ``k_path.non_special_vertices`` for a bulk cell typed R3 or R-3 with the
 RHL1 variant, where Setyawan and Curtarolo's B, B_1, P, P_1, Q and X are
 general points. Both tables choose paths by lattice type: ASE's oblique
@@ -296,15 +301,18 @@ class KPathDecision:
     """The band path of the written cell (module docstring).
 
     ``k_path_distance`` is the largest spacing allowed between neighbouring
-    points, in 1/Å with 2π included; ``n_kpoints`` the points pw.x runs per
-    spin channel, the sum over the branches of their steps plus one.
+    points, in 1/Å with 2π included; ``n_kpoints`` the points the step runs,
+    pw.x per spin channel on a bands step and matdyn.x on a dispersion step
+    (whose path ``advisors/phonon.py``'s ``dispersion_path`` gives), the sum
+    over the branches of their steps plus one.
     ``convention`` names the family of tables and ``lattice_type`` the table:
     Setyawan and Curtarolo's (``FCC``, ``RHL1``, ``TRI1a``, ...), ASE's
     (``HEX2D``, ``SQR``, ``RECT``, ``CRECT``, ``OBL``) or ``LINE`` for a
     wire. ``space_group`` is the group of the typed cell the path was read
     on, the layer's primitive cell for a slab, e.g. ``P-6m2 (187)``.
     ``primitive_cells`` is the number of primitive cells the written cell
-    holds; above 1 the bands are folded. ``cell`` is the written cell."""
+    holds; above 1 the bands or phonon branches are folded. ``cell`` is the
+    written cell."""
 
     branches: tuple[PathBranch, ...]
     k_path_distance: float

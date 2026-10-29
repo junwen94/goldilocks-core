@@ -40,6 +40,39 @@ and its q record is blocked. matdyn.x only interpolates, so a fine mesh is
 cheap. The DOS is tabulated every ``DOS_DELTA_E`` = 1 cm^-1, matdyn.x's own
 default.
 
+**The dispersion** (``dispersion_path``). matdyn.x follows the band task's
+path of the written cell (``advisors/k_path.py``), read as the rows pw.x
+reads from a K_POINTS crystal_b card (``q_in_band_form``,
+``q_in_cryst_coord``) and expanded by the same routine
+(``Modules/generate_k_along_lines.f90``). Where the first step runs on
+fixed occupations, so that ph.x computes the effective charges
+(``PHonon/PH/prepare_q.f90:139-162``), and loto_2d is off, under which
+matdyn.x skips this (``matdyn.f90:621``), matdyn.x adds the non-analytic
+(LO-TO) term at every point that is q = 0 to within 1e-6 in crystal
+coordinates, along the direction from the point before, or from the point
+after for the first point and for one whose predecessor is exactly 0
+(``matdyn.f90:621-651``). There the path differs from the band task's in
+two ways, and the record's ``source_note`` says so:
+
+- each segment that ends at Gamma takes the fewest steps, at least its own,
+  with which matdyn.x lands on Gamma exactly: its last point is
+  x + (delta * n) * (0 - x), delta = 1 / n, which is 0 only where
+  fl(fl(1/n) n) = 1, so 49, 98, 103, ... steps are raised, by at most 4 up
+  to 4000 steps. A point about 1e-16 off Gamma still counts as q = 0, and
+  the dipole sum adds the term there a second time
+  (``rigid.f90:195-217``);
+- each Gamma inside a branch ends that branch and starts the next, so the
+  rows list it twice with a count of 0 between, as matdyn.x's header
+  advises (``matdyn.f90:148-153``): the first copy takes the arriving
+  direction, and the second, whose predecessor is exactly 0, the leaving
+  one. The path's first Gamma takes the leaving direction already, and a
+  Gamma that ends a branch has only the arriving one.
+
+``n_kpoints`` is then matdyn.x's number of points (``matdyn.f90:539-542``):
+the band path's, plus one per Gamma split and the steps added into Gamma.
+A molecule or cluster in a box has no dispersion: its record is
+``Unavailable`` with ``NO_DISPERSION``.
+
 **Notices** (``phonon_notices``), carried by the phonon record:
 
 - ``phonon.relax_first``, for the phonon task, whose first step is an scf:
@@ -68,8 +101,9 @@ tasks' relaxation warning, carried by the relax record
 
 from __future__ import annotations
 
+import itertools
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from pydantic import Field
@@ -77,6 +111,12 @@ from pydantic import Field
 from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.hubbard_u import HubbardUDecision
 from goldilocks_core.advisors.job_resources import JobDecision
+from goldilocks_core.advisors.k_path import (
+    KPathDecision,
+    KPathHumanInput,
+    PathBranch,
+    k_path,
+)
 from goldilocks_core.advisors.magnetic_config import MagneticCell, MagneticConfigFacts
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.q_sampling import QSamplingDecision
@@ -89,6 +129,7 @@ from goldilocks_core.resolution import (
     FieldState,
     Provenance,
     Resolved,
+    Unavailable,
     Warning,
     blocked_by,
     field_sources_from,
@@ -144,6 +185,22 @@ _DOS_NOTE = (
     "aiida-quantumespresso's pdos protocol, balanced. matdyn.x only "
     "interpolates the force constants, so a fine mesh is cheap."
 )
+
+NO_DISPERSION = "a molecule or cluster in a box has no phonon dispersion"
+"""The dispersion record's reason for a written cell with vacuum along a, b
+and c."""
+
+_DISPERSION_NOTE = (
+    "matdyn.x adds the non-analytic (LO-TO) term on this run: Gamma inside a "
+    "branch is listed twice, ending one branch and starting the next, so that "
+    "the term takes the direction of each side, and a segment that ends at "
+    "Gamma takes the fewest steps, at least its own, with which matdyn.x lands "
+    "on Gamma exactly."
+)
+
+_GAMMA = (0.0, 0.0, 0.0)
+"""Gamma's crystal coordinates as ``k_path`` records them: matdyn.x tests a
+point's predecessor for exactly 0 (module docstring)."""
 
 RELAX_FIRST_NOTE = Warning(
     code="phonon.relax_first",
@@ -496,3 +553,85 @@ def phonon_dos_settings(
             derived_from=("magnetic",),
         ),
     )
+
+
+def dispersion_path(
+    cell: FieldState[MagneticCell],
+    geometry: FieldState[GeometryFacts],
+    occupations: FieldState[OccupationsDecision],
+    q2r: FieldState[Q2rDecision],
+    human: KPathHumanInput | None = None,
+) -> FieldState[KPathDecision]:
+    """The path matdyn.x follows on the dispersion step (module docstring):
+    the band path of the written ``cell`` at ``human``'s
+    ``k_path_distance``, with each Gamma inside a branch listed twice and
+    each segment into Gamma landing on it exactly where the first step's
+    ``occupations`` are fixed and ``q2r`` has no loto_2d. ``Blocked`` when
+    ``cell`` is not resolved; else ``Unavailable`` with ``NO_DISPERSION``
+    when the written cell's ``geometry`` has vacuum along a, b and c; else
+    ``Blocked`` by the first of ``occupations``, ``q2r`` and the band path
+    that is not resolved, q2r before the path so that a structure whose
+    boundary blocks q2r keeps that root cause. An unresolved ``geometry``
+    is not read: the band path takes the vacuum from the cell itself."""
+    if not cell.ok:
+        return Blocked(by=blocked_by(cell))
+    if geometry.ok and len(geometry.value.vacuum_axes) == 3:
+        return Unavailable(reason=NO_DISPERSION)
+    for state in (occupations, q2r):
+        if not state.ok:
+            return Blocked(by=blocked_by(state))
+    path = k_path(cell, human)
+    if not path.ok:
+        return Blocked(by=blocked_by(path))
+    band = path.value
+    branches = band.branches
+    if occupations.value.occupations == "fixed" and not q2r.value.loto_2d:
+        branches = tuple(
+            piece for branch in branches for piece in _matdyn_branches(branch)
+        )
+    notes = (
+        path.provenance.source_note,
+        _DISPERSION_NOTE if branches != band.branches else None,
+    )
+    return Resolved(
+        replace(
+            band,
+            branches=branches,
+            n_kpoints=sum(sum(branch.steps) + 1 for branch in branches),
+        ),
+        path.provenance.model_copy(
+            update={
+                "source_note": " ".join(note for note in notes if note) or None,
+                "derived_from": ("magnetic", "occupations", "q2r"),
+            }
+        ),
+    )
+
+
+def _matdyn_branches(branch: PathBranch) -> tuple[PathBranch, ...]:
+    """``branch`` as matdyn.x reads it where it adds the non-analytic term
+    (module docstring): each segment into Gamma takes ``_exact_count``
+    steps, then each Gamma inside the branch ends one branch and starts the
+    next."""
+    vertices = branch.vertices
+    steps = tuple(
+        _exact_count(count) if end.k == _GAMMA else count
+        for count, end in zip(branch.steps, vertices[1:], strict=True)
+    )
+    cuts = [
+        index
+        for index, vertex in enumerate(vertices[1:-1], start=1)
+        if vertex.k == _GAMMA
+    ]
+    bounds = (0, *cuts, len(vertices) - 1)
+    return tuple(
+        PathBranch(vertices=vertices[start : end + 1], steps=steps[start:end])
+        for start, end in itertools.pairwise(bounds)
+    )
+
+
+def _exact_count(steps: int) -> int:
+    """The fewest steps, at least ``steps``, whose last point lands exactly
+    on Gamma: n with fl(fl(1/n) n) = 1 in double precision (module
+    docstring)."""
+    return next(n for n in itertools.count(steps) if (1.0 / n) * n == 1.0)

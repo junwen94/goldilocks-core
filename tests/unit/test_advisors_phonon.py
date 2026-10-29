@@ -1,7 +1,9 @@
 """The phonon tasks' ph.x, q2r.x and matdyn.x settings and the notices of a
 phonon run (#215): defaults and request values, the bounds ph.x checks, each
 notice on its own condition, the acoustic-sum-rule fallback against one
-task's memory, loto_2d, and the phonon DOS mesh."""
+task's memory, loto_2d, the phonon DOS mesh, and the dispersion path matdyn.x
+reads. How matdyn.x expands that path and where it lands on Gamma are in
+``tests/physics/test_phonon_dispersion.py``."""
 
 from __future__ import annotations
 
@@ -9,31 +11,38 @@ import dataclasses
 
 import pytest
 from pydantic import ValidationError
-from pymatgen.core import Structure
+from pymatgen.core import Lattice, Structure
 from support import (
     INTERNAL_TEXT,
+    carbon_pair_in_a_box,
     framed_magnetic_cell,
     geometry_facts,
     graphene_monolayer,
     mc3d_42058_silicon,
+    phosphorene,
     rutile_titanium_dioxide,
     written_afm_nickel_oxide,
     written_boron_nitride_monolayer,
     written_cell,
     written_magnetic_cell,
+    written_sodium_chloride,
 )
 
 from goldilocks_core.advisors.boundary import BoundaryFacts
 from goldilocks_core.advisors.hubbard_u import HubbardU, HubbardUDecision
 from goldilocks_core.advisors.job_resources import JobDecision
+from goldilocks_core.advisors.k_path import KPathDecision, KPathHumanInput, k_path
 from goldilocks_core.advisors.occupations import OccupationsDecision
 from goldilocks_core.advisors.phonon import (
     LOOSE_FORCE_THRESHOLD_WARNING,
+    NO_DISPERSION,
     PHONON_CITATIONS,
     WARNING_CATALOGUE,
     PhononDosHumanInput,
     PhononHumanInput,
+    Q2rDecision,
     Q2rHumanInput,
+    dispersion_path,
     phonon_dos_settings,
     phonon_notices,
     phonon_settings,
@@ -483,3 +492,215 @@ def test_the_dos_mesh_is_blocked_by_an_unresolved_cell() -> None:
     state = phonon_dos_settings(Blocked(by="no compatible pseudopotential table"))
 
     assert isinstance(state, Blocked)
+
+
+def _route(decision: KPathDecision) -> str:
+    return " | ".join(
+        "-".join(vertex.label for vertex in branch.vertices)
+        for branch in decision.branches
+    )
+
+
+def _q2r_record(*, loto_2d: bool = False) -> Resolved[Q2rDecision]:
+    return _resolved(Q2rDecision(asr="crystal", loto_2d=loto_2d, asr_memory_mb=1.0))
+
+
+def _nacl() -> Resolved[object]:
+    return written_magnetic_cell(written_sodium_chloride())
+
+
+def _dispersion(
+    cell: Resolved[object] | None = None,
+    occupations: str = "fixed",
+    *,
+    loto_2d: bool = False,
+    vacuum_axes: tuple[str, ...] = (),
+    distance: float | None = None,
+):
+    """The dispersion path of ``cell``, written NaCl by default, on fixed
+    occupations without loto_2d: a run on which matdyn.x adds the
+    non-analytic term."""
+    return dispersion_path(
+        cell or _nacl(),
+        _resolved(geometry_facts("2d" if vacuum_axes else "3d", vacuum_axes)),
+        _occupations(occupations),
+        _q2r_record(loto_2d=loto_2d),
+        KPathHumanInput(k_path_distance=distance),
+    )
+
+
+def test_gamma_inside_a_branch_ends_one_branch_and_starts_the_next() -> None:
+    """NaCl on fixed occupations without loto_2d: its interior Gamma is
+    listed twice, ending K-Gamma and starting Gamma-L, one point more than
+    the band path; the 48 steps into Gamma already land on it, and the
+    record keeps the band path's table, notices and citations."""
+    cell = _nacl()
+    band = k_path(cell)
+
+    state = _dispersion(cell)
+
+    decision = state.value
+    assert _route(band.value) == "Gamma-X-W-K-Gamma-L-U-W-L-K | U-X"
+    assert _route(decision) == "Gamma-X-W-K-Gamma | Gamma-L-U-W-L-K | U-X"
+    assert [branch.steps for branch in decision.branches] == [
+        (45, 23, 16, 48),
+        (39, 28, 16, 32, 28),
+        (16,),
+    ]
+    assert decision.n_kpoints == band.value.n_kpoints + 1 == 294
+    unsplit = dataclasses.replace(
+        decision, branches=band.value.branches, n_kpoints=band.value.n_kpoints
+    )
+    assert unsplit == band.value
+    provenance = state.provenance
+    assert provenance.derived_from == ("magnetic", "occupations", "q2r")
+    assert provenance.field_sources == {"k_path_distance": "heuristic"}
+    assert provenance.citations == band.provenance.citations
+    assert provenance.source_note.startswith(band.provenance.source_note)
+    assert "listed twice" in provenance.source_note
+    assert not INTERNAL_TEXT.findall(provenance.source_note)
+
+
+@pytest.mark.parametrize(
+    ("cell", "settings"),
+    [
+        (_nacl, {"occupations": "smearing"}),
+        (_nacl, {"occupations": "smearing", "distance": 0.024492}),
+        (_nacl, {"occupations": "tetrahedra_opt"}),
+        (
+            lambda: framed_magnetic_cell(phosphorene()),
+            {"loto_2d": True, "vacuum_axes": ("c",)},
+        ),
+    ],
+    ids=["smearing", "smearing-49-steps-into-gamma", "tetrahedra", "loto_2d"],
+)
+def test_without_the_non_analytic_term_the_dispersion_is_the_band_path(
+    cell, settings
+) -> None:
+    """On smearing or tetrahedra ph.x computes no effective charges (QE 7.3
+    PHonon/PH/prepare_q.f90:139-162), and under loto_2d matdyn.x skips its
+    q = 0 block, so an interior Gamma (NaCl's, and phosphorene's Y-Gamma-S)
+    needs no second point, and a segment into Gamma keeps its count: NaCl's
+    K-Gamma keeps its 49 steps at k_path_distance 0.024492."""
+    written = cell()
+    band = k_path(written, KPathHumanInput(k_path_distance=settings.get("distance")))
+
+    state = _dispersion(written, **settings)
+
+    assert "Gamma" in [
+        vertex.label
+        for branch in band.value.branches
+        for vertex in branch.vertices[1:-1]
+    ]
+    assert state.value == band.value
+    assert state.provenance.source_note == band.provenance.source_note
+    assert state.provenance.derived_from == ("magnetic", "occupations", "q2r")
+
+
+def test_a_segment_into_gamma_takes_the_fewest_steps_that_land_on_it() -> None:
+    """At k_path_distance 0.024492 NaCl's K-Gamma takes 49 steps, and
+    fl(fl(1/49) 49) < 1 leaves its last point about 1e-16 off Gamma: the
+    dispersion takes 50, the fewest from 49 that land on Gamma, and splits
+    there as before."""
+    band = k_path(_nacl(), KPathHumanInput(k_path_distance=0.024492)).value
+
+    state = _dispersion(distance=0.024492)
+
+    assert band.branches[0].steps == (46, 23, 17, 49, 40, 29, 17, 33, 29)
+    assert [branch.steps for branch in state.value.branches] == [
+        (46, 23, 17, 50),
+        (40, 29, 17, 33, 29),
+        (17,),
+    ]
+    assert state.value.n_kpoints == band.n_kpoints + 2 == 304
+    assert state.value.k_path_distance == 0.024492
+    assert state.provenance.field_sources == {"k_path_distance": "human"}
+    assert "lands on Gamma exactly" in state.provenance.source_note
+    assert "bands.yaml" not in state.provenance.source_note
+
+
+def test_raising_a_count_alone_changes_the_record_and_its_note() -> None:
+    """The hBN monolayer's path ends at Gamma, so nothing splits, but at
+    k_path_distance 0.034422 its K-Gamma takes 49 steps: the dispersion
+    raises them to 50 and says so."""
+    cell = written_magnetic_cell(written_boron_nitride_monolayer())
+    band = k_path(cell, KPathHumanInput(k_path_distance=0.034422)).value
+
+    state = _dispersion(cell, vacuum_axes=("c",), distance=0.034422)
+
+    (branch,) = state.value.branches
+    assert band.branches[0].steps == (42, 25, 49)
+    assert branch.vertices == band.branches[0].vertices
+    assert branch.steps == (42, 25, 50)
+    assert (state.value.n_kpoints, band.n_kpoints) == (118, 117)
+    assert "lands on Gamma exactly" in state.provenance.source_note
+
+
+def test_a_molecule_in_a_box_has_no_dispersion() -> None:
+    """Vacuum along a, b and c: the record is unavailable, not blocked by
+    the band path's own refusal of a box."""
+    state = dispersion_path(
+        framed_magnetic_cell(carbon_pair_in_a_box()),
+        _resolved(geometry_facts("molecule", ("a", "b", "c"))),
+        _occupations(),
+        _q2r_record(),
+    )
+
+    assert isinstance(state, Unavailable)
+    assert state.reason == NO_DISPERSION
+
+
+@pytest.mark.parametrize("unresolved", ["cell", "occupations", "q2r"])
+def test_an_unresolved_input_blocks_the_dispersion(unresolved: str) -> None:
+    blocked = Blocked(by="pseudopotential table sssp is not installed")
+    inputs = {
+        "cell": _nacl(),
+        "geometry": _resolved(geometry_facts("3d")),
+        "occupations": _occupations(),
+        "q2r": _q2r_record(),
+        unresolved: blocked,
+    }
+
+    state = dispersion_path(**inputs)
+
+    assert isinstance(state, Blocked)
+    assert state.root_cause() == blocked.root_cause()
+
+
+def test_an_unresolved_geometry_is_not_read() -> None:
+    """Only the box test reads the written cell's vacuum facts; the path
+    takes the vacuum from the cell itself."""
+    state = dispersion_path(
+        _nacl(),
+        Unavailable(reason="dimensionality classification failed"),
+        _occupations(),
+        _q2r_record(),
+    )
+
+    assert state.ok
+    assert state.value.n_kpoints == 294
+
+
+def test_a_disordered_cell_is_blocked_by_q2r_before_its_path() -> None:
+    """An unresolved q2r record blocks the dispersion before the path is
+    read, so a disordered written cell keeps q2r's root cause, the
+    boundary's or the job's: a task never resolves q2r on such a cell,
+    whose job record is unavailable. With q2r resolved by hand, the path's
+    own reason blocks it."""
+    alloy = Structure(
+        Lattice.cubic(3.6), [{"Cu": 0.5, "Au": 0.5}], [[0, 0, 0]]
+    ).make_supercell([2, 2, 2])
+    cell = framed_magnetic_cell(alloy)
+    geometry = Unavailable(
+        reason="dimensionality classification does not support disordered structures"
+    )
+
+    by_q2r = dispersion_path(
+        cell, geometry, _occupations(), Blocked(by=geometry.reason)
+    )
+    by_path = dispersion_path(cell, geometry, _occupations(), _q2r_record())
+
+    assert isinstance(by_q2r, Blocked)
+    assert by_q2r.root_cause() == geometry.reason
+    assert isinstance(by_path, Blocked)
+    assert by_path.root_cause() == k_path(cell).reason
