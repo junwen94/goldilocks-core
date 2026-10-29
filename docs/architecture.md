@@ -532,8 +532,8 @@ It places records by the response's `layout`: the Analysis card shows the
 analysis tier; the Advisors card shows every other record with the settings
 whose `resolved_in` names it, or read-only after them, a multi-step task's
 per-step records (a `dos` task's `nscf_` records, a `band` task's `bands_`
-records, a phonon task's records of each step, such as its first step's
-`fft_grid`) under their step. Each
+records and `k_path`, a phonon task's records of each step, such as its
+first step's `fft_grid`) under their step. Each
 setting control shows the value its `resolved_in` path leads to, captioned
 with the tier that produced that value: the record's per-setting source, or
 its own source -- except a record-level `human`, which another of the

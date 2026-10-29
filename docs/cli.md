@@ -99,13 +99,13 @@ each record's tier and step: `analysis` (what the structure alone decides),
 `system` (what every step shares), then `steps`, one `{"name", "records"}`
 per step of the task in run order -- the task's one `job` with its first step,
 a `dos` task's nscf decisions under their `nscf_` names, a `band` task's
-bands-step decisions under their `bands_` names, and a phonon task's
-`fft_grid` (and, for a relaxation, `relax`) with its first step, then
-`q_sampling` and `phonon` under `ph`, `q2r` under `q2r` and `phonon_dos`
-under `phonon_dos`. Every record is in exactly one list. `warnings` holds
-every record's warnings, for every task, each as `{"code", "level",
-"category", "message", "record"}`, where `record` names the record it came
-from (`nscf_parallelisation` for a `dos` task's nscf step,
+bands-step path as `k_path` and its other decisions under their `bands_`
+names, and a phonon task's `fft_grid` (and, for a relaxation, `relax`) with
+its first step, then `q_sampling` and `phonon` under `ph`, `q2r` under `q2r`
+and `phonon_dos` under `phonon_dos`. Every record is in exactly one list.
+`warnings` holds every record's warnings, for every task, each as `{"code",
+"level", "category", "message", "record"}`, where `record` names the record
+it came from (`nscf_parallelisation` for a `dos` task's nscf step,
 `bands_parallelisation` for a `band` task's bands step), then the request's
 routing notices under the `record` `overrides` (below); `goldilocks.json`
 carries the same list.
@@ -232,13 +232,11 @@ their group's record under their own name (`conv_thr` in
 in `magnetic.ordering.applied` (`null` for a run without spin polarization,
 which applies no ordering), `moment_direction` in
 `magnetic.moment_direction.uvw`, `k_grid` in `k_sampling.mesh`,
-`k_path_distance` in `bands_k_path.k_path_distance`, `hubbard_projectors`
-in `hubbard.projectors` (`null` without +U) and `q_grid` in
-`q_sampling.mesh`. `path` is
-`null` where the record holds no value of the setting: `extra_bands` only
-shifts `nbnd`, `nosym` only changes the `n_irr_k` count, and
-`hubbard_needs_correlation` and `u_by_element` decide which U values the
-`hubbard` record lists.
+`hubbard_projectors` in `hubbard.projectors` (`null` without +U) and
+`q_grid` in `q_sampling.mesh`. `path` is `null` where the record holds no
+value of the setting: `extra_bands` only shifts `nbnd`, `nosym` only changes
+the `n_irr_k` count, and `hubbard_needs_correlation` and `u_by_element`
+decide which U values the `hubbard` record lists.
 
 Quote `--set` values that contain brackets or braces (e.g. `--set
 'k_grid=[8,8,8]'`) so the shell does not glob-expand them; array and object

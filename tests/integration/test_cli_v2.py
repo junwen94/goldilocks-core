@@ -841,9 +841,9 @@ class TestRunAndExplainAgainstRealAssets:
     def test_explain_band_task_reports_bands_prefixed_records(
         self, real_assets: None
     ) -> None:
-        """#118: --task band routes to advise_band: the bands step's
-        decisions are published under bands_ names, and the 8-atom cubic
-        Si.cif gets the fcc path, folded."""
+        """#118: --task band routes to advise_band: the bands step's path is
+        published as k_path and its other decisions under bands_ names, and
+        the 8-atom cubic Si.cif gets the fcc path, folded."""
         silicon = structure("Si.cif")
 
         completed = _run_cli(
@@ -852,7 +852,7 @@ class TestRunAndExplainAgainstRealAssets:
 
         assert completed.returncode == 0, completed.stderr
         document = json.loads(completed.stdout)
-        path = document["records"]["bands_k_path"]["value"]
+        path = document["records"]["k_path"]["value"]
         assert (path["lattice_type"], path["primitive_cells"]) == ("FCC", 4)
         assert document["records"]["bands_nbnd"]["status"] == "resolved"
         assert document["blocking"] == []
@@ -1219,7 +1219,7 @@ class TestPerStepOverrides:
 
         assert completed.returncode == 0, completed.stderr
         records = strict_json(completed.stdout)["records"]
-        k_path = records["bands_k_path"]
+        k_path = records["k_path"]
         assert k_path["value"]["k_path_distance"] == 0.05
         assert k_path["field_sources"] == {"k_path_distance": "human"}
         assert records["bands_convergence"]["value"]["conv_thr"] == 1e-11

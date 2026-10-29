@@ -180,7 +180,7 @@ if band_report.ok:
     band_steps = generate_band(band_advice, band_report, ctx=ctx)
     print([step.name for step in band_steps])
 
-k_path = band_advice.records()["bands_k_path"]
+k_path = band_advice.records()["k_path"]
 if isinstance(k_path, Resolved):
     print(k_path.value.lattice_type, k_path.value.n_kpoints, k_path.value.primitive_cells)
 ```
@@ -189,10 +189,10 @@ The steps are `scf`, `bands` (`pw.x` with `calculation='bands'` on a
 `K_POINTS crystal_b` card) and `bands_x` (`bands.x`), or `bands_x_up` and
 `bands_x_down` for a collinear spin-polarized run, all in one job.
 `BandAdvice.records()` keys the shared system-level fields, the scf step's
-own and the task's one `job` unprefixed, and the bands step's own under
-`bands_`: `bands_k_path`, the high-symmetry path of the written cell
-(branches of labelled vertices in crystal coordinates of its reciprocal
-vectors, with `n_kpoints`, `lattice_type` and `primitive_cells`),
+own, the task's one `job` and `k_path`, the high-symmetry path of the
+written cell (branches of labelled vertices in crystal coordinates of its
+reciprocal vectors, with `n_kpoints`, `lattice_type` and `primitive_cells`),
+unprefixed, and the bands step's other records under `bands_`:
 `bands_occupations`, `bands_nbnd`, `bands_convergence` and
 `bands_parallelisation`; `band_advice.tiers().layout()` names the steps scf
 and bands, since `bands.x` has no records. Unless the request sets them, the

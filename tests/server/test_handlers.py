@@ -267,7 +267,7 @@ class TestExplain:
         if task == "band":
             assert by_step["bands"] == [
                 "bands_occupations",
-                "bands_k_path",
+                "k_path",
                 "bands_nbnd",
                 "bands_convergence",
                 "bands_parallelisation",

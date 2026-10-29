@@ -27,7 +27,7 @@ k-point or cutoff convergence tolerance.
 Every setting above is listed by `goldilocks settings` (with its group, type,
 and default) and, once resolved for a structure, shown in the matching record
 from `goldilocks explain`/the published `goldilocks.json` (`k_sampling`,
-a `band` task's `bands_k_path`, a phonon task's `q_sampling` and
+a `band` task's `k_path`, a phonon task's `q_sampling` and
 `phonon_dos`, `occupations`, `cutoffs`, `convergence` and `relax`
 respectively). `k_distance` defaults to `0.15` for metals or when
 metallicity is unknown and `0.30` for a confirmed non-metal;

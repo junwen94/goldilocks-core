@@ -259,7 +259,7 @@ if band_report.ok:
     )
     print([step.name for step in band_steps])
 
-k_path = band_advice.records()["bands_k_path"]
+k_path = band_advice.records()["k_path"]
 if isinstance(k_path, Resolved):
     print(k_path.value.lattice_type, k_path.value.n_kpoints)
     print(k_path.value.primitive_cells)
@@ -276,17 +276,17 @@ loop; `nbnd`, `extra_bands`, `conv_thr`, `npool` and `ndiag` given without a
 step reach both `pw.x` steps, with the `overrides.applies_to_multiple_steps`
 notice.
 
-`band_advice.records()` keys the shared fields, the scf step's own and the
-task's one `job` unprefixed, and the bands step's own under `bands_`:
-`bands_k_path`, the path, and `bands_occupations`, `bands_nbnd`,
-`bands_convergence` and `bands_parallelisation`. Unless the request sets
-them, the bands step takes its `k_path_distance` (0.025 Å⁻¹) and three times
-the occupied bands from aiida-quantumespresso's `bands.yaml` protocol, read
-`heuristic` with the protocol in `source_note`.
+`band_advice.records()` keys the shared fields, the scf step's own, the
+task's one `job` and the bands step's path, `k_path`, unprefixed, and the
+bands step's other records under `bands_`: `bands_occupations`,
+`bands_nbnd`, `bands_convergence` and `bands_parallelisation`. Unless the
+request sets them, the bands step takes its `k_path_distance` (0.025 Å⁻¹)
+and three times the occupied bands from aiida-quantumespresso's `bands.yaml`
+protocol, read `heuristic` with the protocol in `source_note`.
 
 The path comes from the symmetry of the cell that is written: here the FCC
 path of diamond. The bundled `Si.cif` is diamond's 8-atom conventional
-cell, so `primitive_cells` is 4 and `bands_k_path` carries the
+cell, so `primitive_cells` is 4 and `k_path` carries the
 `k_path.folded_bands` notice: at each point of the path, the bands of four
 points of the primitive cell's zone appear together. Upload a primitive cell
 for unfolded bands. See [the band structure path](science.md#check-the-band-structure-path)

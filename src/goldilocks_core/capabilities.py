@@ -67,10 +67,9 @@ setting's own field name -- and ``_SETTING_META`` declares the
 exceptions: ``pseudo_table_id`` resolves in ``pseudo_table.id``,
 ``spin_orbit_coupling`` in ``magnetic.spin_orbit_enabled``,
 ``magnetic_ordering`` in ``magnetic.ordering.applied``, ``k_grid`` in
-``k_sampling.mesh``, ``k_path_distance`` in the band task's ``bands_k_path``,
-``hubbard_projectors`` in ``hubbard.projectors``, ``q_grid`` in the phonon
-tasks' ``q_sampling.mesh``, and a knob no record holds a value of
-(``extra_bands``, ``nosym``, ``hubbard_needs_correlation``,
+``k_sampling.mesh``, ``hubbard_projectors`` in ``hubbard.projectors``,
+``q_grid`` in the phonon tasks' ``q_sampling.mesh``, and a knob no record
+holds a value of (``extra_bands``, ``nosym``, ``hubbard_needs_correlation``,
 ``u_by_element``) has no path. Neither has a setting published under a key
 other than its field name, since a record's ``field_sources`` names
 settings by field name.
@@ -166,7 +165,7 @@ from goldilocks_core.service import (
 )
 from goldilocks_core.types import CalcTask
 
-VOCABULARY_VERSION = "3"
+VOCABULARY_VERSION = "4"
 """Bump when the settings/facts vocabulary changes in a way other
 ecosystem repos (ml/agent/data) need to know about -- goldilocks-core
 -design.md S4.2's cross-repo validation antidote."""
@@ -609,7 +608,6 @@ _SETTING_META: dict[str, _SettingExtra] = {
     "k_path_distance": {
         "structure_specific": False,
         "unit": "1/Angstrom",
-        "record": "bands_k_path",
         "description": (
             "Largest spacing between neighbouring points of a band task's "
             "high-symmetry path, with 2 pi included as for k_distance: each "

@@ -29,10 +29,10 @@ export function AdvisorRecordItems({
 
 /** The read-only records `names` of one step of a task with more than one
  * step, under a heading naming the step (`nscf step`, `bands step`,
- * `relax step`): a dos task's nscf decisions or a band task's bands-step
- * decisions, under their `nscf_` or `bands_` names, or a phonon task's
- * decisions of one step, such as its first step's `fft_grid` (#187, #118,
- * #215). */
+ * `relax step`): a dos task's nscf decisions under their `nscf_` names, a
+ * band task's bands-step path as `k_path` and its other decisions under
+ * their `bands_` names, or a phonon task's decisions of one step, such as
+ * its first step's `fft_grid` (#187, #118, #215). */
 export function AdvisorStepRecords({
   step,
   names,

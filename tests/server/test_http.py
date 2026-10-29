@@ -475,8 +475,8 @@ class TestExplain:
         self, client: TestClient, real_assets, silicon_cif: str
     ) -> None:
         """#118: task='band' routes to advise_band through the real HTTP
-        transport: the bands step's decisions under bands_ names, laid out
-        under its own step."""
+        transport: the bands step's path as k_path and its other decisions
+        under bands_ names, laid out under its own step."""
         response = client.post(
             "/explain",
             json={"structure_content": silicon_cif, "hpc": "scarf", "task": "band"},
@@ -485,7 +485,7 @@ class TestExplain:
         assert response.status_code == 200
         body = response.json()
         records = body["records"]
-        assert records["bands_k_path"]["value"]["lattice_type"] == "FCC"
+        assert records["k_path"]["value"]["lattice_type"] == "FCC"
         assert (
             records["bands_occupations"]["value"]["occupations"]
             == (records["occupations"]["value"]["occupations"])

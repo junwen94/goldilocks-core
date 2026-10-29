@@ -178,7 +178,7 @@ export interface Capabilities {
  * against exactly the failure mode that made this rewrite necessary:
  * a frontend build silently drifting from the backend contract it
  * talks to, discovered only by runtime breakage deep in a form. */
-const SUPPORTED_VOCABULARY_VERSION = "3";
+const SUPPORTED_VOCABULARY_VERSION = "4";
 
 // ---------------------------------------------------------------------
 // POST /inspect -- mirrors inputs/structure.py's `StructureInspection`.
@@ -258,10 +258,10 @@ export interface StepLayout {
  * decides, `system` what every step of the task shares, then each step's
  * own records in run order -- the task's one `job` with its first step, a
  * `dos` task's nscf decisions under their `nscf_` names, a `band` task's
- * bands-step decisions under their `bands_` names, and a phonon task's
- * `fft_grid` (and a relaxation's `relax`) with its first step, then its
- * `ph`, `q2r` and `phonon_dos` steps' records under their own names. Every
- * record is in exactly one list. */
+ * bands-step path as `k_path` and its other decisions under their `bands_`
+ * names, and a phonon task's `fft_grid` (and a relaxation's `relax`) with
+ * its first step, then its `ph`, `q2r` and `phonon_dos` steps' records under
+ * their own names. Every record is in exactly one list. */
 export interface RecordLayout {
   readonly analysis: readonly string[];
   readonly system: readonly string[];

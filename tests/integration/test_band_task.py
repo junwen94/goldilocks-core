@@ -332,14 +332,14 @@ def test_a_band_task_writes_scf_bands_and_bands_x_in_one_script(store) -> None:
     assert [step["name"] for step in layout] == ["scf", "bands"]
     assert layout[1]["records"] == [
         "bands_occupations",
-        "bands_k_path",
+        "k_path",
         "bands_nbnd",
         "bands_convergence",
         "bands_parallelisation",
     ]
     scf_in = steps["scf"].files["scf.in"]
     bands_in = steps["bands"].files["bands.in"]
-    path = advice.records()["bands_k_path"].value
+    path = advice.records()["k_path"].value
     assert _keyword(bands_in, "calculation") == "'bands'"
     assert k_points_crystal_b(path) in bands_in
     assert [label for _k, label in _path_rows(bands_in)] == [
@@ -396,7 +396,7 @@ def test_a_band_bundle_records_the_task_and_cites_the_path(store, tmp_path) -> N
     manifest = strict_json((tmp_path / "bundle" / "goldilocks.json").read_text())
     assert manifest["request"]["task"] == "band"
     assert manifest["request"]["overrides"] == {"k_path_distance": 0.05}
-    k_path = manifest["records"]["bands_k_path"]
+    k_path = manifest["records"]["k_path"]
     assert k_path["value"]["k_path_distance"] == 0.05
     assert k_path["field_sources"] == {"k_path_distance": "human"}
     citations = (tmp_path / "bundle" / "CITATIONS.md").read_text()
@@ -564,7 +564,7 @@ def test_a_slab_s_path_lies_in_its_plane(store) -> None:
     assume_isolated, which the bands run's potential is rebuilt with."""
     advice, steps = _generated(graphene_monolayer(), {"isolation": "slab"}, store)
 
-    path = advice.records()["bands_k_path"].value
+    path = advice.records()["k_path"].value
     bands_in = steps["bands"].files["bands.in"]
     assert (path.convention, path.lattice_type) == ("bravais_2d", "HEX2D")
     assert [label for _k, label in _path_rows(bands_in)] == ["Gamma", "M", "K", "Gamma"]
@@ -581,7 +581,7 @@ def test_a_generated_slab_with_a_tilted_c_gets_a_rectangular_path(store) -> None
     advice, steps = _generated(slab, {}, store)
 
     rows = _path_rows(steps["bands"].files["bands.in"])
-    assert advice.records()["bands_k_path"].value.lattice_type == "RECT"
+    assert advice.records()["k_path"].value.lattice_type == "RECT"
     assert ((0.0, 0.0, 0.0), "Gamma") in rows
     assert all(k[2] == 0 for k, _label in rows)
 
@@ -591,7 +591,7 @@ def test_a_wire_runs_gamma_to_z(store) -> None:
     a reciprocal vector of one period, is a whole one of the cell's."""
     advice, steps = _generated(carbon_chain(), {}, store)
 
-    assert advice.records()["bands_k_path"].value.lattice_type == "LINE"
+    assert advice.records()["k_path"].value.lattice_type == "LINE"
     assert _path_rows(steps["bands"].files["bands.in"]) == [
         ((0.0, 0.0, 0.0), "Gamma"),
         ((0.0, 0.0, 1.0), "Z"),
@@ -611,7 +611,7 @@ def test_a_molecule_in_a_box_is_refused_once(store) -> None:
         "scf_single_point or relax task"
     )
     assert finding.remedies == ()
-    assert isinstance(advice.records()["bands_k_path"], Blocked)
+    assert isinstance(advice.records()["k_path"], Blocked)
 
 
 def test_a_conventional_cell_s_bands_are_noticed_as_folded(store) -> None:
@@ -622,5 +622,5 @@ def test_a_conventional_cell_s_bands_are_noticed_as_folded(store) -> None:
         for warning in advice.warnings()
         if warning["code"] == "k_path.folded_bands"
     )
-    assert folded["record"] == "bands_k_path"
+    assert folded["record"] == "k_path"
     assert "4 primitive cells" in folded["message"]

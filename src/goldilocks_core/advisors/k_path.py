@@ -149,7 +149,7 @@ between neighbouring path points. aiida-quantumespresso's
 ``reference_distance`` default."""
 
 _DEFAULT_NOTE = (
-    "Default k_path_distance of the band path: aiida-quantumespresso's "
+    "Default k_path_distance of the high-symmetry path: aiida-quantumespresso's "
     "bands.yaml, balanced."
 )
 
@@ -227,7 +227,7 @@ _BOX = (
     "a molecule or cluster in a box has no band structure; use the "
     "scf_single_point or relax task"
 )
-_DISORDERED = "the band path does not support disordered structures"
+_DISORDERED = "the high-symmetry path does not support disordered structures"
 
 FOLDED_BANDS = Warning(
     code="k_path.folded_bands",
@@ -235,8 +235,9 @@ FOLDED_BANDS = Warning(
     category="k_path",
     message=(
         "the written cell holds several primitive cells (a conventional cell "
-        "or a supercell), so the band path, taken from the primitive cell, "
-        "gives folded bands; upload the primitive cell for unfolded bands."
+        "or a supercell), so the high-symmetry path, taken from the primitive "
+        "cell, gives folded bands or phonon branches; upload the primitive "
+        "cell to unfold them."
     ),
 )
 
@@ -245,10 +246,10 @@ MAGNETIC_NONCOLLINEAR_SYMMETRY = Warning(
     level="warning",
     category="k_path",
     message=(
-        "the run is spin-polarized with spin-orbit coupling: the band path "
-        "follows the cell's symmetry without the moment directions and "
-        "assumes E(k) = E(-k), which the moments can break, so segments it "
-        "treats as equivalent may differ."
+        "the run is spin-polarized with spin-orbit coupling: the high-symmetry "
+        "path follows the cell's symmetry without the moment directions, so "
+        "segments it treats as equivalent may differ, and for the bands it "
+        "assumes E(k) = E(-k), which the moments can break."
     ),
 )
 
@@ -258,8 +259,8 @@ NON_SPECIAL_VERTICES = Warning(
     category="k_path",
     message=(
         "in space group R3 or R-3 with a rhombohedral angle below 90 degrees, "
-        "the band path vertices B, B_1, P, P_1, Q and X are general points of "
-        "the zone boundary, not points of special symmetry."
+        "the path vertices B, B_1, P, P_1, Q and X are general points of the "
+        "zone boundary, not points of special symmetry."
     ),
 )
 
@@ -1004,10 +1005,10 @@ def _folded(cells: int) -> Warning:
         update={
             "message": (
                 f"the written cell holds {cells} primitive cells (a conventional "
-                "cell or a supercell), so the band path, taken from the "
-                "primitive cell, gives folded bands: at each point the bands "
-                f"of {cells} points of the primitive cell's Brillouin zone "
-                "appear together. Upload the primitive cell for unfolded bands."
+                "cell or a supercell), so the high-symmetry path, taken from the "
+                "primitive cell, gives folded bands or phonon branches: at each "
+                f"point those of {cells} points of the primitive cell's Brillouin "
+                "zone appear together. Upload the primitive cell to unfold them."
             )
         }
     )

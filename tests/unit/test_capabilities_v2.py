@@ -145,8 +145,9 @@ class TestTopLevelShape:
         assert capabilities()["core_version"] == package_version("goldilocks-core")
 
     def test_vocabulary_version_is_the_module_constant(self) -> None:
-        """'2': isolation replaced assume_isolated (#161)."""
-        assert capabilities()["vocabulary_version"] == VOCABULARY_VERSION == "3"
+        """'4': the band task's path record, bands_k_path, was renamed
+        k_path (#215)."""
+        assert capabilities()["vocabulary_version"] == VOCABULARY_VERSION == "4"
 
     def test_sources_is_the_closed_priority_order(self) -> None:
         assert (
@@ -549,7 +550,7 @@ class TestSettingApplicability:
         )
         assert k_path_distance["structure_specific"] is False
         assert k_path_distance["resolved_in"] == {
-            "record": "bands_k_path",
+            "record": "k_path",
             "path": ["k_path_distance"],
         }
         assert "2 pi included" in k_path_distance["description"]

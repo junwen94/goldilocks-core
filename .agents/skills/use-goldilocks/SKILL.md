@@ -86,7 +86,7 @@ publication paths.
 
 For prepared input data, report the Structure Source, functional, target
 code/Task, k-grid and shift, pseudopotentials and cutoffs, smearing, spin/SOC,
-convergence controls, for a `band` task the path (`bands_k_path`: its
+convergence controls, for a `band` task the path (`k_path`: its
 `lattice_type`, `n_kpoints` and `primitive_cells`, above 1 for folded bands),
 for a phonon task the q-point mesh (`q_sampling`: `mesh`, `n_irr_q`, `work`),
 the first step's k-mesh raised against it, any FFT grid written for ph.x

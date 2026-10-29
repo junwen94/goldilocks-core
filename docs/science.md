@@ -792,7 +792,7 @@ crystal coordinates of the written cell's reciprocal vectors, as
 `K_POINTS crystal_b` takes them. A conventional cell or a supercell gets the
 path of its primitive cell, written in its own basis, and folded bands: at
 each point of the path, the bands of several points of the primitive cell's
-zone appear together. The `bands_k_path` record counts the primitive cells
+zone appear together. The `k_path` record counts the primitive cells
 the written cell holds (`primitive_cells`) and, above 1, carries the info
 notice `k_path.folded_bands`. The bundled `Si.cif`, diamond's 8-atom
 conventional cell, holds 4; upload the primitive cell for unfolded bands. A
@@ -858,7 +858,7 @@ default, 0.025 Å⁻¹, is aiida-quantumespresso's `bands.yaml` (balanced); it
 gives diamond Si 306 points. Vertices that coincide in a particular cell are
 merged, since bands.x writes no plot file for two equal consecutive points,
 and a path that would turn back along the segment it came by is split into
-two branches there. `bands_k_path` records the branches (each vertex's
+two branches there. `k_path` records the branches (each vertex's
 `label` and crystal coordinates `k`, and the `steps` between them),
 `n_kpoints`, the points pw.x runs per spin channel, the table (`convention`,
 `lattice_type`), the space group of the typed cell it was read on (for a
@@ -914,7 +914,7 @@ moment, with the remedy `occupations=smearing`. A noncollinear run takes no
 Each also writes a `.gnu` file of every band's energy in eV against the
 distance along the path, for plotting; it draws the gap between two branches
 as a segment when they lie at most five steps apart, so take the branch ends
-from `bands_k_path`. bands.x runs without its symmetry analysis
+from `k_path`. bands.x runs without its symmetry analysis
 (`lsym=.false.`), which can stop it after it has written the bands; only its
 `.rap` file of symmetry labels is lost. It runs on one task
 (`srun --nodes=1 --ntasks=1`) in the walltime the two pw.x steps leave, and
@@ -925,7 +925,7 @@ collinear run, at three times the bands.
 Both tables choose a path by lattice type, not by space group. In R3 and
 R-3 with a rhombohedral angle below 90°, such as ilmenite FeTiO3, Setyawan
 and Curtarolo's B, B_1, P, P_1, Q and X are general points of the zone
-boundary, not points of special symmetry, and `bands_k_path` carries the info
+boundary, not points of special symmetry, and `k_path` carries the info
 notice `k_path.non_special_vertices`. ASE's oblique loop encloses about a
 third of the zone, and its corners H and H_1 are general points too. The
 typing ignores the moments' directions, and the path assumes E(k) = E(-k),
@@ -1308,7 +1308,7 @@ applied the rule, `heuristic`, and names that record in `derived_from`:
 `needs_correlation` (or `functional` for a hybrid functional), an
 automatically selected `pseudo_table` names `functional` and `magnetic`,
 `relativistic` names `magnetic`, `pseudopotentials` names
-`pseudo_table`, a `band` task's `bands_k_path` names `magnetic`, whose cell
+`pseudo_table`, a `band` task's `k_path` names `magnetic`, whose cell
 it reads, and its `bands_occupations` names `occupations`, the scf step's
 decision it follows. A phonon task's `q_sampling` and `phonon_dos` name
 `magnetic`, whose cell they mesh, `fft_grid` names `cutoffs` and `magnetic`,
@@ -1327,7 +1327,7 @@ follow `derived_from` to find that. `human` only ever means a value set in the
 request: a `dos` task's nscf protocol values (`nscf_k_sampling`'s k_distance,
 `nscf_occupations`) read `heuristic`, with `source_note` naming the protocol,
 and so do a `band` task's bands-step defaults (`bands_nbnd`, and
-`bands_k_path`'s `k_path_distance`) and a phonon task's protocol values: the
+`k_path`'s `k_path_distance`) and a phonon task's protocol values: the
 relaxation's `forc_conv_thr` 1e-4, `q_distance` 0.3, the ph.x settings and
 `dos_q_distance`. A `k_sampling` the phonon rule raised keeps the source of
 the tier that decided its starting mesh (`ml` for QRF95's `k_distance`), and
@@ -1341,10 +1341,10 @@ record-name order, each naming the record it came from in `record`, then the
 request's routing notices (a setting given without a step that reached several
 steps), under the `record` `overrides`. A `dos` task's nscf step keeps its
 own, under `nscf_`-prefixed records, and a `band` task's bands step under
-`bands_`-prefixed ones: a notice on `nscf_parallelisation` is about the nscf
-step's npool, not the scf step's. A phonon task's steps have records of their
-own names (`q_sampling`, `phonon`, `q2r`, `phonon_dos`), so their warnings
-name those.
+`bands_`-prefixed ones and its path's under `k_path`: a notice on
+`nscf_parallelisation` is about the nscf step's npool, not the scf step's.
+A phonon task's steps have records of their own names (`q_sampling`,
+`phonon`, `q2r`, `phonon_dos`), so their warnings name those.
 
 A resolved record also carries the rest of its provenance: `source_note`,
 the advisor's rationale where it gives one (such as why a molecule gets a
