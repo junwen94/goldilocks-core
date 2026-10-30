@@ -169,8 +169,8 @@ class TestToolCalls:
         self, silicon_fixture_table, silicon_cif: str
     ) -> None:
         """#118: task='band' reaches the shared handler through the real MCP
-        transport, which publishes the bands step's decisions under bands_
-        names."""
+        transport, which publishes the bands step's path as k_path and its
+        other decisions under bands_ names."""
         server = create_server()
 
         result = asyncio.run(
@@ -190,7 +190,7 @@ class TestToolCalls:
         files = result.structured_content["files"]
         for name in ("scf.in", "bands.in", "bands_x.in", "submit.sh"):
             assert name in files, name
-        assert "bands_k_path" in result.structured_content["records"]
+        assert {"k_path", "bands_nbnd"} <= set(result.structured_content["records"])
 
     @pytest.mark.parametrize(
         ("task", "first_step"),
@@ -203,8 +203,8 @@ class TestToolCalls:
         MCP transport: explain finds nothing to refuse in Si set to a
         non-metal, which a phonon task needs on smearing without a model to
         decide it, and run generates the first pw.x step, ph.x, q2r.x and
-        matdyn.x inputs, with the decisions laid out under the ph, q2r and
-        phonon_dos steps as explain lays them out."""
+        both matdyn.x inputs, with the decisions laid out under the ph, q2r,
+        phonon_dos and dispersion steps as explain lays them out."""
         server = create_server()
         document = {
             "structure_content": silicon_cif,
@@ -219,7 +219,13 @@ class TestToolCalls:
         assert (explained.is_error, result.is_error) == (False, False)
         assert explained.structured_content["blocking"] == []
         files = result.structured_content["files"]
-        for name in (f"{first_step}.in", "ph.in", "q2r.in", "phonon_dos.in"):
+        for name in (
+            f"{first_step}.in",
+            "ph.in",
+            "q2r.in",
+            "phonon_dos.in",
+            "dispersion.in",
+        ):
             assert name in files, name
         layout = result.structured_content["layout"]
         assert layout == explained.structured_content["layout"]
@@ -228,6 +234,7 @@ class TestToolCalls:
             "ph",
             "q2r",
             "phonon_dos",
+            "dispersion",
         ]
 
     def test_run_tool_relax_task_generates_relax_in(

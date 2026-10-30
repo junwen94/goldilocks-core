@@ -3,8 +3,10 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
+from pymatgen.core import Lattice, Structure
 
 from goldilocks_core.advisors.convergence import ConvergenceDecision
+from goldilocks_core.advisors.k_path import KPathDecision, PathBranch, PathVertex
 from goldilocks_core.advisors.k_sampling import KSamplingDecision
 from goldilocks_core.advisors.nbnd import NbndDecision
 from goldilocks_core.advisors.occupations import OccupationsDecision
@@ -16,6 +18,7 @@ from goldilocks_core.advisors.phonon import (
 )
 from goldilocks_core.advisors.q_sampling import QSamplingDecision
 from goldilocks_core.step_settings import (
+    DispersionSettings,
     DosSettings,
     MatdynSettings,
     PhSettings,
@@ -23,7 +26,14 @@ from goldilocks_core.step_settings import (
     Q2rSettings,
 )
 
-_SETTINGS = [PwSettings, DosSettings, PhSettings, Q2rSettings, MatdynSettings]
+_SETTINGS = [
+    PwSettings,
+    DosSettings,
+    PhSettings,
+    Q2rSettings,
+    MatdynSettings,
+    DispersionSettings,
+]
 
 
 def _pw_settings() -> PwSettings:
@@ -148,6 +158,32 @@ def _matdyn_settings() -> MatdynSettings:
     )
 
 
+def _dispersion_settings() -> DispersionSettings:
+    """Diamond Si's dispersion along Gamma-X alone, 46 points."""
+    cell = Structure(
+        Lattice.from_parameters(3.84, 3.84, 3.84, 60, 60, 60),
+        ["Si", "Si"],
+        [[0.0, 0.0, 0.0], [0.25, 0.25, 0.25]],
+    )
+    branch = PathBranch(
+        (PathVertex("Gamma", (0.0, 0.0, 0.0)), PathVertex("X", (0.5, 0.0, 0.5))),
+        (45,),
+    )
+    return DispersionSettings(
+        q2r=_q2r(),
+        path=KPathDecision(
+            branches=(branch,),
+            k_path_distance=0.025,
+            n_kpoints=46,
+            convention="setyawan_curtarolo",
+            lattice_type="FCC",
+            space_group="Fd-3m (227)",
+            primitive_cells=1,
+            cell=cell,
+        ),
+    )
+
+
 def test_ph_settings_is_its_own_distinct_type_too() -> None:
     """ph.x's settings are the advisors' decisions, all required. No epsil:
     on a q-mesh ph.x decides it at Gamma itself (#215)."""
@@ -173,6 +209,18 @@ def test_q2r_x_and_matdyn_x_share_the_sum_rule_and_split_the_dos() -> None:
     assert not hasattr(q2r, "phonon_dos")
 
 
+def test_the_dispersion_takes_the_sum_rule_and_a_path_but_no_dos_mesh() -> None:
+    """matdyn.x's dispersion run applies q2r.x's acoustic sum rule and 2D term
+    along its path; it has no DOS mesh, and both its fields are required
+    (#215)."""
+    dispersion = _dispersion_settings()
+
+    assert (dispersion.q2r.asr, dispersion.path.n_kpoints) == ("crystal", 46)
+    assert not hasattr(dispersion, "phonon_dos")
+    with pytest.raises(TypeError, match="path"):
+        DispersionSettings(q2r=_q2r())  # type: ignore[call-arg]
+
+
 def test_step_settings_variants_are_distinguishable_by_isinstance() -> None:
     variants: list[object] = [
         _pw_settings(),
@@ -180,6 +228,7 @@ def test_step_settings_variants_are_distinguishable_by_isinstance() -> None:
         _ph_settings(),
         Q2rSettings(q2r=_q2r()),
         _matdyn_settings(),
+        _dispersion_settings(),
     ]
 
     matched = [

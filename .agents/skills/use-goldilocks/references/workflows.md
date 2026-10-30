@@ -180,7 +180,7 @@ if band_report.ok:
     band_steps = generate_band(band_advice, band_report, ctx=ctx)
     print([step.name for step in band_steps])
 
-k_path = band_advice.records()["bands_k_path"]
+k_path = band_advice.records()["k_path"]
 if isinstance(k_path, Resolved):
     print(k_path.value.lattice_type, k_path.value.n_kpoints, k_path.value.primitive_cells)
 ```
@@ -189,10 +189,10 @@ The steps are `scf`, `bands` (`pw.x` with `calculation='bands'` on a
 `K_POINTS crystal_b` card) and `bands_x` (`bands.x`), or `bands_x_up` and
 `bands_x_down` for a collinear spin-polarized run, all in one job.
 `BandAdvice.records()` keys the shared system-level fields, the scf step's
-own and the task's one `job` unprefixed, and the bands step's own under
-`bands_`: `bands_k_path`, the high-symmetry path of the written cell
-(branches of labelled vertices in crystal coordinates of its reciprocal
-vectors, with `n_kpoints`, `lattice_type` and `primitive_cells`),
+own, the task's one `job` and `k_path`, the high-symmetry path of the
+written cell (branches of labelled vertices in crystal coordinates of its
+reciprocal vectors, with `n_kpoints`, `lattice_type` and `primitive_cells`),
+unprefixed, and the bands step's other records under `bands_`:
 `bands_occupations`, `bands_nbnd`, `bands_convergence` and
 `bands_parallelisation`; `band_advice.tiers().layout()` names the steps scf
 and bands, since `bands.x` has no records. Unless the request sets them, the
@@ -219,36 +219,41 @@ and `to_bundle_input_phonon` take its `PhononAdvice`, and
 `TASK_PHASES[task]` holds all five with the task bound. The steps are the
 first `pw.x` step (`scf` for `phonon`, `relax` for `relax-phonon`,
 `vc-relax` for `vc-relax-phonon`), `d3hess` (`d3hess.x`) under DFT-D3, `ph`
-(`ph.x` on a q-point mesh), `q2r` (`q2r.x`) and `phonon_dos` (`matdyn.x`),
-all in one job on one prefix and outdir.
+(`ph.x` on a q-point mesh), `q2r` (`q2r.x`), `phonon_dos` (`matdyn.x`, the
+phonon DOS) and `dispersion` (`matdyn.x` along the band task's path), all in
+one job on one prefix and outdir.
 
 `PhononAdvice.records()` keys the first step's records and the task's one
 `job` unprefixed, with `fft_grid` (the dense FFT grid ph.x accepts; `written`
 is the `nr1`-`nr3` the first step writes, or `null`) and, for a relaxation,
 `relax`, then `q_sampling` (`mesh`, `n_irr_q`, `work`) and `phonon` for the
-ph step, `q2r` and `phonon_dos`. Unless the request sets them, the q-mesh
-takes `q_distance` 0.3 1/Å, the ph.x settings `tr2_ph` 1e-18, `alpha_mix`
-0.4 and `nmix_ph` 8, and the relaxation `forc_conv_thr` 1e-4 Ry/Bohr, from
-aiida-quantumespresso's protocols; those records read `heuristic` with the
-protocol in `source_note`. The first step's k-mesh is raised against the
-q-mesh (notice `phonon.k_mesh_raised`) unless the request sets `k_grid`,
-`k_index` or `k_distance`. The job splits no walltime:
-`job.max_seconds_by_step` is empty and `job.timer_seconds`, 95% of
-`walltime_h`, is when `submit.sh` creates `<prefix>.EXIT`, where pw.x or
+ph step, `q2r`, `phonon_dos` and `k_path`, the dispersion step's path: the
+band task's path, except that on fixed occupations without
+`isolation='slab'` each Γ inside a branch is listed twice and each segment
+into Γ lands on it exactly, which its `source_note` says and `n_kpoints`
+counts. Unless the request sets them, the q-mesh takes `q_distance` 0.3
+1/Å, the ph.x settings `tr2_ph` 1e-18, `alpha_mix` 0.4 and `nmix_ph` 8, the
+relaxation `forc_conv_thr` 1e-4 Ry/Bohr and the dispersion
+`k_path_distance` 0.025 1/Å, from aiida-quantumespresso's protocols; those
+records read `heuristic` with the protocol in `source_note`. The first
+step's k-mesh is raised against the q-mesh (notice `phonon.k_mesh_raised`)
+unless the request sets `k_grid`, `k_index` or `k_distance`. The job splits
+no walltime: `job.max_seconds_by_step` is empty and `job.timer_seconds`, 95%
+of `walltime_h`, is when `submit.sh` creates `<prefix>.EXIT`, where pw.x or
 ph.x stops cleanly. The pw.x settings reach the first step only, `q_grid`,
 `q_distance`, `tr2_ph`, `alpha_mix` and `nmix_ph` the `ph` step, `asr` the
-`q2r` step and `dos_q_distance` the `phonon_dos` step; `steps.scf.<key>` is
-an unknown step in the relaxation tasks. The gate refuses, with remedies,
+`q2r` step, `dos_q_distance` the `phonon_dos` step and `k_path_distance` the
+`dispersion` step; `steps.scf.<key>` is an unknown step in the relaxation
+tasks. The gate refuses, with remedies,
 +U without `hubbard_projectors=atomic`, spin-orbit coupling with +U,
 `tot_magnetization` with smearing, a `q_grid` that breaks symmetry, a q-mesh
 beyond q2r.x's limits, `fix_bottom_layers` and smearing or tetrahedra on a
 composition that is not all-metallic unless `is_metal=metal` is set (a
 requested `occupations=fixed` the run cannot take is refused under the same
 code, and for a metal needs `is_metal=metal` with `occupations=smearing`), and,
-with
-no remedy, `isolation='isolated'` and `vc-relax-phonon` on a fragile cell,
-where the FFT grid the vc-relax rebuilds can fail ph.x's symmetry test
-(`relax-phonon` runs there). The metallicity refusal
+with no remedy, a molecule or cluster in a box, whatever `isolation`, and
+`vc-relax-phonon` on a fragile cell, where the FFT grid the vc-relax rebuilds
+can fail ph.x's symmetry test (`relax-phonon` runs there). The metallicity refusal
 (`phonon.metallicity_unconfirmed`) is the user's call: the classifier calls
 many insulators metals, and ph.x treats a run on smearing as a metal, so ask
 whether the material is a metal (`is_metal=metal`) or an insulator rather than
@@ -269,7 +274,11 @@ uv run goldilocks run structure.cif --hpc scarf --task relax-phonon --set q_dist
 
 A stopped job prints `goldilocks:` lines naming why, and resumes at the ph
 step, without repeating the relaxation, with
-`sbatch --export=ALL,GOLDILOCKS_FROM_STEP=ph submit.sh`.
+`sbatch --export=ALL,GOLDILOCKS_FROM_STEP=ph submit.sh`;
+`GOLDILOCKS_FROM_STEP=dispersion` reruns only the dispersion, from the
+`pwscf.fc` the job wrote. d3hess.x, q2r.x and matdyn.x stop the job
+without a `goldilocks:` line when they fail: read their output
+(`dispersion.out` for the dispersion) and `CRASH`.
 
 ## Optional transports
 

@@ -54,7 +54,7 @@ describe("HttpCoreClient", () => {
       const fetcher = vi
         .fn<typeof fetch>()
         .mockResolvedValue(
-          Response.json({ ...capabilities, vocabulary_version: "2" }),
+          Response.json({ ...capabilities, vocabulary_version: "3" }),
         );
       const client = new HttpCoreClient("", fetcher);
 

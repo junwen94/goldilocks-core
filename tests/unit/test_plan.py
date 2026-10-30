@@ -57,7 +57,8 @@ def test_a_phonon_task_expands_to_its_first_pw_x_step_then_ph_q2r_and_matdyn(
 ) -> None:
     """#215: ph.x reads the save of the first pw.x step, which keeps its own
     purpose, q2r.x ph.x's dynamical matrices and matdyn.x q2r.x's force
-    constants. d3hess.x has no row: the writer inserts it for DFT-D3."""
+    constants twice, for the phonon DOS and along the band path. d3hess.x has
+    no row: the writer inserts it for DFT-D3."""
     steps = expand_task(task)
 
     assert steps == (
@@ -65,6 +66,7 @@ def test_a_phonon_task_expands_to_its_first_pw_x_step_then_ph_q2r_and_matdyn(
         PlannedStep(purpose="ph", program="ph.x"),
         PlannedStep(purpose="q2r", program="q2r.x"),
         PlannedStep(purpose="phonon_dos", program="matdyn.x"),
+        PlannedStep(purpose="dispersion", program="matdyn.x"),
     )
 
 

@@ -1,5 +1,5 @@
 """write_qe_phonon: the phonon tasks' ``d3hess.x``, ``ph.x``, ``q2r.x`` and
-``matdyn.x`` inputs (#215).
+two ``matdyn.x`` inputs, the phonon DOS and the dispersion (#215).
 
 They follow the first pw.x step (scf, relax or vc-relax) on its
 ``SharedContext``: d3hess.x and ph.x read its save under ``outdir`` with its
@@ -57,17 +57,51 @@ means tetrahedra. Blank ``flfrq`` and ``flvec`` stop it writing the
 frequencies and modes of every mesh point (``PHonon/PH/matdyn.f90:564-583``,
 ``:760-778``).
 
+**dispersion.in** (matdyn.x) applies the same sum rule and ``loto_2d`` to the
+same force constants along the path of ``DispersionSettings``, the rows of
+``bands.path_rows`` after the namelist. With ``q_in_band_form`` and
+``q_in_cryst_coord`` matdyn.x reads the number of rows, then each row that
+starts with a digit, a sign or a dot as x y z n, ignoring the rest of the
+line (``matdyn.f90:485-501``). A row starting with a letter is read as a
+symbolic point, which needs an ``ibrav`` other than 0 in the force-constant
+file (``:529-531``), and every cell written here has 0, so the labels stay
+comments. The coordinates are taken in the reciprocal vectors of the cell
+the force-constant file holds (``:538``), and the rows are expanded as pw.x
+expands a K_POINTS crystal_b card, a count of 0 going straight to the next
+row (``:546``, ``Modules/generate_k_along_lines.f90``). ``flfrq`` writes the
+frequencies in cm^-1, negative where imaginary, to ``<prefix>.freq``, with
+each point's Cartesian coordinates in 2 pi / alat, and to
+``<prefix>.freq.gp`` against the length along the path, jumps included
+(``:760-776``); a blank ``flvec`` leaves out the modes of every point,
+5 + 3 nat (nat + 1) lines each (``:564-569``, ``:739``,
+``write_eigenvectors.f90:90-108``). ``fleig`` and ``fldyn``, which write the
+modes too, are left unset, and so is ``dos``, false by default. The
+``.freq`` header writes the number of points with format i4 (``:762``), so
+plotband.x cannot read a path of 10000 points or more; the ``.gp`` file has
+no such limit.
+
 d3hess.x, q2r.x and matdyn.x run on one MPI task. q2r.x works on its I/O rank
 alone and matdyn.x repeats its whole calculation on every rank; d3hess.x
 reads the save as dos.x does (``dos.py``), where a rank that owns no FFT
 plane aborts. None writes a status file, so ``JOB DONE`` in its stdout
-passes it, and ``errore`` exits non-zero.
+passes it. Their errors exit non-zero, so the submission script's ``set -e``
+ends the job at the launch, before that check: ``errore`` writes CRASH and
+stops with code 1 (``UtilXlib/error_handler.f90:90-94``), and matdyn.x opens
+the force-constant file and reads each row without IOSTAT
+(``matdyn.f90:917``, ``:499-500``), so a missing file or a malformed row
+ends in a Fortran runtime error.
 """
 
 from __future__ import annotations
 
+from goldilocks_core.generation.quantum_espresso.bands import path_rows
 from goldilocks_core.generation.quantum_espresso.namelists import render_namelist
-from goldilocks_core.step_settings import MatdynSettings, PhSettings, Q2rSettings
+from goldilocks_core.step_settings import (
+    DispersionSettings,
+    MatdynSettings,
+    PhSettings,
+    Q2rSettings,
+)
 from goldilocks_core.steps import (
     DynamicalMatricesCheck,
     SharedContext,
@@ -80,15 +114,22 @@ def write_qe_phonon(
     ph: PhSettings,
     q2r: Q2rSettings,
     matdyn: MatdynSettings,
+    dispersion: DispersionSettings,
     ctx: SharedContext,
     *,
     d3hess: bool,
 ) -> list[Step]:
     """The steps after the first pw.x step, in order: ``d3hess`` when
-    ``d3hess`` (the first step writes DFT-D3), then ``ph``, ``q2r`` and
-    ``phonon_dos`` (module docstring)."""
+    ``d3hess`` (the first step writes DFT-D3), then ``ph``, ``q2r``,
+    ``phonon_dos`` and ``dispersion`` (module docstring)."""
     steps = [_d3hess_step(ctx)] if d3hess else []
-    return [*steps, _ph_step(ph, ctx), _q2r_step(q2r, ctx), _dos_step(matdyn, ctx)]
+    return [
+        *steps,
+        _ph_step(ph, ctx),
+        _q2r_step(q2r, ctx),
+        _dos_step(matdyn, ctx),
+        _dispersion_step(dispersion, ctx),
+    ]
 
 
 def _fildyn(ctx: SharedContext) -> str:
@@ -176,14 +217,33 @@ def _dos_step(matdyn: MatdynSettings, ctx: SharedContext) -> Step:
     return _one_task_step("phonon_dos", "matdyn.x", namelist)
 
 
-def _one_task_step(name: str, executable: str, namelist: str) -> Step:
+def _dispersion_step(dispersion: DispersionSettings, ctx: SharedContext) -> Step:
+    """matdyn.x's dispersion from the force constants, along the path's rows
+    (module docstring)."""
+    keywords: dict[str, object] = {
+        "flfrc": _flfrc(ctx),
+        "asr": dispersion.q2r.asr,
+        "flfrq": f"{ctx.prefix}.freq",
+        "flvec": " ",
+        "q_in_band_form": True,
+        "q_in_cryst_coord": True,
+    }
+    if dispersion.q2r.loto_2d:
+        keywords["loto_2d"] = True
+    rows = "\n".join(path_rows(dispersion.path))
+    contents = f"{render_namelist(keywords, binary='matdyn')}{rows}\n"
+    return _one_task_step("dispersion", "matdyn.x", contents)
+
+
+def _one_task_step(name: str, executable: str, contents: str) -> Step:
     """The step ``name``: ``executable`` on one MPI task, reading ``<name>.in``,
-    passed by ``JOB DONE`` in ``<name>.out`` (module docstring)."""
+    which holds ``contents``, passed by ``JOB DONE`` in ``<name>.out`` (module
+    docstring)."""
     return Step(
         name=name,
         executable=executable,
         args=("-in", f"{name}.in"),
-        files={f"{name}.in": namelist},
+        files={f"{name}.in": contents},
         stdout=f"{name}.out",
         completion=StdoutMarkerCheck(),
         ntasks=1,

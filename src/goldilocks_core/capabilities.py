@@ -28,9 +28,10 @@ field inside ``CutoffsHumanInput`` gets ``group="cutoffs"`` for free);
 `scope` is which composing class a field came from (``AnalysisOverrides``/
 ``SystemOverrides`` -> ``"system"``, ``JobOverrides`` -> ``"task"``, the
 step classes -> ``"per_step"``); `steps` is the step purposes a per-step
-setting applies to, by composing class (``_BRANCH_STEPS``: every pw.x step,
-relax and vc-relax, dos, a band task's bands step, or a phonon task's ph,
-q2r or phonon_dos step), narrowed per key where ``_SETTING_META`` says so
+setting applies to, by composing class (``_BRANCH_STEPS``: every pw.x step;
+relax and vc-relax; dos; a band task's bands step and a phonon task's
+dispersion step, which follow the band path; or a phonon task's ph, q2r or
+phonon_dos step), narrowed per key where ``_SETTING_META`` says so
 (vc-relax's cell keys, relax's ``etot_conv_thr``, the SCF loop's mixing and
 iteration keys, which an nscf or bands step does not read, and the
 occupations and k-mesh keys, which a bands step takes from its scf step and
@@ -67,10 +68,9 @@ setting's own field name -- and ``_SETTING_META`` declares the
 exceptions: ``pseudo_table_id`` resolves in ``pseudo_table.id``,
 ``spin_orbit_coupling`` in ``magnetic.spin_orbit_enabled``,
 ``magnetic_ordering`` in ``magnetic.ordering.applied``, ``k_grid`` in
-``k_sampling.mesh``, ``k_path_distance`` in the band task's ``bands_k_path``,
-``hubbard_projectors`` in ``hubbard.projectors``, ``q_grid`` in the phonon
-tasks' ``q_sampling.mesh``, and a knob no record holds a value of
-(``extra_bands``, ``nosym``, ``hubbard_needs_correlation``,
+``k_sampling.mesh``, ``hubbard_projectors`` in ``hubbard.projectors``,
+``q_grid`` in the phonon tasks' ``q_sampling.mesh``, and a knob no record
+holds a value of (``extra_bands``, ``nosym``, ``hubbard_needs_correlation``,
 ``u_by_element``) has no path. Neither has a setting published under a key
 other than its field name, since a record's ``field_sources`` names
 settings by field name.
@@ -166,7 +166,7 @@ from goldilocks_core.service import (
 )
 from goldilocks_core.types import CalcTask
 
-VOCABULARY_VERSION = "3"
+VOCABULARY_VERSION = "4"
 """Bump when the settings/facts vocabulary changes in a way other
 ecosystem repos (ml/agent/data) need to know about -- goldilocks-core
 -design.md S4.2's cross-repo validation antidote."""
@@ -229,7 +229,7 @@ _BRANCH_STEPS: dict[_Branch, tuple[str, ...] | None] = {
     "resources": _PW_STEPS,
     "relax": _RELAX_STEPS,
     "dos": ("dos",),
-    "k_path": ("bands",),
+    "k_path": ("bands", "dispersion"),
     "ph": ("ph",),
     "q2r": ("q2r",),
     "phonon_dos": ("phonon_dos",),
@@ -609,14 +609,17 @@ _SETTING_META: dict[str, _SettingExtra] = {
     "k_path_distance": {
         "structure_specific": False,
         "unit": "1/Angstrom",
-        "record": "bands_k_path",
         "description": (
-            "Largest spacing between neighbouring points of a band task's "
-            "high-symmetry path, with 2 pi included as for k_distance: each "
-            "segment takes the fewest equal steps no longer than it. Default "
-            "0.025, aiida-quantumespresso's bands.yaml. The path is read from "
-            "the written cell's own symmetry, so a conventional cell or a "
-            "supercell gives folded bands."
+            "Largest spacing between neighbouring points of the high-symmetry "
+            "path that a band task's bands step and a phonon task's dispersion "
+            "step follow, with 2 pi included as for k_distance: each segment "
+            "takes the fewest equal steps no longer than it, except that on "
+            "fixed occupations, unless isolation is 'slab', a segment of the "
+            "dispersion that ends at Gamma can take a few more (49 becomes 50), "
+            "so that matdyn.x lands on Gamma exactly. Default 0.025, "
+            "aiida-quantumespresso's bands.yaml. The path is read from the "
+            "written cell's own symmetry, so a conventional cell or a supercell "
+            "gives folded bands and phonon branches."
         ),
     },
     "nbnd": {
@@ -952,12 +955,12 @@ _SETTING_META: dict[str, _SettingExtra] = {
         "structure_specific": False,
         "description": (
             "Acoustic sum rule q2r.x applies to the effective charges and "
-            "matdyn.x to the force constants of the phonon DOS: 'crystal', the "
-            "optimized correction of the force constants (a projection), or "
-            "'simple', which corrects their diagonal only. Unset: 'crystal', "
-            "or 'simple' with a notice where the projection would not fit one "
-            "task's share of a node's memory on the partition, since matdyn.x "
-            "runs as one task."
+            "matdyn.x to the force constants of the phonon DOS and the "
+            "dispersion: 'crystal', the optimized correction of the force "
+            "constants (a projection), or 'simple', which corrects their "
+            "diagonal only. Unset: 'crystal', or 'simple' with a notice where "
+            "the projection would not fit one task's share of a node's memory "
+            "on the partition, since matdyn.x runs as one task."
         ),
     },
     "dos_q_distance": {
@@ -1388,52 +1391,57 @@ def _tasks() -> list[dict[str, object]]:
             "id": _PHONON_TASK,
             "name": "Phonon (no relaxation)",
             "description": (
-                "scf, then ph.x on a q-point mesh (DFPT), q2r.x and matdyn.x "
-                "for the phonon DOS -- four steps in one job sharing one "
+                "scf, then ph.x on a q-point mesh (DFPT), q2r.x, and matdyn.x "
+                "for the phonon DOS and for the dispersion along the band "
+                "task's path -- five steps in one job sharing one "
                 "prefix/outdir, with d3hess.x before ph.x under DFT-D3. The "
                 "phonons are computed at the written geometry, so relax it "
                 "first or use relax-phonon. Unless set, the q-mesh takes "
                 "q_distance 0.3 from aiida-quantumespresso's ph protocol, and "
-                "the scf k-mesh is raised against it."
+                "the scf k-mesh is raised against it; the dispersion takes "
+                "k_path_distance 0.025 from its bands protocol."
             ),
             "codes": [_CODE],
-            "step_count": 4,
-            "executables": [_PROGRAM, "ph.x", "q2r.x", "matdyn.x"],
+            "step_count": 5,
+            "executables": [_PROGRAM, "ph.x", "q2r.x", "matdyn.x", "matdyn.x"],
         },
         {
             "id": _RELAX_PHONON_TASK,
             "name": "Phonon (incl. relaxation)",
             "description": (
                 "A fixed-cell relax, then ph.x on its save on a q-point mesh "
-                "(DFPT), q2r.x and matdyn.x for the phonon DOS -- four steps in "
-                "one job sharing one prefix/outdir, with d3hess.x before ph.x "
+                "(DFPT), q2r.x, and matdyn.x for the phonon DOS and for the "
+                "dispersion along the band task's path -- five steps in one "
+                "job sharing one prefix/outdir, with d3hess.x before ph.x "
                 "under DFT-D3. Unless set, the relaxation takes forc_conv_thr "
-                "1e-4 from aiida-quantumespresso's pw protocol and the q-mesh "
-                "q_distance 0.3 from its ph protocol, and the relaxation's "
-                "k-mesh is raised against the q-mesh."
+                "1e-4 from aiida-quantumespresso's pw protocol, the q-mesh "
+                "q_distance 0.3 from its ph protocol and the dispersion "
+                "k_path_distance 0.025 from its bands protocol, and the "
+                "relaxation's k-mesh is raised against the q-mesh."
             ),
             "codes": [_CODE],
-            "step_count": 4,
-            "executables": [_PROGRAM, "ph.x", "q2r.x", "matdyn.x"],
+            "step_count": 5,
+            "executables": [_PROGRAM, "ph.x", "q2r.x", "matdyn.x", "matdyn.x"],
         },
         {
             "id": _VC_RELAX_PHONON_TASK,
             "name": "Phonon (incl. vc-relaxation)",
             "description": (
                 "A vc-relax, then ph.x on the relaxed cell's save on a q-point "
-                "mesh (DFPT), q2r.x and matdyn.x for the phonon DOS -- four "
-                "steps in one job sharing one prefix/outdir, with d3hess.x "
-                "before ph.x under DFT-D3. Refused on a cell whose FFT grid, "
-                "rebuilt by the vc-relax, ph.x can refuse; relax-phonon runs "
-                "there. Unless set, the relaxation takes forc_conv_thr 1e-4 "
-                "from aiida-quantumespresso's pw protocol and the q-mesh "
-                "q_distance 0.3 from its ph protocol; the q-mesh and the "
-                "relaxation's k-mesh, raised against it, are sized on the input "
-                "cell."
+                "mesh (DFPT), q2r.x, and matdyn.x for the phonon DOS and for "
+                "the dispersion along the band task's path -- five steps in one "
+                "job sharing one prefix/outdir, with d3hess.x before ph.x under "
+                "DFT-D3. Refused on a cell whose FFT grid, rebuilt by the "
+                "vc-relax, ph.x can refuse; relax-phonon runs there. Unless "
+                "set, the relaxation takes forc_conv_thr 1e-4 from "
+                "aiida-quantumespresso's pw protocol, the q-mesh q_distance 0.3 "
+                "from its ph protocol and the dispersion k_path_distance 0.025 "
+                "from its bands protocol; the q-mesh, the relaxation's k-mesh, "
+                "raised against it, and the path are built on the input cell."
             ),
             "codes": [_CODE],
-            "step_count": 4,
-            "executables": [_PROGRAM, "ph.x", "q2r.x", "matdyn.x"],
+            "step_count": 5,
+            "executables": [_PROGRAM, "ph.x", "q2r.x", "matdyn.x", "matdyn.x"],
         },
     ]
 

@@ -61,6 +61,8 @@ from goldilocks_core.pw_symmetry import pw_frame
 from goldilocks_core.resolution import Provenance, Resolved
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from goldilocks_core.analysis.geometry import Dimensionality, LatticeAxis
     from goldilocks_core.analysis.is_magnetic import Magnetism
     from goldilocks_core.assets.pseudopotentials.registry import PseudoTable
@@ -1419,6 +1421,30 @@ def strained(structure: Structure, strain: np.ndarray) -> Structure:
         structure.species,
         structure.frac_coords,
     )
+
+
+def points_along_lines(
+    vertices: Sequence[np.ndarray], counts: Sequence[int]
+) -> tuple[np.ndarray, np.ndarray]:
+    """The points QE 7.3's ``generate_k_along_lines`` makes of ``vertices``
+    and their ``counts``, in its operation order
+    (``Modules/generate_k_along_lines.f90:26-50``): a count n > 0 puts the n
+    points x + (delta * j) * (y - x), delta = 1.0 / n and j = 1..n, after
+    vertex x on the way to the next vertex y, and 0 jumps straight to y; the
+    last count is not used. Also returns, for each pair of consecutive
+    points, whether it is such a jump. The coordinates are taken as given:
+    pw.x expands a K_POINTS crystal_b card in crystal coordinates, matdyn.x
+    its rows after converting them to Cartesian ones."""
+    points, jumps = [vertices[0]], []
+    for start, end, count in zip(vertices, vertices[1:], counts, strict=False):
+        if count == 0:
+            points.append(end)
+            jumps.append(True)
+            continue
+        delta = 1.0 / count
+        points.extend(start + (delta * j) * (end - start) for j in range(1, count + 1))
+        jumps.extend([False] * count)
+    return np.array(points), np.array(jumps)
 
 
 def geometry_facts(

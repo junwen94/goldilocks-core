@@ -475,8 +475,8 @@ class TestExplain:
         self, client: TestClient, real_assets, silicon_cif: str
     ) -> None:
         """#118: task='band' routes to advise_band through the real HTTP
-        transport: the bands step's decisions under bands_ names, laid out
-        under its own step."""
+        transport: the bands step's path as k_path and its other decisions
+        under bands_ names, laid out under its own step."""
         response = client.post(
             "/explain",
             json={"structure_content": silicon_cif, "hpc": "scarf", "task": "band"},
@@ -485,7 +485,7 @@ class TestExplain:
         assert response.status_code == 200
         body = response.json()
         records = body["records"]
-        assert records["bands_k_path"]["value"]["lattice_type"] == "FCC"
+        assert records["k_path"]["value"]["lattice_type"] == "FCC"
         assert (
             records["bands_occupations"]["value"]["occupations"]
             == (records["occupations"]["value"]["occupations"])
@@ -507,9 +507,9 @@ class TestExplain:
     ) -> None:
         """#215: each phonon task routes to advise_phonon through the real HTTP
         transport: the first pw.x step's records under its own name, then the
-        ph step's q-mesh and ph.x settings, q2r.x's and matdyn.x's. Si is set
-        to a non-metal, which a phonon task needs on smearing without a model
-        to decide it."""
+        ph step's q-mesh and ph.x settings, q2r.x's and matdyn.x's, the
+        dispersion's path as k_path. Si is set to a non-metal, which a phonon
+        task needs on smearing without a model to decide it."""
         response = client.post(
             "/explain",
             json={
@@ -527,6 +527,7 @@ class TestExplain:
             {"name": "ph", "records": ["q_sampling", "phonon"]},
             {"name": "q2r", "records": ["q2r"]},
             {"name": "phonon_dos", "records": ["phonon_dos"]},
+            {"name": "dispersion", "records": ["k_path"]},
         ]
         assert body["layout"]["steps"][0]["name"] == first_step
         records = body["records"]
@@ -752,7 +753,8 @@ class TestPerStepOverrides:
                 "relax-phonon",
                 {"steps.scf.k_grid": [4, 4, 4]},
                 "unknown step 'scf' in 'steps.scf.k_grid'; "
-                "task 'relax-phonon' has steps: relax, ph, q2r, phonon_dos",
+                "task 'relax-phonon' has steps: relax, ph, q2r, phonon_dos, "
+                "dispersion",
             ),
             (
                 "scf_single_point",
@@ -991,6 +993,7 @@ class TestRun:
             "ph.in",
             "q2r.in",
             "phonon_dos.in",
+            "dispersion.in",
             "submit.sh",
         ):
             assert name in files, name

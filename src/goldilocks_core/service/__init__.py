@@ -57,11 +57,13 @@ module into one file. Split by pipeline phase instead, matching
   ``advise_steps`` for its one step (single-step tasks, unlike ``dos``)
 - ``_phonon_steps.py`` -- what a phonon task decides on its first pw.x
   step's advice (``PhononStepsAdvice``, #215): a relaxation's relax record,
-  the FFT grid for ph.x, and the ph, q2r and phonon_dos steps' records
+  the FFT grid for ph.x, and the ph, q2r, phonon_dos and dispersion steps'
+  records
 - ``_phonon.py`` -- the ``phonon``/``relax-phonon``/``vc-relax-phonon``
   tasks' path (#215): ``advise_steps`` for the first pw.x step (scf, relax
   or vc-relax) under the phonon protocol, ``_phonon_steps.py`` on its
-  advice, then d3hess.x for DFT-D3, ph.x, q2r.x and matdyn.x
+  advice, then d3hess.x for DFT-D3, ph.x, q2r.x and matdyn.x for the phonon
+  DOS and the dispersion
 - ``_tasks.py`` -- ``TASK_PHASES``, each task's ``advise``/``check``/
   ``generate``/``render_submission``/``to_bundle_input`` by
   ``types.CalcTask``: the one table every transport's ``explain`` and

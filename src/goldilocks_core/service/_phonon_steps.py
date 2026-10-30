@@ -3,8 +3,8 @@ step's advice (#215).
 
 A phonon task runs its first pw.x step, an scf, a fixed-cell relax or a
 vc-relax, then ``d3hess.x`` for DFT-D3, ``ph.x`` on a q-point mesh,
-``q2r.x``, and ``matdyn.x`` for the phonon DOS, in one job on one
-``SharedContext``. The first step is advised as any pw.x step, by
+``q2r.x``, and ``matdyn.x`` for the phonon DOS and for the dispersion, in one
+job on one ``SharedContext``. The first step is advised as any pw.x step, by
 ``advise_steps`` under ``phonon_step_protocol`` (``_step_protocol.py``): its
 k-mesh is constrained by the ph step's q-mesh, and the job runs the phonon
 tasks' timer. ``phonon_steps_advice`` decides the rest on that step's
@@ -16,16 +16,20 @@ tasks' timer. ``phonon_steps_advice`` decides the rest on that step's
 - the first step's dense FFT grid for ph.x (``advisors/fft_grid.py``);
 - the ph step's q-point mesh (``advisors/q_sampling.py``) and its
   linear-response settings, which carry the run's notices, the q2r step's
-  acoustic sum rule and the phonon_dos step's mesh (``advisors/phonon.py``).
+  acoustic sum rule and the phonon_dos step's mesh (``advisors/phonon.py``);
+- the dispersion step's path, the band path as matdyn.x reads it, which
+  depends on the first step's occupations and the q2r record
+  (``advisors/phonon.py``'s ``dispersion_path``).
 
 Every structural input is the written cell (``system.cell``), the cell the
 first step's k-mesh is constrained on, so the q-mesh decided here is the one
-that k-mesh meets. d3hess.x has no settings and no record: it runs exactly
-when the first step writes DFT-D3, the fact the two-body notice reads.
+that k-mesh meets, and the path is the band task's on the same cell. d3hess.x
+has no settings and no record: it runs exactly when the first step writes
+DFT-D3, the fact the two-body notice reads.
 
 ``phonon_step_settings`` turns the resolved records into the ph.x, q2r.x and
-matdyn.x settings ``write_qe_phonon`` renders, ph.x with the first step's
-pools and diagonalization group.
+both matdyn.x settings ``write_qe_phonon`` renders, ph.x with the first
+step's pools and diagonalization group.
 """
 
 from __future__ import annotations
@@ -35,10 +39,12 @@ from dataclasses import dataclass
 from typing import Literal
 
 from goldilocks_core.advisors.fft_grid import FftGridDecision, fft_grid
+from goldilocks_core.advisors.k_path import KPathDecision
 from goldilocks_core.advisors.phonon import (
     PhononDecision,
     PhononDosDecision,
     Q2rDecision,
+    dispersion_path,
     phonon_dos_settings,
     phonon_notices,
     phonon_settings,
@@ -56,7 +62,12 @@ from goldilocks_core.resolution import FieldState
 from goldilocks_core.service._advice import Advice
 from goldilocks_core.service._magnetic import cell_geometry
 from goldilocks_core.service._step import StepOverrides
-from goldilocks_core.step_settings import MatdynSettings, PhSettings, Q2rSettings
+from goldilocks_core.step_settings import (
+    DispersionSettings,
+    MatdynSettings,
+    PhSettings,
+    Q2rSettings,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,8 +75,8 @@ class PhononStepsAdvice:
     """A phonon task's records beside its first step's advice (module
     docstring). The first step holds ``relax``, its relaxation (``None`` for
     an scf first step), and ``fft_grid``; the ph step ``q_sampling`` and
-    ``phonon``, the q2r step ``q2r`` and the phonon_dos step
-    ``phonon_dos``."""
+    ``phonon``, the q2r step ``q2r``, the phonon_dos step ``phonon_dos`` and
+    the dispersion step ``dispersion``, its path."""
 
     relax: FieldState[RelaxOptions | VcRelaxOptions] | None
     fft_grid: FieldState[FftGridDecision]
@@ -73,6 +84,7 @@ class PhononStepsAdvice:
     phonon: FieldState[PhononDecision]
     q2r: FieldState[Q2rDecision]
     phonon_dos: FieldState[PhononDosDecision]
+    dispersion: FieldState[KPathDecision]
 
     def field_states(self) -> tuple[FieldState[object], ...]:
         """Everything except ``relax``, which ``check()`` folds in with the
@@ -83,6 +95,7 @@ class PhononStepsAdvice:
             self.phonon,
             self.q2r,
             self.phonon_dos,
+            self.dispersion,
         )
 
     def first_step_records(self) -> dict[str, FieldState[object]]:
@@ -92,12 +105,14 @@ class PhononStepsAdvice:
         return {**relax, "fft_grid": self.fft_grid}
 
     def step_records(self) -> dict[str, dict[str, FieldState[object]]]:
-        """The ph, q2r and phonon_dos steps' records, by step, in run
-        order."""
+        """The ph, q2r, phonon_dos and dispersion steps' records, by step, in
+        run order; the dispersion's path is ``k_path``, as the band task's
+        bands step publishes its own."""
         return {
             "ph": {"q_sampling": self.q_sampling, "phonon": self.phonon},
             "q2r": {"q2r": self.q2r},
             "phonon_dos": {"phonon_dos": self.phonon_dos},
+            "dispersion": {"k_path": self.dispersion},
         }
 
 
@@ -110,12 +125,12 @@ def phonon_steps_advice(
 ) -> PhononStepsAdvice:
     """The phonon steps on ``first``, the advice of the task's first step,
     ``first_step`` (module docstring). ``steps`` holds the request's
-    overrides by purpose, for ``first_step`` and the ``ph``, ``q2r`` and
-    ``phonon_dos`` steps; ``hpc`` holds the job's partition, against which
-    the acoustic sum rule's memory is weighed; ``relax_protocol`` is the
-    first step's ``StepProtocol.relax``. ``first`` is advised under
-    ``phonon_step_protocol`` with the q request of ``steps["ph"]``, so its
-    k-mesh meets the q-mesh decided here."""
+    overrides by purpose, for ``first_step`` and the ``ph``, ``q2r``,
+    ``phonon_dos`` and ``dispersion`` steps; ``hpc`` holds the job's
+    partition, against which the acoustic sum rule's memory is weighed;
+    ``relax_protocol`` is the first step's ``StepProtocol.relax``. ``first``
+    is advised under ``phonon_step_protocol`` with the q request of
+    ``steps["ph"]``, so its k-mesh meets the q-mesh decided here."""
     system = first.system
     kpoints = first.step.kpoints
     geometry = cell_geometry(first.analysis.geometry, system.cell)
@@ -141,29 +156,37 @@ def phonon_steps_advice(
         system.hubbard,
         d3=system.vdw.ok and system.vdw.value.use_vdw,
     )
+    q2r = q2r_settings(
+        system.cell,
+        q,
+        system.boundary,
+        first.step.resources.job,
+        hpc,
+        steps["q2r"].q2r.q2r,
+    )
     return PhononStepsAdvice(
         relax=relax,
         fft_grid=fft_grid(system.cell, system.cutoffs, first_step),
         q_sampling=q,
         phonon=phonon_settings(ph.phonon, notices),
-        q2r=q2r_settings(
-            system.cell,
-            q,
-            system.boundary,
-            first.step.resources.job,
-            hpc,
-            steps["q2r"].q2r.q2r,
-        ),
+        q2r=q2r,
         phonon_dos=phonon_dos_settings(
             system.cell, steps["phonon_dos"].phonon_dos.phonon_dos
+        ),
+        dispersion=dispersion_path(
+            system.cell,
+            geometry,
+            kpoints.occupations,
+            q2r,
+            steps["dispersion"].k_path.k_path,
         ),
     )
 
 
 def phonon_step_settings(
     steps: PhononStepsAdvice, first: Advice
-) -> tuple[PhSettings, Q2rSettings, MatdynSettings]:
-    """The ph.x, q2r.x and matdyn.x settings of ``steps``, ph.x with the
+) -> tuple[PhSettings, Q2rSettings, MatdynSettings, DispersionSettings]:
+    """The ph.x, q2r.x and both matdyn.x settings of ``steps``, ph.x with the
     pools and diagonalization group of ``first``, the first step's advice:
     what ``write_qe_phonon`` renders. Every record must be resolved, as the
     gate checks before any input is written."""
@@ -176,4 +199,5 @@ def phonon_step_settings(
         ),
         Q2rSettings(q2r=q2r),
         MatdynSettings(q2r=q2r, phonon_dos=steps.phonon_dos.value),
+        DispersionSettings(q2r=q2r, path=steps.dispersion.value),
     )

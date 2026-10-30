@@ -35,12 +35,12 @@ The main files in `si-run/` are:
 
 | Path                         | Contents                                                                                        |
 | ---------------------------- | ------------------------------------------------------------------------------------------------ |
-| `scf.in`                     | Quantum ESPRESSO input, named after the task (`relax.in`, `vc-relax.in`, `scf.in`+`nscf.in`+`dos.in` for `--task dos`, `scf.in`+`bands.in`+`bands_x.in` for `--task band`, with `bands_x_up.in`+`bands_x_down.in` in place of `bands_x.in` for a collinear spin-polarized run, or, for the phonon tasks, `scf.in`, `relax.in` or `vc-relax.in`, then `ph.in`+`q2r.in`+`phonon_dos.in`, with `d3hess.in` before `ph.in` under DFT-D3) |
+| `scf.in`                     | Quantum ESPRESSO input, named after the task (`relax.in`, `vc-relax.in`, `scf.in`+`nscf.in`+`dos.in` for `--task dos`, `scf.in`+`bands.in`+`bands_x.in` for `--task band`, with `bands_x_up.in`+`bands_x_down.in` in place of `bands_x.in` for a collinear spin-polarized run, or, for the phonon tasks, `scf.in`, `relax.in` or `vc-relax.in`, then `ph.in`+`q2r.in`+`phonon_dos.in`+`dispersion.in`, with `d3hess.in` before `ph.in` under DFT-D3) |
 | `pseudo/`                    | The selected UPF pseudopotential file(s)                                                         |
 | `licences/`                  | The pseudopotential table's licence file, shipped with its UPFs                                 |
 | `submit.sh`                  | Generated SLURM submission script for the chosen `--hpc` profile; a phonon task's also runs a job timer and resumes from a later step (see [phonon jobs](cli.md#submit-and-resume-a-phonon-job)) |
 | `goldilocks.json`            | The request (code, task, HPC profile, overrides as given, structure sha256, goldilocks-core version), every setting with its provenance (including the model behind each ML-chosen record), and file hashes |
-| `README.md`, `CITATIONS.md`  | What `goldilocks.json` holds and the bundle contents; what to cite: the pseudopotential table, every model used, a `band` task's path table, a phonon task's protocols and DFPT reference, and the licence files |
+| `README.md`, `CITATIONS.md`  | What `goldilocks.json` holds and the bundle contents; what to cite: the pseudopotential table, every model used, the path table of a `band` task or a phonon task's dispersion, a phonon task's protocols and DFPT reference, and the licence files |
 
 ## 3. Check the settings
 

@@ -34,6 +34,8 @@ LIMITS = {
     "service._tasks": (8, 26),  # + service._phonon's five phase functions (#215)
     # the phonon tasks' phase functions, like service._dos (#215)
     "service._phonon": (14, 27),
+    # + advisors.k_path and the dispersion step's path and settings (#215)
+    "service._phonon_steps": (11, 26),
 }
 DEFAULT_LIMIT = (12, 24)
 

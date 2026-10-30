@@ -841,9 +841,9 @@ class TestRunAndExplainAgainstRealAssets:
     def test_explain_band_task_reports_bands_prefixed_records(
         self, real_assets: None
     ) -> None:
-        """#118: --task band routes to advise_band: the bands step's
-        decisions are published under bands_ names, and the 8-atom cubic
-        Si.cif gets the fcc path, folded."""
+        """#118: --task band routes to advise_band: the bands step's path is
+        published as k_path and its other decisions under bands_ names, and
+        the 8-atom cubic Si.cif gets the fcc path, folded."""
         silicon = structure("Si.cif")
 
         completed = _run_cli(
@@ -852,7 +852,7 @@ class TestRunAndExplainAgainstRealAssets:
 
         assert completed.returncode == 0, completed.stderr
         document = json.loads(completed.stdout)
-        path = document["records"]["bands_k_path"]["value"]
+        path = document["records"]["k_path"]["value"]
         assert (path["lattice_type"], path["primitive_cells"]) == ("FCC", 4)
         assert document["records"]["bands_nbnd"]["status"] == "resolved"
         assert document["blocking"] == []
@@ -887,8 +887,8 @@ class TestRunAndExplainAgainstRealAssets:
         self, real_assets: None
     ) -> None:
         """#215: --task vc-relax-phonon routes to advise_phonon: the vc-relax
-        step relaxes to the phonon protocol's 1e-4, and the ph, q2r and
-        phonon_dos steps follow it in the layout."""
+        step relaxes to the phonon protocol's 1e-4, and the ph, q2r,
+        phonon_dos and dispersion steps follow it in the layout."""
         silicon = structure("Si.cif")
 
         completed = _run_cli(
@@ -912,6 +912,7 @@ class TestRunAndExplainAgainstRealAssets:
             "ph",
             "q2r",
             "phonon_dos",
+            "dispersion",
         ]
 
     @pytest.mark.parametrize(
@@ -941,10 +942,13 @@ class TestRunAndExplainAgainstRealAssets:
             "ph.in",
             "q2r.in",
             "phonon_dos.in",
+            "dispersion.in",
             "submit.sh",
         ):
             assert (destination / name).exists(), name
         assert "ldisp            = .true." in (destination / "ph.in").read_text()
+        dispersion = (destination / "dispersion.in").read_text()
+        assert "q_in_band_form   = .true." in dispersion
 
     def test_unknown_task_is_an_operator_error_not_a_silent_fallback(self) -> None:
         silicon = structure("Si.cif")
@@ -1219,7 +1223,7 @@ class TestPerStepOverrides:
 
         assert completed.returncode == 0, completed.stderr
         records = strict_json(completed.stdout)["records"]
-        k_path = records["bands_k_path"]
+        k_path = records["k_path"]
         assert k_path["value"]["k_path_distance"] == 0.05
         assert k_path["field_sources"] == {"k_path_distance": "human"}
         assert records["bands_convergence"]["value"]["conv_thr"] == 1e-11
@@ -1258,7 +1262,8 @@ class TestPerStepOverrides:
                 "relax-phonon",
                 "steps.scf.k_grid=[4,4,4]",
                 "unknown step 'scf' in 'steps.scf.k_grid'; "
-                "task 'relax-phonon' has steps: relax, ph, q2r, phonon_dos",
+                "task 'relax-phonon' has steps: relax, ph, q2r, phonon_dos, "
+                "dispersion",
             ),
             (
                 "dos",

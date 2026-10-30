@@ -50,9 +50,10 @@ class PlannedStep:
     step's purpose -- one ``pw.x`` run does the whole task. A ``bands``
     step is ``pw.x`` with ``calculation='bands'`` and ``bands_x`` the
     ``bands.x`` run after it (#118). A phonon task's first step keeps its
-    pw.x purpose, ``scf``, ``relax`` or ``vc-relax``, and ``ph``, ``q2r``
-    and ``phonon_dos`` are the ph.x run on its save, q2r.x on ph.x's
-    dynamical matrices and matdyn.x on q2r.x's force constants (#215).
+    pw.x purpose, ``scf``, ``relax`` or ``vc-relax``, and ``ph``, ``q2r``,
+    ``phonon_dos`` and ``dispersion`` are the ph.x run on its save, q2r.x on
+    ph.x's dynamical matrices and matdyn.x on q2r.x's force constants, once
+    for the phonon DOS and once along the band task's path (#215).
     d3hess.x, which runs before ph.x for DFT-D3, has no row: the writer
     inserts it (``generation/quantum_espresso/phonon.py``), as it inserts
     one bands.x step per spin channel."""
@@ -68,6 +69,7 @@ class PlannedStep:
         "ph",
         "q2r",
         "phonon_dos",
+        "dispersion",
     ]
     program: Literal["pw.x", "dos.x", "bands.x", "ph.x", "q2r.x", "matdyn.x"]
 
@@ -91,18 +93,21 @@ _TASK_STEPS: Mapping[CalcTask, tuple[PlannedStep, ...]] = {
         PlannedStep(purpose="ph", program="ph.x"),
         PlannedStep(purpose="q2r", program="q2r.x"),
         PlannedStep(purpose="phonon_dos", program="matdyn.x"),
+        PlannedStep(purpose="dispersion", program="matdyn.x"),
     ),
     "relax-phonon": (
         PlannedStep(purpose="relax", program="pw.x"),
         PlannedStep(purpose="ph", program="ph.x"),
         PlannedStep(purpose="q2r", program="q2r.x"),
         PlannedStep(purpose="phonon_dos", program="matdyn.x"),
+        PlannedStep(purpose="dispersion", program="matdyn.x"),
     ),
     "vc-relax-phonon": (
         PlannedStep(purpose="vc-relax", program="pw.x"),
         PlannedStep(purpose="ph", program="ph.x"),
         PlannedStep(purpose="q2r", program="q2r.x"),
         PlannedStep(purpose="phonon_dos", program="matdyn.x"),
+        PlannedStep(purpose="dispersion", program="matdyn.x"),
     ),
 }
 

@@ -68,11 +68,12 @@ class BandAdvice:
 
     def tiers(self) -> RecordTiers:
         """``scf``'s records unprefixed, the task's one ``job`` with them,
-        then the bands step's own under a ``bands_`` prefix:
-        ``bands_occupations``, ``bands_k_path``, ``bands_nbnd``,
-        ``bands_convergence`` and ``bands_parallelisation``."""
+        then the bands step's own: its path as ``k_path``, a name no scf
+        record has, and the others under a ``bands_`` prefix, since the scf
+        step has records of their names: ``bands_occupations``, ``k_path``,
+        ``bands_nbnd``, ``bands_convergence`` and ``bands_parallelisation``."""
         bands = {
-            f"bands_{name}": state
+            name if name == "k_path" else f"bands_{name}": state
             for name, state in self.bands.step.records().items()
             if name != "job"
         }
