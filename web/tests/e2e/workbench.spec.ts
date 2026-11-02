@@ -1092,10 +1092,12 @@ test("keeps the document static and scrolls long content inside its own card", a
   for (const card of Object.keys(records)) {
     const body = page.locator(`.card-${card} .card-body`);
     const lastRecord = page.locator(`.card-${card} .record-card`).last();
+    // The card body is focusable so keyboard users can scroll it (App.css),
+    // and End takes it to its last record. The string evaluate this replaces
+    // was evaluated as an expression and never called, so the card never
+    // scrolled and only a last record already in view passed.
     await body.focus();
-    await body.evaluate(
-      "(element) => { element.scrollTop = element.scrollHeight; }",
-    );
+    await page.keyboard.press("End");
     await expect(lastRecord).toBeInViewport();
   }
 });
