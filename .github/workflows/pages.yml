@@ -1,11 +1,11 @@
 name: pages
 
-# Publishes https://stfc.github.io/goldilocks-core/ (#239). v2, not main: the
-# v2 line lives on stfc's v2 branch until it merges into main; switch the
-# branch below then. Forks skip both jobs, so the site has one home.
+# Publishes https://stfc.github.io/goldilocks-core/ from stfc's main, which
+# the v2 line becomes after the v0.3.0 release (#239). Forks skip both jobs,
+# so the site has one home.
 on:
   push:
-    branches: [v2]
+    branches: [main]
     paths:
       - docs/**
       - mkdocs.yml
