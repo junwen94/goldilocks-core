@@ -137,8 +137,11 @@ mMACE runs on the CPU unless `GOLDILOCKS_MMACE_DEVICE` says otherwise:
 export GOLDILOCKS_MMACE_DEVICE=cuda   # or cpu, the default; anything else stops the server at startup
 ```
 
-On `cuda`, each ordering ranking relaxes its candidates on the GPU. A ranking's process
-exits when the ranking ends, so its GPU memory is freed with it.
+On `cuda`, the `is_magnetic` classifier embeds structures on the GPU, and each ordering
+ranking relaxes its candidates there. A ranking's process exits when the ranking ends, so
+its GPU memory is freed with it. The `is_magnetic` worker lives as long as the server, so
+it holds its CUDA context, and whatever its predictions leave cached, until it is replaced
+(section 5).
 
 The CUDA build of torch comes from a uv dependency group. A uv-managed install takes CPU
 torch by default (the `cpu` group, so CI and the image stay small). Swap that group for
