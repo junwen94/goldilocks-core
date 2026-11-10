@@ -181,7 +181,7 @@ def mmace_device() -> str:
     only slower. A ranking's process exits after the ranking, so its GPU
     memory is freed with it. On the A100, a bcc Fe ranking took 67 s against
     107 s on 24 CPU cores, and GPU memory grew by about 41 MB per atom
-    (core 0.3.1, 2026-11-10).
+    (core 0.3.1, before goldilocks-ml 0.4.0's faster relaxation, 2026-11-10).
 
     Raises ``ValueError`` for a value other than ``cpu`` or ``cuda``."""
     raw = os.environ.get(DEVICE_ENV)

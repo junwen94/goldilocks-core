@@ -32,7 +32,7 @@ dependencies = [
     # apart. Since goldilocks-ml 0.3.0 that stack includes
     # mace-torch[magnetic], which is_magnetic and mMACE ordering ranking
     # run on (#240).
-    "goldilocks-ml==0.3.3",
+    "goldilocks-ml==0.4.0",
     # v2: contracts/ is pydantic BaseModel end to end (validation, serialization,
     # OpenAPI/capabilities schema generation) -- promoted from the http/mcp
     # extras to a core dependency (goldilocks-core-design.md S12, already decided).

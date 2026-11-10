@@ -101,7 +101,8 @@ UI.
 Clicking **Run mMACE** there ranks the candidates in a separate process, so editing a setting
 while it runs is unaffected. Rankings run one at a time on the server: a ranking behind
 others shows "Queued: N rankings ahead of yours", then "Ranking candidate i of n" while it
-runs. Rankings take minutes: rock-salt NiO's eight candidates take about two on a laptop CPU.
+runs. With goldilocks-ml 0.4.0, rock-salt NiO's eight candidates take about 11 s and bcc Fe's
+eight about 9 s on a laptop CPU (Apple silicon, 2026-11-10). Larger cells take longer.
 
 ## 5. Structure size limit
 
@@ -181,3 +182,7 @@ Measured on an A100 80 GB, with core 0.3.1 and torch 2.13.0+cu130 (2026-11-10):
 - **GPU memory**: grows by about 41 MB per atom, so about 8 GB at the 200-atom limit.
 - **Sharing the GPU**: a ranking running beside a chat model on the same GPU slowed the chat
   model's decoding from 52 to 43 tokens/s.
+
+These numbers predate goldilocks-ml 0.4.0, whose relaxation is 5–15× faster on either device.
+The fixed cost of each ranking (starting its process, loading the checkpoint, initialising
+CUDA) now weighs more, so measure both devices before choosing `cuda`.
