@@ -128,3 +128,53 @@ So after a structure of more than 16 atoms, once the worker has been idle for 30
 one is started and warmed up in the background and takes over, and the old one exits. On
 Linux that brought the worker back to 0.67 GB. Predictions keep going to the old worker
 meanwhile, so none waits for the model to load.
+
+## 6. Run mMACE on a GPU
+
+mMACE runs on the CPU unless `GOLDILOCKS_MMACE_DEVICE` says otherwise:
+
+```bash
+export GOLDILOCKS_MMACE_DEVICE=cuda   # or cpu, the default; anything else stops the server at startup
+```
+
+On `cuda`, each ordering ranking relaxes its candidates on the GPU. A ranking's process
+exits when the ranking ends, so its GPU memory is freed with it.
+
+The CUDA build of torch comes from a uv dependency group. A uv-managed install takes CPU
+torch by default (the `cpu` group, so CI and the image stay small). Swap that group for
+`cu130` (Linux, with an NVIDIA driver for CUDA 13.0):
+
+```bash
+uv sync --no-group cpu --group cu130 --extra http
+# or, at each start:
+uv run --no-group cpu --group cu130 --extra http goldilocks serve http
+```
+
+Asking for both groups is an error.
+
+The groups exist only in a source checkout: the published package carries neither, so
+`--group cu130` does nothing for an install from PyPI. Such an install, whether by pip,
+`uv pip` or `uvx`, takes torch from PyPI, and PyPI's Linux wheel is already a CUDA build. So
+`GOLDILOCKS_MMACE_DEVICE=cuda` works there as long as the install was not pointed at the CPU
+index.
+
+If torch cannot use a GPU, mMACE runs on the CPU. That happens when torch is a CPU build or
+sees no CUDA device. The server logs a warning at startup saying which:
+
+```text
+GOLDILOCKS_MMACE_DEVICE=cuda, but torch sees no CUDA device, so mMACE runs on the CPU
+```
+
+On cuda, Triton writes `~/.triton` the first time it runs, so the server's `HOME` must be
+writable. With a read-only `HOME`, rankings come back unranked as "ranking unavailable".
+
+Measured on an A100 80 GB, with core 0.3.1 and torch 2.13.0+cu130 (2026-11-10):
+
+- **bcc Fe ranking**: 8 candidates in 67 s, against 107 s on 24 CPU cores. The first candidate
+  takes about 19 s, since it starts the process, loads the checkpoint and initialises CUDA.
+  Each later one takes about 5.5 s, against 13 s on the CPU.
+- **Results**: the same recommended ordering as on the CPU, with energies within about
+  1e-10 eV/atom.
+- **GPU memory**: grows by about 41 MB per atom, so about 8 GB at the 200-atom limit.
+- **Sharing the GPU**: a ranking running beside a chat model on the same GPU slowed the chat
+  model's decoding from 52 to 43 tokens/s.
