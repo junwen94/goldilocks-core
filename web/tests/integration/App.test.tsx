@@ -537,68 +537,127 @@ describe("Goldilocks Workbench", () => {
     ).toBeEnabled();
   });
 
-  it("says that each selected ordering downloads on its own, and that Bundle holds the uploaded cell", async () => {
+  it("lists fm as Bundle's default ordering and every other candidate after it, and ticking one changes nothing there", async () => {
     // #293: ticking an ordering, or its Recommended badge, read as if it
-    // changed what Bundle holds. It only feeds the download of the ticked
-    // orderings' inputs, an archive each; Bundle keeps the draft's cell.
+    // changed what Bundle holds. Bundle's own menu says which ordering it
+    // generates; the ticks only feed the download, an archive each.
+    const user = userEvent.setup();
     const core = new CoreStub(Promise.resolve(magneticCapabilities()));
     core.inspectionResults = [Promise.resolve(inspection)];
-    core.explainResults = [Promise.resolve(appliedOrderingReview("fm", 10))];
-    core.magneticOrderingsResults = [
-      Promise.resolve(orderingsListing(20, "fm", "afm-6")),
-    ];
+    core.explainResults = [spinPolarizedReview()];
+    core.magneticOrderingsResults = [Promise.resolve(rankedGdListing())];
     const { container } = renderApp(core);
-    await openStructure(userEvent.setup(), container);
+    await openStructure(user, container);
+    const bundle = screen.getByRole("region", { name: "Bundle" });
+    const menu = await within(bundle).findByLabelText("Magnetic ordering");
+
+    expect(menu).toHaveValue("fm");
+    expect(
+      Array.from(
+        menu.querySelectorAll("option"),
+        (option) => option.textContent,
+      ),
+    ).toEqual([
+      "fm — uploaded cell (10 atoms), default",
+      "afm-1 (10 atoms)",
+      "afm-6 (20 atoms) · recommended",
+    ]);
     const card = await orderingsCard();
-    await within(card).findByRole("checkbox", {
-      name: "Select afm-6 for download",
-    });
+    expect(
+      within(card).getByText(
+        "Each selected ordering downloads as its own .zip of inputs.",
+      ),
+    ).toBeVisible();
+
+    await user.click(
+      within(card).getByRole("checkbox", { name: "Select afm-6 for download" }),
+    );
 
     expect(
       within(card).getByRole("button", {
-        name: "Download inputs for selected (0)",
+        name: "Download inputs for selected (1)",
       }),
-    ).toBeDisabled();
-    expect(
-      within(card).getByText(
-        "Each selected ordering downloads as its own .zip of inputs. Bundle (05) is not changed.",
-      ),
-    ).toBeVisible();
-    const bundle = screen.getByRole("region", { name: "Bundle" });
-    expect(
-      await within(bundle).findByText(
-        "Inputs for the uploaded cell (10 atoms), with starting magnetization per species. To get another ordering's inputs, select it in Magnetic Orderings and download it there.",
-      ),
-    ).toBeVisible();
+    ).toBeEnabled();
+    expect(menu).toHaveValue("fm");
+    await pause(500);
+    expect(core.explainCalls).toHaveLength(1);
   });
 
-  it("names the ordering Bundle holds when a magnetic_ordering setting applied one", async () => {
-    // #293: with magnetic_ordering set, Bundle holds that ordering's cell,
-    // not the uploaded one.
+  it("generates the ordering chosen in Bundle's menu, without starting magnetization, and the uploaded cell again for fm", async () => {
+    // #293: the menu sets the draft's magnetic_ordering, so the
+    // recommendation and Bundle's inputs follow it. starting_magnetization
+    // is keyed by the current cell's sites, so a choice sets it back to
+    // automatic, as a candidate downloaded from Magnetic Orderings has it.
+    const user = userEvent.setup();
     const core = new CoreStub(Promise.resolve(magneticCapabilities()));
     core.inspectionResults = [Promise.resolve(inspection)];
-    core.explainResults = [Promise.resolve(appliedOrderingReview("afm-6", 20))];
-    core.magneticOrderingsResults = [
-      Promise.resolve(orderingsListing(20, "fm", "afm-6")),
+    core.explainResults = [
+      spinPolarizedReview(),
+      spinPolarizedReview(),
+      spinPolarizedReview(),
+      spinPolarizedReview(),
     ];
-    const { container } = renderApp(core);
-    await openStructure(userEvent.setup(), container);
-
+    core.magneticOrderingsResults = [Promise.resolve(rankedGdListing())];
+    const workspace = createWorkspace(core, vi.fn());
+    const { container } = render(
+      <WorkspaceProvider workspace={workspace}>
+        <App />
+      </WorkspaceProvider>,
+    );
+    await openStructure(user, container);
     const bundle = screen.getByRole("region", { name: "Bundle" });
+    const menu = await within(bundle).findByLabelText("Magnetic ordering");
+    await act(async () => {
+      await workspace.dispatch({
+        type: "draft.patch",
+        overrides: { starting_magnetization: { Gd1: 0.5 } },
+      });
+    });
     expect(
-      await within(bundle).findByText(
-        "Inputs for the afm-6 ordering (20 atoms). To get another ordering's inputs, select it in Magnetic Orderings and download it there.",
+      within(bundle).getByText(
+        "Choosing another ordering sets starting magnetization back to automatic.",
       ),
     ).toBeVisible();
-    expect(within(bundle).queryByText(/uploaded cell/)).not.toBeInTheDocument();
+
+    await user.selectOptions(menu, "afm-6");
+
+    expect(menu).toHaveValue("afm-6");
+    await waitFor(
+      () => {
+        expect(core.explainCalls.at(-1)?.overrides).toEqual({
+          magnetic_ordering: "afm-6",
+        });
+        expect(core.archiveCalls.at(-1)?.overrides).toEqual({
+          magnetic_ordering: "afm-6",
+        });
+      },
+      { timeout: 3000 },
+    );
+    expect(
+      within(bundle).queryByText(/sets starting magnetization back/),
+    ).not.toBeInTheDocument();
+
+    await user.selectOptions(menu, "fm");
+
+    expect(menu).toHaveValue("fm");
+    await waitFor(
+      () => {
+        expect(core.explainCalls.at(-1)?.overrides).toEqual({});
+      },
+      { timeout: 3000 },
+    );
   });
 
-  it("says nothing in Bundle about orderings for a run without spin polarization", async () => {
-    // #293: no orderings are listed for a spin-unpolarized run, so Bundle
-    // has nothing to set apart from them.
+  it("has no ordering menu in Bundle for a run without spin polarization", async () => {
+    // #293: nothing is listed for a spin-unpolarized run, so there is no
+    // ordering to choose.
     const core = new CoreStub(Promise.resolve(magneticCapabilities()));
     core.inspectionResults = [Promise.resolve(inspection)];
-    core.explainResults = [Promise.resolve(appliedOrderingReview(null, 10))];
+    core.explainResults = [
+      Promise.resolve(
+        magneticReview({ isMagnetic: "magnetic", spinPolarized: false }),
+      ),
+    ];
     const { container } = renderApp(core);
     await openStructure(userEvent.setup(), container);
     // The review has landed once Download appears.
@@ -606,8 +665,8 @@ describe("Goldilocks Workbench", () => {
 
     expect(core.magneticOrderingsCalls).toEqual([]);
     expect(
-      within(screen.getByRole("region", { name: "Bundle" })).queryByText(
-        /Inputs for the/,
+      within(screen.getByRole("region", { name: "Bundle" })).queryByLabelText(
+        "Magnetic ordering",
       ),
     ).not.toBeInTheDocument();
   });
@@ -2351,35 +2410,6 @@ function magneticReview({
   };
 }
 
-/** A review whose magnetic record applied the ordering `applied` to a cell
- * of `nat` atoms, as /explain returns it; `applied` null is a run without
- * spin polarization, which applies no ordering. */
-function appliedOrderingReview(
-  applied: string | null,
-  nat: number,
-): ExplainResult {
-  return {
-    ...explainResult,
-    records: {
-      ...explainResult.records,
-      magnetic: {
-        status: "resolved",
-        value: {
-          cell: { formula: "Gd2Cu4Si4", nat },
-          ordering: {
-            requested: applied === "fm" ? null : applied,
-            applied,
-            criterion: "identity",
-            alternatives: [],
-          },
-          spin_polarized: applied !== null,
-        },
-        source: "heuristic",
-      },
-    },
-  };
-}
-
 /** A spin-polarized review, which shows the Magnetic Orderings card. */
 function spinPolarizedReview(): Promise<ExplainResult> {
   return Promise.resolve(
@@ -2404,6 +2434,21 @@ function orderingsListing(
       overrides: { magnetic_ordering: label },
     })),
     warnings: [],
+  };
+}
+
+/** Gd(CuSi)2's listing after a ranking, cut to three candidates: fm and
+ * afm-1 on the 10-atom uploaded cell, and afm-6, recommended, on 20. */
+function rankedGdListing(): MagneticOrderingsResult {
+  const listing = orderingsListing(10, "fm", "afm-1", "afm-6");
+  return {
+    ...listing,
+    ranked: true,
+    candidates: listing.candidates.map((candidate) =>
+      candidate.label === "afm-6"
+        ? { ...candidate, natoms: 20, is_recommended: true }
+        : candidate,
+    ),
   };
 }
 

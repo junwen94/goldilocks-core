@@ -27,9 +27,10 @@ const UNLISTED = { result: null, operation: null, error: null } as const;
  * inspected structure, with an opt-in "Rank with mMACE" pass -- a server
  * job whose place in the queue and progress the card shows (#261) -- and
  * "Download inputs for selected", which saves each ticked ordering's inputs
- * as an archive of its own and leaves Bundle's draft alone, as the card says
- * under the table (#293) -- see workspace.ts's `magneticOrderings.*` actions
- * for the request/response plumbing.
+ * as an archive of its own and leaves the draft alone; Bundle's Magnetic
+ * ordering menu is what puts one ordering in the draft (#293) -- see
+ * workspace.ts's `magneticOrderings.*` actions for the request/response
+ * plumbing.
  * Rendered inside `MagneticOrderingsCard`, which owns the heading --
  * this component starts directly with its content. */
 export function MagneticOrderingsPanel() {
@@ -188,8 +189,7 @@ export function MagneticOrderingsPanel() {
             </Button>
           </Group>
           <Text size="xs" c="dimmed">
-            Each selected ordering downloads as its own .zip of inputs. Bundle
-            (05) is not changed.
+            Each selected ordering downloads as its own .zip of inputs.
           </Text>
         </>
       )}

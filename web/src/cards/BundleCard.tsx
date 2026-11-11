@@ -4,6 +4,7 @@ import {
   Button,
   Group,
   Loader,
+  NativeSelect,
   Paper,
   Stack,
   Text,
@@ -14,7 +15,7 @@ import { Download, RotateCw } from "lucide-react";
 
 import {
   type BlockingFinding,
-  type ResolvedField,
+  type MagneticOrderingCandidate,
   findingsOf,
 } from "../api/coreClient";
 import { GeneratedInputReview } from "../review/GeneratedInputReview";
@@ -32,8 +33,7 @@ import { currentOrderings } from "../workspace/workspace";
 export function BundleCard({ kicker }: { readonly kicker: string }) {
   const snapshot = useWorkspaceSnapshot();
   const status = bundleStatus(snapshot);
-  const listed =
-    (currentOrderings(snapshot)?.result?.candidates.length ?? 0) > 0;
+  const candidates = currentOrderings(snapshot)?.result?.candidates ?? [];
 
   return (
     <Paper
@@ -55,10 +55,14 @@ export function BundleCard({ kicker }: { readonly kicker: string }) {
           <NoRecommendation status={status} />
         ) : (
           <Stack gap="lg">
+            {candidates.length === 0 || snapshot.draft === null ? null : (
+              <OrderingSelect
+                candidates={candidates}
+                overrides={snapshot.draft.overrides}
+                disabled={snapshot.operation === "inspect"}
+              />
+            )}
             <BundleNotice status={status} />
-            {listed ? (
-              <BundledCell magnetic={snapshot.reviewed.records.magnetic} />
-            ) : null}
             <DownloadRow
               status={status}
               download={downloadState(snapshot)}
@@ -100,47 +104,72 @@ function NoRecommendation({ status }: { readonly status: BundleStatus }) {
   );
 }
 
-/** What Bundle holds, said while Magnetic Orderings lists candidates for
- * the open structure (#293): downloading a selected ordering there never
- * changes the draft, so Bundle keeps the cell the magnetic record applied
- * -- the uploaded cell (`fm`), or the ordering a `magnetic_ordering`
- * setting applied -- and says its atom count. Nothing for a run without
- * spin polarization, which applies no ordering. */
-function BundledCell({
-  magnetic,
+/** Which listed magnetic ordering Bundle generates (#293): the draft's
+ * `magnetic_ordering`, the setting Advisors shows too. fm, the uploaded
+ * cell, is the default and leaves the setting unset; another candidate
+ * applies its own overrides. Either choice sets `starting_magnetization`
+ * back to automatic, since its keys are the current cell's site labels --
+ * as a candidate downloaded from Magnetic Orderings leaves it out. A value
+ * set in Advisors that is not a listed label, such as `afm`, is shown as
+ * it is. */
+function OrderingSelect({
+  candidates,
+  overrides,
+  disabled,
 }: {
-  readonly magnetic: ResolvedField | undefined;
+  readonly candidates: readonly MagneticOrderingCandidate[];
+  readonly overrides: Readonly<Record<string, unknown>>;
+  readonly disabled: boolean;
 }) {
-  const cell = appliedCell(magnetic);
-  if (cell === null) return null;
-  const atoms = `${String(cell.nat)} atom${cell.nat === 1 ? "" : "s"}`;
-  const held =
-    cell.ordering === "fm"
-      ? `Inputs for the uploaded cell (${atoms}), with starting magnetization per species.`
-      : `Inputs for the ${cell.ordering} ordering (${atoms}).`;
+  const workspace = useWorkspace();
+  const setting = overrides.magnetic_ordering;
+  const value = typeof setting === "string" ? setting : "fm";
+  const data = candidates.map((candidate) => ({
+    value: candidate.label,
+    label: orderingOption(candidate),
+  }));
+  if (!data.some((item) => item.value === value)) {
+    data.push({ value, label: `${value} (set in Advisors)` });
+  }
   return (
-    <Text size="sm">
-      {held} To get another ordering&apos;s inputs, select it in Magnetic
-      Orderings and download it there.
-    </Text>
+    <NativeSelect
+      label="Magnetic ordering"
+      description={
+        overrides.starting_magnetization === undefined
+          ? undefined
+          : "Choosing another ordering sets starting magnetization back to automatic."
+      }
+      disabled={disabled}
+      value={value}
+      data={data}
+      onChange={(event) => {
+        const label = event.currentTarget.value;
+        const candidate = candidates.find((entry) => entry.label === label);
+        if (candidate === undefined) return;
+        void workspace.dispatch({
+          type: "draft.patch",
+          overrides: {
+            ...(label === "fm"
+              ? { magnetic_ordering: undefined }
+              : candidate.overrides),
+            starting_magnetization: undefined,
+          },
+        });
+      }}
+    />
   );
 }
 
-/** The ordering label the magnetic record applied and the atom count of the
- * cell it writes; null when it applied none. */
-function appliedCell(
-  record: ResolvedField | undefined,
-): { readonly ordering: string; readonly nat: number } | null {
-  if (record?.status !== "resolved") return null;
-  const value = record.value as {
-    readonly ordering?: { readonly applied?: unknown } | null;
-    readonly cell?: { readonly nat?: unknown } | null;
-  } | null;
-  const ordering = value?.ordering?.applied;
-  const nat = value?.cell?.nat;
-  return typeof ordering === "string" && typeof nat === "number"
-    ? { ordering, nat }
-    : null;
+/** A candidate as the ordering menu lists it: its label and atom count, fm
+ * as the uploaded cell and the default, and the one mMACE ranked lowest
+ * marked recommended. */
+function orderingOption(candidate: MagneticOrderingCandidate): string {
+  const atoms = `${String(candidate.natoms)} atom${candidate.natoms === 1 ? "" : "s"}`;
+  const option =
+    candidate.label === "fm"
+      ? `fm — uploaded cell (${atoms}), default`
+      : `${candidate.label} (${atoms})`;
+  return candidate.is_recommended ? `${option} · recommended` : option;
 }
 
 /** Why the current draft has no input files yet, when that needs saying: it
