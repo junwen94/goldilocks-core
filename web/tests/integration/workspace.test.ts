@@ -885,6 +885,45 @@ describe("Workspace", () => {
     expect(saveArchive.mock.calls).toEqual([[fm], [afm]]);
   });
 
+  it("leaves Bundle's draft and preview alone when selected orderings download", async () => {
+    // #293: each selected ordering downloads as an archive of its own;
+    // Bundle keeps previewing, and downloading, the draft's archive.
+    const preview = buildArchive("Si.cif-scf_single_point.zip");
+    const fm = buildArchive("Si.cif-fm-scf_single_point.zip");
+    const afm = buildArchive("Si.cif-afm-1-scf_single_point.zip");
+    const core = new CoreStub();
+    core.explainResults = [Promise.resolve(explainResult)];
+    core.archiveResults = [
+      Promise.resolve(preview),
+      Promise.resolve(fm),
+      Promise.resolve(afm),
+    ];
+    core.magneticOrderingsResults = [
+      Promise.resolve(orderingsListing(2, "fm", "afm-1")),
+    ];
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const workspace = createWorkspace(core, saveArchive);
+    await workspace.dispatch({ type: "workspace.start" });
+    await workspace.dispatch({ type: "source.open", input: structureInput });
+    await workspace.dispatch({ type: "review.compute" });
+    await workspace.dispatch({ type: "review.refreshArchive" });
+    await workspace.dispatch({ type: "magneticOrderings.list" });
+    const before = workspace.getSnapshot();
+
+    await workspace.dispatch({
+      type: "magneticOrderings.downloadSelected",
+      labels: ["fm", "afm-1"],
+    });
+
+    const after = workspace.getSnapshot();
+    expect(saveArchive.mock.calls).toEqual([[fm], [afm]]);
+    expect(after.draft).toBe(before.draft);
+    expect(after.preview).toBe(before.preview);
+    expect(currentArchive(after)).toBe(preview);
+    await workspace.dispatch({ type: "review.download" });
+    expect(saveArchive.mock.calls).toEqual([[fm], [afm], [preview]]);
+  });
+
   it("lists a replacement structure itself and drops the old structure's late listing", async () => {
     // #149: a listing that arrived after another structure opened was shown
     // for that structure, kept it from being listed itself, and Download
@@ -1007,9 +1046,9 @@ describe("Workspace", () => {
   ])(
     "leaves the replacement's listing alone when an old candidate download $outcome",
     async ({ settle, saved }) => {
-      // #149: Download selected for the old structure finished by clearing
-      // the replacement listing's busy flag (and showing its own error
-      // there), so the replacement was listed a second time. The old
+      // #149: downloading the old structure's selected orderings finished
+      // by clearing the replacement listing's busy flag (and showing its own
+      // error there), so the replacement was listed a second time. The old
       // structure's archives are still saved, named and built from its own
       // listing.
       const candidateArchive = deferred<ArchiveDownload>();

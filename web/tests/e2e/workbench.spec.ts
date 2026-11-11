@@ -1583,7 +1583,7 @@ test("lists and bundles the open structure's own magnetic orderings", async ({
   await fm.check();
   const downloadStarted = page.waitForEvent("download");
   await orderings
-    .getByRole("button", { name: "Download selected (1)" })
+    .getByRole("button", { name: "Download inputs for selected (1)" })
     .click();
   const download = await downloadStarted;
   expect(download.suggestedFilename()).toBe("POSCAR-fm-scf_single_point.zip");

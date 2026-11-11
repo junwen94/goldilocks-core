@@ -423,7 +423,8 @@ describe("Goldilocks Workbench", () => {
   it("lists and bundles a replacement structure's own orderings when the old listing lands late", async () => {
     // #149: the listing of a structure replaced while it was in flight was
     // shown on the new structure's card, kept the new structure from being
-    // listed, and Download selected filed its candidates under the new name.
+    // listed, and downloading the selected filed its candidates under the new
+    // name.
     const user = userEvent.setup();
     let finishObsoleteListing: (value: MagneticOrderingsResult) => void = () =>
       undefined;
@@ -480,7 +481,9 @@ describe("Goldilocks Workbench", () => {
 
     await user.click(afm);
     await user.click(
-      within(card).getByRole("button", { name: "Download selected (1)" }),
+      within(card).getByRole("button", {
+        name: "Download inputs for selected (1)",
+      }),
     );
 
     await waitFor(() => {
@@ -498,8 +501,8 @@ describe("Goldilocks Workbench", () => {
     ).toEqual([["Fe.cif-afm-1", "data_Fe", "afm-1"]]);
   });
 
-  it("keeps the ticked orderings after Download selected saves them", async () => {
-    // Download selected marks the listing busy and then idle again; only a
+  it("keeps the ticked orderings after their inputs download", async () => {
+    // The download marks the listing busy and then idle again; only a
     // new listing (another structure, a ranking) clears the selection.
     const user = userEvent.setup();
     const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
@@ -518,7 +521,9 @@ describe("Goldilocks Workbench", () => {
 
     await user.click(afm);
     await user.click(
-      within(card).getByRole("button", { name: "Download selected (1)" }),
+      within(card).getByRole("button", {
+        name: "Download inputs for selected (1)",
+      }),
     );
 
     await waitFor(() => {
@@ -526,8 +531,85 @@ describe("Goldilocks Workbench", () => {
     });
     expect(afm).toBeChecked();
     expect(
-      within(card).getByRole("button", { name: "Download selected (1)" }),
+      within(card).getByRole("button", {
+        name: "Download inputs for selected (1)",
+      }),
     ).toBeEnabled();
+  });
+
+  it("says that each selected ordering downloads on its own, and that Bundle holds the uploaded cell", async () => {
+    // #293: ticking an ordering, or its Recommended badge, read as if it
+    // changed what Bundle holds. It only feeds the download of the ticked
+    // orderings' inputs, an archive each; Bundle keeps the draft's cell.
+    const core = new CoreStub(Promise.resolve(magneticCapabilities()));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [Promise.resolve(appliedOrderingReview("fm", 10))];
+    core.magneticOrderingsResults = [
+      Promise.resolve(orderingsListing(20, "fm", "afm-6")),
+    ];
+    const { container } = renderApp(core);
+    await openStructure(userEvent.setup(), container);
+    const card = await orderingsCard();
+    await within(card).findByRole("checkbox", {
+      name: "Select afm-6 for download",
+    });
+
+    expect(
+      within(card).getByRole("button", {
+        name: "Download inputs for selected (0)",
+      }),
+    ).toBeDisabled();
+    expect(
+      within(card).getByText(
+        "Each selected ordering downloads as its own .zip of inputs. Bundle (05) is not changed.",
+      ),
+    ).toBeVisible();
+    const bundle = screen.getByRole("region", { name: "Bundle" });
+    expect(
+      await within(bundle).findByText(
+        "Inputs for the uploaded cell (10 atoms), with starting magnetization per species. To get another ordering's inputs, select it in Magnetic Orderings and download it there.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("names the ordering Bundle holds when a magnetic_ordering setting applied one", async () => {
+    // #293: with magnetic_ordering set, Bundle holds that ordering's cell,
+    // not the uploaded one.
+    const core = new CoreStub(Promise.resolve(magneticCapabilities()));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [Promise.resolve(appliedOrderingReview("afm-6", 20))];
+    core.magneticOrderingsResults = [
+      Promise.resolve(orderingsListing(20, "fm", "afm-6")),
+    ];
+    const { container } = renderApp(core);
+    await openStructure(userEvent.setup(), container);
+
+    const bundle = screen.getByRole("region", { name: "Bundle" });
+    expect(
+      await within(bundle).findByText(
+        "Inputs for the afm-6 ordering (20 atoms). To get another ordering's inputs, select it in Magnetic Orderings and download it there.",
+      ),
+    ).toBeVisible();
+    expect(within(bundle).queryByText(/uploaded cell/)).not.toBeInTheDocument();
+  });
+
+  it("says nothing in Bundle about orderings for a run without spin polarization", async () => {
+    // #293: no orderings are listed for a spin-unpolarized run, so Bundle
+    // has nothing to set apart from them.
+    const core = new CoreStub(Promise.resolve(magneticCapabilities()));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = [Promise.resolve(appliedOrderingReview(null, 10))];
+    const { container } = renderApp(core);
+    await openStructure(userEvent.setup(), container);
+    // The review has landed once Download appears.
+    await screen.findByRole("button", { name: "Download (.zip)" });
+
+    expect(core.magneticOrderingsCalls).toEqual([]);
+    expect(
+      within(screen.getByRole("region", { name: "Bundle" })).queryByText(
+        /Inputs for the/,
+      ),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps a failed listing's error on its card and lists again only on Retry", async () => {
@@ -2266,6 +2348,35 @@ function magneticReview({
     warnings: [],
     blocking: [],
     layout: explainResult.layout,
+  };
+}
+
+/** A review whose magnetic record applied the ordering `applied` to a cell
+ * of `nat` atoms, as /explain returns it; `applied` null is a run without
+ * spin polarization, which applies no ordering. */
+function appliedOrderingReview(
+  applied: string | null,
+  nat: number,
+): ExplainResult {
+  return {
+    ...explainResult,
+    records: {
+      ...explainResult.records,
+      magnetic: {
+        status: "resolved",
+        value: {
+          cell: { formula: "Gd2Cu4Si4", nat },
+          ordering: {
+            requested: applied === "fm" ? null : applied,
+            applied,
+            criterion: "identity",
+            alternatives: [],
+          },
+          spin_polarized: applied !== null,
+        },
+        source: "heuristic",
+      },
+    },
   };
 }
 

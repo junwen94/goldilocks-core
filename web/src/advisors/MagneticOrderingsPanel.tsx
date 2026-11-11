@@ -25,9 +25,11 @@ const UNLISTED = { result: null, operation: null, error: null } as const;
 /** #87 layer 4: lists candidate magnetic orderings (FM plus any AFM
  * candidates enumerate_magnetic_orderings finds) for the currently
  * inspected structure, with an opt-in "Rank with mMACE" pass -- a server
- * job whose place in the queue and progress the card shows (#261) -- and a
- * multi-select bundle download -- see workspace.ts's
- * `magneticOrderings.*` actions for the request/response plumbing.
+ * job whose place in the queue and progress the card shows (#261) -- and
+ * "Download inputs for selected", which saves each ticked ordering's inputs
+ * as an archive of its own and leaves Bundle's draft alone, as the card says
+ * under the table (#293) -- see workspace.ts's `magneticOrderings.*` actions
+ * for the request/response plumbing.
  * Rendered inside `MagneticOrderingsCard`, which owns the heading --
  * this component starts directly with its content. */
 export function MagneticOrderingsPanel() {
@@ -38,10 +40,11 @@ export function MagneticOrderingsPanel() {
   const { result: magneticOrderings, operation, error } = listing ?? UNLISTED;
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   // Reset the selection whenever the listed candidates change (another
-  // structure, a ranking, ...), not when Download selected marks the
-  // listing busy and idle again -- adjusted during render, React's own
-  // recommended pattern for "reset state when an input changes", rather
-  // than a second effect that would call setState after the fact.
+  // structure, a ranking, ...), not when downloading the selected inputs
+  // marks the listing busy and idle again -- adjusted during render,
+  // React's own recommended pattern for "reset state when an input
+  // changes", rather than a second effect that would call setState after
+  // the fact.
   const [previousOrderings, setPreviousOrderings] = useState(magneticOrderings);
   if (previousOrderings !== magneticOrderings) {
     setPreviousOrderings(magneticOrderings);
@@ -181,9 +184,13 @@ export function MagneticOrderingsPanel() {
                 })
               }
             >
-              Download selected ({selected.size})
+              Download inputs for selected ({selected.size})
             </Button>
           </Group>
+          <Text size="xs" c="dimmed">
+            Each selected ordering downloads as its own .zip of inputs. Bundle
+            (05) is not changed.
+          </Text>
         </>
       )}
     </Stack>

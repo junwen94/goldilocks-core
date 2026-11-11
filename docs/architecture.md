@@ -587,9 +587,11 @@ until that archive has arrived, and retrying a failed preview refreshes the
 preview without saving a file.
 A magnetic-ordering listing is stored with the structure it was requested for
 and shown only while that structure is open. Opening another structure aborts
-a listing still in flight, and Download selected builds and names each
-candidate bundle from the listing's own structure. A failed listing keeps its
-error on the card and is sent again only by its Retry listing button.
+a listing still in flight, and Download inputs for selected builds and names
+each candidate bundle from the listing's own structure and saves it as an
+archive of its own, leaving the draft and Bundle's preview unchanged. A failed
+listing keeps its error on the card and is sent again only by its Retry listing
+button.
 
 After changing the wire contract, run these from the repository root with the
 HTTP extra installed:

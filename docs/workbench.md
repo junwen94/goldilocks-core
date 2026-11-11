@@ -53,11 +53,15 @@ installed with the default assets (see [mMACE](mmace-setup.md)).
 - **Is it magnetic?** In the Analysis card, the "is magnetic" field reads
   **Goldilocks-ML prediction** when the model made the call.
 - **Rank antiferromagnetic orderings.** The Magnetic Orderings card lists the
-  candidate orderings. Click **Run mMACE** to rank them by energy, then choose
-  one. A ranking can take from seconds to minutes, depending on the size of the
-  cell. You can keep editing settings while it runs. If several people share
-  one server, rankings wait their turn, and the card shows how many are ahead of
-  yours. Loading another structure cancels the ranking.
+  candidate orderings. Click **Run mMACE** to rank them by energy. A ranking
+  can take from seconds to minutes, depending on the size of the cell. You can
+  keep editing settings while it runs. If several people share one server,
+  rankings wait their turn, and the card shows how many are ahead of yours.
+  Loading another structure cancels the ranking.
+- **Download an ordering's inputs.** Tick the orderings you want and click
+  **Download inputs for selected**. Each one downloads as its own zip. This
+  does not change the Bundle card: it holds the uploaded cell, unless you set
+  **magnetic ordering** in Advisors, and it says which cell it holds.
 
 Structures with more than 200 atoms skip both features; see
 [Structure size limit](mmace-setup.md#5-structure-size-limit).

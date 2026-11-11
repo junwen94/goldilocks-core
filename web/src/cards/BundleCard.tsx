@@ -12,7 +12,11 @@ import {
 } from "@mantine/core";
 import { Download, RotateCw } from "lucide-react";
 
-import { type BlockingFinding, findingsOf } from "../api/coreClient";
+import {
+  type BlockingFinding,
+  type ResolvedField,
+  findingsOf,
+} from "../api/coreClient";
 import { GeneratedInputReview } from "../review/GeneratedInputReview";
 import { WarningsPanel } from "../review/WarningsPanel";
 import { FindingList } from "../status/FindingNote";
@@ -23,10 +27,13 @@ import {
   downloadState,
 } from "../workspace/pipelineStatus";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
+import { currentOrderings } from "../workspace/workspace";
 
 export function BundleCard({ kicker }: { readonly kicker: string }) {
   const snapshot = useWorkspaceSnapshot();
   const status = bundleStatus(snapshot);
+  const listed =
+    (currentOrderings(snapshot)?.result?.candidates.length ?? 0) > 0;
 
   return (
     <Paper
@@ -49,6 +56,9 @@ export function BundleCard({ kicker }: { readonly kicker: string }) {
         ) : (
           <Stack gap="lg">
             <BundleNotice status={status} />
+            {listed ? (
+              <BundledCell magnetic={snapshot.reviewed.records.magnetic} />
+            ) : null}
             <DownloadRow
               status={status}
               download={downloadState(snapshot)}
@@ -88,6 +98,49 @@ function NoRecommendation({ status }: { readonly status: BundleStatus }) {
       )}
     </Stack>
   );
+}
+
+/** What Bundle holds, said while Magnetic Orderings lists candidates for
+ * the open structure (#293): downloading a selected ordering there never
+ * changes the draft, so Bundle keeps the cell the magnetic record applied
+ * -- the uploaded cell (`fm`), or the ordering a `magnetic_ordering`
+ * setting applied -- and says its atom count. Nothing for a run without
+ * spin polarization, which applies no ordering. */
+function BundledCell({
+  magnetic,
+}: {
+  readonly magnetic: ResolvedField | undefined;
+}) {
+  const cell = appliedCell(magnetic);
+  if (cell === null) return null;
+  const atoms = `${String(cell.nat)} atom${cell.nat === 1 ? "" : "s"}`;
+  const held =
+    cell.ordering === "fm"
+      ? `Inputs for the uploaded cell (${atoms}), with starting magnetization per species.`
+      : `Inputs for the ${cell.ordering} ordering (${atoms}).`;
+  return (
+    <Text size="sm">
+      {held} To get another ordering&apos;s inputs, select it in Magnetic
+      Orderings and download it there.
+    </Text>
+  );
+}
+
+/** The ordering label the magnetic record applied and the atom count of the
+ * cell it writes; null when it applied none. */
+function appliedCell(
+  record: ResolvedField | undefined,
+): { readonly ordering: string; readonly nat: number } | null {
+  if (record?.status !== "resolved") return null;
+  const value = record.value as {
+    readonly ordering?: { readonly applied?: unknown } | null;
+    readonly cell?: { readonly nat?: unknown } | null;
+  } | null;
+  const ordering = value?.ordering?.applied;
+  const nat = value?.cell?.nat;
+  return typeof ordering === "string" && typeof nat === "number"
+    ? { ordering, nat }
+    : null;
 }
 
 /** Why the current draft has no input files yet, when that needs saying: it
