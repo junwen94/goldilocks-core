@@ -7,6 +7,7 @@ import type {
   ComputeRequest,
   CoreClient,
   ExplainResult,
+  MagneticOrderingCandidate,
   MagneticOrderingsRequest,
   MagneticOrderingsResult,
   RankingJob,
@@ -14,6 +15,7 @@ import type {
   StructureInspection,
 } from "../api/coreClient";
 import { CoreFailure } from "../api/coreClient";
+import { combineArchives } from "./combinedArchive";
 import {
   currentArchive,
   explainDue,
@@ -56,6 +58,9 @@ export interface MagneticOrderingsListing {
    * rankings, or running. `null` until the server first answers, and
    * whenever no ranking is in flight. */
   readonly ranking: RankingProgress | null;
+  /** Why the last download of Bundle's orderings failed, shown in Bundle
+   * beside its Download (#293); cleared by the next download. */
+  readonly downloadError: string | null;
 }
 
 /** A ranking job's status while it is in flight. */
@@ -148,6 +153,12 @@ export interface WorkspaceSnapshot {
   readonly operation: WorkspaceOperation | null;
   /** Read through `currentOrderings`. */
   readonly magneticOrderings: MagneticOrderingsListing | null;
+  /** The candidate labels ticked in Magnetic Orderings for the open
+   * structure; `bundleOrderings` reads them (#293). Kept apart from the
+   * listing, so ticking while a ranking runs does not replace the listing
+   * that ranking completes, and kept across a ranking; cleared when
+   * another structure opens. */
+  readonly selectedOrderings: readonly string[];
 }
 
 export type WorkspaceAction =
@@ -181,10 +192,20 @@ export type WorkspaceAction =
   | { readonly type: "review.download" }
   | { readonly type: "magneticOrderings.list" }
   | { readonly type: "magneticOrderings.rank" }
+  /** Ticks exactly `labels` in Magnetic Orderings (#293). When Bundle
+   * shows a listed candidate that is no longer among `bundleOrderings`,
+   * it shows the first of them instead. */
   | {
-      readonly type: "magneticOrderings.downloadSelected";
+      readonly type: "magneticOrderings.select";
       readonly labels: readonly string[];
     }
+  /** Shows the listed candidate `label` in Bundle by making it the
+   * draft's ordering (`orderingPatch`). */
+  | { readonly type: "magneticOrderings.show"; readonly label: string }
+  /** Saves the inputs of every ordering in `bundleOrderings`: one archive
+   * with a folder per ordering, or, for one ordering, the archive Bundle
+   * previews, as `review.download` does. */
+  | { readonly type: "magneticOrderings.download" }
   /** Clears the failure recorded for `operation` and sends that request
    * again, once. */
   | { readonly type: "failure.retry"; readonly operation: WorkspaceOperation }
@@ -223,6 +244,7 @@ const EMPTY_SNAPSHOT: WorkspaceSnapshot = {
   preview: null,
   operation: null,
   magneticOrderings: null,
+  selectedOrderings: [],
 };
 
 function defaultDraft(capabilities: Capabilities): CalculationDraft {
@@ -359,6 +381,53 @@ export function currentOrderings(
   return listing?.input === snapshot.structureInput ? listing : null;
 }
 
+/** The ordering `draft` gives Bundle: its `magnetic_ordering`, fm (the
+ * uploaded cell) while that is unset. */
+export function shownOrdering(draft: CalculationDraft): string {
+  const value = draft.overrides.magnetic_ordering;
+  return typeof value === "string" ? value : "fm";
+}
+
+/** The orderings Bundle offers for the open structure, by label (#293):
+ * the candidates ticked in Magnetic Orderings in listing order, or fm
+ * while none is ticked, then the ordering Bundle shows when it is not
+ * among them (a value set in Advisors). Empty without a listed candidate.
+ * Bundle's menu lists these and its Download saves them all. */
+export function bundleOrderings(
+  snapshot: WorkspaceSnapshot,
+): readonly string[] {
+  const offered = offeredOrderings(snapshot);
+  if (offered.length === 0 || snapshot.draft === null) return offered;
+  const shown = shownOrdering(snapshot.draft);
+  return offered.includes(shown) ? offered : [...offered, shown];
+}
+
+/** `bundleOrderings` without the ordering Bundle shows. */
+function offeredOrderings(snapshot: WorkspaceSnapshot): readonly string[] {
+  const candidates = currentOrderings(snapshot)?.result?.candidates ?? [];
+  if (candidates.length === 0) return [];
+  const ticked = candidates
+    .map((candidate) => candidate.label)
+    .filter((label) => snapshot.selectedOrderings.includes(label));
+  return ticked.length > 0 ? ticked : ["fm"];
+}
+
+/** The override patch that makes the listed `candidate` the draft's
+ * ordering: fm leaves `magnetic_ordering` unset, any other candidate
+ * applies its own overrides. `starting_magnetization` goes back to
+ * automatic: its keys are the previous cell's site labels, which the
+ * candidate's cell does not have (#170). */
+function orderingPatch(
+  candidate: MagneticOrderingCandidate,
+): Readonly<Record<string, unknown>> {
+  return {
+    ...(candidate.label === "fm"
+      ? { magnetic_ordering: undefined }
+      : candidate.overrides),
+    starting_magnetization: undefined,
+  };
+}
+
 export function createWorkspace(
   core: CoreClient,
   saveArchive: ArchiveSink = saveArchiveToBrowser,
@@ -463,6 +532,7 @@ export function createWorkspace(
         explain: null,
         preview: null,
         magneticOrderings: null,
+        selectedOrderings: [],
       });
     } catch (error) {
       failOperation(owner, error, (failure) => ({
@@ -573,7 +643,9 @@ export function createWorkspace(
    * is no longer open (or was reset away) is dropped. */
   function completeOrderings(
     pending: MagneticOrderingsListing,
-    update: Partial<Pick<MagneticOrderingsListing, "result" | "error">> = {},
+    update: Partial<
+      Pick<MagneticOrderingsListing, "result" | "error" | "downloadError">
+    > = {},
   ): void {
     if (store.getState().magneticOrderings !== pending) return;
     store.setState({
@@ -586,18 +658,20 @@ export function createWorkspace(
     });
   }
 
-  /** As `failOperation`: a `CoreFailure` becomes the listing's error, any
-   * other error propagates once the listing is no longer busy. */
+  /** As `failOperation`: a `CoreFailure` becomes the listing's `field`
+   * (its error, or its download error), any other error propagates once
+   * the listing is no longer busy. */
   function failOrderings(
     pending: MagneticOrderingsListing,
     error: unknown,
+    field: "error" | "downloadError" = "error",
   ): void {
     if (store.getState().magneticOrderings !== pending) return;
     if (!(error instanceof CoreFailure)) {
       completeOrderings(pending);
       throw error;
     }
-    completeOrderings(pending, { error: error.message });
+    completeOrderings(pending, { [field]: error.message });
   }
 
   /** Starts the open structure's `operation` (a listing or a ranking):
@@ -619,6 +693,7 @@ export function createWorkspace(
       result: current?.result ?? null,
       error: null,
       ranking: null,
+      downloadError: current?.downloadError ?? null,
     };
     const request = new AbortController();
     orderingsRequest = request;
@@ -689,29 +764,53 @@ export function createWorkspace(
     return next;
   }
 
-  /** Generates and downloads each selected candidate's DFT input bundle
-   * -- one `runArchive` call per candidate, one browser download per
-   * archive. A candidate is the listing's own structure (`input`, which
-   * also names the bundle) with the draft's overrides plus its own
-   * `magnetic_ordering` label (#170), which asks for a spin-polarized
-   * run, `fm` included. The draft's `starting_magnetization` is left out
-   * of every candidate: it is keyed by the uploaded cell's site labels,
-   * which an ordered cell does not have, so each candidate starts from
-   * its own ordering's seeds. Archives that arrive after another
-   * structure opened are still saved; only the listing's busy state is
-   * dropped with it. */
-  async function downloadSelectedOrderings(
-    labels: readonly string[],
-  ): Promise<void> {
+  /** Ticks exactly `labels`; when Bundle shows a listed candidate that
+   * is no longer offered, shows the first offered ordering instead. */
+  function selectOrderings(labels: readonly string[]): void {
+    store.setState({ selectedOrderings: labels });
     const snapshot = store.getState();
+    const candidates = currentOrderings(snapshot)?.result?.candidates ?? [];
+    const offered = offeredOrderings(snapshot);
+    const first = offered[0];
+    if (snapshot.draft === null || first === undefined) return;
+    const shown = shownOrdering(snapshot.draft);
+    const listed = candidates.some((candidate) => candidate.label === shown);
+    if (listed && !offered.includes(shown)) showOrdering(first);
+  }
+
+  /** Makes the listed candidate `label` the draft's ordering. Does nothing
+   * for a label the open structure's listing does not have. */
+  function showOrdering(label: string): void {
+    const candidate = currentOrderings(
+      store.getState(),
+    )?.result?.candidates.find((entry) => entry.label === label);
+    if (candidate === undefined) return;
+    patchDraft({ type: "draft.patch", overrides: orderingPatch(candidate) });
+  }
+
+  /** Saves the inputs of every ordering in `bundleOrderings`. One ordering
+   * is the one Bundle shows, and its previewed archive is saved as it is.
+   * Several are generated afresh, one `runArchive` call each, named after
+   * the listing's structure and the ordering label, and saved as one
+   * archive with a folder per ordering: the shown ordering with the
+   * draft's overrides, any other with them patched to it
+   * (`orderingPatch`). Refused while the listing is busy. Archives that
+   * arrive after another structure opened are still saved; only the
+   * listing's busy state is dropped with it. */
+  async function downloadBundleOrderings(): Promise<void> {
+    const snapshot = store.getState();
+    const labels = bundleOrderings(snapshot);
+    if (labels.length < 2) {
+      downloadReviewed();
+      return;
+    }
     const { capabilities, draft } = snapshot;
     const listing = currentOrderings(snapshot);
     if (
       capabilities === null ||
       draft === null ||
       listing?.result == null ||
-      listing.operation !== null ||
-      labels.length === 0
+      listing.operation !== null
     ) {
       return;
     }
@@ -719,35 +818,42 @@ export function createWorkspace(
     const pending: MagneticOrderingsListing = {
       ...listing,
       operation: "download",
-      error: null,
+      downloadError: null,
     };
     store.setState({ magneticOrderings: pending });
-    const overrides = Object.fromEntries(
-      Object.entries(draft.overrides).filter(
-        ([key]) => key !== "starting_magnetization",
-      ),
-    );
+    const shown = shownOrdering(draft);
+    const overridesFor = (label: string): Readonly<Record<string, unknown>> => {
+      const candidate = result.candidates.find(
+        (entry) => entry.label === label,
+      );
+      return label === shown || candidate === undefined
+        ? draft.overrides
+        : mergeOverrides(draft.overrides, orderingPatch(candidate));
+    };
     let archives: readonly ArchiveDownload[];
     try {
       archives = await Promise.all(
-        result.candidates
-          .filter((candidate) => labels.includes(candidate.label))
-          .map((candidate) =>
-            core.runArchive({
-              ...toComputeRequest(capabilities, input, {
-                ...draft,
-                overrides: { ...overrides, ...candidate.overrides },
-              }),
-              structure_name: `${input.structure_name}-${candidate.label}`,
+        labels.map((label) =>
+          core.runArchive({
+            ...toComputeRequest(capabilities, input, {
+              ...draft,
+              overrides: overridesFor(label),
             }),
-          ),
+            structure_name: `${input.structure_name}-${label}`,
+          }),
+        ),
       );
     } catch (error) {
-      failOrderings(pending, error);
+      failOrderings(pending, error, "downloadError");
       return;
     }
     completeOrderings(pending);
-    for (const archive of archives) saveArchive(archive);
+    saveArchive(
+      await combineArchives(
+        `${input.structure_name}-magnetic-orderings-${draft.task}.zip`,
+        archives,
+      ),
+    );
   }
 
   /** Clears the failure recorded for `operation` and sends that request
@@ -847,8 +953,14 @@ export function createWorkspace(
       case "magneticOrderings.rank":
         await rankMagneticOrderings();
         return;
-      case "magneticOrderings.downloadSelected":
-        await downloadSelectedOrderings(action.labels);
+      case "magneticOrderings.select":
+        selectOrderings(action.labels);
+        return;
+      case "magneticOrderings.show":
+        showOrdering(action.label);
+        return;
+      case "magneticOrderings.download":
+        await downloadBundleOrderings();
         return;
       case "failure.retry":
         return retryFailure(action.operation);

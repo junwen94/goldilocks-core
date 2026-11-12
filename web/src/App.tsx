@@ -110,7 +110,10 @@ export function WorkbenchContent() {
         <AnalysisCard kicker="02" />
         <AdvisorsCard kicker="03" />
         {showMagneticOrderings ? <MagneticOrderingsCard kicker="04" /> : null}
-        <BundleCard kicker={showMagneticOrderings ? "05" : "04"} />
+        <BundleCard
+          kicker={showMagneticOrderings ? "05" : "04"}
+          orderings={showMagneticOrderings}
+        />
       </main>
     </div>
   );

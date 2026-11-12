@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import {
   Badge,
   Button,
@@ -9,7 +9,7 @@ import {
   Text,
   VisuallyHidden,
 } from "@mantine/core";
-import { Download, RotateCw } from "lucide-react";
+import { RotateCw } from "lucide-react";
 
 import { WarningsPanel } from "../review/WarningsPanel";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
@@ -25,28 +25,19 @@ const UNLISTED = { result: null, operation: null, error: null } as const;
 /** #87 layer 4: lists candidate magnetic orderings (FM plus any AFM
  * candidates enumerate_magnetic_orderings finds) for the currently
  * inspected structure, with an opt-in "Rank with mMACE" pass -- a server
- * job whose place in the queue and progress the card shows (#261) -- and a
- * multi-select bundle download -- see workspace.ts's
- * `magneticOrderings.*` actions for the request/response plumbing.
+ * job whose place in the queue and progress the card shows (#261) -- and
+ * a checkbox per candidate. The ticked candidates are the orderings Bundle
+ * offers in its menu and downloads (#293, `bundleOrderings`) -- see
+ * workspace.ts's `magneticOrderings.*` actions for the request/response
+ * plumbing.
  * Rendered inside `MagneticOrderingsCard`, which owns the heading --
  * this component starts directly with its content. */
 export function MagneticOrderingsPanel() {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
-  const { inspection } = snapshot;
+  const { inspection, selectedOrderings } = snapshot;
   const listing = currentOrderings(snapshot);
   const { result: magneticOrderings, operation, error } = listing ?? UNLISTED;
-  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
-  // Reset the selection whenever the listed candidates change (another
-  // structure, a ranking, ...), not when Download selected marks the
-  // listing busy and idle again -- adjusted during render, React's own
-  // recommended pattern for "reset state when an input changes", rather
-  // than a second effect that would call setState after the fact.
-  const [previousOrderings, setPreviousOrderings] = useState(magneticOrderings);
-  if (previousOrderings !== magneticOrderings) {
-    setPreviousOrderings(magneticOrderings);
-    setSelected(new Set());
-  }
 
   // Lists the open structure while it has no listing of its own. A failed
   // listing is its listing too, so its error stays and only Retry listing
@@ -63,14 +54,11 @@ export function MagneticOrderingsPanel() {
   const busy = operation !== null;
 
   function toggleSelected(label: string, checked: boolean): void {
-    setSelected((current) => {
-      const next = new Set(current);
-      if (checked) {
-        next.add(label);
-      } else {
-        next.delete(label);
-      }
-      return next;
+    void workspace.dispatch({
+      type: "magneticOrderings.select",
+      labels: checked
+        ? [...selectedOrderings, label]
+        : selectedOrderings.filter((entry) => entry !== label),
     });
   }
 
@@ -123,7 +111,7 @@ export function MagneticOrderingsPanel() {
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th style={{ width: "2.5rem" }}>
-                    <VisuallyHidden>Select for download</VisuallyHidden>
+                    <VisuallyHidden>Select for Bundle</VisuallyHidden>
                   </Table.Th>
                   <Table.Th>Ordering</Table.Th>
                   <Table.Th>Atoms</Table.Th>
@@ -136,8 +124,8 @@ export function MagneticOrderingsPanel() {
                   <Table.Tr key={candidate.label}>
                     <Table.Td>
                       <Checkbox
-                        aria-label={`Select ${candidate.label} for download`}
-                        checked={selected.has(candidate.label)}
+                        aria-label={`Select ${candidate.label} for Bundle`}
+                        checked={selectedOrderings.includes(candidate.label)}
                         onChange={(event) => {
                           toggleSelected(
                             candidate.label,
@@ -168,22 +156,6 @@ export function MagneticOrderingsPanel() {
               </Table.Tbody>
             </Table>
           </Table.ScrollContainer>
-          <Group justify="flex-end">
-            <Button
-              size="xs"
-              rightSection={<Download aria-hidden="true" size={14} />}
-              loading={operation === "download"}
-              disabled={busy || selected.size === 0}
-              onClick={() =>
-                void workspace.dispatch({
-                  type: "magneticOrderings.downloadSelected",
-                  labels: [...selected],
-                })
-              }
-            >
-              Download selected ({selected.size})
-            </Button>
-          </Group>
         </>
       )}
     </Stack>

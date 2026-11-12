@@ -91,6 +91,7 @@ function snapshot(fields: Partial<WorkspaceSnapshot> = {}): WorkspaceSnapshot {
     preview: null,
     operation: null,
     magneticOrderings: null,
+    selectedOrderings: [],
     ...fields,
   };
 }
