@@ -1042,26 +1042,51 @@ test("constrains a narrow desktop layout without clipping", async ({
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
 });
 
-test("reflows intermediate widths without horizontal clipping", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 1050, height: 900 });
-  await page.goto("/");
-  await page.waitForLoadState("networkidle");
-  await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
-  await waitForBundleReady(page);
+for (const width of [1050, 600]) {
+  test(`keeps the cards in one row at ${String(width)} px, scrolling the grid sideways`, async ({
+    page,
+  }) => {
+    // #294: below 84rem the cards stacked, each squeezed to a strip of one
+    // screen's height. They stay in one row at every width, each at least
+    // its floor (20rem, 30rem for Bundle), and the grid scrolls sideways
+    // while the document scrolls neither way.
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/");
+    await page.waitForLoadState("networkidle");
+    await page.locator('input[type="file"]').setInputFiles(SILICON_CIF);
+    await waitForBundleReady(page);
 
-  const workspace = await page.getByRole("main").boundingBox();
-  const bundle = await page
-    .getByRole("region", { name: "Bundle" })
-    .boundingBox();
-  expect(workspace).not.toBeNull();
-  expect(bundle).not.toBeNull();
-  expect((workspace?.x ?? 0) + (workspace?.width ?? 0)).toBeLessThanOrEqual(
-    1050,
-  );
-  expect((bundle?.x ?? 0) + (bundle?.width ?? 0)).toBeLessThanOrEqual(1050);
-});
+    const floors = [
+      ["Structure workspace", 320],
+      ["Goldilocks analysis", 320],
+      ["Goldilocks advisors", 320],
+      ["Bundle", 480],
+    ] as const;
+    const boxes = await Promise.all(
+      floors.map(([name]) => page.getByRole("region", { name }).boundingBox()),
+    );
+    for (const [index, box] of boxes.entries()) {
+      assert(box, `${floors[index]?.[0] ?? "card"} must have a box`);
+      expect(box.y).toBeCloseTo(boxes[0]?.y ?? 0, 0);
+      expect(box.width).toBeGreaterThanOrEqual((floors[index]?.[1] ?? 0) - 1);
+    }
+    const scroll = await page.evaluate<{
+      readonly grid: boolean;
+      readonly documentWidth: number;
+      readonly viewportWidth: number;
+    }>(`(() => {
+      const grid = document.querySelector("main");
+      return {
+        grid: grid.scrollWidth > grid.clientWidth,
+        documentWidth: document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
+      };
+    })()`);
+    expect(scroll.grid).toBe(true);
+    expect(scroll.documentWidth).toBeLessThanOrEqual(scroll.viewportWidth);
+    await expectDocumentWithinViewportHeight(page);
+  });
+}
 
 test("keeps the document static and scrolls long content inside its own card", async ({
   page,
@@ -1209,27 +1234,7 @@ test("keeps a refused preview's long failure notice within one screen", async ({
   await expectDocumentWithinViewportHeight(page);
 });
 
-test("keeps the header in view while the narrow layout scrolls", async ({
-  page,
-}) => {
-  // Below 47.5rem the cards stack at their own height and the document
-  // scrolls; the sticky header stays at the top past the first screen.
-  await page.setViewportSize({ width: 720, height: 500 });
-  await page.goto("/");
-  await expect(
-    page.getByRole("heading", { name: "No structure selected" }),
-  ).toBeVisible();
-
-  const scrollY = await page.evaluate<number>(
-    "window.scrollTo(0, 2 * window.innerHeight), window.scrollY",
-  );
-  expect(scrollY).toBe(1000);
-  const header = await page.getByRole("banner").boundingBox();
-  assert(header, "The header must have a layout box");
-  expect(header.y).toBe(0);
-});
-
-test("reflows at effective 200 percent zoom without clipping", async ({
+test("keeps the grid inside the viewport at effective 200 percent zoom", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 720, height: 500 });
