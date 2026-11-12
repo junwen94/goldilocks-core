@@ -58,14 +58,14 @@ installed with the default assets (see [mMACE](mmace-setup.md)).
   keep editing settings while it runs. If several people share one server,
   rankings wait their turn, and the card shows how many are ahead of yours.
   Loading another structure cancels the ranking.
-- **Use an ordering.** The Bundle card's **Magnetic ordering** menu chooses
-  the one ordering whose inputs Bundle shows and downloads. The default, fm,
-  is the uploaded cell. The choice is the same setting as **magnetic ordering**
-  in Advisors, so the recommendation updates for that cell. Choosing an
-  ordering sets **starting magnetization** back to automatic.
-- **Download several orderings.** Tick orderings in the Magnetic Orderings card
-  and click **Download inputs for selected**. Each downloads as its own zip.
-  Ticking does not change the Bundle card.
+- **Choose orderings.** Tick orderings in the Magnetic Orderings card. The
+  Bundle card's **Magnetic ordering** menu lists the ticked ones (only fm, the
+  uploaded cell, while none is ticked), and Bundle shows the inputs of the one
+  chosen there. That choice is the same setting as **magnetic ordering** in
+  Advisors, so the recommendation updates for that cell, and **starting
+  magnetization** goes back to automatic.
+- **Download them.** With several orderings ticked, Bundle's button reads
+  **Download N orderings**. It saves one zip with a folder per ordering.
 
 Structures with more than 200 atoms skip both features; see
 [Structure size limit](mmace-setup.md#5-structure-size-limit).

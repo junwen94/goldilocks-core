@@ -355,7 +355,7 @@ describe("Goldilocks Workbench", () => {
     await openStructure(user, container);
     const card = await orderingsCard();
     await within(card).findByRole("checkbox", {
-      name: "Select afm-1 for download",
+      name: "Select afm-1 for Bundle",
     });
 
     await user.click(within(card).getByRole("button", { name: "Run mMACE" }));
@@ -392,7 +392,7 @@ describe("Goldilocks Workbench", () => {
     await openStructure(user, container);
     const card = await orderingsCard();
     await within(card).findByRole("checkbox", {
-      name: "Select afm-1 for download",
+      name: "Select afm-1 for Bundle",
     });
 
     await user.click(within(card).getByRole("button", { name: "Run mMACE" }));
@@ -423,8 +423,7 @@ describe("Goldilocks Workbench", () => {
   it("lists and bundles a replacement structure's own orderings when the old listing lands late", async () => {
     // #149: the listing of a structure replaced while it was in flight was
     // shown on the new structure's card, kept the new structure from being
-    // listed, and downloading the selected filed its candidates under the new
-    // name.
+    // listed, and downloading its orderings filed them under the new name.
     const user = userEvent.setup();
     let finishObsoleteListing: (value: MagneticOrderingsResult) => void = () =>
       undefined;
@@ -437,7 +436,7 @@ describe("Goldilocks Workbench", () => {
       Promise.resolve(inspection),
       Promise.resolve(inspection),
     ];
-    core.explainResults = [spinPolarizedReview(), spinPolarizedReview()];
+    core.explainResults = Array.from({ length: 4 }, spinPolarizedReview);
     core.magneticOrderingsResults = [
       obsoleteListing,
       Promise.resolve(orderingsListing(1, "fm", "afm-1")),
@@ -459,7 +458,7 @@ describe("Goldilocks Workbench", () => {
       structureFile("Fe.cif", "data_Fe"),
     );
     const afm = await within(await orderingsCard()).findByRole("checkbox", {
-      name: "Select afm-1 for download",
+      name: "Select afm-1 for Bundle",
     });
 
     expect(
@@ -474,41 +473,51 @@ describe("Goldilocks Workbench", () => {
     const card = await orderingsCard();
     expect(
       within(card).queryByRole("checkbox", {
-        name: "Select afm-2 for download",
+        name: "Select afm-2 for Bundle",
       }),
     ).not.toBeInTheDocument();
     expect(within(card).getAllByRole("row")).toHaveLength(3);
 
     await user.click(afm);
     await user.click(
-      within(card).getByRole("button", {
-        name: "Download inputs for selected (1)",
-      }),
+      within(card).getByRole("checkbox", { name: "Select fm for Bundle" }),
     );
+    const download = within(
+      screen.getByRole("region", { name: "Bundle" }),
+    ).getByRole("button", { name: "Download 2 orderings (.zip)" });
+    await waitFor(
+      () => {
+        expect(download).toBeEnabled();
+      },
+      { timeout: 3000 },
+    );
+    await user.click(download);
 
     await waitFor(() => {
       expect(saveArchive).toHaveBeenCalledOnce();
     });
-    const candidateRequests = core.archiveCalls.filter(
-      (request) => request.overrides?.magnetic_ordering !== undefined,
-    );
     expect(
-      candidateRequests.map((request) => [
-        request.structure_name,
-        request.structure_content,
-        request.overrides?.magnetic_ordering,
-      ]),
-    ).toEqual([["Fe.cif-afm-1", "data_Fe", "afm-1"]]);
+      core.archiveCalls
+        .filter((request) => request.structure_name !== "Fe.cif")
+        .map((request) => [
+          request.structure_name,
+          request.structure_content,
+          request.overrides?.magnetic_ordering,
+        ]),
+    ).toEqual([
+      ["Fe.cif-fm", "data_Fe", undefined],
+      ["Fe.cif-afm-1", "data_Fe", "afm-1"],
+    ]);
   });
 
-  it("keeps the ticked orderings after their inputs download", async () => {
-    // The download marks the listing busy and then idle again; only a
-    // new listing (another structure, a ranking) clears the selection.
+  it("keeps the ticked orderings after Bundle downloads them", async () => {
+    // The download marks the listing busy and then idle again; only another
+    // structure clears the ticks.
     const user = userEvent.setup();
     const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
     const core = new CoreStub(Promise.resolve(capabilities));
     core.inspectionResults = [Promise.resolve(inspection)];
-    core.explainResults = [spinPolarizedReview()];
+    core.explainResults = [spinPolarizedReview(), spinPolarizedReview()];
     core.magneticOrderingsResults = [
       Promise.resolve(orderingsListing(2, "fm", "afm-1")),
     ];
@@ -516,87 +525,127 @@ describe("Goldilocks Workbench", () => {
     await openStructure(user, container);
     const card = await orderingsCard();
     const afm = await within(card).findByRole("checkbox", {
-      name: "Select afm-1 for download",
+      name: "Select afm-1 for Bundle",
+    });
+    const fm = within(card).getByRole("checkbox", {
+      name: "Select fm for Bundle",
     });
 
     await user.click(afm);
-    await user.click(
-      within(card).getByRole("button", {
-        name: "Download inputs for selected (1)",
-      }),
+    await user.click(fm);
+    const download = within(
+      screen.getByRole("region", { name: "Bundle" }),
+    ).getByRole("button", { name: "Download 2 orderings (.zip)" });
+    await waitFor(
+      () => {
+        expect(download).toBeEnabled();
+      },
+      { timeout: 3000 },
     );
+    await user.click(download);
 
     await waitFor(() => {
       expect(saveArchive).toHaveBeenCalledOnce();
     });
     expect(afm).toBeChecked();
-    expect(
-      within(card).getByRole("button", {
-        name: "Download inputs for selected (1)",
-      }),
-    ).toBeEnabled();
+    expect(fm).toBeChecked();
+    expect(download).toBeEnabled();
   });
 
-  it("lists fm as Bundle's default ordering and every other candidate after it, and ticking one changes nothing there", async () => {
+  it("offers the ticked orderings in Bundle's menu, fm while none is ticked, and downloads them all as one archive", async () => {
     // #293: ticking an ordering, or its Recommended badge, read as if it
-    // changed what Bundle holds. Bundle's own menu says which ordering it
-    // generates; the ticks only feed the download, an archive each.
+    // changed what Bundle holds, while 04's own download saved the ticked
+    // orderings apart. Now the ticks are what Bundle offers: its menu picks
+    // the one it shows, and its Download saves them all.
     const user = userEvent.setup();
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
     const core = new CoreStub(Promise.resolve(magneticCapabilities()));
     core.inspectionResults = [Promise.resolve(inspection)];
-    core.explainResults = [spinPolarizedReview()];
+    core.explainResults = Array.from({ length: 4 }, spinPolarizedReview);
     core.magneticOrderingsResults = [Promise.resolve(rankedGdListing())];
-    const { container } = renderApp(core);
+    const { container } = renderApp(core, saveArchive);
     await openStructure(user, container);
     const bundle = screen.getByRole("region", { name: "Bundle" });
     const menu = await within(bundle).findByLabelText("Magnetic ordering");
-
-    expect(menu).toHaveValue("fm");
-    expect(
+    const card = await orderingsCard();
+    const options = () =>
       Array.from(
         menu.querySelectorAll("option"),
         (option) => option.textContent,
-      ),
-    ).toEqual([
-      "fm — uploaded cell (10 atoms), default",
+      );
+
+    expect(menu).toHaveValue("fm");
+    expect(options()).toEqual(["fm — uploaded cell (10 atoms), default"]);
+    expect(
+      within(bundle).getByRole("button", { name: "Download (.zip)" }),
+    ).toBeInTheDocument();
+    expect(
+      within(card).queryByRole("button", { name: /Download/ }),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      within(card).getByRole("checkbox", { name: "Select afm-6 for Bundle" }),
+    );
+    expect(menu).toHaveValue("afm-6");
+    expect(options()).toEqual(["afm-6 (20 atoms) · recommended"]);
+    await user.click(
+      within(card).getByRole("checkbox", { name: "Select afm-1 for Bundle" }),
+    );
+    expect(menu).toHaveValue("afm-6");
+    expect(options()).toEqual([
       "afm-1 (10 atoms)",
       "afm-6 (20 atoms) · recommended",
     ]);
-    const card = await orderingsCard();
-    expect(
-      within(card).getByText(
-        "Each selected ordering downloads as its own .zip of inputs.",
-      ),
-    ).toBeVisible();
 
-    await user.click(
-      within(card).getByRole("checkbox", { name: "Select afm-6 for download" }),
+    await user.selectOptions(menu, "afm-1");
+
+    expect(menu).toHaveValue("afm-1");
+    await waitFor(
+      () => {
+        expect(core.explainCalls.at(-1)?.overrides).toEqual({
+          magnetic_ordering: "afm-1",
+        });
+      },
+      { timeout: 3000 },
     );
+    const download = within(bundle).getByRole("button", {
+      name: "Download 2 orderings (.zip)",
+    });
+    await waitFor(
+      () => {
+        expect(download).toBeEnabled();
+      },
+      { timeout: 3000 },
+    );
+    await user.click(download);
 
+    await waitFor(() => {
+      expect(saveArchive).toHaveBeenCalledOnce();
+    });
+    expect(saveArchive.mock.calls[0]?.[0].filename).toBe(
+      "Si.cif-magnetic-orderings-scf_single_point.zip",
+    );
     expect(
-      within(card).getByRole("button", {
-        name: "Download inputs for selected (1)",
-      }),
-    ).toBeEnabled();
-    expect(menu).toHaveValue("fm");
-    await pause(500);
-    expect(core.explainCalls).toHaveLength(1);
+      core.archiveCalls
+        .filter((request) => request.structure_name !== "Si.cif")
+        .map((request) => [
+          request.structure_name,
+          request.overrides?.magnetic_ordering,
+        ]),
+    ).toEqual([
+      ["Si.cif-afm-1", "afm-1"],
+      ["Si.cif-afm-6", "afm-6"],
+    ]);
   });
 
-  it("generates the ordering chosen in Bundle's menu, without starting magnetization, and the uploaded cell again for fm", async () => {
-    // #293: the menu sets the draft's magnetic_ordering, so the
-    // recommendation and Bundle's inputs follow it. starting_magnetization
-    // is keyed by the current cell's sites, so a choice sets it back to
-    // automatic, as a candidate downloaded from Magnetic Orderings has it.
+  it("sets starting magnetization back to automatic when Bundle switches ordering, and says so beforehand", async () => {
+    // #293: starting_magnetization is keyed by the current cell's sites, so
+    // switching Bundle to another ordering clears it, as a candidate
+    // generated from the listing has it.
     const user = userEvent.setup();
     const core = new CoreStub(Promise.resolve(magneticCapabilities()));
     core.inspectionResults = [Promise.resolve(inspection)];
-    core.explainResults = [
-      spinPolarizedReview(),
-      spinPolarizedReview(),
-      spinPolarizedReview(),
-      spinPolarizedReview(),
-    ];
+    core.explainResults = Array.from({ length: 4 }, spinPolarizedReview);
     core.magneticOrderingsResults = [Promise.resolve(rankedGdListing())];
     const workspace = createWorkspace(core, vi.fn());
     const { container } = render(
@@ -606,7 +655,7 @@ describe("Goldilocks Workbench", () => {
     );
     await openStructure(user, container);
     const bundle = screen.getByRole("region", { name: "Bundle" });
-    const menu = await within(bundle).findByLabelText("Magnetic ordering");
+    await within(bundle).findByLabelText("Magnetic ordering");
     await act(async () => {
       await workspace.dispatch({
         type: "draft.patch",
@@ -619,14 +668,14 @@ describe("Goldilocks Workbench", () => {
       ),
     ).toBeVisible();
 
-    await user.selectOptions(menu, "afm-6");
+    await user.click(
+      within(await orderingsCard()).getByRole("checkbox", {
+        name: "Select afm-6 for Bundle",
+      }),
+    );
 
-    expect(menu).toHaveValue("afm-6");
     await waitFor(
       () => {
-        expect(core.explainCalls.at(-1)?.overrides).toEqual({
-          magnetic_ordering: "afm-6",
-        });
         expect(core.archiveCalls.at(-1)?.overrides).toEqual({
           magnetic_ordering: "afm-6",
         });
@@ -636,16 +685,48 @@ describe("Goldilocks Workbench", () => {
     expect(
       within(bundle).queryByText(/sets starting magnetization back/),
     ).not.toBeInTheDocument();
+  });
 
-    await user.selectOptions(menu, "fm");
-
-    expect(menu).toHaveValue("fm");
+  it("shows in Bundle why its orderings could not be downloaded", async () => {
+    const user = userEvent.setup();
+    const saveArchive = vi.fn<(download: ArchiveDownload) => void>();
+    const core = new CoreStub(Promise.resolve(magneticCapabilities()));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    core.explainResults = Array.from({ length: 2 }, spinPolarizedReview);
+    core.magneticOrderingsResults = [Promise.resolve(rankedGdListing())];
+    const { container } = renderApp(core, saveArchive);
+    await openStructure(user, container);
+    const card = await orderingsCard();
+    await user.click(
+      await within(card).findByRole("checkbox", {
+        name: "Select fm for Bundle",
+      }),
+    );
+    await user.click(
+      within(card).getByRole("checkbox", { name: "Select afm-6 for Bundle" }),
+    );
+    const bundle = screen.getByRole("region", { name: "Bundle" });
+    const download = within(bundle).getByRole("button", {
+      name: "Download 2 orderings (.zip)",
+    });
     await waitFor(
       () => {
-        expect(core.explainCalls.at(-1)?.overrides).toEqual({});
+        expect(download).toBeEnabled();
       },
       { timeout: 3000 },
     );
+    core.archiveResults = [
+      Promise.resolve(buildArchive()),
+      failing(new CoreFailure("advice_incomplete", "afm-6 is incomplete.")),
+    ];
+
+    await user.click(download);
+
+    expect(await within(bundle).findByRole("alert")).toHaveTextContent(
+      "afm-6 is incomplete.",
+    );
+    expect(saveArchive).not.toHaveBeenCalled();
+    expect(within(card).queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("has no ordering menu in Bundle for a run without spin polarization", async () => {
@@ -719,7 +800,7 @@ describe("Goldilocks Workbench", () => {
 
     expect(
       await within(card).findByRole("checkbox", {
-        name: "Select afm-1 for download",
+        name: "Select afm-1 for Bundle",
       }),
     ).toBeInTheDocument();
     expect(within(card).queryByRole("alert")).not.toBeInTheDocument();

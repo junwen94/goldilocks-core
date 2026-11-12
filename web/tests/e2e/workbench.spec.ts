@@ -873,7 +873,7 @@ test("keeps a failed listing's error visible and lists again only on Retry", asy
   await orderings.getByRole("button", { name: "Retry listing" }).click();
 
   await expect(
-    orderings.getByRole("checkbox", { name: "Select fm for download" }),
+    orderings.getByRole("checkbox", { name: "Select fm for Bundle" }),
   ).toBeVisible({ timeout: 20_000 });
   await expect(error).toHaveCount(0);
   expect(listings).toBe(2);
@@ -1569,29 +1569,36 @@ test("lists and bundles the open structure's own magnetic orderings", async ({
     buffer: Buffer.from(NICKEL_FCC_POSCAR),
   });
   const fm = orderings.getByRole("checkbox", {
-    name: "Select fm for download",
+    name: "Select fm for Bundle",
   });
   await expect(fm).toBeVisible({ timeout: 20_000 });
   await expect.poll(() => failed).toEqual(["Fe_bcc.cif net::ERR_ABORTED"]);
   releaseListing();
   // Atoms: the one-atom Ni cell, not Fe_bcc.cif's two.
   const fmRow = orderings.getByRole("row").filter({
-    has: page.getByRole("checkbox", { name: "Select fm for download" }),
+    has: page.getByRole("checkbox", { name: "Select fm for Bundle" }),
   });
   await expect(fmRow.getByRole("cell").nth(2)).toHaveText("1");
 
   await fm.check();
-  const downloadStarted = page.waitForEvent("download");
   await orderings
-    .getByRole("button", { name: "Download inputs for selected (1)" })
-    .click();
+    .getByRole("checkbox", { name: "Select afm-1 for Bundle" })
+    .check();
+  const downloadButton = page
+    .getByRole("region", { name: "Bundle" })
+    .getByRole("button", { name: "Download 2 orderings (.zip)" });
+  await expect(downloadButton).toBeEnabled({ timeout: 60_000 });
+  const downloadStarted = page.waitForEvent("download");
+  await downloadButton.click();
   const download = await downloadStarted;
-  expect(download.suggestedFilename()).toBe("POSCAR-fm-scf_single_point.zip");
+  expect(download.suggestedFilename()).toBe(
+    "POSCAR-magnetic-orderings-scf_single_point.zip",
+  );
   const path = await download.path();
   assert(path, "Download must have a local path");
   const entries = unzipSync(new Uint8Array(await readFile(path)));
   const manifest = JSON.parse(
-    textEntry(entries, "goldilocks.json"),
+    textEntry(entries, "POSCAR-fm-scf_single_point/goldilocks.json"),
   ) as InputManifest;
   expect(manifest.request.structure).toMatchObject({
     name: "POSCAR-fm",

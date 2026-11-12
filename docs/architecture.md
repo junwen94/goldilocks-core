@@ -587,14 +587,17 @@ until that archive has arrived, and retrying a failed preview refreshes the
 preview without saving a file.
 A magnetic-ordering listing is stored with the structure it was requested for
 and shown only while that structure is open. Opening another structure aborts
-a listing still in flight, and Download inputs for selected builds and names
-each candidate bundle from the listing's own structure and saves it as an
-archive of its own, leaving the draft and Bundle's preview unchanged. Bundle's
-Magnetic ordering menu is the way one candidate enters the draft: it sets
-`magnetic_ordering` to the candidate (unset for fm, the uploaded cell) and
-clears `starting_magnetization`, whose keys are the previous cell's site labels.
-A failed listing keeps its error on the card and is sent again only by its Retry
-listing button.
+a listing still in flight. A failed listing keeps its error on the card and is
+sent again only by its Retry listing button. The candidates ticked in Magnetic
+Orderings are kept beside the listing, so ticking during a ranking cannot drop
+its result; they are the orderings Bundle offers (`bundleOrderings`: the ticked
+ones, or fm while none is). Bundle's Magnetic ordering menu makes one of them
+the draft's ordering: it sets `magnetic_ordering` to the candidate (unset for
+fm, the uploaded cell) and clears `starting_magnetization`, whose keys are the
+previous cell's site labels. Unticking the ordering Bundle shows moves it to
+the first one still offered. With several offered, Bundle's Download generates
+each from the listing's own structure and saves one archive with a folder per
+ordering.
 
 After changing the wire contract, run these from the repository root with the
 HTTP extra installed:
