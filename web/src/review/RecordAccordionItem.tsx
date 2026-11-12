@@ -40,7 +40,9 @@ export function RecordAccordionItem({
             />
             <span>{readableName(name)}</span>
           </Group>
-          <Code>{name}</Code>
+          <Code className="record-key" title={name}>
+            {name}
+          </Code>
         </Group>
       </Accordion.Control>
       <Accordion.Panel>

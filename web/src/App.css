@@ -57,7 +57,10 @@
  * --workbench-columns), mirroring goldilocks-core's own structure ->
  * analysis -> advisors -> [magnetic orderings] -> bundle pipeline, one
  * screen, no vertical page scroll -- each column scrolls its own body
- * internally as a safety net. Every column has a floor (min-width, set
+ * internally as a safety net. The cards sit in this one row at every
+ * width, zoom and embed size; they never stack, since stacked cards
+ * squeezed into one screen's height left each a strip a few lines tall
+ * (#294). Every column has a floor (min-width, set
  * per class below): --workbench-card-min for Magnetic Orderings/Bundle
  * (their table/file-review content needs real room), the smaller
  * --workbench-narrow-card-min for Structure/Analysis/Advisors.
@@ -90,8 +93,8 @@
       var(--workbench-gap) + 2 * var(--workbench-padding)
   );
   display: grid;
-  grid-template-columns: 1fr;
-  grid-template-rows: repeat(var(--workbench-columns), minmax(0, 1fr));
+  grid-template-columns: repeat(var(--workbench-columns), 1fr);
+  grid-template-rows: 1fr;
   gap: var(--workbench-gap);
   flex: 1 1 auto;
   min-height: 0;
@@ -100,14 +103,7 @@
   margin-inline: auto;
   padding: var(--workbench-padding);
   box-sizing: border-box;
-}
-
-@media (min-width: 84rem) {
-  .workbench-grid {
-    grid-template-columns: repeat(var(--workbench-columns), 1fr);
-    grid-template-rows: 1fr;
-    overflow-x: auto;
-  }
+  overflow-x: auto;
 }
 
 .workbench-card {
@@ -197,6 +193,18 @@
   padding-block: var(--mantine-spacing-md);
 }
 
+/* A record's key beside its name in an accordion label
+ * (RecordAccordionItem) gives way first in a card at its floor width: it
+ * ends in an ellipsis instead of scrolling inside Mantine Code's own
+ * overflow: auto, a scroll region no keyboard reaches (#294). Two classes
+ * beat Mantine's one. */
+.workbench-card .record-key {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .card-magnetic-orderings {
   --card-accent: #0f766e;
   /* Overrides .workbench-card's min-width: 0 (same specificity, later
@@ -248,31 +256,4 @@
   background: var(--mantine-color-body);
   border: 1px solid var(--mantine-color-default-border);
   border-radius: var(--mantine-radius-md);
-}
-
-@media (max-width: 47.5rem) {
-  /* The cards stack at their own height and the page, or an embedder's
-   * container, scrolls: WorkbenchContent keeps its content's height even
-   * in a container of definite height, and .app-layout grows with it,
-   * since the sticky header stays in view only within it, its containing
-   * block. */
-  .app-layout {
-    height: auto;
-    min-height: 100dvh;
-  }
-
-  .workbench-content {
-    flex: none;
-    height: auto;
-  }
-
-  .workbench-card {
-    min-height: 24rem;
-  }
-
-  .structure-stage {
-    flex: 0 0 auto;
-    height: 16rem;
-    min-height: 16rem;
-  }
 }

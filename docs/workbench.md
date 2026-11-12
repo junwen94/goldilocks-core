@@ -23,7 +23,8 @@ Then open **http://127.0.0.1:8000**.
 
 ## Set up a calculation
 
-The page is a row of cards, worked from left to right:
+The page is a row of cards, worked from left to right. In a narrow or zoomed-in
+window the row stays a row; scroll it sideways to reach the cards on the right.
 
 1. **Structure Setup.** Drop a CIF or POSCAR on the card, or click
    **Browse files**. The card shows the structure and its atoms.
