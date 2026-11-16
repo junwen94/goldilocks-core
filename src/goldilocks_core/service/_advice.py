@@ -23,7 +23,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TypedDict
 
-from goldilocks_core.resolution import FieldState, Warning, collect_warnings
+from goldilocks_core.resolution import (
+    FieldState,
+    RecordWarning,
+    Warning,
+    collect_warnings,
+)
 from goldilocks_core.service._analysis import AnalysisFacts, AnalysisOverrides
 from goldilocks_core.service._step import StepAdvice, StepOverrides
 from goldilocks_core.service._step_resources import JobOverrides
@@ -66,15 +71,16 @@ class RunOverrides:
 
 
 class StepLayout(TypedDict):
-    """One step of ``RecordLayout``: its purpose and its records' names."""
+    """One step of a task: its name and the names of its records."""
 
     name: str
     records: list[str]
 
 
 class RecordLayout(TypedDict):
-    """Which tier and step each record of a response belongs to, by record
-    name (``RecordTiers.layout``): every record is in exactly one list."""
+    """Where each record belongs, by name: analysis (the structure alone),
+    system (shared by every step) or one step. Every record is in exactly
+    one list."""
 
     analysis: list[str]
     system: list[str]
@@ -108,7 +114,7 @@ class RecordTiers:
             merged.update(records)
         return merged
 
-    def warnings(self) -> list[dict[str, object]]:
+    def warnings(self) -> list[RecordWarning]:
         """Every record's own warnings (``resolution.collect_warnings``)."""
         return collect_warnings(self.records())
 
@@ -173,7 +179,7 @@ class Advice:
         no record reaches an output by a second path (#152)."""
         return self.tiers().records()
 
-    def warnings(self) -> list[dict[str, object]]:
+    def warnings(self) -> list[RecordWarning]:
         """Every record's own ``resolution.Warning``s, flattened into one
         machine-actionable list (``resolution.collect_warnings``), each
         tagged with the ``record`` it came from -- goldilocks-agent

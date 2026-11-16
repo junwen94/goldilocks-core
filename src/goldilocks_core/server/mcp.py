@@ -1,43 +1,51 @@
-"""MCP stdio transport over the v2 ``service``/``capabilities``/
-``set_overrides`` stack (v2 epic 8, #8).
+"""MCP stdio transport over ``server/_handlers.py``, the same functions the
+HTTP transport calls, so validation and dispatch cannot drift between them.
 
-Every tool calls ``server/_handlers.py``'s free functions -- the exact
-same path ``server/http.py`` calls -- so validation/dispatch can never
-drift between the two transports (this epic's own "one shared
-request-validation path" scope item).
-
-Four tools, not v1's three: ``capabilities``, ``inspect_structure``,
-``explain`` (new: the tri-state "diagnosis always available" half of
-the promise, with no v1 precedent at the transport layer), and ``run``
-(replaces v1's ``compute``). ``run`` never returns raw bundle bytes --
-only the file list, every decision, and ``warnings`` -- matching MCP's
-own JSON/text idiom; fetching actual file contents has no MCP-shaped
-answer yet (out of scope, tracked with web/agent integration, not this
-epic's ``/run archive`` HTTP route).
-
-Fixes issue #8's own evidence #3: v1 hardcoded ``version="0.1.0"``,
-disagreeing with ``capabilities.py``'s real
-``importlib.metadata.version("goldilocks-core")``. Now the same call.
+- **Flat arguments.** Each tool's input schema is its request document's own
+  schema (``server/documents.py``), so a call is ``{"structure_content": ...,
+  "task": ...}``. The arguments are wrapped into the tool function's single
+  ``document`` parameter before the SDK validates them, so the pydantic
+  documents stay the one contract; ``extra="forbid"`` refuses unknown keys.
+- **Results.** A tool returns its document as structured content checked
+  against the response type (the tool's ``outputSchema``), plus the same JSON
+  as compact text.
+- **Errors.** A refused request returns ``isError`` with ``{"error": {kind,
+  message, details}}``, the body HTTP sends; an argument that does not match
+  the document is ``invalid_request``.
+- ``run`` returns the file list, decisions and warnings, never file contents.
 """
 
 from __future__ import annotations
 
-import asyncio
+import json
+from collections.abc import Callable, Mapping
+from functools import partial
 from importlib.metadata import version as package_version
-from typing import Any
+from typing import Annotated, Any
+
+import anyio
+from pydantic import BaseModel, ValidationError
 
 from goldilocks_core.capabilities import capabilities as build_capabilities
 from goldilocks_core.failures import ExpectedFailure
 from goldilocks_core.server import _handlers
 from goldilocks_core.server.documents import (
+    CapabilitiesRequestDocument,
+    CapabilitiesResponse,
     ComputeRequestDocument,
+    ExplainResponse,
     InlineStructureDocument,
+    InspectResponse,
+    MagneticOrderingsResponse,
     MagneticOrderingsToolDocument,
+    RunResponse,
+    invalid_request,
 )
 
 try:
-    from mcp.server.mcpserver import MCPServer
+    from mcp.server.mcpserver import Context, MCPServer
     from mcp.server.mcpserver.exceptions import ToolError
+    from mcp_types import CallToolResult, TextContent, ToolAnnotations
 except ImportError as error:
     raise ImportError(
         'The MCP transport requires the mcp extra: install "goldilocks-core[mcp]".'
@@ -45,143 +53,190 @@ except ImportError as error:
 
 __all__ = ["create_server", "serve"]
 
+_INSTRUCTIONS = """\
+goldilocks-core recommends DFT settings for a crystal structure and writes \
+Quantum ESPRESSO input files. It does not run DFT.
+Call capabilities (with the task, for the settings it reads), then \
+inspect_structure, then explain, then run.
+Send a structure as file text in structure_content, never as a path.
+Relay every entry of a result's warnings array to the user as it is.
+When explain lists blocking findings, show them to the user. Each remedy is \
+an overrides patch that resolves its finding (null clears a key): apply the \
+one the user chooses, then explain again.
+Every value in overrides is recorded as the user's own choice: send only \
+values the user gave.
+A failure returns {"error": {"kind", "message", "details"}}: act on kind.\
+"""
 
-class _StrictMCPServer(MCPServer):
-    """``additionalProperties: false`` on every tool's schema, and every
-    call re-checked against that same schema -- reused unchanged from
-    v1 (issue #8's own "v1 code leaned on as-is" section): the one hard
-    gate at the LLM/core boundary."""
+_READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+
+
+class _DocumentServer(MCPServer):
+    """An MCP server whose every tool takes one request document, published
+    with the document's fields as the tool's own arguments."""
+
+    def __init__(self, **settings: Any) -> None:
+        super().__init__(**settings)
+        self._documents: dict[str, type[BaseModel]] = {}
+
+    def document_tool(
+        self, document: type[BaseModel], *, name: str, title: str, description: str
+    ) -> Callable[[Any], Any]:
+        """Registers the decorated function, whose one argument is
+        ``document: <document>``, as the read-only tool ``name``."""
+        self._documents[name] = document
+        return self.tool(
+            name=name, title=title, description=description, annotations=_READ_ONLY
+        )
 
     async def list_tools(self) -> list[Any]:
         tools = await super().list_tools()
         for tool in tools:
-            tool.input_schema["additionalProperties"] = False
+            tool.input_schema = self._documents[tool.name].model_json_schema()
         return tools
 
     async def call_tool(
-        self,
-        name: str,
-        arguments: dict[str, Any],
-        context: Any | None = None,
+        self, name: str, arguments: dict[str, Any], context: Any | None = None
     ) -> Any:
-        tools = await self.list_tools()
-        tool = next((candidate for candidate in tools if candidate.name == name), None)
-        if tool is not None:
-            allowed = set(tool.input_schema.get("properties", {}))
-            unknown = sorted(set(arguments) - allowed)
-            if unknown:
-                raise ToolError(f"Unknown {name} arguments: {', '.join(unknown)}")
-        return await super().call_tool(name, arguments, context)
+        try:
+            return await super().call_tool(name, {"document": arguments}, context)
+        except ToolError as error:
+            if isinstance(error.__cause__, ValidationError):
+                return _error_result(invalid_request(error.__cause__.errors(), skip=1))
+            raise
 
 
 def create_server(*, name: str = "goldilocks-core") -> MCPServer:
-    server = _StrictMCPServer(
+    server = _DocumentServer(
         name=name,
         version=package_version("goldilocks-core"),
-        instructions=(
-            "Inspect structures and generate Goldilocks Core DFT inputs. "
-            "structure_content must be file text (e.g. CIF), never a path."
+        instructions=_INSTRUCTIONS,
+    )
+
+    @server.document_tool(
+        CapabilitiesRequestDocument,
+        name="capabilities",
+        title="Capabilities",
+        description=(
+            "What this server can prepare: codes, tasks and their steps, "
+            "settings (key, type, unit, default, allowed values), facts, "
+            "pseudopotential tables, HPC profiles, ML models and the warnings "
+            "catalogue. Pass task to get only the settings that task reads."
         ),
     )
+    async def capabilities(
+        document: CapabilitiesRequestDocument,
+    ) -> Annotated[CallToolResult, CapabilitiesResponse]:
+        return await _call(build_capabilities, document.task)
 
-    @server.tool(
-        description="Describe available codes, tasks, settings, facts, and assets."
+    @server.document_tool(
+        InlineStructureDocument,
+        name="inspect_structure",
+        title="Inspect structure",
+        description=(
+            "Parse a structure and report its source, composition, lattice and "
+            "sites, with a canonical CIF. explain, run and magnetic_orderings "
+            "refuse a structure with partial occupancies; order it first."
+        ),
     )
-    async def capabilities() -> dict[str, Any]:
-        return await asyncio.to_thread(build_capabilities)
-
-    @server.tool(description="Normalize and inspect an inline structure.")
-    async def inspect_structure(document: InlineStructureDocument) -> dict[str, Any]:
+    async def inspect_structure(
+        document: InlineStructureDocument,
+    ) -> Annotated[CallToolResult, InspectResponse]:
         return await _call(_handlers.inspect, document)
 
-    @server.tool(
+    @server.document_tool(
+        MagneticOrderingsToolDocument,
+        name="magnetic_orderings",
+        title="List magnetic orderings",
         description=(
-            "List candidate magnetic orderings for a structure (plain "
-            "ferromagnetic, plus every antiferromagnetic candidate "
-            "enumlib finds). rank_with_mmace=True additionally relaxes each "
-            "candidate on the mMACE potential energy surface and marks the "
-            "lowest energy-per-atom one as recommended; degrades to an "
-            "unranked listing, with a warning, if that is not configured on "
-            "the server. Lists candidates only -- does not generate any "
-            "input file: generate one by calling run or explain on the same "
-            "structure with the candidate's overrides "
-            "({'magnetic_ordering': '<label>'})."
-        )
+            "List candidate magnetic orderings: ferromagnetic, plus every "
+            "antiferromagnetic candidate enumlib finds. rank_with_mmace also "
+            "ranks them by mMACE energy per atom and marks the lowest as "
+            "recommended, reporting progress; without mMACE on this server the "
+            "listing comes back unranked, with a warning. Writes nothing: to "
+            "prepare inputs for a candidate, send its overrides with the same "
+            "structure to explain or run."
+        ),
     )
     async def magnetic_orderings(
-        document: MagneticOrderingsToolDocument,
-    ) -> dict[str, Any]:
-        return await _call(_handlers.magnetic_orderings_tool, document)
+        document: MagneticOrderingsToolDocument, ctx: Context
+    ) -> Annotated[CallToolResult, MagneticOrderingsResponse]:
+        def report(done: int, total: int) -> None:
+            anyio.from_thread.run(ctx.report_progress, done, total)
 
-    @server.tool(
+        return await _call(_handlers.magnetic_orderings_tool, document, report)
+
+    @server.document_tool(
+        ComputeRequestDocument,
+        name="explain",
+        title="Explain DFT settings",
         description=(
-            "Run analysis, advisors and run's checks, without generating any "
-            "files. Returns every decision (with its source), a warnings "
-            "array the caller must relay verbatim (each warning names the "
-            "decision it came from in 'record'), a blocking array of the "
-            "findings run would refuse to generate an input for (empty when "
-            "those checks pass: each has a code, the settings it concerns in "
-            "'fields', a message to relay, and 'remedies', override patches "
-            "that each resolve it, where null clears that override), and a "
-            "layout naming each "
-            "decision's tier (analysis: the structure alone; system: shared "
-            "by every step) or step. task='dos' explains all three "
-            "of the density-of-states task's steps (scf, nscf, dos.x); "
-            "its nscf-step decisions are returned under nscf_-prefixed keys. "
-            "task='band' explains scf, the pw.x bands step along the written "
-            "cell's high-symmetry path ('k_path'), and bands.x; its other "
-            "bands-step decisions are returned under bands_-prefixed keys. "
-            "task='relax'/'vc-relax' explains one pw.x step with ionic (and, "
-            "for vc-relax, cell) relaxation parameters resolved under the "
-            "'relax' key. task='phonon'/'relax-phonon'/'vc-relax-phonon' "
-            "explains a first pw.x step (scf, relax or vc-relax, with its "
-            "'fft_grid' decision and, for a relaxation, 'relax'), d3hess.x for "
-            "DFT-D3, ph.x on a q-point mesh ('q_sampling' and 'phonon'), q2r.x "
-            "('q2r'), matdyn.x for the phonon DOS ('phonon_dos') and matdyn.x "
-            "along the band task's path ('k_path'). An overrides key reaches "
-            "every step of the task it applies to; 'steps.<step>.<key>' "
-            "(steps: scf; relax; vc-relax; scf, nscf, dos; scf, bands, "
-            "bands_x; scf, ph, q2r, phonon_dos, dispersion; relax, ph, q2r, "
-            "phonon_dos, dispersion; vc-relax, ph, q2r, phonon_dos, "
-            "dispersion) sets one step only, and a key no step of the task "
-            "reads is an error."
-        )
+            "Decide every setting of a task for the structure, without writing "
+            "files. Returns records (each decision: value, source, what it was "
+            "derived from), warnings to relay as they are (each names its "
+            "record), blocking (the findings run would refuse on, empty when "
+            "run would generate; each has a message to show and remedies) and "
+            "layout (each record's tier or step). Records of a later step "
+            "carry its prefix, e.g. nscf_ for dos and bands_ for band; "
+            "capabilities lists each task's steps."
+        ),
     )
-    async def explain(document: ComputeRequestDocument) -> dict[str, Any]:
+    async def explain(
+        document: ComputeRequestDocument,
+    ) -> Annotated[CallToolResult, ExplainResponse]:
         return await _call(_handlers.explain, document)
 
-    @server.tool(
+    @server.document_tool(
+        ComputeRequestDocument,
+        name="run",
+        title="Generate DFT inputs",
         description=(
-            "Generate a runnable input. Returns the published file list, "
-            "every decision with explain's layout, and a warnings array the "
-            "caller must relay verbatim -- fails with explain's findings, "
-            "each followed by its remedy overrides, if run's checks refuse "
-            "the request. task='dos' generates all three steps "
-            "(scf, nscf, dos.x) sharing one submission script, not just a "
-            "single scf. task='band' generates scf.in, bands.in and a bands.x "
-            "input (one per spin channel of a collinear run), sharing one "
-            "submission script. task='relax'/'vc-relax' generates one pw.x "
-            "input with calculation='relax'/'vc-relax' set accordingly. "
-            "task='phonon'/'relax-phonon'/'vc-relax-phonon' generates scf.in, "
-            "relax.in or vc-relax.in, d3hess.in for DFT-D3, ph.in, q2r.in, "
-            "phonon_dos.in and dispersion.in, sharing one submission script "
-            "whose job timer stops pw.x or ph.x cleanly near the walltime and "
-            "whose GOLDILOCKS_FROM_STEP variable resumes it from a later step. "
-            "Overrides are routed to the task's steps as in explain."
-        )
+            "Generate the task's input files and submission script. Returns the "
+            "file list with the same records, warnings and layout as explain. "
+            "If run's checks refuse the request it fails with kind "
+            "advice_incomplete and details.findings, explain's blocking "
+            "findings. This server writes nothing and returns no file contents."
+        ),
     )
-    async def run(document: ComputeRequestDocument) -> dict[str, Any]:
-        summary, _bundle_input = await _call(_handlers.run, document)
-        return summary
+    async def run(
+        document: ComputeRequestDocument,
+    ) -> Annotated[CallToolResult, RunResponse]:
+        return await _call(_run_summary, document)
 
     return server
 
 
-async def _call(handler: Any, document: Any) -> Any:
+def _run_summary(document: ComputeRequestDocument) -> RunResponse:
+    summary, _bundle_input = _handlers.run(document)
+    return summary
+
+
+async def _call(handler: Callable[..., Any], *args: Any) -> CallToolResult:
+    """``handler(*args)`` on a worker thread, as a tool result."""
     try:
-        return await asyncio.to_thread(handler, document)
+        document = await anyio.to_thread.run_sync(partial(handler, *args))
     except ExpectedFailure as error:
-        raise ToolError(str(error)) from error
+        return _error_result({"error": error.public_error()})
+    return _result(document)
+
+
+def _result(document: Mapping[str, Any]) -> CallToolResult:
+    return CallToolResult(
+        content=[TextContent(type="text", text=_compact_json(document))],
+        structured_content=dict(document),
+    )
+
+
+def _error_result(document: Mapping[str, Any]) -> CallToolResult:
+    return CallToolResult(
+        content=[TextContent(type="text", text=_compact_json(document))],
+        structured_content=dict(document),
+        is_error=True,
+    )
+
+
+def _compact_json(document: Mapping[str, Any]) -> str:
+    return json.dumps(document, allow_nan=False, separators=(",", ":"))
 
 
 def serve() -> None:

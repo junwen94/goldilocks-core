@@ -72,6 +72,15 @@ def test_unknown_profile_name_raises_invalid_hpc_profile() -> None:
         load_hpc_profile("not-a-real-machine")
 
 
+@pytest.mark.parametrize("name", ["not-a-real-machine", "../profiles/scarf"])
+def test_a_caller_names_only_an_installed_profile(name: str) -> None:
+    """The error lists the profiles and never the server's file paths."""
+    with pytest.raises(InvalidHpcProfile) as excinfo:
+        resolve_hpc_profile(name, field="hpc")
+
+    assert str(excinfo.value) == f"unknown hpc profile {name!r}; profiles: scarf"
+
+
 def test_a_profile_with_two_default_partitions_is_rejected(
     tmp_path, monkeypatch
 ) -> None:

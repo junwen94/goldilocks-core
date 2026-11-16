@@ -111,6 +111,7 @@ from goldilocks_core.service._dos import (
 from goldilocks_core.service._generate import AdviceIncomplete, generate
 from goldilocks_core.service._magnetic_orderings import (
     MagneticOrderingCandidate,
+    MagneticOrderingsDocument,
     MagneticOrderingsReport,
     list_magnetic_orderings,
     report_to_json,
@@ -170,6 +171,7 @@ __all__ = [
     "KPathOverrides",
     "KpointsOverrides",
     "MagneticOrderingCandidate",
+    "MagneticOrderingsDocument",
     "MagneticOrderingsReport",
     "PathStepAdvice",
     "PhOverrides",

@@ -31,17 +31,42 @@ from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, NotRequired, TypedDict
 
 from pymatgen.core import Structure
 
 from goldilocks_core.advisors.magnetic_ordering_ml import warm_ranking_worker
-from goldilocks_core.service import list_magnetic_orderings, report_to_json
+from goldilocks_core.service import (
+    MagneticOrderingsDocument,
+    list_magnetic_orderings,
+    report_to_json,
+)
 from goldilocks_core.worker_process import WorkerProcess
 
 __all__ = ["Rank", "RankingQueue", "rank_orderings_report"]
 
 JobState = Literal["queued", "running", "done", "failed"]
+
+
+class RankingProgress(TypedDict):
+    """Candidates relaxed so far, of the total."""
+
+    done: int
+    total: int
+
+
+class RankingStatus(TypedDict):
+    """A ranking job's state. Queued: position, the rankings ahead of it.
+    Running: progress, null until the first relaxation starts. Done: report.
+    Failed: error."""
+
+    job_id: str
+    state: JobState
+    position: NotRequired[int]
+    progress: NotRequired[RankingProgress | None]
+    report: NotRequired[MagneticOrderingsDocument]
+    error: NotRequired[str | None]
+
 
 Rank = Callable[[Structure, WorkerProcess, Callable[[int, int], None]], Any]
 """Ranks a structure's orderings on the worker given, reporting
@@ -72,7 +97,7 @@ def rank_orderings_report(
     structure: Structure,
     worker: WorkerProcess,
     on_progress: Callable[[int, int], None],
-) -> dict[str, Any]:
+) -> MagneticOrderingsDocument:
     """The ranked listing of ``structure``'s orderings, as
     ``/magnetic-orderings`` documents a listing: the work of a job."""
     report = list_magnetic_orderings(
@@ -142,7 +167,7 @@ class RankingQueue:
             self._standby = _Standby(self._warm_worker)
         return self._standby
 
-    def submit(self, structure: Structure) -> dict[str, Any]:
+    def submit(self, structure: Structure) -> RankingStatus:
         """Queue a ranking of ``structure``; returns its status."""
         with self._lock:
             doomed = self._drop_abandoned()
@@ -159,7 +184,7 @@ class RankingQueue:
         _kill(doomed)
         return status
 
-    def status(self, job_id: str) -> dict[str, Any] | None:
+    def status(self, job_id: str) -> RankingStatus | None:
         """The job's status, or ``None`` for a job this queue does not hold.
 
         ``{"job_id", "state"}`` plus, by state: ``position``, the number of
@@ -184,8 +209,8 @@ class RankingQueue:
         _kill(doomed)
         return job is not None
 
-    def _status(self, job: _Job) -> dict[str, Any]:
-        status: dict[str, Any] = {"job_id": job.id, "state": job.state}
+    def _status(self, job: _Job) -> RankingStatus:
+        status: RankingStatus = {"job_id": job.id, "state": job.state}
         if job.state == "queued":
             running = self._running is not None and not self._running.cancelled
             status["position"] = self._queued.index(job) + running

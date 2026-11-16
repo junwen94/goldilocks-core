@@ -21,12 +21,11 @@ no CLI invocation to add a flag to. A relative root is resolved against
 the cwd once, when the app is created, so later requests never depend on
 the process's cwd (#136).
 
-**Strict JSON documents.** ``/explain``, ``/magnetic-orderings`` and
-``/run`` return a ``JSONResponse`` rather than letting FastAPI serialize
-the document: ``JSONResponse`` raises on a non-finite float (a 500),
-where FastAPI's route serializer silently writes it as ``null`` (#137).
-``/explain`` and ``/magnetic-orderings`` keep their ``-> Any``
-annotations, so the OpenAPI schema does not change.
+**Strict JSON documents.** Every route returns a ``JSONResponse`` rather
+than letting FastAPI serialize the document: ``JSONResponse`` raises on a
+non-finite float (a 500), where FastAPI's serializer writes it as ``null``
+(#137), and a TypedDict ``response_model`` would drop undeclared keys. The
+``response_model``s therefore only document the responses in OpenAPI.
 
 Behind the optional ``[http]`` extra; importing ``goldilocks_core``
 never imports FastAPI (P7).
@@ -37,18 +36,28 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from importlib.metadata import version as package_version
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from goldilocks_core.bundle import archive_bytes
 from goldilocks_core.capabilities import capabilities
 from goldilocks_core.failures import ExpectedFailure
 from goldilocks_core.server import _handlers
 from goldilocks_core.server.documents import (
+    CapabilitiesRequestDocument,
+    CapabilitiesResponse,
     ComputeRequestDocument,
+    ErrorResponse,
+    ExplainResponse,
     InlineStructureDocument,
+    InspectResponse,
     MagneticOrderingsRequestDocument,
+    MagneticOrderingsResponse,
+    RankingResponse,
     RunRequestDocument,
+    RunResponse,
+    invalid_request,
 )
 
 try:
@@ -61,9 +70,10 @@ try:
     # fallback keeps the module importable without the [http] extra --
     # create_app()'s own try/except still raises _MISSING_HTTP_EXTRA
     # for anyone who actually calls it.
+    from fastapi import Query
     from fastapi.responses import JSONResponse, Response
 except ImportError:
-    JSONResponse = Response = Any  # type: ignore[assignment,misc]
+    JSONResponse = Response = Query = Any  # type: ignore[assignment,misc]
 
 __all__ = ["create_app", "serve"]
 
@@ -72,6 +82,45 @@ _MISSING_HTTP_EXTRA = (
 )
 _STATIC_ROOT_ENV = "GOLDILOCKS_WORKBENCH_STATIC_ROOT"
 _STATUS_BY_CATEGORY = {"input": 422, "dependency": 424, "local": 500}
+_FAILURES: dict[int | str, dict[str, Any]] = {
+    422: {
+        "model": ErrorResponse,
+        "description": (
+            "The request was refused: invalid_request, invalid_setting, "
+            "invalid_structure, invalid_hpc_profile, advice_incomplete "
+            "(details.findings), generation_error or submission_error."
+        ),
+    },
+    424: {
+        "model": ErrorResponse,
+        "description": (
+            "A runtime asset on the server is missing or damaged: "
+            "asset_not_installed or asset_corrupt."
+        ),
+    },
+    500: {
+        "model": ErrorResponse,
+        "description": "A failure on the server, e.g. pseudo_import_error.",
+    },
+}
+_UNKNOWN_RANKING: dict[int | str, dict[str, Any]] = {
+    422: _FAILURES[422],
+    404: {
+        "model": ErrorResponse,
+        "description": "unknown_ranking: this server holds no such job.",
+    },
+}
+_ZIP: dict[int | str, dict[str, Any]] = {
+    200: {
+        "description": (
+            "respond_with 'json': the summary below; 'archive': the whole "
+            "bundle as a ZIP file."
+        ),
+        "content": {
+            "application/zip": {"schema": {"type": "string", "format": "binary"}}
+        },
+    }
+}
 
 
 def create_app(*, static_root: str | Path | None = None) -> Any:
@@ -90,31 +139,80 @@ def create_app(*, static_root: str | Path | None = None) -> Any:
         rankings.start()
         yield
 
-    app = FastAPI(title="goldilocks-core", lifespan=lifespan)
+    app = FastAPI(
+        title="goldilocks-core",
+        version=package_version("goldilocks-core"),
+        description=(
+            "Recommends DFT settings for a crystal structure and writes Quantum "
+            "ESPRESSO input files. Every failure is "
+            '{"error": {"kind", "message", "details"}}.'
+        ),
+        lifespan=lifespan,
+    )
     app.state.asset_readiness = readiness
     _register_error_handlers(app)
     _register_operational_routes(app, readiness)
 
-    @app.get("/capabilities")
-    def get_capabilities() -> Any:
-        return capabilities()
+    @app.get(
+        "/capabilities",
+        tags=["discovery"],
+        response_model=CapabilitiesResponse,
+        responses=_FAILURES,
+    )
+    def get_capabilities(
+        query: Annotated[CapabilitiesRequestDocument, Query()],
+    ) -> Any:
+        """What this server can prepare: codes, tasks and their steps,
+        settings, facts, pseudopotential tables, HPC profiles, ML models and
+        the warnings catalogue. ``?task=`` keeps only that task's settings."""
+        return JSONResponse(capabilities(query.task))
 
-    @app.post("/inspect")
+    @app.post(
+        "/inspect",
+        tags=["structures"],
+        response_model=InspectResponse,
+        responses=_FAILURES,
+    )
     def inspect(body: InlineStructureDocument) -> Any:
-        return _handlers.inspect(body)
+        """Parse a structure: its source, composition, lattice and sites,
+        with a canonical CIF."""
+        return JSONResponse(_handlers.inspect(body))
 
-    @app.post("/explain")
+    @app.post(
+        "/explain",
+        tags=["inputs"],
+        response_model=ExplainResponse,
+        responses=_FAILURES,
+    )
     def explain(body: ComputeRequestDocument) -> Any:
+        """Every decision for the task, without generating files. A request
+        run would refuse is still a 200 here, with its findings in
+        ``blocking``."""
         return JSONResponse(_handlers.explain(body))
 
-    @app.post("/magnetic-orderings")
+    @app.post(
+        "/magnetic-orderings",
+        tags=["structures"],
+        response_model=MagneticOrderingsResponse,
+        responses=_FAILURES,
+    )
     def magnetic_orderings(body: MagneticOrderingsRequestDocument) -> Any:
+        """The structure's candidate magnetic orderings, unranked. Rank them
+        with ``POST /magnetic-orderings/rank``."""
         return JSONResponse(_handlers.magnetic_orderings(body))
 
     _register_ranking_routes(app, rankings)
 
-    @app.post("/run")
+    @app.post(
+        "/run",
+        tags=["inputs"],
+        response_model=RunResponse,
+        responses={**_FAILURES, **_ZIP},
+    )
     def run(body: RunRequestDocument) -> Response:
+        """Generate the task's input files and submission script, in memory:
+        nothing is written on the server. A refused request is a 422
+        ``advice_incomplete`` with ``details.findings``."""
         summary, bundle_input = _handlers.run(body)
         if body.respond_with == "archive":
             return Response(archive_bytes(bundle_input), media_type="application/zip")
@@ -165,28 +263,7 @@ def _register_error_handlers(app: Any) -> None:
     async def validation_error_handler(
         _request: Request, error: RequestValidationError
     ) -> JSONResponse:
-        # pydantic's own error.errors() embeds the raw exception object
-        # in ctx for custom validators (e.g. this module's own
-        # _reject_path_shaped_content) -- not JSON-safe. Keep only the
-        # string fields, same sanitization v1's handler already did.
-        validation_errors = [
-            {
-                "path": ".".join(str(part) for part in item["loc"]),
-                "type": item["type"],
-                "message": item["msg"],
-            }
-            for item in error.errors()
-        ]
-        return JSONResponse(
-            status_code=422,
-            content={
-                "error": {
-                    "kind": "invalid_request",
-                    "message": "The request does not match the transport contract.",
-                    "details": {"validation_errors": validation_errors},
-                }
-            },
-        )
+        return JSONResponse(status_code=422, content=invalid_request(error.errors()))
 
     @app.exception_handler(ExpectedFailure)
     async def expected_failure_handler(
@@ -201,19 +278,40 @@ def _register_ranking_routes(app: Any, queue: Any) -> None:
     not hold -- unknown, cancelled, long finished, or from before a restart
     -- is a 404."""
 
-    @app.post("/magnetic-orderings/rank", status_code=202)
+    @app.post(
+        "/magnetic-orderings/rank",
+        status_code=202,
+        tags=["structures"],
+        response_model=RankingResponse,
+        responses=_FAILURES,
+    )
     def submit_ranking(body: MagneticOrderingsRequestDocument) -> Any:
+        """Queue a ranking of the structure's candidate orderings by mMACE
+        energy per atom; returns the job's status."""
         return JSONResponse(_handlers.submit_ranking(queue, body), status_code=202)
 
-    @app.get("/magnetic-orderings/rank/{job_id}")
+    @app.get(
+        "/magnetic-orderings/rank/{job_id}",
+        tags=["structures"],
+        response_model=RankingResponse,
+        responses=_UNKNOWN_RANKING,
+    )
     def ranking_status(job_id: str) -> Any:
+        """The job's status. Poll at least every 120 s: a queued or running
+        job nobody polls for 120 s is dropped. A finished job is kept until
+        64 newer jobs finish, and a restart forgets every job."""
         status = queue.status(job_id)
         return _unknown_ranking(job_id) if status is None else JSONResponse(status)
 
     @app.delete(
-        "/magnetic-orderings/rank/{job_id}", status_code=204, response_model=None
+        "/magnetic-orderings/rank/{job_id}",
+        status_code=204,
+        response_model=None,
+        tags=["structures"],
+        responses=_UNKNOWN_RANKING,
     )
     def cancel_ranking(job_id: str) -> Any:
+        """Drop the job, stopping its ranking if it runs."""
         if not queue.cancel(job_id):
             return _unknown_ranking(job_id)
         return Response(status_code=204)
@@ -236,12 +334,23 @@ def _unknown_ranking(job_id: str) -> Any:
 
 
 def _register_operational_routes(app: Any, readiness: Any) -> None:
-    @app.get("/health")
+    @app.get("/health", tags=["operations"])
     async def health() -> dict[str, str]:
+        """The process is up."""
         return {"status": "ok"}
 
-    @app.get("/ready")
-    def ready() -> Any:
+    @app.get(
+        "/ready",
+        tags=["operations"],
+        responses={
+            503: {
+                "model": ErrorResponse,
+                "description": "assets_unavailable: a runtime asset is missing.",
+            }
+        },
+    )
+    def ready() -> dict[str, Any]:
+        """Every registered runtime asset is installed and intact."""
         report = readiness.check()
         if report.ready:
             return {"status": "ready", "asset_count": report.asset_count}

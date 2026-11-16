@@ -14,6 +14,7 @@ import math
 import re
 import time
 import zipfile
+from importlib.metadata import version as package_version
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,7 @@ pytest.importorskip("fastapi")
 
 from fastapi.testclient import TestClient
 from pymatgen.core import Lattice, Structure
-from support import silicon_dimer_in_a_box, strict_json
+from support import INTERNAL_TEXT, silicon_dimer_in_a_box, strict_json
 
 from goldilocks_core.server.http import create_app
 
@@ -241,6 +242,61 @@ class TestOpenAPISchema:
             "/magnetic-orderings/rank",
             "/magnetic-orderings/rank/{job_id}",
         }
+
+    def test_openapi_describes_the_real_responses(self, client: TestClient) -> None:
+        """The package version, typed 200s, the real error envelope, and the
+        ZIP form of /run (#299)."""
+        schema = client.app.openapi()
+        run = schema["paths"]["/run"]["post"]["responses"]
+
+        assert schema["info"]["version"] == package_version("goldilocks-core")
+        assert "HTTPValidationError" not in schema["components"]["schemas"]
+        assert run["422"]["content"]["application/json"]["schema"] == {
+            "$ref": "#/components/schemas/ErrorResponse"
+        }
+        assert set(run["200"]["content"]) == {"application/json", "application/zip"}
+        explain = schema["paths"]["/explain"]["post"]["responses"]["200"]
+        assert explain["content"]["application/json"]["schema"] == {
+            "$ref": "#/components/schemas/ExplainResponse"
+        }
+
+    def test_openapi_text_reads_as_user_text(self, client: TestClient) -> None:
+        schema = client.app.openapi()
+        texts = [
+            value
+            for key, value in _walk(schema["components"])
+            if key == "description" and isinstance(value, str)
+        ]
+
+        assert [text for text in texts if INTERNAL_TEXT.search(text)] == []
+
+
+def _walk(node: object) -> list[tuple[str, object]]:
+    if isinstance(node, dict):
+        return [
+            pair
+            for key, value in node.items()
+            for pair in [(key, value), *_walk(value)]
+        ]
+    if isinstance(node, list):
+        return [pair for value in node for pair in _walk(value)]
+    return []
+
+
+class TestCapabilitiesQuery:
+    def test_task_narrows_the_settings(self, client: TestClient) -> None:
+        response = client.get("/capabilities", params={"task": "dos"})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert [task["id"] for task in body["tasks"]] == ["dos"]
+        assert all("dos" in setting["tasks"] for setting in body["settings"])
+
+    def test_an_unknown_query_parameter_is_a_422(self, client: TestClient) -> None:
+        response = client.get("/capabilities", params={"bogus": "1"})
+
+        assert response.status_code == 422
+        assert response.json()["error"]["kind"] == "invalid_request"
 
 
 class TestCapabilities:

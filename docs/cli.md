@@ -411,7 +411,7 @@ address. `--static-root DIRECTORY` also serves a built Workbench; a relative
 
 | Endpoint            | Purpose                                                                          |
 | ------------------- | --------------------------------------------------------------------------------- |
-| `GET /capabilities` | Codes, tasks, facts, settings, pseudopotential tables, HPC profiles, models, warnings |
+| `GET /capabilities` | Codes, tasks, facts, settings, pseudopotential tables, HPC profiles, models, warnings; `?task=` keeps only that task's settings |
 | `POST /inspect`     | Structure inspection (inline `structure_content`, not a path)                     |
 | `POST /explain`     | Analysis and advisor decisions with their `layout`, plus `blocking`: the findings `/run` would refuse with; never writes anything |
 | `POST /run`         | Generate a runnable input; `respond_with: "json"` (default) returns a JSON summary, `respond_with: "archive"` returns ZIP bytes; a refusal is a 422 `advice_incomplete` with the findings in `error.details.findings` |
@@ -421,7 +421,7 @@ address. `--static-root DIRECTORY` also serves a built Workbench; a relative
 | `DELETE /magnetic-orderings/rank/{job_id}` | Cancel the ranking job; 204 |
 | `GET /health`       | Process health                                                                     |
 | `GET /ready`        | Asset readiness; 503 for missing or corrupt assets                                |
-| `GET /openapi.json` | Request and response schemas                                                      |
+| `GET /openapi.json` | Request and response schemas, and the `{"error": {...}}` body of every failure |
 
 Interactive API documentation is at `/docs`.
 
@@ -477,13 +477,19 @@ your MCP client to launch:
 goldilocks serve mcp
 ```
 
-The stdio tools are `capabilities`, `inspect_structure`, `explain`, and `run`.
+The stdio tools are `capabilities`, `inspect_structure`, `magnetic_orderings`,
+`explain` and `run`. Each tool's arguments are the fields of the matching HTTP
+request body, sent flat (`{"structure_content": "...", "task": "dos"}`), and
+each tool publishes the shape it returns as its output schema. `capabilities`
+takes an optional `task`. `magnetic_orderings` takes `rank_with_mmace` and
+reports the ranking's progress.
+
 MCP's `explain` tool returns the same `records`, `warnings`, `blocking` and
-`layout` as `POST /explain`; when `run` refuses, its error lists the same
-findings, each followed by its remedies as JSON override patches. MCP's `run`
-tool never writes to the server's
-filesystem — it always returns only the published file list, every resolved
-decision (with its source) and their `layout`, and a warnings array the caller
-must relay verbatim. To obtain actual file bytes, use the CLI (`goldilocks run
-... -o/--out`) or the HTTP transport's `/run` endpoint with `respond_with:
-"archive"`.
+`layout` as `POST /explain`. A refused call returns a tool error whose content
+is the body HTTP sends, `{"error": {"kind", "message", "details"}}`: when `run`
+refuses, `kind` is `advice_incomplete` and `details.findings` holds explain's
+blocking findings. MCP's `run` tool never writes to the server's filesystem:
+it returns the published file list, every resolved decision (with its source)
+and their `layout`, and a warnings array the caller must relay verbatim. To
+obtain the files, use the CLI (`goldilocks run ... -o/--out`) or the HTTP
+transport's `/run` endpoint with `respond_with: "archive"`.

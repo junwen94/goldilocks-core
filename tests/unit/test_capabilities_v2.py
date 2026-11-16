@@ -288,6 +288,22 @@ class TestTopLevelShape:
                 category,
             ), code
 
+    def test_a_task_keeps_its_own_settings_and_every_task_keeps_them_all(
+        self,
+    ) -> None:
+        """``capabilities(task)`` narrows ``tasks``, ``codes`` and ``settings``
+        without losing any setting across the tasks (#299)."""
+        full = capabilities()
+        union: set[str] = set()
+        for task in _ALL_TASKS:
+            narrowed = capabilities(task)
+            assert [entry["id"] for entry in narrowed["tasks"]] == [task]
+            assert all(task in setting["tasks"] for setting in narrowed["settings"])
+            assert narrowed["facts"] == full["facts"]
+            union |= {setting["key"] for setting in narrowed["settings"]}
+
+        assert union == {setting["key"] for setting in full["settings"]}
+
     def test_codes_match_what_requests_accept(self) -> None:
         """A request's ``code`` is ``types.CodeName``; capabilities must
         offer exactly those codes (#299)."""

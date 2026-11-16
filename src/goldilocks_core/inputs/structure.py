@@ -41,9 +41,9 @@ class SpeciesOccupancy(TypedDict):
 
 
 class StructureSite(TypedDict):
-    """One site: its coordinates, its label (the CIF's ``_atom_site_label``;
-    a POSCAR's element symbol), which keys ``starting_magnetization``
-    (#185), and its species with their occupancies."""
+    """One site: its coordinates, its label (the CIF's _atom_site_label, a
+    POSCAR's element symbol), which starting_magnetization keys by, and its
+    species with their occupancies."""
 
     fractional_coordinates: Annotated[list[float], Portable(Vector3)]
     cartesian_coordinates_angstrom: Annotated[list[float], Portable(Vector3)]
@@ -78,6 +78,9 @@ class StructureSourceDocument(TypedDict):
 
 
 class StructureInspection(TypedDict):
+    """A parsed structure: where it came from, its composition, lattice and
+    sites, and a canonical CIF of it."""
+
     source: StructureSourceDocument
     structure: StructureDocument
     canonical_cif: str

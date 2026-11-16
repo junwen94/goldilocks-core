@@ -1,13 +1,11 @@
 import type { components } from "./schema";
 
 // Request bodies are generated from openapi.json (FastAPI infers a real
-// schema from these pydantic models). Response bodies are NOT generated:
-// every route in src/goldilocks_core/server/http.py returns a bare
-// dict/TypedDict (typed `Any`), so FastAPI has nothing to build an
-// OpenAPI response schema from and openapi-typescript resolves every
-// 200 response to `unknown`. The response types below are hand-authored
-// to mirror the real Python shapes; see the comment above each group for
-// its source of truth.
+// schema from these pydantic models). openapi.json also documents each
+// response (`response_model`, #299), but the response types below are still
+// hand-authored to mirror the real Python shapes, with narrower types than
+// the TypedDicts give; see the comment above each group for its source of
+// truth.
 export type StructureInput = components["schemas"]["InlineStructureDocument"];
 export type ComputeRequest = components["schemas"]["ComputeRequestDocument"];
 export type CalcTask = ComputeRequest["task"];

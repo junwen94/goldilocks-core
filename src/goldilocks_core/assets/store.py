@@ -58,9 +58,11 @@ class AssetNotInstalled(ExpectedFailure, FileNotFoundError):
                 f"Runtime asset {self.reference.id}@{self.reference.version} "
                 f"{self.reason}."
             ),
-            "asset_id": self.reference.id,
-            "version": self.reference.version,
-            "reason": self.reason,
+            "details": {
+                "asset_id": self.reference.id,
+                "version": self.reference.version,
+                "reason": self.reason,
+            },
         }
 
 
