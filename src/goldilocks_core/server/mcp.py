@@ -40,8 +40,7 @@ try:
     from mcp.server.mcpserver.exceptions import ToolError
 except ImportError as error:
     raise ImportError(
-        "The MCP transport requires goldilocks-core[mcp]. "
-        "Install it with `uv sync --extra mcp`."
+        'The MCP transport requires the mcp extra: install "goldilocks-core[mcp]".'
     ) from error
 
 __all__ = ["create_server", "serve"]

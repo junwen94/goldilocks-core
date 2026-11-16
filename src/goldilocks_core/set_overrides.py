@@ -108,7 +108,10 @@ def _did_you_mean(key: str, candidates: list[str]) -> str:
     matches = difflib.get_close_matches(key, candidates, n=3)
     if matches:
         return f"unknown setting {key!r}; did you mean: {', '.join(matches)}?"
-    return f"unknown setting {key!r}; run 'goldilocks settings' to see valid keys"
+    return (
+        f"unknown setting {key!r}; valid keys are capabilities' settings "
+        "('goldilocks settings' on the command line)"
+    )
 
 
 def _setting(catalogue: Mapping[str, SettingBinding], key: str) -> SettingBinding:

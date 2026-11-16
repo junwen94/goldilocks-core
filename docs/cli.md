@@ -463,7 +463,8 @@ proxy before exposing it. Configure TLS and request limits there.
 
 HTTP and MCP accept inline structures and registered table IDs, not local
 structure paths or publication paths. Server operators control installed
-assets. `/run` never writes to the server's disk: on request it can return
+assets: a request cannot install one, so install them with
+`goldilocks assets install` on the server. `/run` never writes to the server's disk: on request it can return
 ZIP bytes directly (`respond_with: "archive"`) or a JSON summary (the
 default), but it always builds and serves the bundle in memory.
 

@@ -412,7 +412,6 @@ export const draft: CalculationDraft = {
   task: "scf_single_point",
   hpc: null,
   overrides: {},
-  fetchMissing: false,
 };
 
 // Field names confirmed against a real /explain response for Si.cif

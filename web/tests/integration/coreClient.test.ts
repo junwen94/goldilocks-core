@@ -24,7 +24,6 @@ const request: ComputeRequest = {
   task: "scf_single_point",
   hpc: null,
   overrides: {},
-  fetch_missing: false,
 };
 
 const npoolFinding: BlockingFinding = {

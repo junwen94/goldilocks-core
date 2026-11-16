@@ -1,35 +1,14 @@
-"""Wire-level request/response contracts shared by HTTP and MCP (v2
-epic 8, #8).
+"""Request documents shared by the HTTP and MCP transports.
 
-**`structure_content`, never `structure_path`.** The agent-design doc's
-own corrected rule (goldilocks-agent-design.md S9.1, "but 'pass path'
-has two boundaries") -- confirmed with the user for this epic: the
-browser-to-agent-server boundary passes a path, but the agent-to-core
-boundary passes content, matching core's own pitfall list item D3
-("remote interfaces do not accept local paths"). ``InlineStructureDocument``
-below is the same shape v1's ``server/documents.py`` already enforced
-(``InlineStructureSource``, path-shaped input explicitly rejected) --
-this rule did not change in v2, only the CLI (which *does* read local
-paths, being a local process, not a remote transport) needed the
-opposite rule spelled out.
-
-**Not a reflective ``_serialized_model``-style projection of internal
-dataclasses**, unlike v1's ``server/documents.py``. That reflection
-mechanism existed to mirror v1's `contracts.py`-centralized shapes
-automatically; v2 deliberately has no such central hub
-(``resolution.py``'s own docstring) and per-domain contracts are
-already pydantic (``inputs/overrides.py``'s ``HumanInput`` family,
-``resolution.ResolvedField``) -- so responses here just reuse those
-directly (``ResolvedField.from_state``) rather than re-deriving a
-parallel schema from scratch.
-
-**`overrides: dict[str, Any]`, not a typed model.** The same reasoning
-``set_overrides.py`` documents: every settable key is reflected from
-``capabilities.bindings()`` at request-validation time, not hand-listed
-in a schema -- a request body's ``overrides`` object is exactly the
-flat ``{key: value}`` shape ``set_overrides.build_overrides`` already
-accepts, JSON-typed instead of CLI-string-typed (no ``coerce_cli_value``
-step needed transport-side).
+- A structure arrives as file text (``structure_content``), never a path:
+  remote transports do not read the server's filesystem
+  (goldilocks-agent-design.md S9.1). The CLI, a local process, reads paths.
+- ``overrides`` is a flat ``{key: value}`` object validated at request time
+  by ``set_overrides.build_overrides`` against ``capabilities.bindings()``,
+  so the settable keys have one source instead of a second schema here.
+- Every document forbids unknown fields. Field descriptions and class
+  docstrings are published in the MCP tool schemas and in OpenAPI, so they
+  are written for callers; design notes stay in this module docstring.
 """
 
 from __future__ import annotations
@@ -38,22 +17,38 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from goldilocks_core.types import CalcTask
+from goldilocks_core.inputs.structure import require_filename
+from goldilocks_core.types import CalcTask, CodeName
 
 _STRICT = ConfigDict(extra="forbid")
 
 
 class InlineStructureDocument(BaseModel):
-    """Every scientific endpoint's structure input. Rejects anything
-    path-shaped outright, rather than relying on callers never sending
-    one -- the same guarantee v1's ``InlineStructureDocument`` gave via
-    its own ``_inline_structure`` validator."""
+    """A crystal structure sent as the text of a CIF or POSCAR file."""
 
     model_config = _STRICT
 
-    structure_content: str
-    structure_name: str = "structure"
-    structure_format: Literal["cif", "poscar"] | None = None
+    structure_content: str = Field(
+        description=(
+            "The full text of a CIF or POSCAR file. Never a file path: the "
+            "server does not read paths."
+        )
+    )
+    structure_name: str = Field(
+        "structure",
+        description=(
+            "A file name for the structure, with no directories. A .cif or "
+            ".poscar suffix sets the format when structure_format is omitted."
+        ),
+    )
+    structure_format: Literal["cif", "poscar"] | None = Field(
+        None,
+        description=(
+            "The format of structure_content. When omitted, it is taken from "
+            "structure_name's suffix, else from a leading 'data_' line (CIF), "
+            "else POSCAR."
+        ),
+    )
 
     @field_validator("structure_content")
     @classmethod
@@ -71,41 +66,68 @@ class InlineStructureDocument(BaseModel):
             )
         return value
 
+    @field_validator("structure_name")
+    @classmethod
+    def _one_file_name(cls, value: str) -> str:
+        return require_filename(value, field="structure_name")
+
 
 class ComputeRequestDocument(InlineStructureDocument):
-    """Shared by ``/explain`` and ``/run`` (and MCP's ``explain``/``run``
-    tools) -- one request shape, per this epic's own "one shared
-    request-validation path" scope item.
+    """A structure plus the calculation to prepare for it."""
 
-    ``task: CalcTask`` (v2 epic 9, #9, #28), not a bare ``str``: an
-    unknown task must be a pydantic validation error at the transport
-    boundary, the same "clear operator error, not a silent fallback"
-    contract an unknown ``--set`` key or hpc profile already gets --
-    before this, the field parsed but was never read anywhere, so any
-    value (typo or not) silently ran the scf-only pipeline."""
-
-    code: str = "quantum_espresso"
-    task: CalcTask = "scf_single_point"
-    hpc: str | None = None
-    overrides: dict[str, Any] = Field(default_factory=dict)
-    fetch_missing: bool = False
+    code: CodeName = Field(
+        "quantum_espresso", description="The simulation code to write input for."
+    )
+    task: CalcTask = Field(
+        "scf_single_point",
+        description="The calculation task. capabilities lists each task's steps.",
+    )
+    hpc: str | None = Field(
+        None,
+        description=(
+            "An HPC profile id from capabilities' hpc_profiles. May be omitted "
+            "when exactly one profile is installed."
+        ),
+    )
+    overrides: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Settings to pin, as {key: value} with JSON values. Keys are "
+            "capabilities' settings[].key and the overridable facts[].key. A "
+            "key applies to every step of the task that reads it; "
+            "'steps.<step>.<key>' sets one step only; a key that no step of "
+            "the task reads is refused. null leaves a key to the automatic "
+            "choice. Every value here is recorded as the user's own choice "
+            "(source 'human')."
+        ),
+    )
 
 
 class RunRequestDocument(ComputeRequestDocument):
-    respond_with: Literal["json", "archive"] = "json"
+    """A run request over HTTP, which can return the bundle as a ZIP."""
+
+    respond_with: Literal["json", "archive"] = Field(
+        "json",
+        description=(
+            "'json' returns the file list, decisions and warnings; 'archive' "
+            "returns the whole input bundle as a ZIP file."
+        ),
+    )
 
 
 class MagneticOrderingsRequestDocument(InlineStructureDocument):
-    """``/magnetic-orderings``, which lists, and ``/magnetic-orderings/rank``,
-    which queues a ranking job (#87, #261). Its own document, not
-    ``ComputeRequestDocument``: this lists candidates independently of any
-    code/task/hpc/overrides choice, the same reason
-    ``service.list_magnetic_orderings`` sits outside ``advise()``/
-    ``generate()`` entirely."""
+    """A structure whose candidate magnetic orderings to list."""
 
 
 class MagneticOrderingsToolDocument(MagneticOrderingsRequestDocument):
-    """MCP's ``magnetic_orderings`` tool, which ranks in the call itself
-    when ``rank_with_mmace`` is set: a tool call has no job to poll."""
+    """A structure whose candidate magnetic orderings to list, and optionally
+    rank."""
 
-    rank_with_mmace: bool = False
+    rank_with_mmace: bool = Field(
+        False,
+        description=(
+            "Also relax every candidate on the mMACE potential and mark the "
+            "lowest energy per atom as recommended. Takes seconds for a small "
+            "cell and minutes for a large one."
+        ),
+    )

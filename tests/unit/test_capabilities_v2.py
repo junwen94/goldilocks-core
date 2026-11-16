@@ -35,6 +35,7 @@ from goldilocks_core.service import (
     SystemOverrides,
 )
 from goldilocks_core.set_overrides import build_overrides
+from goldilocks_core.types import CodeName
 
 _ALL_TASKS = [
     "scf_single_point",
@@ -286,6 +287,13 @@ class TestTopLevelShape:
                 level,
                 category,
             ), code
+
+    def test_codes_match_what_requests_accept(self) -> None:
+        """A request's ``code`` is ``types.CodeName``; capabilities must
+        offer exactly those codes (#299)."""
+        offered = [code["id"] for code in capabilities()["codes"]]
+
+        assert offered == list(typing.get_args(CodeName))
 
     def test_codes_and_tasks_reflect_only_what_actually_runs(self) -> None:
         """v2 epic 9 (#9, #28): ``dos`` joined ``scf_single_point`` once

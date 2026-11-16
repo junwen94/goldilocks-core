@@ -159,7 +159,6 @@ function baseRequest(): ComputeRequest {
     task: draft.task,
     hpc: draft.hpc,
     overrides: draft.overrides,
-    fetch_missing: draft.fetchMissing,
   };
 }
 

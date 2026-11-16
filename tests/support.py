@@ -71,12 +71,13 @@ if TYPE_CHECKING:
     from goldilocks_core.types import RelativisticTreatment
 
 INTERNAL_TEXT = re.compile(
-    r"\.py\b|goldilocks_core|''|\[['\"]|plan=|\(pitfall|\bepic\b|design\.md"
+    r"\.py\b|goldilocks_core|''|\[['\"]|plan=|\(pitfall|\bepic\b|design\.md|#\d"
 )
 """What user-facing text must not contain (#151): a module path, the package
 name, a ``repr()`` artefact -- a quoted name followed by ``'s`` reads
 ``'scarf''s``, a list of names ``['Fe9']`` -- an internal literal such as
-``plan=``, a design-document id such as ``(pitfall A10)`` or a roadmap note.
+``plan=``, a design-document id such as ``(pitfall A10)``, a roadmap note or an
+issue number such as ``#151``.
 Quantum ESPRESSO literals such as ``occupations='fixed'`` stay quoted."""
 
 REAL_ASSET_ROOT = asset_root()

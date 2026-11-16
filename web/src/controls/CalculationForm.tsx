@@ -14,6 +14,7 @@ import {
 import type {
   AdvisorWarning,
   CalcTask,
+  CodeName,
   HpcProfile,
   PseudopotentialTable,
   ResolvedField,
@@ -155,7 +156,7 @@ export function CalculationContextControls() {
         onChange={(event) => {
           void workspace.dispatch({
             type: "draft.patch",
-            code: event.currentTarget.value,
+            code: event.currentTarget.value as CodeName,
           });
         }}
       />

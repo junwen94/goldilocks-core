@@ -11,6 +11,7 @@ import type { components } from "./schema";
 export type StructureInput = components["schemas"]["InlineStructureDocument"];
 export type ComputeRequest = components["schemas"]["ComputeRequestDocument"];
 export type CalcTask = ComputeRequest["task"];
+export type CodeName = ComputeRequest["code"];
 export type MagneticOrderingsRequest =
   components["schemas"]["MagneticOrderingsRequestDocument"];
 
