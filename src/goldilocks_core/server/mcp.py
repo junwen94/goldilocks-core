@@ -13,6 +13,11 @@ HTTP transport calls, so validation and dispatch cannot drift between them.
   message, details}}``, the body HTTP sends; an argument that does not match
   the document is ``invalid_request``.
 - ``run`` returns the file list, decisions and warnings, never file contents.
+  With a publish root, set by whoever starts the server, ``run`` also takes
+  a ``bundle_name`` and publishes the whole bundle as a new directory under
+  that root; a caller names the bundle, never a path
+  (goldilocks-agent-design.md S9.1).
+- Transports: stdio, or streamable HTTP at ``/mcp`` on a host and port.
 """
 
 from __future__ import annotations
@@ -21,11 +26,13 @@ import json
 from collections.abc import Callable, Mapping
 from functools import partial
 from importlib.metadata import version as package_version
-from typing import Annotated, Any
+from pathlib import Path
+from typing import Annotated, Any, Literal
 
 import anyio
 from pydantic import BaseModel, ValidationError
 
+from goldilocks_core.bundle import resolve_publish_root
 from goldilocks_core.capabilities import capabilities as build_capabilities
 from goldilocks_core.failures import ExpectedFailure
 from goldilocks_core.server import _handlers
@@ -38,6 +45,7 @@ from goldilocks_core.server.documents import (
     InspectResponse,
     MagneticOrderingsResponse,
     MagneticOrderingsToolDocument,
+    PublishRequestDocument,
     RunResponse,
     invalid_request,
 )
@@ -68,7 +76,26 @@ values the user gave.
 A failure returns {"error": {"kind", "message", "details"}}: act on kind.\
 """
 
+_PUBLISHING_INSTRUCTIONS = """
+This server publishes run's whole bundle when you pass a new bundle_name; \
+the result's path is on the server's machine.\
+"""
+
 _READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+_PUBLISHING = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=False,
+    open_world_hint=False,
+)
+_RUN_DESCRIPTION = (
+    "Generate the task's input files and submission script. Returns the file "
+    "list with the same records, warnings and layout as explain. If run's "
+    "checks refuse the request it fails with kind advice_incomplete and "
+    "details.findings, explain's blocking findings."
+)
+
+type Transport = Literal["stdio", "streamable-http"]
 
 
 class _DocumentServer(MCPServer):
@@ -80,13 +107,19 @@ class _DocumentServer(MCPServer):
         self._documents: dict[str, type[BaseModel]] = {}
 
     def document_tool(
-        self, document: type[BaseModel], *, name: str, title: str, description: str
+        self,
+        document: type[BaseModel],
+        *,
+        name: str,
+        title: str,
+        description: str,
+        annotations: ToolAnnotations = _READ_ONLY,
     ) -> Callable[[Any], Any]:
         """Registers the decorated function, whose one argument is
-        ``document: <document>``, as the read-only tool ``name``."""
+        ``document: <document>``, as the tool ``name``."""
         self._documents[name] = document
         return self.tool(
-            name=name, title=title, description=description, annotations=_READ_ONLY
+            name=name, title=title, description=description, annotations=annotations
         )
 
     async def list_tools(self) -> list[Any]:
@@ -106,11 +139,16 @@ class _DocumentServer(MCPServer):
             raise
 
 
-def create_server(*, name: str = "goldilocks-core") -> MCPServer:
+def create_server(
+    *, name: str = "goldilocks-core", publish_root: str | Path | None = None
+) -> MCPServer:
+    """The MCP server. ``publish_root``, an existing directory, lets ``run``
+    publish bundles under it; it is resolved once, here."""
+    root = None if publish_root is None else resolve_publish_root(publish_root)
     server = _DocumentServer(
         name=name,
         version=package_version("goldilocks-core"),
-        instructions=_INSTRUCTIONS,
+        instructions=_INSTRUCTIONS + ("" if root is None else _PUBLISHING_INSTRUCTIONS),
     )
 
     @server.document_tool(
@@ -186,16 +224,21 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
     ) -> Annotated[CallToolResult, ExplainResponse]:
         return await _call(_handlers.explain, document)
 
+    if root is None:
+        _register_summary_run(server)
+    else:
+        _register_publishing_run(server, root)
+    return server
+
+
+def _register_summary_run(server: _DocumentServer) -> None:
     @server.document_tool(
         ComputeRequestDocument,
         name="run",
         title="Generate DFT inputs",
         description=(
-            "Generate the task's input files and submission script. Returns the "
-            "file list with the same records, warnings and layout as explain. "
-            "If run's checks refuse the request it fails with kind "
-            "advice_incomplete and details.findings, explain's blocking "
-            "findings. This server writes nothing and returns no file contents."
+            _RUN_DESCRIPTION + " This server writes nothing and returns no "
+            "file contents."
         ),
     )
     async def run(
@@ -203,7 +246,24 @@ def create_server(*, name: str = "goldilocks-core") -> MCPServer:
     ) -> Annotated[CallToolResult, RunResponse]:
         return await _call(_run_summary, document)
 
-    return server
+
+def _register_publishing_run(server: _DocumentServer, root: Path) -> None:
+    @server.document_tool(
+        PublishRequestDocument,
+        name="run",
+        title="Generate DFT inputs",
+        description=(
+            _RUN_DESCRIPTION + " With bundle_name, the whole bundle is also "
+            "published as a new directory in this server's publish directory, "
+            "and path gives its location on the server's machine; an existing "
+            "name fails with kind bundle_exists. Returns no file contents."
+        ),
+        annotations=_PUBLISHING,
+    )
+    async def run(
+        document: PublishRequestDocument,
+    ) -> Annotated[CallToolResult, RunResponse]:
+        return await _call(_handlers.publish_run, document, root)
 
 
 def _run_summary(document: ComputeRequestDocument) -> RunResponse:
@@ -239,5 +299,16 @@ def _compact_json(document: Mapping[str, Any]) -> str:
     return json.dumps(document, allow_nan=False, separators=(",", ":"))
 
 
-def serve() -> None:
-    create_server().run("stdio")
+def serve(
+    *,
+    transport: Transport = "stdio",
+    host: str = "127.0.0.1",
+    port: int = 8001,
+    publish_root: str | Path | None = None,
+) -> None:
+    """Serve over stdio, or over streamable HTTP at ``http://host:port/mcp``."""
+    server = create_server(publish_root=publish_root)
+    if transport == "stdio":
+        server.run("stdio")
+    else:
+        server.run("streamable-http", host=host, port=port)

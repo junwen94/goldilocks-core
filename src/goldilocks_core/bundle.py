@@ -78,6 +78,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal, TypedDict
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
+from goldilocks_core.failures import ExpectedFailure
 from goldilocks_core.generation.files import InputArtifact
 from goldilocks_core.resolution import (
     FieldState,
@@ -108,7 +109,34 @@ through this table, so neither claims a key the manifest lacks (#176)."""
 _CITATION_KEYS = ("citations", "records")
 
 
+class BundleExists(ExpectedFailure, FileExistsError):
+    """The publication target already exists; publishing never overwrites."""
+
+    kind = "bundle_exists"
+
+
+class InvalidPublishRoot(ExpectedFailure, NotADirectoryError):
+    """A server's publish root is not an existing directory."""
+
+    kind = "invalid_publish_root"
+    category = "local"
+
+
+def resolve_publish_root(root: str | Path) -> Path:
+    """``root`` as an absolute directory, resolved once so later
+    publications do not depend on the working directory. Raises
+    ``InvalidPublishRoot`` if it is not an existing directory."""
+    resolved = Path(root).expanduser().resolve()
+    if not resolved.is_dir():
+        raise InvalidPublishRoot(
+            f"publish root {resolved} is not an existing directory"
+        )
+    return resolved
+
+
 class Publication(TypedDict):
+    """Where a bundle was published, and its files' paths within it."""
+
     kind: Literal["directory", "archive"]
     path: str
     files: list[str]
@@ -278,7 +306,10 @@ def _publish_directory(
 ) -> Publication:
     target = destination.expanduser().absolute()
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.mkdir(mode=0o700)
+    try:
+        target.mkdir(mode=0o700)
+    except FileExistsError as error:
+        raise BundleExists(f"{target} already exists") from error
     try:
         _write_directory_path(target, files)
         (target / _COMPLETE_MARKER).touch()
@@ -302,7 +333,10 @@ def _publish_archive(
     target = destination.expanduser().absolute()
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = _archive_bytes(files)
-    descriptor = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        descriptor = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError as error:
+        raise BundleExists(f"{target} already exists") from error
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(payload)

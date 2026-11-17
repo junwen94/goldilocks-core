@@ -428,6 +428,42 @@ def test_serve_mcp_answers_initialize_on_stdout() -> None:
     assert response["result"]["serverInfo"]["name"] == "goldilocks-core"
 
 
+def test_serve_mcp_transport_option_keeps_the_subcommand() -> None:
+    """``--transport`` has its own dest, so ``serve``'s subcommand still reads
+    ``mcp`` (#299)."""
+    from goldilocks_core.cli.core import build_parser
+
+    args = build_parser().parse_args(
+        ["serve", "mcp", "--transport", "streamable-http", "--port", "9001"]
+    )
+
+    assert (args.transport, args.mcp_transport, args.port) == (
+        "mcp",
+        "streamable-http",
+        9001,
+    )
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        (["--host", "0.0.0.0"], "apply to --transport streamable-http"),
+        (["--publish-root", "/no/such/goldilocks/dir"], "not an existing directory"),
+    ],
+)
+def test_serve_mcp_refuses_options_that_cannot_work(
+    options: list[str], message: str
+) -> None:
+    """Refused before serving, as operator errors (#299)."""
+    pytest.importorskip("mcp")
+
+    completed = _run_cli("serve", "mcp", *options)
+
+    assert completed.returncode == 2
+    assert message in completed.stderr
+    assert completed.stdout == ""
+
+
 def test_unknown_set_key_is_a_did_you_mean_operator_error() -> None:
     silicon = structure("Si.cif")
 

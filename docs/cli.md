@@ -477,7 +477,7 @@ your MCP client to launch:
 goldilocks serve mcp
 ```
 
-The stdio tools are `capabilities`, `inspect_structure`, `magnetic_orderings`,
+The tools are `capabilities`, `inspect_structure`, `magnetic_orderings`,
 `explain` and `run`. Each tool's arguments are the fields of the matching HTTP
 request body, sent flat (`{"structure_content": "...", "task": "dos"}`), and
 each tool publishes the shape it returns as its output schema. `capabilities`
@@ -488,8 +488,43 @@ MCP's `explain` tool returns the same `records`, `warnings`, `blocking` and
 `layout` as `POST /explain`. A refused call returns a tool error whose content
 is the body HTTP sends, `{"error": {"kind", "message", "details"}}`: when `run`
 refuses, `kind` is `advice_incomplete` and `details.findings` holds explain's
-blocking findings. MCP's `run` tool never writes to the server's filesystem:
-it returns the published file list, every resolved decision (with its source)
-and their `layout`, and a warnings array the caller must relay verbatim. To
-obtain the files, use the CLI (`goldilocks run ... -o/--out`) or the HTTP
-transport's `/run` endpoint with `respond_with: "archive"`.
+blocking findings. `run` returns the file list, every resolved decision (with
+its source) and their `layout`, and a warnings array the caller must relay
+verbatim, but never file contents.
+
+### Publish bundles from MCP
+
+By default MCP's `run` writes nothing. Start the server with a publish root to
+let it write bundles:
+
+```bash
+goldilocks serve mcp --publish-root /absolute/path/to/runs
+```
+
+`run` then takes a `bundle_name` (letters, digits, `.`, `_` and `-`) and
+publishes the whole bundle, the same files as `goldilocks run -o`, as the new
+directory `<publish root>/<bundle_name>`. The result's `path` gives its
+location. A name already used is refused with `bundle_exists`; nothing is
+overwritten. Callers name a bundle, never a path. Give an absolute publish
+root: desktop clients often start servers in `/`.
+
+### Streamable HTTP
+
+For a client that connects over the network instead of launching the server:
+
+```bash
+goldilocks serve mcp --transport streamable-http
+```
+
+The endpoint is `http://127.0.0.1:8001/mcp`; `--host` and `--port` change the
+address. Like the HTTP API, it has no authentication:
+
+- keep the default local host, or put an authenticated reverse proxy in front;
+  on a local host the server only accepts requests whose `Host` header is
+  local, so the proxy must send one;
+- run one server process, since sessions live in memory;
+- give the proxy a long read timeout: a ranking keeps its call open for
+  minutes;
+- a publish root is on the server's machine, so its paths mean nothing to a
+  remote client; do not combine `--publish-root` with a non-local `--host`
+  unless an authenticated proxy guards the server.

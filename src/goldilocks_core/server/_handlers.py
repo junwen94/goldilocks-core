@@ -13,9 +13,10 @@ shape here as there: both look the task's service functions up in
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from goldilocks_core.assets.store import AssetStore
-from goldilocks_core.bundle import BundleInput, bundle_files
+from goldilocks_core.bundle import BundleInput, DirectoryOutput, bundle_files, publish
 from goldilocks_core.inputs.hpc import resolve_hpc_profile
 from goldilocks_core.inputs.structure import (
     InlineStructureSource,
@@ -31,6 +32,7 @@ from goldilocks_core.server.documents import (
     MagneticOrderingsRequestDocument,
     MagneticOrderingsResponse,
     MagneticOrderingsToolDocument,
+    PublishRequestDocument,
     RunResponse,
 )
 from goldilocks_core.server.ranking_jobs import RankingQueue, RankingStatus
@@ -170,3 +172,14 @@ def run(document: ComputeRequestDocument) -> tuple[RunResponse, BundleInput]:
         "layout": tiers.layout(),
     }
     return summary, bundle_input
+
+
+def publish_run(document: PublishRequestDocument, root: Path) -> RunResponse:
+    """``run``'s summary; given a ``bundle_name``, the bundle is also published
+    as the new directory ``root / bundle_name``, and its kind and path join
+    the summary. An existing name raises ``bundle.BundleExists``."""
+    summary, bundle_input = run(document)
+    if document.bundle_name is None:
+        return summary
+    publication = publish(bundle_input, DirectoryOutput(root / document.bundle_name))
+    return {**summary, "kind": "directory", "path": publication["path"]}

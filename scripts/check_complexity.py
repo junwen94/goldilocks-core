@@ -28,8 +28,12 @@ LIMITS = {
     # + _handlers.build_ranking_queue and submit_ranking for ranking jobs (#261)
     # + the request/response/error documents OpenAPI describes (#299)
     "server.http": (5, 24),
-    # + the response documents behind each tool's outputSchema (#299)
-    "server.mcp": (5, 18),
+    # + the response documents behind each tool's outputSchema, and the
+    #   publish root's resolution and request document (#299)
+    "server.mcp": (5, 20),
+    # + the typed response documents, and bundle publishing for an MCP
+    #   publish root (#299)
+    "server._handlers": (12, 28),
     # + analysis.geometry.GeometryFacts for the geometry_eff record (#210)
     "service._system": (14, 23),
     "service._dos": (16, 26),
