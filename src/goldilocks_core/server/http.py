@@ -68,8 +68,7 @@ except ImportError:
 __all__ = ["create_app", "serve"]
 
 _MISSING_HTTP_EXTRA = (
-    "The HTTP transport requires goldilocks-core[http]. "
-    "Install it with `uv sync --extra http`."
+    'The HTTP transport requires the http extra: install "goldilocks-core[http]".'
 )
 _STATIC_ROOT_ENV = "GOLDILOCKS_WORKBENCH_STATIC_ROOT"
 _STATUS_BY_CATEGORY = {"input": 422, "dependency": 424, "local": 500}

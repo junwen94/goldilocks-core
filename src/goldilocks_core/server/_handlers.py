@@ -109,7 +109,6 @@ def explain(document: ComputeRequestDocument) -> dict[str, Any]:
         code=document.code,
         hpc=hpc,
         overrides=overrides,
-        fetch_missing=document.fetch_missing,
     )
     report = phases.check(advice)
     tiers = advice.tiers()
@@ -138,7 +137,6 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
         code=document.code,
         hpc=hpc,
         overrides=overrides,
-        fetch_missing=document.fetch_missing,
     )
     report = phases.check(advice)
     # raises AdviceIncomplete if not ok

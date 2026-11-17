@@ -1174,6 +1174,30 @@ class TestRun:
 
         assert response.status_code == 422
 
+    @pytest.mark.parametrize("route", ["/explain", "/run"])
+    def test_a_request_cannot_install_assets(
+        self, client: TestClient, silicon_cif: str, route: str
+    ) -> None:
+        """Only the operator installs assets on a server (#299)."""
+        response = client.post(
+            route, json={"structure_content": silicon_cif, "fetch_missing": True}
+        )
+
+        assert response.status_code == 422
+        assert response.json()["error"]["kind"] == "invalid_request"
+
+    def test_a_structure_name_with_a_directory_is_a_422(
+        self, client: TestClient, silicon_cif: str
+    ) -> None:
+        """Refused by the request contract, not as a server error."""
+        response = client.post(
+            "/explain",
+            json={"structure_content": silicon_cif, "structure_name": "a/b.cif"},
+        )
+
+        assert response.status_code == 422
+        assert response.json()["error"]["kind"] == "invalid_request"
+
 
 def _finished(client: TestClient, job_id: str) -> dict:
     """The job's status once it is no longer queued or running."""

@@ -42,6 +42,7 @@ from goldilocks_core.advisors.q_sampling import QSamplingHumanInput, q_sampling
 from goldilocks_core.advisors.relax import RelaxOptions, VcRelaxOptions
 from goldilocks_core.advisors.vdw_method import VdwFacts
 from goldilocks_core.advisors.warning_catalogue import WARNING_CATALOGUE
+from goldilocks_core.capabilities import capabilities
 from goldilocks_core.checks import (
     FINDING_CATALOGUE,
     CheckReport,
@@ -301,6 +302,19 @@ other than 'isolated'."""
 def test_every_published_warning_reads_as_user_text(warning: Warning) -> None:
     """The catalogue ``/capabilities`` publishes."""
     assert _internal(warning.message) == []
+
+
+def test_every_capabilities_description_reads_as_user_text() -> None:
+    """Task, setting and fact descriptions reach agents through
+    ``capabilities`` and the CLI's ``settings``."""
+    published = capabilities()
+    entries = (*published["tasks"], *published["settings"], *published["facts"])
+    leaks = {
+        entry.get("id", entry.get("key")): _internal(entry["description"])
+        for entry in entries
+        if _internal(entry["description"])
+    }
+    assert leaks == {}
 
 
 _SUMMARY_LIMIT = 200

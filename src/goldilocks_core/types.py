@@ -7,7 +7,8 @@ JsonDict = dict[str, Any]
 
 PathLike = str | Path
 
-CodeName = str
+CodeName = Literal["quantum_espresso"]
+"""The codes core writes input for; capabilities' ``codes`` lists the same ids."""
 
 CalcTask = Literal[
     "scf_single_point",

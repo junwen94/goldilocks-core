@@ -164,7 +164,7 @@ from goldilocks_core.service import (
     ResourceOverrides,
     SystemOverrides,
 )
-from goldilocks_core.types import CalcTask
+from goldilocks_core.types import CalcTask, CodeName
 
 VOCABULARY_VERSION = "5"
 """Bump when the settings/facts vocabulary changes in a way other
@@ -180,7 +180,7 @@ SOURCES: tuple[Literal["human", "ml", "llm", "heuristic"], ...] = (
 """Order is priority, matching ``resolution.Source`` -- closed, four
 tiers, per design point (5)."""
 
-_CODE = "quantum_espresso"
+_CODE: CodeName = "quantum_espresso"
 _TASK = "scf_single_point"
 _DOS_TASK = "dos"
 _BAND_TASK = "band"
@@ -1336,7 +1336,7 @@ def _tasks() -> list[dict[str, object]]:
             "name": "Density of states",
             "description": (
                 "scf, then a denser nscf pass, then dos.x -- three steps "
-                "sharing one prefix/outdir (v2 epic 9, #9). Unless set, the "
+                "sharing one prefix/outdir. Unless set, the "
                 "nscf step takes k_distance 0.10 and tetrahedra_opt "
                 "occupations from aiida-quantumespresso's pdos.yaml protocol."
             ),
@@ -1364,7 +1364,7 @@ def _tasks() -> list[dict[str, object]]:
             "name": "Ionic relaxation",
             "description": (
                 "One pw.x run, calculation='relax': scf plus BFGS/damped/FIRE "
-                "ionic-position optimization (v2 epic 10, #10)."
+                "ionic-position optimization."
             ),
             "codes": [_CODE],
             "step_count": 1,
@@ -1375,7 +1375,7 @@ def _tasks() -> list[dict[str, object]]:
             "name": "Variable-cell relaxation",
             "description": (
                 "One pw.x run, calculation='vc-relax': scf plus BFGS ionic "
-                "and cell relaxation together (v2 epic 10, #10)."
+                "and cell relaxation together."
             ),
             "codes": [_CODE],
             "step_count": 1,

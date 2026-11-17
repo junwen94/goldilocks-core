@@ -84,6 +84,22 @@ class StructureInspection(TypedDict):
     schema_version: int
 
 
+def require_filename(name: str, *, field: str) -> str:
+    """Returns ``name`` if it is one file name: not blank, not ``.`` or
+    ``..``, with no path separator or control character. Raises
+    ``ValueError`` naming ``field`` otherwise."""
+    if (
+        not isinstance(name, str)
+        or not name.strip()
+        or name in {".", ".."}
+        or "/" in name
+        or "\\" in name
+        or any(unicodedata.category(character) == "Cc" for character in name)
+    ):
+        raise ValueError(f"{field} must be one file name, not a path")
+    return name
+
+
 @dataclass(frozen=True, slots=True)
 class InlineStructureSource:
     name: str
@@ -91,15 +107,7 @@ class InlineStructureSource:
     format: StructureFormat | None = None
 
     def __post_init__(self) -> None:
-        if (
-            not isinstance(self.name, str)
-            or not self.name.strip()
-            or self.name in {".", ".."}
-            or "/" in self.name
-            or "\\" in self.name
-            or any(unicodedata.category(character) == "Cc" for character in self.name)
-        ):
-            raise ValueError("InlineStructureSource.name must be one filename")
+        require_filename(self.name, field="InlineStructureSource.name")
         if not isinstance(self.content, str):
             raise ValueError("InlineStructureSource.content must be text")
         if self.format is not None and self.format not in ("cif", "poscar"):

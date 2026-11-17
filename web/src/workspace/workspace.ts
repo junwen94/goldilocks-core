@@ -4,6 +4,7 @@ import type {
   ArchiveDownload,
   CalcTask,
   Capabilities,
+  CodeName,
   ComputeRequest,
   CoreClient,
   ExplainResult,
@@ -81,11 +82,10 @@ const RANKING_POLL_MS = 2000;
  * another structure keeps the draft except the overrides that describe the
  * structure it replaces (`carryOverDraft`, #188). */
 export interface CalculationDraft {
-  readonly code: string;
+  readonly code: CodeName;
   readonly task: CalcTask;
   readonly hpc: string | null;
   readonly overrides: Readonly<Record<string, unknown>>;
-  readonly fetchMissing: boolean;
 }
 
 /** The open structure and draft revision an `/explain` or preview `/run`
@@ -169,7 +169,7 @@ export type WorkspaceAction =
   | { readonly type: "source.open"; readonly input: StructureInput }
   | {
       readonly type: "draft.patch";
-      readonly code?: string;
+      readonly code?: CodeName;
       readonly task?: CalcTask;
       readonly hpc?: string | null;
       /** Shallow-merged into the current overrides. A value of
@@ -249,17 +249,17 @@ const EMPTY_SNAPSHOT: WorkspaceSnapshot = {
 
 function defaultDraft(capabilities: Capabilities): CalculationDraft {
   return {
-    code: capabilities.codes[0]?.id ?? "quantum_espresso",
+    code:
+      (capabilities.codes[0]?.id as CodeName | undefined) ?? "quantum_espresso",
     task:
       (capabilities.tasks[0]?.id as CalcTask | undefined) ?? "scf_single_point",
     hpc: null,
     overrides: {},
-    fetchMissing: false,
   };
 }
 
-/** The draft for a newly opened structure: `previous` with the code, task,
- * HPC profile and `fetchMissing` kept, and only the overrides of settings
+/** The draft for a newly opened structure: `previous` with the code, task
+ * and HPC profile kept, and only the overrides of settings
  * that `capabilities` marks not `structure_specific` (#188). The other
  * overrides are cleared and listed in `cleared`, in draft order: those of
  * structure-specific settings, of facts (judgements about the structure by
@@ -310,7 +310,6 @@ function toComputeRequest(
     task: draft.task,
     hpc: draft.hpc,
     overrides,
-    fetch_missing: draft.fetchMissing,
   };
 }
 

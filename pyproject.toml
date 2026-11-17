@@ -45,8 +45,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-http = ["fastapi", "uvicorn"]
-mcp = ["mcp"]
+http = ["fastapi>=0.115", "uvicorn"]
+mcp = ["mcp>=2.3,<3"]
 # is_magnetic classification and mMACE-based magnetic-ordering ranking
 # (v2 #11, #87) need no extra: goldilocks-ml, a base dependency, brings
 # mace-torch[magnetic]. Both also need the backbone checkpoint named by

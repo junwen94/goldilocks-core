@@ -138,8 +138,9 @@ def resolve_pseudopotentials(
                 metadata=Unavailable(
                     reason=(
                         f"pseudopotential table {table.id!r} is not installed; "
-                        f"run 'goldilocks assets install {table.id}' or retry "
-                        "with fetch_missing"
+                        f"install it with 'goldilocks assets install {table.id}' "
+                        "on the machine running Goldilocks, or pass "
+                        "--fetch-missing to a goldilocks command"
                     )
                 ),
                 relativistic=relativistic_state,
