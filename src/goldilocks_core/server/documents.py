@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -126,6 +126,23 @@ class RunRequestDocument(ComputeRequestDocument):
     )
 
 
+class PublishRequestDocument(ComputeRequestDocument):
+    """A run request to an MCP server that publishes bundles in its publish
+    directory."""
+
+    bundle_name: str | None = Field(
+        None,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        max_length=100,
+        description=(
+            "Publish the whole bundle (inputs, submission script, "
+            "pseudopotentials, goldilocks.json) in this server's publish "
+            "directory under this new name: letters, digits, '.', '_' and '-'. "
+            "Omit it to get the summary only."
+        ),
+    )
+
+
 class MagneticOrderingsRequestDocument(InlineStructureDocument):
     """A structure whose candidate magnetic orderings to list."""
 
@@ -171,12 +188,15 @@ class ExplainResponse(TypedDict):
 
 class RunResponse(TypedDict):
     """The generated files' paths within the bundle, with the same records,
-    warnings and layout as explain."""
+    warnings and layout as explain; for a published bundle, also its kind and
+    absolute path on the server's machine."""
 
     files: list[str]
     records: dict[str, ResolvedField[Any]]
     warnings: list[RecordWarning]
     layout: RecordLayout
+    kind: NotRequired[Literal["directory"]]
+    path: NotRequired[str]
 
 
 CapabilitiesResponse = Capabilities

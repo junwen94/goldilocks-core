@@ -16,6 +16,7 @@ import asyncio
 import json
 import math
 from importlib.metadata import version as package_version
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -25,12 +26,14 @@ pytest.importorskip("mcp")
 from mcp import Client
 from support import INTERNAL_TEXT, strict_json
 
+from goldilocks_core.bundle import InvalidPublishRoot
 from goldilocks_core.server import _handlers
 from goldilocks_core.server.documents import (
     CapabilitiesRequestDocument,
     ComputeRequestDocument,
     InlineStructureDocument,
     MagneticOrderingsToolDocument,
+    PublishRequestDocument,
 )
 from goldilocks_core.server.mcp import create_server
 
@@ -473,6 +476,60 @@ class TestToolCalls:
         assert result.is_error is True
         assert result.structured_content == response.json()
         assert json.loads(result.content[0].text) == response.json()
+
+
+class TestPublishRoot:
+    """``goldilocks serve mcp --publish-root DIR`` (#299): run publishes the
+    bundle under a name the caller gives, never a path."""
+
+    def _publish(self, root: Path, silicon_cif: str, name: str) -> Any:
+        server = create_server(publish_root=root)
+        arguments = {"structure_content": silicon_cif, "bundle_name": name}
+        return asyncio.run(server.call_tool("run", arguments))
+
+    def test_run_publishes_the_whole_bundle_once_under_its_name(
+        self, silicon_fixture_table, silicon_cif: str, tmp_path: Path
+    ) -> None:
+        published = self._publish(tmp_path, silicon_cif, "si-scf")
+        again = self._publish(tmp_path, silicon_cif, "si-scf")
+
+        assert published.is_error is False
+        target = tmp_path.resolve() / "si-scf"
+        assert published.structured_content["path"] == str(target)
+        assert (target / ".complete").is_file()
+        assert (target / "scf.in").is_file()
+        assert again.structured_content["error"]["kind"] == "bundle_exists"
+
+    @pytest.mark.parametrize("name", ["../escape", "a/b", ".hidden", ""])
+    def test_a_bundle_name_is_one_new_name_not_a_path(
+        self, silicon_cif: str, tmp_path: Path, name: str
+    ) -> None:
+        result = self._publish(tmp_path, silicon_cif, name)
+
+        assert _validation_paths(result) == ["bundle_name"]
+        assert list(tmp_path.iterdir()) == []
+
+    def test_only_a_publishing_run_is_marked_as_writing(self, tmp_path: Path) -> None:
+        def run_tool(server: Any) -> Any:
+            tools = asyncio.run(server.list_tools())
+            return next(tool for tool in tools if tool.name == "run")
+
+        summary = run_tool(create_server())
+        publishing_server = create_server(publish_root=tmp_path)
+        publishing = run_tool(publishing_server)
+
+        assert summary.annotations.read_only_hint is True
+        assert "bundle_name" not in summary.input_schema["properties"]
+        assert publishing.annotations.read_only_hint is False
+        assert publishing.annotations.destructive_hint is False
+        assert publishing.input_schema == PublishRequestDocument.model_json_schema()
+        assert "bundle_name" in (publishing_server.instructions or "")
+
+    def test_a_missing_publish_root_stops_the_server_starting(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(InvalidPublishRoot):
+            create_server(publish_root=tmp_path / "missing")
 
 
 class TestPerStepOverrides:

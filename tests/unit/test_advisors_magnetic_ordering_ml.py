@@ -601,19 +601,19 @@ def test_serve_stops_on_a_bad_device_before_either_transport_starts(
 
     started = []
     monkeypatch.setattr(http, "serve", lambda **kwargs: started.append("http"))
-    monkeypatch.setattr(mcp, "serve", lambda: started.append("mcp"))
+    monkeypatch.setattr(mcp, "serve", lambda **kwargs: started.append("mcp"))
     monkeypatch.setenv(DEVICE_ENV, "gpu")
 
+    options = {"host": None, "port": None, "static_root": None}
+    mcp_options = {"mcp_transport": "stdio", "publish_root": None}
     for transport in ("http", "mcp"):
         with pytest.raises(ValueError, match=f"^{DEVICE_ENV}="):
             _serve.run(
-                argparse.Namespace(
-                    transport=transport, host="127.0.0.1", port=8000, static_root=None
-                )
+                argparse.Namespace(transport=transport, **options, **mcp_options)
             )
 
     monkeypatch.setenv(DEVICE_ENV, "cpu")
-    _serve.run(argparse.Namespace(transport="mcp"))
+    _serve.run(argparse.Namespace(transport="mcp", **options, **mcp_options))
     assert started == ["mcp"]
 
 

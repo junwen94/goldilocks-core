@@ -14,6 +14,15 @@ from __future__ import annotations
 
 import argparse
 
+from goldilocks_core.failures import ExpectedFailure
+
+
+class ServeOptionError(ExpectedFailure, ValueError):
+    """Options that do not go together for the chosen transport."""
+
+    kind = "invalid_serve_option"
+    category = "local"
+
 
 def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     serve = subparsers.add_parser("serve", help="Run an HTTP or MCP transport.")
@@ -30,7 +39,43 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
             "package was installed from a release build (#122)."
         ),
     )
-    transports.add_parser("mcp", help="Run the MCP stdio transport.")
+    mcp = transports.add_parser(
+        "mcp",
+        help="Run the MCP transport, over stdio or streamable HTTP.",
+        description=(
+            "Serve the MCP tools over stdio, for a client that launches this "
+            "command, or over streamable HTTP at http://HOST:PORT/mcp. "
+            "Streamable HTTP has no authentication: keep the default local "
+            "host, or put an authenticated proxy in front."
+        ),
+    )
+    mcp.add_argument(
+        "--transport",
+        dest="mcp_transport",
+        choices=("stdio", "streamable-http"),
+        default="stdio",
+        help="stdio (default) or streamable-http.",
+    )
+    mcp.add_argument(
+        "--host",
+        default=None,
+        help="Streamable HTTP only: the address to listen on (default 127.0.0.1).",
+    )
+    mcp.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Streamable HTTP only: the port to listen on (default 8001).",
+    )
+    mcp.add_argument(
+        "--publish-root",
+        default=None,
+        metavar="DIR",
+        help=(
+            "An existing directory where the run tool publishes bundles under "
+            "the names callers give. Without it, run writes nothing."
+        ),
+    )
 
 
 def run(args: argparse.Namespace) -> None:
@@ -45,6 +90,13 @@ def run(args: argparse.Namespace) -> None:
         serve(host=args.host, port=args.port, static_root=args.static_root)
         return
 
+    if args.mcp_transport == "stdio" and (args.host or args.port):
+        raise ServeOptionError("--host and --port apply to --transport streamable-http")
     from goldilocks_core.server.mcp import serve
 
-    serve()
+    serve(
+        transport=args.mcp_transport,
+        host=args.host or "127.0.0.1",
+        port=args.port or 8001,
+        publish_root=args.publish_root,
+    )

@@ -17,14 +17,17 @@ from goldilocks_core.analysis.is_metal import is_metal
 from goldilocks_core.assets.pseudopotentials.upf import PseudoMetadata
 from goldilocks_core.bundle import (
     ArchiveOutput,
+    BundleExists,
     BundleInput,
     BundleStep,
     DirectoryOutput,
+    InvalidPublishRoot,
     RequestIdentity,
     archive_bytes,
     bundle_files,
     is_complete,
     publish,
+    resolve_publish_root,
 )
 from goldilocks_core.resolution import (
     Blocked,
@@ -376,8 +379,22 @@ def test_publish_never_overwrites_an_existing_destination(
     destination = tmp_path / "target"
 
     publish(bundle_input, output_type(destination))
-    with pytest.raises(FileExistsError):
+    with pytest.raises(BundleExists, match="already exists") as excinfo:
         publish(bundle_input, output_type(destination))
+
+    assert excinfo.value.public_error()["kind"] == "bundle_exists"
+
+
+def test_a_publish_root_must_be_an_existing_directory(tmp_path, monkeypatch) -> None:
+    """Resolved once, absolute, so later publications ignore the cwd."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "runs").mkdir()
+    (tmp_path / "a-file").write_text("")
+
+    assert resolve_publish_root("runs") == (tmp_path / "runs").resolve()
+    for root in ("missing", "a-file"):
+        with pytest.raises(InvalidPublishRoot, match="not an existing directory"):
+            resolve_publish_root(root)
 
 
 @pytest.mark.parametrize("output_type", [DirectoryOutput, ArchiveOutput])
