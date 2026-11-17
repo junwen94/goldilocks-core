@@ -1,9 +1,9 @@
-"""Tests for goldilocks_core.server.mcp (v2 epic 8, #8).
+"""Tests for goldilocks_core.server.mcp.
 
 Deliberately thin on business-logic scenarios (test_handlers.py already
-covers those) -- this file is about what's MCP-specific: the strict
-tool schema, the real package version (issue #8's own evidence #3),
-and ToolError propagation.
+covers those) -- this file is about what's MCP-specific: the flat tool
+schemas and their output schemas and annotations, the real package version,
+progress, and the structured errors HTTP also sends (#299).
 
 No ``pytest-asyncio`` in this project's dependencies -- every test
 below runs its coroutine through a plain ``asyncio.run()`` instead of a
@@ -13,6 +13,7 @@ native ``async def`` test function.
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 from importlib.metadata import version as package_version
 from typing import Any
@@ -21,9 +22,16 @@ import pytest
 
 pytest.importorskip("mcp")
 
-from mcp.server.mcpserver.exceptions import ToolError
-from support import strict_json
+from mcp import Client
+from support import INTERNAL_TEXT, strict_json
 
+from goldilocks_core.server import _handlers
+from goldilocks_core.server.documents import (
+    CapabilitiesRequestDocument,
+    ComputeRequestDocument,
+    InlineStructureDocument,
+    MagneticOrderingsToolDocument,
+)
 from goldilocks_core.server.mcp import create_server
 
 _SILICON_GAMMA_INTERVAL = [round(2 * math.pi / 5.431, 8), None]
@@ -31,16 +39,24 @@ _SILICON_GAMMA_INTERVAL = [round(2 * math.pi / 5.431, 8), None]
 k-distance above |b| = 2 pi / a, with no upper bound."""
 
 
+def _call(tool: str, arguments: dict[str, Any]) -> Any:
+    return asyncio.run(create_server().call_tool(tool, arguments))
+
+
+def _validation_paths(result: Any) -> list[str]:
+    error = result.structured_content["error"]
+    assert error["kind"] == "invalid_request"
+    return [item["path"] for item in error["details"]["validation_errors"]]
+
+
 def _gamma_only_call(server: Any, tool: str, silicon_cif: str) -> Any:
     return asyncio.run(
         server.call_tool(
             tool,
             {
-                "document": {
-                    "structure_content": silicon_cif,
-                    "hpc": "scarf",
-                    "overrides": {"k_grid": [1, 1, 1]},
-                }
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "overrides": {"k_grid": [1, 1, 1]},
             },
         )
     )
@@ -85,6 +101,110 @@ class TestToolCatalogue:
             assert tool.input_schema["additionalProperties"] is False, tool.name
 
 
+_TOOL_DOCUMENTS = {
+    "capabilities": CapabilitiesRequestDocument,
+    "inspect_structure": InlineStructureDocument,
+    "magnetic_orderings": MagneticOrderingsToolDocument,
+    "explain": ComputeRequestDocument,
+    "run": ComputeRequestDocument,
+}
+_TOOL_OUTPUT_KEYS = {
+    "capabilities": {"codes", "tasks", "settings", "facts"},
+    "inspect_structure": {"source", "structure", "canonical_cif"},
+    "magnetic_orderings": {"ranked", "candidates", "warnings"},
+    "explain": {"records", "warnings", "blocking", "layout"},
+    "run": {"files", "records", "warnings", "layout"},
+}
+
+
+class TestToolContract:
+    """What a client's model reads before calling (#299)."""
+
+    def test_each_tool_takes_its_document_fields_as_arguments(self) -> None:
+        tools = asyncio.run(create_server().list_tools())
+
+        assert {tool.name: tool.input_schema for tool in tools} == {
+            name: document.model_json_schema()
+            for name, document in _TOOL_DOCUMENTS.items()
+        }
+
+    def test_each_tool_publishes_the_shape_it_returns(self) -> None:
+        tools = asyncio.run(create_server().list_tools())
+
+        for tool in tools:
+            properties = set(tool.output_schema["properties"])
+            assert _TOOL_OUTPUT_KEYS[tool.name] <= properties, tool.name
+
+    def test_every_tool_is_titled_read_only_and_closed_world(self) -> None:
+        tools = asyncio.run(create_server().list_tools())
+
+        for tool in tools:
+            assert tool.title, tool.name
+            assert tool.annotations.read_only_hint is True, tool.name
+            assert tool.annotations.open_world_hint is False, tool.name
+
+    def test_schema_text_reads_as_user_text(self) -> None:
+        server = create_server()
+        tools = asyncio.run(server.list_tools())
+        texts = [server.instructions or ""]
+        for tool in tools:
+            texts.append(tool.description or "")
+            texts.extend(_descriptions(tool.input_schema))
+            texts.extend(_descriptions(tool.output_schema))
+
+        assert [text for text in texts if INTERNAL_TEXT.search(text)] == []
+
+    def test_capabilities_narrows_to_one_task(self) -> None:
+        result = _call("capabilities", {"task": "dos"})
+
+        assert result.is_error is False
+        assert [task["id"] for task in result.structured_content["tasks"]] == ["dos"]
+        assert all("dos" in s["tasks"] for s in result.structured_content["settings"])
+
+    def test_a_ranking_reports_progress_to_the_client(self, monkeypatch) -> None:
+        def ranked(document: Any, on_progress: Any) -> dict[str, Any]:
+            on_progress(0, 2)
+            on_progress(2, 2)
+            return {"ranked": True, "candidates": [], "warnings": []}
+
+        monkeypatch.setattr(_handlers, "magnetic_orderings_tool", ranked)
+        seen: list[tuple[float, float | None]] = []
+
+        async def progress(done: float, total: float | None, message: Any) -> None:
+            seen.append((done, total))
+
+        async def call() -> Any:
+            async with Client(create_server()) as client:
+                return await client.call_tool(
+                    "magnetic_orderings",
+                    {
+                        "structure_content": "line one\nline two",
+                        "rank_with_mmace": True,
+                    },
+                    progress_callback=progress,
+                )
+
+        result = asyncio.run(call())
+
+        assert result.is_error is False
+        assert seen == [(0, 2), (2, 2)]
+
+
+def _descriptions(schema: Any) -> list[str]:
+    if isinstance(schema, dict):
+        own = (
+            [schema["description"]]
+            if isinstance(schema.get("description"), str)
+            else []
+        )
+        return own + [
+            text for value in schema.values() for text in _descriptions(value)
+        ]
+    if isinstance(schema, list):
+        return [text for value in schema for text in _descriptions(value)]
+    return []
+
+
 class TestToolCalls:
     def test_capabilities_tool_returns_the_real_contract(self) -> None:
         from goldilocks_core.capabilities import capabilities
@@ -100,9 +220,7 @@ class TestToolCalls:
         server = create_server()
 
         result = asyncio.run(
-            server.call_tool(
-                "inspect_structure", {"document": {"structure_content": silicon_cif}}
-            )
+            server.call_tool("inspect_structure", {"structure_content": silicon_cif})
         )
 
         assert result.is_error is False
@@ -114,9 +232,7 @@ class TestToolCalls:
         server = create_server()
 
         result = asyncio.run(
-            server.call_tool(
-                "magnetic_orderings", {"document": {"structure_content": silicon_cif}}
-            )
+            server.call_tool("magnetic_orderings", {"structure_content": silicon_cif})
         )
 
         assert result.is_error is False
@@ -127,9 +243,7 @@ class TestToolCalls:
         server = create_server()
 
         result = asyncio.run(
-            server.call_tool(
-                "run", {"document": {"structure_content": silicon_cif, "hpc": "scarf"}}
-            )
+            server.call_tool("run", {"structure_content": silicon_cif, "hpc": "scarf"})
         )
 
         assert result.is_error is False
@@ -150,11 +264,9 @@ class TestToolCalls:
             server.call_tool(
                 "run",
                 {
-                    "document": {
-                        "structure_content": silicon_cif,
-                        "hpc": "scarf",
-                        "task": "dos",
-                    }
+                    "structure_content": silicon_cif,
+                    "hpc": "scarf",
+                    "task": "dos",
                 },
             )
         )
@@ -177,11 +289,9 @@ class TestToolCalls:
             server.call_tool(
                 "run",
                 {
-                    "document": {
-                        "structure_content": silicon_cif,
-                        "hpc": "scarf",
-                        "task": "band",
-                    }
+                    "structure_content": silicon_cif,
+                    "hpc": "scarf",
+                    "task": "band",
                 },
             )
         )
@@ -213,8 +323,8 @@ class TestToolCalls:
             "overrides": {"is_metal": "non_metal"},
         }
 
-        explained = asyncio.run(server.call_tool("explain", {"document": document}))
-        result = asyncio.run(server.call_tool("run", {"document": document}))
+        explained = asyncio.run(server.call_tool("explain", document))
+        result = asyncio.run(server.call_tool("run", document))
 
         assert (explained.is_error, result.is_error) == (False, False)
         assert explained.structured_content["blocking"] == []
@@ -249,11 +359,9 @@ class TestToolCalls:
             server.call_tool(
                 "run",
                 {
-                    "document": {
-                        "structure_content": silicon_cif,
-                        "hpc": "scarf",
-                        "task": "relax",
-                    }
+                    "structure_content": silicon_cif,
+                    "hpc": "scarf",
+                    "task": "relax",
                 },
             )
         )
@@ -291,7 +399,7 @@ class TestToolCalls:
         """#165: no real assets, so the isolated asset root's uninstalled
         default table blocks both tools."""
         server = create_server()
-        arguments = {"document": {"structure_content": silicon_cif, "hpc": "scarf"}}
+        arguments = {"structure_content": silicon_cif, "hpc": "scarf"}
 
         explained = asyncio.run(server.call_tool("explain", arguments))
 
@@ -300,53 +408,71 @@ class TestToolCalls:
         assert len(blocking) == 1
         assert blocking[0]["code"] == "advice.blocked"
         assert "is not installed" in blocking[0]["message"]
-        with pytest.raises(ToolError) as excinfo:
-            asyncio.run(server.call_tool("run", arguments))
-        assert str(excinfo.value).endswith(
-            "cannot generate a runnable input: " + blocking[0]["message"]
-        )
+        refused = asyncio.run(server.call_tool("run", arguments))
+        assert refused.is_error is True
+        error = refused.structured_content["error"]
+        assert error["kind"] == "advice_incomplete"
+        assert error["details"]["findings"] == blocking
 
-    def test_unknown_top_level_argument_raises_tool_error(
-        self, silicon_cif: str
+    @pytest.mark.parametrize(
+        ("extra", "path"),
+        [({"bogus": 1}, "bogus"), ({"fetch_missing": True}, "fetch_missing")],
+    )
+    def test_an_unknown_argument_is_an_invalid_request(
+        self, silicon_cif: str, extra: dict[str, Any], path: str
     ) -> None:
-        server = create_server()
+        result = _call("run", {"structure_content": silicon_cif, **extra})
 
-        with pytest.raises(ToolError, match="Unknown run arguments"):
-            asyncio.run(
-                server.call_tool(
-                    "run", {"document": {"structure_content": silicon_cif}, "bogus": 1}
-                )
-            )
+        assert result.is_error is True
+        assert _validation_paths(result) == [path]
 
-    def test_unknown_setting_raises_tool_error(
+    def test_the_old_document_wrapper_is_refused(self, silicon_cif: str) -> None:
+        """Arguments are the document's own fields (#299)."""
+        result = _call("explain", {"document": {"structure_content": silicon_cif}})
+
+        assert result.is_error is True
+        assert _validation_paths(result) == ["structure_content", "document"]
+
+    def test_unknown_setting_is_a_structured_error(
         self, real_assets, silicon_cif: str
     ) -> None:
-        server = create_server()
+        result = _call(
+            "run",
+            {
+                "structure_content": silicon_cif,
+                "hpc": "scarf",
+                "overrides": {"ecutwf_ry": 30},
+            },
+        )
 
-        with pytest.raises(ToolError, match="did you mean: ecutwfc_ry"):
-            asyncio.run(
-                server.call_tool(
-                    "run",
-                    {
-                        "document": {
-                            "structure_content": silicon_cif,
-                            "hpc": "scarf",
-                            "overrides": {"ecutwf_ry": 30},
-                        }
-                    },
-                )
-            )
+        assert result.is_error is True
+        error = result.structured_content["error"]
+        assert error["kind"] == "invalid_setting"
+        assert "did you mean: ecutwfc_ry" in error["message"]
 
-    def test_path_shaped_structure_content_raises_tool_error(self) -> None:
-        server = create_server()
+    def test_path_shaped_structure_content_is_an_invalid_request(self) -> None:
+        result = _call("inspect_structure", {"structure_content": "/etc/passwd"})
 
-        with pytest.raises(ToolError, match="not a path"):
-            asyncio.run(
-                server.call_tool(
-                    "inspect_structure",
-                    {"document": {"structure_content": "/etc/passwd"}},
-                )
-            )
+        assert result.is_error is True
+        assert _validation_paths(result) == ["structure_content"]
+        assert "not a path" in json.dumps(result.structured_content)
+
+    def test_an_error_matches_the_http_body_for_the_same_request(
+        self, silicon_cif: str
+    ) -> None:
+        """One error contract on both transports (#299)."""
+        pytest.importorskip("fastapi")
+        from fastapi.testclient import TestClient
+
+        from goldilocks_core.server.http import create_app
+
+        request = {"structure_content": silicon_cif, "hpc": "no-such-machine"}
+        result = _call("explain", request)
+        response = TestClient(create_app()).post("/explain", json=request)
+
+        assert result.is_error is True
+        assert result.structured_content == response.json()
+        assert json.loads(result.content[0].text) == response.json()
 
 
 class TestPerStepOverrides:
@@ -362,7 +488,7 @@ class TestPerStepOverrides:
             "task": task,
             "overrides": overrides,
         }
-        return asyncio.run(create_server().call_tool(tool, {"document": document}))
+        return asyncio.run(create_server().call_tool(tool, document))
 
     def test_steps_nscf_k_grid_changes_only_the_nscf_mesh(
         self, silicon_cif: str
@@ -400,10 +526,10 @@ class TestPerStepOverrides:
     def test_press_on_an_scf_raises_tool_error(
         self, silicon_cif: str, tool: str
     ) -> None:
-        with pytest.raises(ToolError) as excinfo:
-            self._call(tool, silicon_cif, "scf_single_point", {"press": 10})
+        result = self._call(tool, silicon_cif, "scf_single_point", {"press": 10})
 
-        assert str(excinfo.value).endswith(
+        assert result.is_error is True
+        assert result.structured_content["error"]["message"].endswith(
             "'press' does not apply to task 'scf_single_point'; "
             "it applies to tasks vc-relax, vc-relax-phonon"
         )

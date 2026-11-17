@@ -297,7 +297,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field, replace
-from typing import Literal
+from typing import Literal, TypedDict
 
 from pymatgen.core import Structure
 
@@ -344,6 +344,18 @@ _CARTESIAN_CELL_DOFREE = frozenset(
 the lattice vectors (rule 6 of the module docstring)."""
 
 
+class FindingDocument(TypedDict):
+    """Why run refuses to generate: a stable code, the settings involved
+    (fields), a message and a one-line summary to show the user, and remedies,
+    override patches that each resolve it (null clears a key)."""
+
+    code: str
+    fields: list[str]
+    message: str
+    remedies: list[dict[str, object]]
+    summary: str
+
+
 @dataclass(frozen=True, slots=True)
 class Finding:
     """One reason the gate refuses a request (module docstring). ``code`` is
@@ -366,7 +378,7 @@ class Finding:
     remedies: tuple[dict[str, object], ...] = ()
     cause: str | None = field(default=None, compare=False)
 
-    def to_document(self) -> dict[str, object]:
+    def to_document(self) -> FindingDocument:
         """The JSON every transport returns for this finding."""
         return {
             "code": self.code,

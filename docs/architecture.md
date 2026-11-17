@@ -519,15 +519,16 @@ bodies, CLI `--json` output and `goldilocks.json` raise on a non-finite float
 instead of writing `Infinity`, `NaN` or a silent `null`. Records therefore
 never hold one: a bound or value with no finite number is `None` (for example
 the upper end of the Gamma-only mesh's `k_distance_interval`), and the
-override models reject `inf` and `nan`. MCP's text content, which pydantic
-serializes and would write as `Infinity`, depends on the same rule.
+override models reject `inf` and `nan`. MCP's text content is the same
+document as strict JSON (`json.dumps(..., allow_nan=False)`), so it depends on
+the same rule.
 
 There is no per-transport service object to own. `server/readiness.py`'s
 `AssetReadiness` caches asset-availability checks (used by `GET /ready`)
 across requests within one running process.
 
 Requests run concurrently on threads (FastAPI's threadpool, MCP's
-`asyncio.to_thread`), so no request may change process-wide state such as the
+`anyio.to_thread.run_sync`), so no request may change process-wide state such as the
 working directory. pymatgen's enumlib caller `chdir`s the whole process, so
 magnetic-ordering enumeration runs on one long-lived worker process
 (`worker_process.py`), one call at a time, in a private temporary directory

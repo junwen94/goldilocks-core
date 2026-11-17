@@ -122,16 +122,20 @@ def list_hpc_profiles() -> tuple[str, ...]:
 def resolve_hpc_profile(name: str | None, *, field: str = "hpc") -> HpcProfile:
     """The one policy for turning an optional caller-given profile name
     into a real ``HpcProfile``, shared by the CLI's ``--hpc`` and HTTP/
-    MCP's ``hpc`` request field (v2 epic 8, #8) -- an explicit name
-    always wins; with none given, exactly one installed profile is an
-    unambiguous default, and more than one requires the caller to
-    choose. ``field`` only changes the wording of that error, so a CLI
-    caller sees ``--hpc`` and a transport caller sees the request field
-    name it actually used.
+    MCP's ``hpc`` request field (v2 epic 8, #8) -- an explicit name,
+    which must be an installed profile's, always wins; with none given,
+    exactly one installed profile is an unambiguous default, and more than
+    one requires the caller to choose. ``field`` only changes the wording of
+    the errors, so a CLI caller sees ``--hpc`` and a transport caller sees
+    the request field name it actually used.
     """
-    if name is not None:
-        return load_hpc_profile(name)
     available = list_hpc_profiles()
+    if name is not None:
+        if name not in available:
+            raise InvalidHpcProfile(
+                f"unknown {field} profile {name!r}; profiles: {', '.join(available)}"
+            )
+        return load_hpc_profile(name)
     if len(available) == 1:
         return load_hpc_profile(available[0])
     if not available:

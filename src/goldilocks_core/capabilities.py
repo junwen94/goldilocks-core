@@ -257,26 +257,34 @@ def _approaches(ml_target: str | None) -> list[str]:
     return ["human", "heuristic"]
 
 
+# ``path`` is ``[]`` for the record's value itself, ``None`` where the record
+# holds no value of the setting (an input-only knob such as ``extra_bands``,
+# which only shifts ``nbnd``) (#187).
 class ResolvedIn(TypedDict):
-    """Where a setting's resolved value is published (#187): ``record`` is
-    the record of the decision the setting feeds, in ``explain``/``run``'s
-    ``records``; ``path`` the keys leading to the setting's own value inside
-    that record's ``value`` -- ``[]`` for the value itself, ``None`` where
-    the record holds no value of the setting (an input-only knob such as
-    ``extra_bands``, which only shifts ``nbnd``)."""
+    """Where explain and run publish a setting's resolved value: the record,
+    and the keys inside its value that lead to the setting (empty for the
+    value itself, null when the record holds none)."""
 
     record: str
     path: list[str] | None
 
 
-class Setting(TypedDict, total=False):
-    """One ``--set``-able key. ``tasks`` are the tasks it applies to;
-    ``steps``/``programs`` are the steps (purposes, the names of
-    ``steps.<purpose>.<key>``) and programs a ``per_step`` setting applies
-    to, ``None`` for a ``system`` or ``task`` setting, set once per task.
-    ``structure_specific`` is whether a value is a judgement about the
-    structure it was set for (#188, ``_SettingExtra``); ``resolved_in``
-    where its resolved value is published (#187)."""
+# A tuple setting's array bounds, under JSON Schema's own key names: the
+# functional form keeps those camelCase names string literals.
+_ArrayBounds = TypedDict(  # noqa: UP013
+    "_ArrayBounds",
+    {"items": str, "minItems": int | None, "maxItems": int | None},
+    total=False,
+)
+
+
+# ``steps``/``programs`` are None for a system or task setting, set once per
+# task; ``structure_specific`` comes from ``_SettingExtra`` (#188).
+class Setting(_ArrayBounds, total=False):
+    """A key that overrides can set: its type, unit, default and allowed
+    values; the codes, tasks, steps (the <step> of steps.<step>.<key>) and
+    programs it applies to; whether a value belongs to one structure; where
+    its resolved value is published; and the approaches that can decide it."""
 
     key: str
     group: str
@@ -298,6 +306,9 @@ class Setting(TypedDict, total=False):
 
 
 class Fact(TypedDict):
+    """A judgement about the structure (e.g. is_metal), the approaches that
+    can decide it, and whether overrides can set it."""
+
     key: str
     type: str
     values: list[str] | None
@@ -308,6 +319,10 @@ class Fact(TypedDict):
 
 
 class Capabilities(TypedDict):
+    """What this installation can prepare: codes, tasks, facts, settings,
+    pseudopotential tables, HPC profiles, ML models, the warnings catalogue
+    and the decision sources."""
+
     core_version: str
     vocabulary_version: str
     codes: list[dict[str, object]]
@@ -1470,20 +1485,22 @@ def _models() -> list[dict[str, object]]:
     ]
 
 
-def capabilities() -> Capabilities:
-    """Everything the design doc's S4.2 shape lists. Cacheable in-process
-    per that section's own note ("static... only `models` needs to query
-    ml") -- callers needing a fresh read after installing a new
-    pseudopotential table or HPC profile file should call this again
-    rather than expect a long-lived cache here; this function itself
-    does no caching."""
+def capabilities(task: CalcTask | None = None) -> Capabilities:
+    """Everything the design doc's S4.2 shape lists, read fresh on every call
+    (installing a table or an HPC profile shows on the next call). Given
+    ``task``, ``codes``, ``tasks`` and ``settings`` keep only the entries for
+    that task; the other keys are whole."""
     return {
         "core_version": package_version("goldilocks-core"),
         "vocabulary_version": VOCABULARY_VERSION,
-        "codes": _codes(),
-        "tasks": _tasks(),
+        "codes": [code for code in _codes() if task is None or task in code["tasks"]],
+        "tasks": [entry for entry in _tasks() if task is None or entry["id"] == task],
         "facts": _facts(),
-        "settings": _settings(),
+        "settings": [
+            setting
+            for setting in _settings()
+            if task is None or task in setting["tasks"]
+        ],
         "pseudopotential_tables": _pseudopotential_tables(),
         "hpc_profiles": _hpc_profiles(),
         "models": _models(),

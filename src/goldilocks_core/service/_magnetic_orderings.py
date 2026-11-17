@@ -39,7 +39,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, TypedDict
 
 from pymatgen.core import Structure
 
@@ -76,6 +76,28 @@ class MagneticOrderingCandidate:
         return {"magnetic_ordering": self.label}
 
 
+class CandidateDocument(TypedDict):
+    """One candidate magnetic ordering. Send its overrides with the same
+    structure to explain or run to prepare inputs for it."""
+
+    label: str
+    formula: str
+    natoms: int
+    energy_per_atom_ev: float | None
+    status: str | None
+    is_recommended: bool
+    overrides: dict[str, str]
+
+
+class MagneticOrderingsDocument(TypedDict):
+    """A structure's candidate magnetic orderings, ranked by mMACE energy
+    per atom when ranked is true."""
+
+    ranked: bool
+    candidates: list[CandidateDocument]
+    warnings: list[Warning]
+
+
 @dataclass(frozen=True, slots=True)
 class MagneticOrderingsReport:
     candidates: tuple[MagneticOrderingCandidate, ...]
@@ -83,7 +105,7 @@ class MagneticOrderingsReport:
     warnings: tuple[Warning, ...] = ()
 
 
-def candidate_to_json(candidate: MagneticOrderingCandidate) -> dict[str, Any]:
+def candidate_to_json(candidate: MagneticOrderingCandidate) -> CandidateDocument:
     """The JSON-safe projection of one candidate -- shared by
     ``cli/_magnetic_orderings.py`` and ``server/_handlers.py`` so both
     transports report the same shape.
@@ -106,7 +128,7 @@ def candidate_to_json(candidate: MagneticOrderingCandidate) -> dict[str, Any]:
     }
 
 
-def report_to_json(report: MagneticOrderingsReport) -> dict[str, Any]:
+def report_to_json(report: MagneticOrderingsReport) -> MagneticOrderingsDocument:
     return {
         "ranked": report.ranked,
         "candidates": [candidate_to_json(candidate) for candidate in report.candidates],

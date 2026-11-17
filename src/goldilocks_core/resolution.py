@@ -52,7 +52,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, get_args
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
@@ -73,25 +73,17 @@ _TIERS: tuple[Source, ...] = get_args(Source)
 WarningLevel = Literal["info", "warning", "error"]
 
 
+# Why structured (goldilocks-agent-design.md): an agent relays, filters and
+# groups warnings by these fields without parsing text. ``code`` is
+# ``"<record>.<slug>"`` (``"job.walltime_defaulted"``) and is never renamed
+# once shipped, so callers may match on it. ``category`` reuses the record
+# names of ``Advice.records()``/``capabilities()`` rather than a second
+# vocabulary. ``message`` is shown verbatim by the Workbench, the CLI and the
+# MCP tools, with per-occurrence values interpolated; it names settings by
+# key and value, never modules, internal literals or design ids (#151).
 class Warning(BaseModel):
-    """A machine-actionable warning an advisor's decision can carry
-    alongside its value (goldilocks-agent-design.md: the tool-response
-    ``warnings`` array must be structured, not prose-only, so an agent
-    can relay/filter/group it without parsing text).
-
-    ``code`` is a stable identifier (``"<record>.<slug>"``, e.g.
-    ``"job.walltime_defaulted"``) an advisor commits not to rename once
-    shipped -- callers may match on it. ``category`` is the same record
-    name used throughout ``Advice.records()``/``capabilities()``
-    (``"job"``, ``"hubbard"``, ...): reusing that existing, already
-    -stable vocabulary instead of inventing a second one a frontend
-    would need a separate legend for. ``message`` is the text a user
-    reads, verbatim (the Workbench, the CLI and the MCP tools show it
-    as is), with any per-occurrence values (an element, a number)
-    already interpolated in: it names settings by their keys and values,
-    with no module names, internal literals or design-document ids
-    (#151). The whole reason this array exists is so a caller never has
-    to parse the text to know what happened."""
+    """A warning about a decision: a stable code, a level, the record it
+    concerns (category) and a message to show the user as it is."""
 
     code: str
     level: WarningLevel
@@ -99,12 +91,12 @@ class Warning(BaseModel):
     message: str
 
 
+# As ``ml.predict`` received it from goldilocks-ml, whose ``ModelPrediction``
+# calls ``details`` and ``warnings`` opaque provenance to record verbatim
+# (#156). ``details`` and ``value`` have passed a strict JSON round trip.
 class ModelEvidence(BaseModel):
-    """What a registered ML model returned for the record it decided, as
-    ``ml.predict`` received it from goldilocks-ml (whose ``ModelPrediction``
-    says ``details`` and ``warnings`` are opaque provenance, to be recorded
-    verbatim, #156). ``details`` and ``value`` have passed a strict JSON round
-    trip, so they publish unchanged."""
+    """What the ML model that made a decision returned: its id, asset and
+    target contract, its own value, details and warnings."""
 
     model_id: str
     """goldilocks-ml's id for the model and its feature contract, e.g.
@@ -315,28 +307,18 @@ def blocked_by(state: Unavailable | Blocked) -> Blocked | str:
     return state.reason
 
 
+# The serializable projection of a ``FieldState[T]``: a contract field is
+# declared ``ResolvedField[SomeType]``, never ``FieldState[SomeType]``, so
+# ``model_dump()``, OpenAPI and capabilities see a plain pydantic shape. Build
+# one with ``from_state`` so the fields cannot disagree (a ``blocked`` status
+# with a value). ``records_document`` publishes it as
+# ``serialization.to_portable`` projects it. Every ``Provenance`` field has a
+# twin here under its own name; extra keys are forbidden, so a provenance
+# field without a twin fails projection instead of vanishing (#156).
 class ResolvedField[T](BaseModel):
-    """The serializable projection of a ``FieldState[T]``, for storage
-    on a settings/facts class -- this answers the design doc's
-    "day-one blocker" directly: a contract field's declared type is
-    ``ResolvedField[SomeType]``, never ``FieldState[SomeType]``.
-    Because this is an ordinary pydantic model, ``model_dump()``,
-    OpenAPI schema generation, and the ``capabilities`` auto-generation
-    all see a plain, already-supported shape -- never the poison
-    object. Build one with ``ResolvedField.from_state``, not the
-    constructor directly, so the fields below can't be filled in an
-    inconsistent combination (e.g. a ``status`` of ``"blocked"`` next
-    to a non-``None`` ``value``). ``from_state`` keeps the value as
-    resolved, a ``T``; ``records_document`` publishes the field as
-    ``serialization.to_portable`` projects it: plain JSON, without
-    host-local fields.
-
-    A resolved field carries every ``Provenance`` field under its own name
-    (``source``, ``source_note``, ``field_sources``, ``derived_from``,
-    ``model``, ``citations``). Extra keys are forbidden and ``from_state`` passes the
-    whole provenance, so a ``Provenance`` field without a twin here fails
-    projection rather than being dropped from every published record
-    (#156)."""
+    """One decision: its status; when resolved, its value and where it came
+    from (source, derived_from, model); when not, the reason it is
+    unavailable or the record that blocked it."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -385,9 +367,20 @@ def records_document(
     }
 
 
+class RecordWarning(TypedDict):
+    """A warning as explain and run publish it: the decision's warning plus
+    the record it came from."""
+
+    code: str
+    level: WarningLevel
+    category: str
+    message: str
+    record: str
+
+
 def collect_warnings(
     records: Mapping[str, FieldState[object]],
-) -> list[dict[str, object]]:
+) -> list[RecordWarning]:
     """Every ``Warning`` the resolved records carry, in record-name order,
     each as ``{"code", "level", "category", "message", "record"}``:
     ``record`` names the record it came from, which tells apart the same

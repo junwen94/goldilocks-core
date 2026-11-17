@@ -26,8 +26,10 @@ LIMITS = {
     "checks": (17, 31),
     "cli.core": (11, 16),  # + cli._output.command_stdout (#183)
     # + _handlers.build_ranking_queue and submit_ranking for ranking jobs (#261)
-    "server.http": (5, 14),
-    "server.mcp": (5, 10),
+    # + the request/response/error documents OpenAPI describes (#299)
+    "server.http": (5, 24),
+    # + the response documents behind each tool's outputSchema (#299)
+    "server.mcp": (5, 18),
     # + analysis.geometry.GeometryFacts for the geometry_eff record (#210)
     "service._system": (14, 23),
     "service._dos": (16, 26),

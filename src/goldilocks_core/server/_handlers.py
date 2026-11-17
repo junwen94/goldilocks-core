@@ -12,7 +12,7 @@ shape here as there: both look the task's service functions up in
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
 
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.bundle import BundleInput, bundle_files
@@ -25,11 +25,15 @@ from goldilocks_core.inputs.structure import (
 from goldilocks_core.resolution import records_document
 from goldilocks_core.server.documents import (
     ComputeRequestDocument,
+    ExplainResponse,
     InlineStructureDocument,
+    InspectResponse,
     MagneticOrderingsRequestDocument,
+    MagneticOrderingsResponse,
     MagneticOrderingsToolDocument,
+    RunResponse,
 )
-from goldilocks_core.server.ranking_jobs import RankingQueue
+from goldilocks_core.server.ranking_jobs import RankingQueue, RankingStatus
 from goldilocks_core.server.readiness import AssetReadiness
 from goldilocks_core.service import (
     TASK_PHASES,
@@ -59,21 +63,27 @@ def _structure_source(document: InlineStructureDocument) -> InlineStructureSourc
     )
 
 
-def inspect(document: InlineStructureDocument) -> dict[str, Any]:
+def inspect(document: InlineStructureDocument) -> InspectResponse:
     return normalize_structure(_structure_source(document)).inspection
 
 
-def magnetic_orderings(document: MagneticOrderingsRequestDocument) -> dict[str, Any]:
+def magnetic_orderings(
+    document: MagneticOrderingsRequestDocument,
+) -> MagneticOrderingsResponse:
     """The candidate orderings, unranked."""
     structure = normalize_structure(_structure_source(document)).structure
     return report_to_json(list_magnetic_orderings(structure))
 
 
-def magnetic_orderings_tool(document: MagneticOrderingsToolDocument) -> dict[str, Any]:
-    """The candidate orderings, ranked in this call if the tool was asked to."""
+def magnetic_orderings_tool(
+    document: MagneticOrderingsToolDocument,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> MagneticOrderingsResponse:
+    """The candidate orderings, ranked in this call if the tool was asked to;
+    ``on_progress(done, total)`` reports the relaxations of a ranking."""
     structure = normalize_structure(_structure_source(document)).structure
     report = list_magnetic_orderings(
-        structure, rank_with_mmace=document.rank_with_mmace
+        structure, rank_with_mmace=document.rank_with_mmace, on_progress=on_progress
     )
     return report_to_json(report)
 
@@ -85,7 +95,7 @@ def build_ranking_queue() -> RankingQueue:
 
 def submit_ranking(
     queue: RankingQueue, document: MagneticOrderingsRequestDocument
-) -> dict[str, Any]:
+) -> RankingStatus:
     """Queue a ranking of the document's structure; returns the job's
     status. A structure that cannot be listed is refused here, before it
     is queued."""
@@ -94,7 +104,7 @@ def submit_ranking(
     return queue.submit(structure)
 
 
-def explain(document: ComputeRequestDocument) -> dict[str, Any]:
+def explain(document: ComputeRequestDocument) -> ExplainResponse:
     """Every decision plus the verdict ``run`` reaches before generating
     (#165): ``blocking`` holds the document of each finding the task's
     check refuses generation for (#151), one per root cause in first-seen
@@ -120,7 +130,7 @@ def explain(document: ComputeRequestDocument) -> dict[str, Any]:
     }
 
 
-def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
+def run(document: ComputeRequestDocument) -> tuple[RunResponse, BundleInput]:
     """Returns both the JSON-ready summary and the ``BundleInput`` it
     was built from -- HTTP's archive response mode reuses the latter to
     build the zip without recomputing the pipeline; MCP only ever needs
@@ -153,7 +163,7 @@ def run(document: ComputeRequestDocument) -> tuple[dict[str, Any], BundleInput]:
         source=normalized.source,
     )
     tiers = advice.tiers()
-    summary = {
+    summary: RunResponse = {
         "files": [file["path"] for file in bundle_files(bundle_input)],
         "records": records_document(tiers.records()),
         "warnings": advice.warnings(),
