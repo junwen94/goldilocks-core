@@ -4,6 +4,7 @@ import {
   FileButton,
   Group,
   Loader,
+  NativeSelect,
   Paper,
   Stack,
   Text,
@@ -13,16 +14,36 @@ import { Upload } from "lucide-react";
 import type { StructureInput, StructureInspection } from "../api/coreClient";
 import { formatSiteCount } from "../viewer/siteCount";
 
+/** A structure an embedding host offers next to Browse files: the file
+ * name and text it would have as an opened file. `format` defaults to the
+ * one inferred from `name` (cif for a `.cif` name, else poscar). */
+export interface StructureChoice {
+  readonly name: string;
+  readonly content: string;
+  readonly format?: "cif" | "poscar";
+}
+
+/** The host's structures for the Structure card, listed under `label`
+ * (e.g. "From this chat"). */
+export interface StructureChoices {
+  readonly label: string;
+  readonly items: readonly StructureChoice[];
+}
+
+const MAX_STRUCTURE_BYTES = 5 * 1024 * 1024;
+
 export function StructureSourceControls({
   source,
   inspection,
   inspecting,
   onOpen,
+  choices,
 }: {
   readonly source: StructureInput | null;
   readonly inspection: StructureInspection | null;
   readonly inspecting: boolean;
   readonly onOpen: (input: StructureInput) => Promise<void>;
+  readonly choices?: StructureChoices | undefined;
 }) {
   const resetFileInput = useRef<(() => void) | null>(null);
   const selectionEpoch = useRef(0);
@@ -32,12 +53,9 @@ export function StructureSourceControls({
   async function openFile(file: File): Promise<void> {
     const selection = ++selectionEpoch.current;
     setReadError(null);
-    if (file.size > 5 * 1024 * 1024) {
-      setReadError("Structure files must be 5 MB or smaller.");
-      return;
-    }
-    if (file.size === 0) {
-      setReadError("The selected structure file is empty.");
+    const sizeError = structureSizeError(file.size);
+    if (sizeError !== null) {
+      setReadError(sizeError);
       return;
     }
     try {
@@ -65,6 +83,22 @@ export function StructureSourceControls({
     setDragging(false);
     const file = event.dataTransfer.files[0];
     if (file !== undefined) void openFile(file);
+  }
+
+  /** Opens a host structure as an opened file is opened: the same checks,
+   * the same `onOpen`, and it supersedes a file still being read. */
+  function openChoice(choice: StructureChoice): void {
+    ++selectionEpoch.current;
+    const sizeError = structureSizeError(
+      new TextEncoder().encode(choice.content).length,
+    );
+    setReadError(sizeError);
+    if (sizeError !== null) return;
+    void onOpen({
+      structure_content: choice.content,
+      structure_name: choice.name,
+      structure_format: choice.format ?? structureFormat(choice.name),
+    });
   }
 
   let sourceHelp = "CIF or POSCAR · 5 MB maximum file size";
@@ -111,8 +145,34 @@ export function StructureSourceControls({
     </FileButton>
   );
 
+  const items = choices?.items ?? [];
+  const chosen = items.findIndex(
+    (item) =>
+      source !== null &&
+      item.name === source.structure_name &&
+      item.content === source.structure_content,
+  );
+
   return (
     <>
+      {choices === undefined || items.length === 0 ? null : (
+        <NativeSelect
+          label={choices.label}
+          disabled={inspecting}
+          value={chosen === -1 ? "" : String(chosen)}
+          data={[
+            { value: "", label: "Choose a structure", disabled: true },
+            ...items.map((item, index) => ({
+              value: String(index),
+              label: item.name,
+            })),
+          ]}
+          onChange={(event) => {
+            const item = items[Number(event.currentTarget.value)];
+            if (item !== undefined) openChoice(item);
+          }}
+        />
+      )}
       {/* Once a structure is loaded the viewer needs most of this card's
        * height, so the dropzone collapses from the spacious first-run
        * empty state into a single compact status row (same drop target,
@@ -198,4 +258,13 @@ function StructureSummary({
 
 function structureFormat(name: string): "cif" | "poscar" {
   return name.toLowerCase().endsWith(".cif") ? "cif" : "poscar";
+}
+
+/** Why a structure of `bytes` bytes cannot be opened, or null if it can. */
+function structureSizeError(bytes: number): string | null {
+  if (bytes > MAX_STRUCTURE_BYTES) {
+    return "Structure files must be 5 MB or smaller.";
+  }
+  if (bytes === 0) return "The selected structure file is empty.";
+  return null;
 }
