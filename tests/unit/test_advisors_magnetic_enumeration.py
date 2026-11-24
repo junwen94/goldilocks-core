@@ -1,108 +1,159 @@
-"""The enumeration worker reads enumlib's output in enumlib's numbering, and
-fails loudly when pymatgen-core stops reading it where the worker can set
-that order (#170).
-
-pymatgen's ``MagneticStructureEnumerator`` is replaced by stand-ins that
-read ``vasp.<n>`` files the way pymatgen-core does today (through
-``enumlib_caller.glob``) or the way a later pymatgen-core might (some other
-way), so these tests need no enumlib; the real enumerations are in
-``tests/integration/test_enumeration_isolation.py``.
-"""
+"""The collinear orderings spinforge's spin-symmetry-adapted structures give
+(#308): one per class of symmetry-related patterns in its primitive magnetic
+cell, ferromagnetic ones dropped, split by whether the moments cancel by
+symmetry. Real enumerations, run through the worker process."""
 
 from __future__ import annotations
 
-import glob
-from pathlib import Path
-from typing import Any
-
 import pytest
-from pymatgen.analysis.magnetism import analyzer
-from pymatgen.command_line import enumlib_caller
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.advisors.magnetic_enumeration import (
-    _enumerate_in_private_directory,
-)
-
-_NIO = Structure.from_spacegroup(
-    "Fm-3m", Lattice.cubic(4.17), ["Ni", "O"], [[0, 0, 0], [0.5, 0.5, 0.5]]
-)
+from goldilocks_core.advisors.magnetic_enumeration import enumerate_orderings
+from goldilocks_core.analysis.symmetry import SYMPREC
 
 
-_READ: list[list[str]] = []
-"""The file lists the stand-ins read, in their order."""
+def _rock_salt_nio() -> Structure:
+    return Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(4.17), ["Ni", "O"], [[0, 0, 0], [0.5, 0.5, 0.5]]
+    ).get_primitive_structure()
 
 
-class _ReadingThroughEnumlibCaller:
-    """pymatgen-core as it is: writes enumlib's output files, then reads
-    them in the order ``enumlib_caller.glob("vasp.*")`` returns."""
-
-    def __init__(self, structure: Structure, **_kwargs: Any) -> None:
-        for number in (10, 2, 1):
-            Path(f"vasp.{number}").write_text("")
-        _READ.append(enumlib_caller.glob("vasp.*"))
-        self.ordered_structures = [structure, structure]
-        self.ordered_structure_origins = ["fm", "afm"]
+def _corundum_cr2o3() -> Structure:
+    return Structure.from_spacegroup(
+        "R-3c",
+        Lattice.hexagonal(4.96, 13.6),
+        ["Cr", "O"],
+        [[0, 0, 0.3475], [0.3056, 0, 0.25]],
+    ).get_primitive_structure()
 
 
-class _ReadingAroundEnumlibCaller:
-    """A pymatgen-core that reads the same files without
-    ``enumlib_caller.glob``."""
-
-    def __init__(self, structure: Structure, **_kwargs: Any) -> None:
-        for number in (10, 2, 1):
-            Path(f"vasp.{number}").write_text("")
-        _READ.append(glob.glob("vasp.*"))
-        self.ordered_structures = [structure, structure]
-        self.ordered_structure_origins = ["fm", "afm"]
-
-
-def test_reads_enumlib_output_in_enumlib_numbering(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``vasp.10`` comes after ``vasp.2``, whatever order the directory
-    lists them in, and pymatgen's own ``glob`` is back afterwards."""
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        analyzer, "MagneticStructureEnumerator", _ReadingThroughEnumlibCaller
+def _rutile_mnf2() -> Structure:
+    return Structure.from_spacegroup(
+        "P4_2/mnm",
+        Lattice.tetragonal(4.87, 3.31),
+        ["Mn", "F"],
+        [[0, 0, 0], [0.305, 0.305, 0]],
     )
 
-    _READ.clear()
-    orderings = _enumerate_in_private_directory(_NIO, {})
 
-    assert _READ == [["vasp.1", "vasp.2", "vasp.10"]]
-    assert [origin for _cell, origin in orderings] == ["fm", "afm"]
-    assert enumlib_caller.glob is glob.glob
+def _spinel_fe3o4() -> Structure:
+    return Structure.from_spacegroup(
+        "Fd-3m",
+        Lattice.cubic(8.396),
+        ["Fe", "Fe", "O"],
+        [[0, 0, 0], [0.625, 0.625, 0.625], [0.380, 0.380, 0.380]],
+    ).get_primitive_structure()
 
 
-def test_an_ordering_read_around_enumlib_caller_glob_raises(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A pymatgen-core that reads enumlib's output some other way would
-    leave the candidates in the filesystem's order again: the enumeration
-    fails instead of listing host-dependent cells."""
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        analyzer, "MagneticStructureEnumerator", _ReadingAroundEnumlibCaller
+def _spins(structure: Structure, element: str) -> list[float]:
+    return sorted(
+        site.specie.spin for site in structure if site.specie.symbol == element
     )
 
-    with pytest.raises(RuntimeError, match=r"enumlib_caller\.glob"):
-        _enumerate_in_private_directory(_NIO, {})
-    assert enumlib_caller.glob is glob.glob
+
+def test_nio_lists_its_two_four_site_orderings_once_each() -> None:
+    """A 2-site rock-salt cell orders only in a doubled cell. The doubled-cell
+    structures repeat each pattern under several spin space groups and spin
+    signs; reduced and deduplicated, two remain: AFM-II along [111] and the
+    layered one along [001], both compensated."""
+    orderings = enumerate_orderings(_rock_salt_nio(), ("Ni",), SYMPREC)
+
+    assert [(len(o.structure), o.kind) for o in orderings] == [
+        (4, "afm"),
+        (4, "afm"),
+    ]
+    assert {o.structure.get_space_group_info()[0] for o in orderings} == {
+        "R-3m",
+        "P4/mmm",
+    }
+    for ordering in orderings:
+        assert _spins(ordering.structure, "Ni") == [-1.0, 1.0]
+        assert all(
+            getattr(site.specie, "spin", None) is None
+            for site in ordering.structure
+            if site.specie.symbol == "O"
+        )
 
 
-def test_a_ferromagnetic_only_result_needs_no_read(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_corundum_lists_the_three_compensated_patterns_of_its_cell() -> None:
+    """The four Cr of corundum's primitive cell order three ways with two up
+    and two down (Cr2O3's experimental +-+- among them); every listed
+    ordering cancels by symmetry."""
+    orderings = enumerate_orderings(_corundum_cr2o3(), ("Cr",), SYMPREC)
+
+    in_cell = [o for o in orderings if len(o.structure) == 10]
+    assert len(in_cell) == 3
+    assert {o.kind for o in orderings} == {"afm"}
+    assert all(len(o.structure) in (10, 20) for o in orderings)
+
+
+def test_rutile_mnf2_lists_its_experimental_order_in_its_own_cell() -> None:
+    """MnF2's corner and body-centre Mn antiparallel is the one ordering of
+    its 6-site cell; the others need the doubled cell."""
+    orderings = enumerate_orderings(_rutile_mnf2(), ("Mn",), SYMPREC)
+
+    [own] = [o for o in orderings if len(o.structure) == 6]
+    assert own.kind == "afm"
+    assert _spins(own.structure, "Mn") == [-1.0, 1.0]
+
+
+def test_spinel_orders_only_ferrimagnetically() -> None:
+    """No operation maps a tetrahedral Fe of spinel onto an octahedral one,
+    so no ordering of its six Fe cancels: all are ferrimagnetic, none is
+    ferromagnetic."""
+    orderings = enumerate_orderings(_spinel_fe3o4(), ("Fe",), SYMPREC)
+
+    assert orderings
+    assert {o.kind for o in orderings} == {"fim"}
+    for ordering in orderings:
+        assert set(_spins(ordering.structure, "Fe")) == {-1.0, 1.0}
+
+
+def test_two_magnetic_elements_antiparallel_are_ferrimagnetic() -> None:
+    """Rock-salt-like FeCoO2 with Fe and Co each on one sublattice: Fe up and
+    Co down has equal spin counts but nothing maps Fe onto Co, so it is
+    listed as ferrimagnetic, not antiferromagnetic."""
+    structure = Structure(
+        Lattice.cubic(4.2),
+        ["Fe", "Fe", "Co", "Co", "O", "O", "O", "O"],
+        [
+            [0, 0, 0],
+            [0.5, 0.5, 0],
+            [0.5, 0, 0.5],
+            [0, 0.5, 0.5],
+            [0.5, 0, 0],
+            [0, 0.5, 0],
+            [0, 0, 0.5],
+            [0.5, 0.5, 0.5],
+        ],
+    )
+
+    orderings = enumerate_orderings(structure, ("Co", "Fe"), SYMPREC)
+
+    sublattice_antiparallel = [
+        o
+        for o in orderings
+        if len(set(_spins(o.structure, "Fe"))) == 1
+        and len(set(_spins(o.structure, "Co"))) == 1
+    ]
+    assert sublattice_antiparallel
+    assert {o.kind for o in sublattice_antiparallel} == {"fim"}
+
+
+@pytest.mark.parametrize("element", ["Ni", "O"])
+def test_only_the_listed_elements_carry_moments(
+    element: str,
 ) -> None:
-    """Without an antiferromagnetic ordering, enumlib's output was never
-    used, so nothing had to be read through ``enumlib_caller.glob``."""
+    """Only the listed elements carry moments: ordering O instead of Ni gives
+    O moments and no Ni ones."""
+    orderings = enumerate_orderings(_rock_salt_nio(), (element,), SYMPREC)
 
-    class _FerromagneticOnly:
-        def __init__(self, structure: Structure, **_kwargs: Any) -> None:
-            self.ordered_structures = [structure]
-            self.ordered_structure_origins = ["fm"]
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(analyzer, "MagneticStructureEnumerator", _FerromagneticOnly)
-
-    assert _enumerate_in_private_directory(_NIO, {}) == ((_NIO, "fm"),)
+    other = "O" if element == "Ni" else "Ni"
+    assert orderings
+    for ordering in orderings:
+        assert _spins(ordering.structure, element) == [-1.0, 1.0]
+        assert all(
+            getattr(site.specie, "spin", None) is None
+            for site in ordering.structure
+            if site.specie.symbol == other
+        )

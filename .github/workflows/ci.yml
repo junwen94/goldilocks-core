@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install uv, the dependencies and enumlib
+      - name: Install uv and the dependencies
         uses: ./.github/actions/core-setup
 
       - name: Ruff check
@@ -54,8 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # enumlib too: the real-enumlib tests in tests/unit run under each mutant.
-      - name: Install uv, the dependencies and enumlib
+      - name: Install uv and the dependencies
         uses: ./.github/actions/core-setup
 
       - name: Mutation testing

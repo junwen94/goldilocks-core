@@ -433,17 +433,20 @@ _SETTING_META: dict[str, _SettingExtra] = {
         "structure_specific": True,
         "path": ("ordering", "applied"),
         "description": (
-            "Opt in to an antiferromagnetic ordering instead of the "
-            "ferromagnetic default ('fm' or unset), over the sites that carry "
-            "a local d or f moment: 'afm' applies the first candidate the "
-            "magnetic-orderings listing gives (the smallest cell, then the "
-            "most symmetric), 'afm-<n>' the listed candidate of that label; "
-            "records.magnetic names the criterion and the other candidates of "
-            "that size. A slab, wire or boxed molecule gets only candidates "
-            "that keep its vacuum vectors. Any value, 'fm' included, turns spin "
-            "polarization on unless spin_polarized is false, which ignores it "
-            "with a warning. 'afm' degrades to ferromagnetic with a warning if "
-            "there is no candidate; an 'afm-<n>' that is not listed is refused."
+            "Opt in to an antiferromagnetic or ferrimagnetic ordering instead "
+            "of the ferromagnetic default ('fm' or unset), over the sites that "
+            "carry a local d or f moment: 'afm' applies the first "
+            "antiferromagnetic candidate the magnetic-orderings listing gives "
+            "(the smallest cell, then the most symmetric), 'afm-<n>' or "
+            "'fim-<n>' the listed antiferromagnetic or ferrimagnetic candidate "
+            "of that label; records.magnetic names the criterion and the other "
+            "candidates of that kind and size. Candidates have at most twice "
+            "the primitive cell. A slab, wire or boxed molecule gets only "
+            "candidates that keep its vacuum vectors. Any value, 'fm' included, "
+            "turns spin polarization on unless spin_polarized is false, which "
+            "ignores it with a warning. 'afm' degrades to ferromagnetic with a "
+            "warning if there is no antiferromagnetic candidate; a label that "
+            "is not listed is refused."
         ),
     },
     "moment_direction": {

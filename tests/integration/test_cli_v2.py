@@ -26,7 +26,6 @@ from support import (
     write_registry,
 )
 
-from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
 from goldilocks_core.bundle import bundle_files
@@ -139,10 +138,9 @@ def test_a_disordered_structure_is_refused_but_still_inspected(tmp_path) -> None
 
 
 def test_magnetic_orderings_lists_the_fm_identity_by_default() -> None:
-    """The fm candidate is always listed first, regardless of whatever
-    else enumlib (if present on this machine's real PATH -- this
-    subprocess inherits it, unlike an in-process monkeypatch) finds for
-    bcc Fe -- #87's listing never picks a winner on its own."""
+    """The fm candidate is always listed first, whatever else the
+    enumeration finds for bcc Fe -- #87's listing never picks a winner on
+    its own."""
     iron = structure("Fe_bcc.cif")
 
     completed = _run_cli("magnetic-orderings", str(iron))
@@ -183,13 +181,10 @@ def test_magnetic_orderings_rank_degrades_without_a_configured_checkpoint(
     assert completed.returncode == 0, completed.stderr
     document = json.loads(completed.stdout)
     assert document["ranked"] is False
-    # Not an exact warnings count: this subprocess inherits the real
-    # machine's PATH, so whether AFM enumeration also warns
-    # (magnetic.afm_ordering_unavailable) depends on whether enum.x
-    # happens to be installed here -- only ranking degradation is this
-    # test's own concern.
+    # bcc Fe has an antiferromagnetic ordering, so ranking is the one
+    # degradation reported (#308: enumeration needs no external program).
     codes = {warning["code"] for warning in document["warnings"]}
-    assert "magnetic.ordering_ranking_unavailable" in codes
+    assert codes == {"magnetic.ordering_ranking_unavailable"}
 
 
 def test_settings_json_matches_the_capabilities_contract() -> None:
@@ -1014,10 +1009,6 @@ class TestRunAndExplainAgainstRealAssets:
             for warning in manifest["warnings"]
         )
 
-    @pytest.mark.skipif(
-        not enumlib_installed(),
-        reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
-    )
     def test_run_afm_ordering_publishes_without_crashing(
         self, real_assets: None, tmp_path: Path
     ) -> None:

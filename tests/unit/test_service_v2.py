@@ -23,7 +23,7 @@ from support import (
 
 from goldilocks_core.advisors import magnetic_config as magnetic_config_module
 from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
-from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
+from goldilocks_core.advisors.magnetic_enumeration import EnumeratedOrdering
 from goldilocks_core.advisors.parallelisation import (
     diag_grid_side,
 )
@@ -856,10 +856,6 @@ def test_forced_spin_polarization_survives_generation_on_a_labeled_structure(
     assert "starting_magnetization(2)" not in content
 
 
-@pytest.mark.skipif(
-    not enumlib_installed(),
-    reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
-)
 class TestAfmRelabeling:
     """v2 epic 9 (#9)'s AFM acceptance scenario, through the real
     ``advise()`` orchestrator -- not just ``magnetic_cell()`` in
@@ -1172,17 +1168,16 @@ def _afm_rock_salt(structure: Structure) -> Structure:
 
 @pytest.fixture
 def counted_enumerations(monkeypatch) -> list[Structure]:
-    """Every structure handed to enumlib's enumeration, which returns one
+    """Every structure handed to the enumeration, which returns one
     4-site antiferromagnetic candidate -- stubbed on the module that calls
     it, because the real enumerator runs in a worker process a
     monkeypatch cannot reach."""
     calls: list[Structure] = []
 
-    def enumerate_orderings(structure: Structure, **_kwargs: object):
+    def enumerate_orderings(structure: Structure, *_args: object):
         calls.append(structure)
-        return ((_afm_rock_salt(structure), "afm"),)
+        return (EnumeratedOrdering(_afm_rock_salt(structure), "afm"),)
 
-    monkeypatch.setattr(magnetic_config_module, "enumlib_installed", lambda: True)
     monkeypatch.setattr(
         magnetic_config_module, "enumerate_orderings", enumerate_orderings
     )
@@ -1204,7 +1199,7 @@ def test_an_afm_task_enumerates_its_orderings_once(
 ) -> None:
     """#184 (part A), #128: the simulated cell is resolved once per task.
     The two-pass magnetic decision used to enumerate before pseudopotential
-    selection and again after it, about a second of enumlib each."""
+    selection and again after it, about a second of enumeration each."""
     advise_task(
         _rock_salt_nio(),
         hpc=hpc,

@@ -392,7 +392,8 @@ operations, so a 10x10x10 mesh has 126 irreducible k-points rather than
 
 Set `magnetic_ordering` to `afm` to opt in to an antiferromagnetic
 ordering instead of the ferromagnetic default, or to the label of one
-candidate `goldilocks magnetic-orderings` lists (`afm-3`). Like
+candidate `goldilocks magnetic-orderings` lists (`afm-3`, or a ferrimagnetic
+`fim-1`). Like
 `tot_magnetization` and
 `starting_magnetization`, any `magnetic_ordering`, `fm` included, asks for a
 spin-polarized run, so it turns spin
@@ -416,11 +417,12 @@ operation of its cell maps every spin onto an opposite one, so its net
 moment is zero by construction. `compensated` is false without an applied
 antiferromagnetic ordering, even where starting magnetizations you set on
 the uploaded cell cancel by symmetry.
-NiO's AFM-II cell is compensated. Spinel Fe3O4's R-3m candidate is not: it
-has 3 Fe up and 3 down, but both tetrahedral Fe point down, so it is a
-ferrimagnet. Nor is B2 FeCo's `afm-1`, Fe up and Co down in the uploaded
-cell: its starting moments sum to zero, but no symmetry makes the two
-elements' moments cancel. A compensated non-metal gets fixed occupations with
+NiO's AFM-II cell is compensated. An ordering whose moments no symmetry
+makes cancel is listed as ferrimagnetic (`fim-<n>`), never as `afm-<n>`:
+every ordering of spinel Fe3O4, since no operation maps a tetrahedral Fe
+onto an octahedral one, and B2 FeCo's `fim-1`, Fe up and Co down in the
+uploaded cell, whose starting moments sum to zero although nothing makes
+the two elements' moments cancel. A compensated non-metal gets fixed occupations with
 `tot_magnetization = 0`, except on a `band` task, whose `bands.x` step stops
 on any pinned moment: there it runs on smearing (see
 [the band structure path](#check-the-band-structure-path)). This is decided
@@ -445,17 +447,22 @@ convergence threshold, k-points and the job's memory) is counted on it;
 `records.magnetic` names it by formula and atom count. A `nelec` you set
 counts the electrons of the cell you uploaded, so it is refused together
 with an ordering that changes the cell's size.
-pymatgen keeps at most 16 of enumlib's orderings, smallest cells first;
-goldilocks has it read enumlib's output in enumlib's own numbering, so the
-same 16 are kept wherever the structure is enumerated again with the same
-pymatgen-core, spglib and enumlib versions. They are numbered in one order
-that depends on the cells alone -- smallest first, then most symmetric --
-so a label means the same cell there too; a label
-past the listed candidates is refused.
+The candidates come from spinforge (T. Nomoto, K. Shinohara, H. Watanabe
+and R. Arita, Phys. Rev. X 16, 041052 (2026)): the collinear orderings its
+spin space groups allow in the primitive cell or twice it, one per pattern
+the crystal's symmetry or a global spin flip relate. An ordering that needs a
+larger cell is not listed: NiO's 8-atom orderings, for example. The
+antiferromagnetic candidates (`afm-1`, `afm-2`, ...) and the ferrimagnetic
+ones (`fim-1`, ...) are each numbered in one order that depends on the cells
+alone -- smallest first, then most symmetric -- so a label means the same
+cell wherever the structure is enumerated again with the same spinforge,
+pymatgen-core and spglib versions; a label past the listed candidates is
+refused.
 `records.magnetic.ordering` says why the cell was written (`criterion`:
 `smallest_cell` for `afm`, `requested` for a label, `identity` when the
-uploaded cell is kept) and lists the other candidates with as many sites
-(`alternatives`); the `magnetic.afm_ordering_applied` notice names them too.
+uploaded cell is kept) and lists the other candidates of its kind with as
+many sites (`alternatives`); the `magnetic.afm_ordering_applied` or
+`magnetic.fim_ordering_applied` notice names them too.
 Smallest-and-most-symmetric is a convention, not a prediction: for Fe2O3 it
 picks the Cr2O3-type order (`afm-1`, R3c), not hematite's own (`afm-3`, R-3),
 so list the candidates and choose among them.
@@ -463,32 +470,29 @@ A slab, a wire or a molecule in a box only gets orderings that keep its
 vacuum: a candidate is kept when its cell can be written with the uploaded
 vacuum vectors (the `geometry` record's `vacuum_axes`) as cell vectors, and
 it is written that way, each vacuum vector where it was and the other
-vectors in the plane of the rest. enumlib also offers cells that repeat the structure across the
-vacuum -- the GdI2 monolayer's first candidate doubled c, every sheet
-ferromagnetic and its only antiparallel Gd 19.94 Å away across the vacuum
--- and those are dropped, so the monolayer gets the in-plane stripe. The
+vectors in the plane of the rest. The enumeration also offers cells that
+repeat the structure across the vacuum -- for the GdI2 monolayer, a cell
+that doubles c, every sheet ferromagnetic and its only antiparallel Gd
+19.94 Å away across the vacuum -- and those are dropped, so the monolayer
+gets the in-plane stripe. The
 written cell then has the uploaded vacuum, and the slab advice and gates
 (one k-point along the vacuum, `isolation`, `fix_bottom_layers`, the
 dipole notice) describe one slab. A bulk van der Waals magnet has no vacuum
 and keeps its interlayer orderings. When every candidate repeats across
 the vacuum, `afm` keeps the ferromagnetic default with a warning saying so.
-This needs the external `enumlib` executables (`enum.x` or `multienum.x`,
-plus `makeStr.py`, `makestr.x` or `makeStr.x`) on `PATH`. Its cost grows with
-the number of moment-bearing sites in your structure's primitive cell, which
-is what enumlib orders, not with the atom count: 28-site LiFePO4 has 4 Fe.
-Without enumlib, with more than 8 such sites, when enumlib finds no ordering
-or a call runs past its 30 s limit, or if no antiferromagnetic ordering
-exists for your structure, `afm` degrades to the ferromagnetic default with a warning,
-and an `afm-<n>` label is refused with the same reason; any other enumeration
-error fails the request. Magnetic moments your file carries
-(a magCIF's) are not read; only the seeds above are. Enumeration runs in a
-separate worker process, inside a private scratch directory, so it writes
-nothing to the current directory and concurrent requests cannot disturb each
-other.
+The enumeration needs no external program. Its cost grows with the number
+of moment-bearing sites in your structure's primitive cell, which is what it
+orders, not with the atom count: 28-site LiFePO4 has 4 Fe. With more than 8
+such sites, or if no antiferromagnetic ordering exists for your structure,
+`afm` degrades to the ferromagnetic default with a warning, and an
+`afm-<n>` label is refused with the same reason; any other enumeration error
+fails the request. Magnetic moments your file carries (a magCIF's) are not
+read; only the seeds above are. Enumeration runs in a separate worker
+process, so concurrent requests cannot disturb each other.
 
 `goldilocks magnetic-orderings` lists every candidate this same
-enumeration finds -- the ferromagnetic guess plus any antiferromagnetic
-ones, by label -- for you to inspect or generate inputs
+enumeration finds -- the ferromagnetic guess plus any antiferromagnetic and
+ferrimagnetic ones, by label -- for you to inspect or generate inputs
 from with `magnetic_ordering=<label>` on the same structure, optionally
 ranked by relaxing each on a frozen mMACE potential
 energy surface (`--rank-with-mmace`) rather than picking the ferromagnetic

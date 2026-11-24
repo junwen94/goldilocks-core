@@ -360,7 +360,7 @@ def test_phosphorene_gets_the_rectangular_2d_path() -> None:
     ("bulk", "miller", "space_group", "cells"),
     [
         (rutile_titanium_dioxide, (1, 0, 1), "Pc (7)", 1),
-        (fcc_copper, (2, 1, 1), "P2_1/m (11)", 4),
+        (fcc_copper, (2, 1, 1), "P2_1/m (11)", 1),
     ],
 )
 def test_a_monoclinic_slab_with_its_unique_axis_in_plane_is_rectangular(
@@ -368,8 +368,9 @@ def test_a_monoclinic_slab_with_its_unique_axis_in_plane_is_rectangular(
 ) -> None:
     """SlabGenerator writes these slabs with c tilted. Their layer groups
     are monoclinic with the unique axis in the sheet, whose 2D lattice is
-    rectangular; Cu(211) cut from conventional fcc Cu is a 4-fold in-plane
-    supercell."""
+    rectangular. Since pymatgen-core 2026.10 SlabGenerator writes Cu(211)
+    cut from conventional fcc Cu in its primitive in-plane cell (12 sites),
+    no longer as a 4-fold in-plane supercell (48 sites)."""
     decision = _path(k_path(framed_magnetic_cell(generated_slab(bulk(), miller))))
 
     assert decision.space_group == space_group

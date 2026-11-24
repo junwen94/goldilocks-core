@@ -131,7 +131,7 @@ def test_a_cancelled_running_job_has_its_process_killed_and_the_next_starts() ->
 
 def test_a_ranking_that_raises_reports_its_error() -> None:
     def rank(name, worker, progress) -> dict:
-        raise RuntimeError("enumlib is not installed")
+        raise RuntimeError("enumeration failed")
 
     queue = RankingQueue(rank, warm_worker=WorkerProcess)
     job = queue.submit("broken")["job_id"]
@@ -139,7 +139,7 @@ def test_a_ranking_that_raises_reports_its_error() -> None:
     assert _until(queue, job, lambda status: status["state"] == "failed") == {
         "job_id": job,
         "state": "failed",
-        "error": "enumlib is not installed",
+        "error": "enumeration failed",
     }
 
 

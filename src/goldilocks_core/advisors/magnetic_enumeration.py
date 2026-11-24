@@ -1,115 +1,260 @@
-"""enumerate_orderings: pymatgen's ``MagneticStructureEnumerator``, run where
-its process-wide side effects cannot reach the caller (#136).
+"""enumerate_orderings: the distinct collinear magnetic orderings of a
+structure's magnetic sites, from spinforge's spin-symmetry-adapted (SSA)
+structures (T. Nomoto, K. Shinohara, H. Watanabe and R. Arita, Phys. Rev. X
+16, 041052 (2026); #308).
 
-pymatgen runs enumlib inside monty's ``ScratchDir(".")``: it ``chdir``s the
-whole process into a temporary directory under the current one, writes
-``struct_enum.in`` and reads ``vasp.*`` by relative path, and starts
-``enum.x``/``makeStr.py`` there. Two enumerations on request threads moved
-each other's working directory and deleted each other's files, and the
-server's cwd could be left in a deleted directory.
+spinforge enumerates, for each spin space group of the crystal whose
+invariant translation lattice has index 1 or 2 (``_K_INDICES``, the
+primitive cell or twice it), the moments that group allows, as a basis per
+group of symmetry-equivalent sites. Its defaults are used unmodified
+(Junwen, 2026-11-24): only subgroups that keep the magnetic sites'
+multiplicity, searched to its default depth, one per class of conjugate
+subgroups.
 
-Every enumeration therefore runs on one long-lived worker process
-(``worker_process.WorkerProcess``), one at a time, inside a fresh private
-directory under the system temporary directory that is deleted afterwards.
-The caller's cwd and files are never touched; concurrent callers queue on the
-worker. Only the worker imports pymatgen's enumeration stack.
+Each SSA structure becomes collinear orderings like this:
+- every site group carries one basis vector, along one spin axis, which
+  fixes the relative signs inside the group;
+- the relative sign between groups is free, so each sign combination up to
+  a global flip is one ordering;
+- a structure whose groups do not cover every magnetic site forces some
+  moments to zero and is dropped.
 
-The worker also reads enumlib's ``vasp.<n>`` output files in enumlib's own
-numbering (``_in_enumlib_order``), not the directory's read order, which the
-filesystem decides: pymatgen keeps the first ``max_orderings`` structures,
-smallest cells first, ties in the order it reads them, so the same structure
-gave different candidates on different hosts (#170). pymatgen-core reads
-those files through ``command_line.enumlib_caller.glob`` and leaves them in
-the order ``glob`` returns, so the worker replaces that name for each
-enumeration; an enumeration that returns an antiferromagnetic ordering
-without reading through it raises, since a pymatgen-core that reads them
-some other way would make the candidates host-dependent again.
+All-parallel orderings are ferromagnetic and dropped (the caller lists its
+own ``fm``). The rest are reduced to their primitive magnetic cell and
+deduplicated: two orderings are the same when the crystal's symmetry or a
+global spin flip maps one onto the other. A ``k_index`` 2 enumeration
+repeats the ``k_index`` 1 orderings in a doubled cell, so the reduction is
+what keeps each once.
+
+An ordering is ``"afm"`` when some operation of its cell combined with time
+reversal maps every moment onto the reversed moment of a site of the same
+element, so the moments cancel by symmetry, and ``"fim"`` (ferrimagnetic)
+otherwise. Equal spin counts are not enough: A up and B down with two
+different magnetic elements is ferrimagnetic.
+
+The enumeration runs on one long-lived worker process
+(``worker_process.WorkerProcess``), one at a time, so spinforge and its
+group-theory stack are imported there and not in the caller.
 """
 
 from __future__ import annotations
 
-import glob
-import os
-import shutil
-import tempfile
-from functools import partial
-from typing import TYPE_CHECKING, Any
+import itertools
+from typing import TYPE_CHECKING, Literal, NamedTuple
 
 from goldilocks_core.worker_process import WorkerProcess
 
 if TYPE_CHECKING:
-    from pymatgen.core import Structure
+    import numpy as np
+    from pymatgen.core import PeriodicSite, Structure
+    from spinforge.configuration import SpinSymmetryAdaptedStructure
 
-_ENUMERATOR_EXECUTABLES = ("enum.x", "multienum.x")
-_STRUCTURE_MAKER_EXECUTABLES = ("makestr.x", "makeStr.x", "makeStr.py")
-"""The names pymatgen's ``command_line.enumlib_caller`` looks up on PATH
-(``ENUM_CMD``, ``MAKESTR_CMD``); it refuses to enumerate without one of
-each."""
+OrderingKind = Literal["afm", "fim"]
+
+_K_INDICES = (1, 2)
+"""spinforge's ``k_index`` values searched: the invariant translation lattice
+is the primitive lattice or a sublattice of index 2 (Junwen, 2026-11-24)."""
+
+_SIGN_TOLERANCE = 1e-6
+"""Below this, a projected moment counts as zero."""
 
 _ENUMERATION_WORKER = WorkerProcess()
 
 
-def enumlib_installed() -> bool:
-    """Whether PATH has an enumlib enumerator and a structure maker."""
-    return all(
-        any(shutil.which(name) is not None for name in names)
-        for names in (_ENUMERATOR_EXECUTABLES, _STRUCTURE_MAKER_EXECUTABLES)
-    )
+class EnumeratedOrdering(NamedTuple):
+    """One distinct ordering: its primitive magnetic cell, each magnetic site
+    a ``Species`` with ``spin`` +1 or -1 and every other site a ``Species``
+    without spin, and whether its moments cancel by symmetry."""
+
+    structure: Structure
+    kind: OrderingKind
 
 
 def enumerate_orderings(
-    structure: Structure, **enumerator_kwargs: Any
-) -> tuple[tuple[Structure, str], ...]:
-    """Every ordering ``MagneticStructureEnumerator(structure,
-    **enumerator_kwargs)`` produces, as ``(structure, origin)`` pairs in the
-    enumerator's order: a spin-decorated structure and pymatgen's label for
-    the strategy that produced it (``"fm"``, ``"afm"``, ...).
+    structure: Structure, sublattice: tuple[str, ...], symprec: float
+) -> tuple[EnumeratedOrdering, ...]:
+    """Every distinct antiferromagnetic and ferrimagnetic collinear ordering
+    of the ``sublattice`` elements' sites in ``structure`` (module
+    docstring), in no particular order; empty when there is none.
+    ``symprec`` is the length tolerance, in Angstrom, for the crystal's
+    symmetry and its primitive cell.
 
-    Raises what the enumerator raises, re-raised from the worker, and
+    Raises what spinforge raises, re-raised from the worker, and
     ``worker_process.WorkerDied`` if the worker process dies."""
-    return _ENUMERATION_WORKER.run(
-        _enumerate_in_private_directory, structure, enumerator_kwargs
+    return _ENUMERATION_WORKER.run(_enumerate, structure, sublattice, symprec)
+
+
+def _enumerate(
+    structure: Structure, sublattice: tuple[str, ...], symprec: float
+) -> tuple[EnumeratedOrdering, ...]:
+    """Worker side of ``enumerate_orderings``."""
+    from loguru import logger
+    from moyopy import MoyoDataset
+    from moyopy.interface import MoyoAdapter
+    from pymatgen.core import Element
+    from spinforge.configuration import SSAGenerator
+    from spinspg.spin import SpinOnlyGroupType
+
+    logger.disable("spinforge")
+    dataset = MoyoDataset(
+        MoyoAdapter.from_structure(structure), symprec=symprec, rotate_basis=False
+    )
+    primitive = dataset.prim_std_cell
+    magnetic = [
+        index
+        for index, number in enumerate(primitive.numbers)
+        if Element.from_Z(number).symbol in sublattice
+    ]
+    generator = SSAGenerator(
+        prim_cell=primitive, magnetic_site_indices=magnetic, symprec=symprec
+    )
+    orderings: list[Structure] = []
+    for k_index in _K_INDICES:
+        for _spin_only, _spin_space_group, adapted in generator.enumerate(
+            spin_only_group_type=SpinOnlyGroupType.COLLINEAR, k_index=k_index
+        ):
+            orderings.extend(_orderings_of(adapted, sublattice))
+    distinct = _distinct(orderings, sublattice, symprec)
+    return tuple(
+        EnumeratedOrdering(
+            ordering, "afm" if _compensated(ordering, symprec) else "fim"
+        )
+        for ordering in distinct
     )
 
 
-def _enumerate_in_private_directory(
-    structure: Structure, enumerator_kwargs: dict[str, Any]
-) -> tuple[tuple[Structure, str], ...]:
-    """Worker side of ``enumerate_orderings``: enumerate with this process's
-    cwd inside a new temporary directory, reading enumlib's output files in
-    their own numbering (``_in_enumlib_order``), then leave and delete it.
+def _orderings_of(
+    adapted: SpinSymmetryAdaptedStructure, sublattice: tuple[str, ...]
+) -> list[Structure]:
+    """The collinear orderings one SSA structure allows: one per sign of each
+    site group relative to the first, none when its groups leave a magnetic
+    site without a moment."""
+    import numpy as np
 
-    Raises ``RuntimeError`` when an antiferromagnetic ordering comes back
-    although pymatgen never read enumlib's output through
-    ``enumlib_caller.glob`` (module docstring)."""
-    from pymatgen.analysis.magnetism.analyzer import MagneticStructureEnumerator
-    from pymatgen.command_line import enumlib_caller
-
-    patterns_read: list[str] = []
-    directory_order = enumlib_caller.glob
-    with tempfile.TemporaryDirectory(prefix="goldilocks-enumlib-") as scratch:
-        os.chdir(scratch)
-        enumlib_caller.glob = partial(_in_enumlib_order, read=patterns_read)
-        try:
-            enumerator = MagneticStructureEnumerator(structure, **enumerator_kwargs)
-        finally:
-            enumlib_caller.glob = directory_order
-            os.chdir(tempfile.gettempdir())
-    origins = enumerator.ordered_structure_origins
-    if "afm" in origins and not patterns_read:
-        raise RuntimeError(
-            "pymatgen-core returned antiferromagnetic orderings without reading "
-            "enumlib's vasp.<n> files through enumlib_caller.glob, so their "
-            "order, and which orderings it kept, follow the filesystem (#170)"
+    groups = list(adapted.grouped_magnetic_moments_basis.items())
+    cell = adapted.generate_with_magnetic_moments(
+        np.zeros((len(adapted.supercell.numbers), 3))
+    )
+    magnetic = {
+        index for index, site in enumerate(cell) if site.specie.symbol in sublattice
+    }
+    covered = set().union(*(sites for sites, _indices in groups))
+    if not groups or covered != magnetic:
+        return []
+    vectors = [adapted.magnetic_moments_basis[indices[0]] for _sites, indices in groups]
+    axis = next(row for row in vectors[0] if np.linalg.norm(row) > _SIGN_TOLERANCE)
+    axis = axis / np.linalg.norm(axis)
+    orderings = []
+    for flips in itertools.product((1.0, -1.0), repeat=len(vectors) - 1):
+        projected = sum(
+            sign * (vector @ axis)
+            for sign, vector in zip((1.0, *flips), vectors, strict=True)
         )
-    return tuple(zip(enumerator.ordered_structures, origins, strict=True))
+        orderings.append(_decorated(cell, _signs(projected)))
+    return orderings
 
 
-def _in_enumlib_order(pattern: str, *, read: list[str]) -> list[str]:
-    """The files ``glob.glob(pattern)`` finds, sorted by the number after
-    their last dot, with ``pattern`` appended to ``read``: pymatgen's
-    ``EnumlibAdaptor`` reads ``glob("vasp.*")``, and makeStr numbers those
-    files in enumlib's order. A name without a number raises
-    ``ValueError``."""
-    read.append(pattern)
-    return sorted(glob.glob(pattern), key=lambda name: int(name.rpartition(".")[2]))
+def _signs(projected: np.ndarray) -> tuple[float, ...]:
+    return tuple(
+        0.0 if abs(value) < _SIGN_TOLERANCE else float(1 if value > 0 else -1)
+        for value in projected
+    )
+
+
+def _decorated(cell: Structure, signs: tuple[float, ...]) -> Structure:
+    """``cell`` with each site a ``Species`` carrying its spin sign, none on
+    a site whose sign is 0."""
+    from pymatgen.core import Species, Structure
+
+    species = [
+        Species(site.specie.symbol, spin=sign) if sign else Species(site.specie.symbol)
+        for site, sign in zip(cell, signs, strict=True)
+    ]
+    return Structure(cell.lattice, species, cell.frac_coords)
+
+
+_STAND_IN_ELEMENTS = ("He", "Ne", "Ar", "Kr", "Xe", "Rn", "Es", "Fm", "Md", "No")
+"""Elements that stand for a magnetic element's spin-down sites when two
+orderings are compared (``_coloured``); the first ones absent from the
+structure are used."""
+
+
+def _distinct(
+    orderings: list[Structure], sublattice: tuple[str, ...], symprec: float
+) -> list[Structure]:
+    """The non-ferromagnetic ``orderings``, each in its primitive magnetic
+    cell, one per class of orderings the crystal's symmetry or a global spin
+    flip relate. Orderings are compared with each magnetic element's
+    spin-down sites as a stand-in element (``_coloured``): pymatgen's
+    ``SpinComparator`` only pairs opposite spins, so it never matches an
+    ordering in which an element has one spin only (B2 FeCo, Fe up and Co
+    down) with itself."""
+    from pymatgen.core.structure_matcher import StructureMatcher
+
+    matcher = StructureMatcher(
+        primitive_cell=False, attempt_supercell=True, scale=False
+    )
+    present = {site.specie.symbol for site in orderings[0]} if orderings else set()
+    stand_ins = dict(
+        zip(
+            sorted(sublattice),
+            (element for element in _STAND_IN_ELEMENTS if element not in present),
+            strict=False,
+        )
+    )
+    kept: dict[int, list[tuple[Structure, Structure]]] = {}
+    for ordering in orderings:
+        spins = {_spin(site) for site in ordering if site.specie.symbol in sublattice}
+        if len(spins) < 2:
+            continue
+        reduced = ordering.get_primitive_structure(
+            tolerance=symprec, use_site_props=False
+        )
+        coloured = _coloured(reduced, stand_ins, 1.0)
+        flipped = _coloured(reduced, stand_ins, -1.0)
+        same_size = kept.setdefault(len(reduced), [])
+        if not any(
+            matcher.fit(coloured, other) or matcher.fit(flipped, other)
+            for _ordering, other in same_size
+        ):
+            same_size.append((reduced, coloured))
+    return [ordering for size in sorted(kept) for ordering, _coloured in kept[size]]
+
+
+def _coloured(ordering: Structure, stand_ins: dict[str, str], up: float) -> Structure:
+    """``ordering`` without spins, each magnetic site whose spin times ``up``
+    is negative replaced by its element's stand-in, so plain structure
+    matching tells orderings apart (``up`` -1 compares the flipped
+    ordering)."""
+    from pymatgen.core import Structure
+
+    species = [
+        stand_ins[site.specie.symbol] if _spin(site) * up < 0 else site.specie.symbol
+        for site in ordering
+    ]
+    return Structure(ordering.lattice, species, ordering.frac_coords)
+
+
+def _spin(site: PeriodicSite) -> float:
+    return float(getattr(site.specie, "spin", None) or 0.0)
+
+
+def _compensated(ordering: Structure, symprec: float) -> bool:
+    """Whether an operation of ``ordering``'s cell combined with time reversal
+    maps every site onto a site of the same element with the opposite spin
+    (spglib's magnetic symmetry of the spins as collinear moments)."""
+    import numpy as np
+    import spglib
+
+    dataset = spglib.get_magnetic_symmetry(
+        (
+            ordering.lattice.matrix,
+            ordering.frac_coords,
+            [site.specie.Z for site in ordering],
+            [_spin(site) for site in ordering],
+        ),
+        symprec=symprec,
+        mag_symprec=_SIGN_TOLERANCE,
+        is_axial=False,
+    )
+    return dataset is not None and bool(np.any(dataset["time_reversals"]))

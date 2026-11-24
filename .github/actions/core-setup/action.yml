@@ -1,8 +1,8 @@
 name: Core setup
 description: >-
-  The pinned uv, the frozen dev environment with every extra, and enumlib,
-  which the AFM species-splitting tests need; shared by the quality and
-  mutation jobs of ci.yml (#237).
+  The pinned uv and the frozen dev environment with every extra; shared by
+  the quality and mutation jobs of ci.yml (#237). Magnetic orderings need no
+  external program (#308).
 runs:
   using: composite
   steps:
@@ -15,27 +15,3 @@ runs:
     - name: Install frozen dependencies
       shell: bash
       run: uv sync --group dev --all-extras
-
-    # Known gap: this clones and rebuilds enumlib from source on every CI run,
-    # with no retry around the network calls and no cache keyed on the pinned
-    # ref. Worth hardening the same way src/goldilocks_core/assets/download.py
-    # retries/backs off PSDI downloads, but that needs real CI validation this
-    # pass didn't do -- flagging for a future pass rather than guessing at it.
-    - name: Build enumlib (external dependency for AFM species-splitting)
-      shell: bash
-      run: |
-        sudo apt-get update
-        sudo apt-get install --yes gfortran
-        # The same commit as the Dockerfile's ENUMLIB_COMMIT.
-        git clone --quiet https://github.com/msg-byu/enumlib.git /tmp/enumlib
-        git -C /tmp/enumlib checkout --quiet 67217859c1cfe6e1d8cfe25b76a1d14a28c6030e
-        git -C /tmp/enumlib submodule update --quiet --init --recursive
-        make -C /tmp/enumlib/symlib/src F90=gfortran
-        make -C /tmp/enumlib/src F90=gfortran
-        make -C /tmp/enumlib/src F90=gfortran enum.x
-        install -d /tmp/enumlib-bin
-        install /tmp/enumlib/src/enum.x /tmp/enumlib-bin/enum.x
-        sed "1s|.*|#!${{ github.workspace }}/.venv/bin/python3|" \
-          /tmp/enumlib/aux_src/makeStr.py > /tmp/enumlib-bin/makeStr.py
-        chmod +x /tmp/enumlib-bin/makeStr.py
-        echo "/tmp/enumlib-bin" >> "$GITHUB_PATH"

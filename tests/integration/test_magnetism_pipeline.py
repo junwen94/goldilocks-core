@@ -14,19 +14,19 @@ The control is the written cell passed in directly, with its spins removed
 (spin-decorated species never reach the analysis tier) and the AFM run's
 own seeds as ``starting_magnetization``, so the magnetic step splits it
 into the same species (#170). Runs on a synthetic SSSP-shaped Ni/O table
-(z_valence 18 and 6) with the real enumlib.
+(z_valence 18 and 6) with the real enumeration.
 
 Spin-orbit coupling makes a run noncollinear, where pw.x has no
 ``tot_magnetization`` and fixed occupations need none (#146). The CrI3
 monolayer (MC2D mc2d-da9644c9) runs on a synthetic fully relativistic Cr/I
-table (z_valence 14 and 7) and needs no enumlib. B2 FeCo (MC3D mc3d-60258)
+table (z_valence 14 and 7) and needs no enumeration. B2 FeCo (MC3D mc3d-60258)
 runs on a synthetic fully relativistic Fe/Co table (z_valence 16 and 17):
 its moment direction is a setting, and its k-points are counted with the
 moments as pw.x counts them (#172).
 
-Olivine LiFePO4 (MC3D mc3d-52501) has 28 sites but only 4 Fe for enumlib to
+Olivine LiFePO4 (MC3D mc3d-52501) has 28 sites but only 4 Fe for the enumeration to
 order, so ``magnetic_ordering=afm`` orders them (#171); it runs on a
-synthetic Li/Fe/P/O table (z_valence 3, 16, 5 and 6) with the real enumlib.
+synthetic Li/Fe/P/O table (z_valence 3, 16, 5 and 6) with the real enumeration.
 
 A spin-polarized non-metal used to get fixed occupations without the
 integer ``tot_magnetization`` pw.x needs for them on nspin=2, so the gate
@@ -60,7 +60,7 @@ from pymatgen.core import Lattice, Species, Structure
 from support import hcp_gadolinium, sssp_fixture_table_spec
 
 from goldilocks_core.advisors.magnetic_config import OrderingRecord
-from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
+from goldilocks_core.advisors.magnetic_enumeration import EnumeratedOrdering
 from goldilocks_core.analysis.geometry import slab_geometry, slab_layers, vacuum_axes
 from goldilocks_core.analysis.symmetry import symmetry
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
@@ -85,11 +85,6 @@ from goldilocks_core.service import (
 )
 from goldilocks_core.service._magnetic_orderings import list_magnetic_orderings
 from goldilocks_core.set_overrides import build_overrides
-
-_needs_enumlib = pytest.mark.skipif(
-    not enumlib_installed(),
-    reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
-)
 
 _NEUTRAL_AFM_CELL_NELEC = 2 * 18.0 + 2 * 6.0
 
@@ -206,7 +201,6 @@ _INPUT_CELLS: dict[str, Callable[[], Structure]] = {
 }
 
 
-@_needs_enumlib
 @pytest.mark.parametrize("task", ["scf", "relax", "dos", "band"])
 @pytest.mark.parametrize("input_cell", list(_INPUT_CELLS))
 def test_every_count_describes_the_written_afm_cell(
@@ -241,7 +235,6 @@ def test_every_count_describes_the_written_afm_cell(
     ]
 
 
-@_needs_enumlib
 def test_nelec_for_the_uploaded_cell_is_refused_once_the_ordering_resizes_it(
     store: AssetStore,
 ) -> None:
@@ -277,7 +270,6 @@ def _starting_magnetization_lines(content: str) -> list[str]:
     ]
 
 
-@_needs_enumlib
 def test_a_listed_candidate_and_plain_afm_write_the_same_seeds_and_symmetry(
     store: AssetStore,
 ) -> None:
@@ -531,7 +523,6 @@ def olivine_store(tmp_path, monkeypatch) -> AssetStore:
     return installed
 
 
-@_needs_enumlib
 def test_afm_orders_the_four_fe_of_olivine_lifepo4(olivine_store: AssetStore) -> None:
     """#171: a ceiling on all 28 sites kept LiFePO4 ferromagnetic and listed
     only 'fm', though pymatgen enumerates its 4 Fe in about a second."""
@@ -584,7 +575,6 @@ def chromium_store(tmp_path, monkeypatch) -> AssetStore:
     return installed
 
 
-@_needs_enumlib
 def test_an_afm_request_writes_an_afm_deck_for_a_non_magnetic_classification(
     chromium_store: AssetStore,
 ) -> None:
@@ -605,7 +595,7 @@ def test_an_afm_request_writes_an_afm_deck_for_a_non_magnetic_classification(
         requested="afm",
         applied="afm-1",
         criterion="smallest_cell",
-        alternatives=("afm-2",),
+        alternatives=(),
     )
     assert magnetic.compensated is True
     assert _keyword(content, "nspin") == "2"
@@ -650,7 +640,6 @@ def test_a_magnetic_insulator_s_default_passes_the_gate_on_smearing(
     assert _keyword(content, "tot_magnetization") is None
 
 
-@_needs_enumlib
 @pytest.mark.parametrize("task", ["scf", "relax"])
 def test_a_compensated_afm_insulator_pins_a_zero_moment_on_fixed_occupations(
     task: str, store: AssetStore
@@ -684,7 +673,6 @@ def test_a_compensated_afm_insulator_pins_a_zero_moment_on_fixed_occupations(
     assert _keyword(content, "tot_charge") is None
 
 
-@_needs_enumlib
 @pytest.mark.parametrize(
     "seeds", [{"Ni1": 5.0 / 18.0}, {"Ni2": -5.0 / 18.0}], ids=["Ni1", "Ni2"]
 )
@@ -796,7 +784,6 @@ def hematite_store(tmp_path, monkeypatch) -> AssetStore:
     return installed
 
 
-@_needs_enumlib
 def test_a_requested_label_writes_that_ordering_and_records_its_alternatives(
     hematite_store: AssetStore,
 ) -> None:
@@ -804,7 +791,8 @@ def test_a_requested_label_writes_that_ordering_and_records_its_alternatives(
     first of three 10-site candidates, and recorded only its label. The
     hematite order (R-3 with the up and down Fe as two species) is asked
     for by its listed label: the deck is written for it, and
-    records.magnetic names it, the criterion and the other two."""
+    records.magnetic names it, the criterion and the other two of its size
+    (the doubled-cell candidates are listed too, #308)."""
     hematite = _corundum_fe2o3()
     listing = list_magnetic_orderings(hematite)
     [label] = [
@@ -816,7 +804,7 @@ def test_a_requested_label_writes_that_ordering_and_records_its_alternatives(
     others = tuple(
         candidate.label
         for candidate in listing.candidates
-        if candidate.label not in ("fm", label)
+        if candidate.label not in ("fm", label) and candidate.natoms == 10
     )
 
     steps, (content,) = _run(
@@ -862,7 +850,6 @@ def gdi2_store(tmp_path, monkeypatch) -> AssetStore:
     return installed
 
 
-@_needs_enumlib
 def test_afm_on_a_monolayer_keeps_one_sheet_for_the_slab_gates(
     gdi2_store: AssetStore,
 ) -> None:
@@ -999,7 +986,6 @@ def _drop_in_vacuum(cell: Structure, edir: int, emaxpos: float, eopreg: float) -
     )
 
 
-@_needs_enumlib
 def test_the_dipole_notice_of_a_polar_afm_slab_describes_the_written_cell() -> None:
     """#144: plain afm on the polar VSSe sheet doubled it across its vacuum
     and moved c to b, while the dipole notice, read from the uploaded
@@ -1044,11 +1030,8 @@ def test_the_dipole_notice_reads_the_vacuum_of_the_cell_written(monkeypatch) -> 
         Lattice([a, 2 * b, c]), species, coords, coords_are_cartesian=True
     )
     monkeypatch.setattr(
-        "goldilocks_core.advisors.magnetic_config.enumlib_installed", lambda: True
-    )
-    monkeypatch.setattr(
         "goldilocks_core.advisors.magnetic_config.enumerate_orderings",
-        lambda *_args, **_kwargs: ((candidate, "afm"),),
+        lambda *_args, **_kwargs: (EnumeratedOrdering(candidate, "afm"),),
     )
 
     advice = advise(

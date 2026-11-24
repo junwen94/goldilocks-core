@@ -11,7 +11,7 @@ Then the task through ``advise_band``/``check_band``/``generate_band``: scf,
 bands and one bands.x run per spin channel in one script; a collinear
 smearing magnet (hcp Gd) with no moment in either pw.x input, and the same
 magnet with spin-orbit coupling, whose one bands.x run takes no spin
-component; a compensated antiferromagnet (AFM-II NiO, with the real enumlib)
+component; a compensated antiferromagnet (AFM-II NiO, with the real enumeration)
 on smearing rather than the pinned zero moment bands.x would stop on;
 tetrahedra written as smearing in bands.in; a requested moment refused with
 a remedy that runs; in-plane paths on slabs, Gamma to Z on a wire, a box
@@ -41,7 +41,6 @@ from support import (
 
 from goldilocks_core.advisors.convergence import ConvergenceHumanInput
 from goldilocks_core.advisors.k_path import KPathHumanInput
-from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
 from goldilocks_core.advisors.nbnd import NbndHumanInput
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
@@ -478,10 +477,6 @@ def _primitive_nickel_oxide() -> Structure:
     ).get_primitive_structure()
 
 
-@pytest.mark.skipif(
-    not enumlib_installed(),
-    reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
-)
 def test_a_compensated_antiferromagnet_runs_its_band_task_on_smearing(store) -> None:
     """AFM-II NiO classified non-metal pins tot_magnetization = 0 on fixed
     occupations (#138), which bands.x would stop on: the band task's scf

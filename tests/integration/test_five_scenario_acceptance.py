@@ -55,13 +55,11 @@ import io
 import json
 import re
 
-import pytest
 from pymatgen.core import Lattice, Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from support import mc3d_42058_silicon, run_cli, sssp_fixture_table_spec
 
 from goldilocks_core.advisors.magnetic_config import MagneticConfigHumanInput
-from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
 from goldilocks_core.advisors.n_irr_k import n_irr_k
 from goldilocks_core.assets.pseudopotentials.importers import sssp_preparer
 from goldilocks_core.assets.store import AssetStore
@@ -294,13 +292,6 @@ class TestScenario3SocOnCerium:
         assert isinstance(advice.system.electron_count, Blocked)
 
 
-_ENUMLIB_MISSING = not enumlib_installed()
-
-
-@pytest.mark.skipif(
-    _ENUMLIB_MISSING,
-    reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
-)
 class TestScenario4Afm:
     """Row 4: simulated-cell plumbing + symmetry recompute +
     k-point propagation. Rock-salt FeO, the design doc's own worked
@@ -352,7 +343,7 @@ class TestScenario4Afm:
 
         # Against the default (FM) advice on the same input: the AFM
         # cell's mesh is one its cubic group maps onto itself, n x n x n
-        # in enumlib's skewed basis, and has fewer irreducible k-points
+        # in the enumerator's skewed basis, and has fewer irreducible k-points
         # than the FM cell's. Meshing each axis on its own gave 9x10x9
         # there, which broke the group: 230 irreducible k-points against
         # the FM cell's 56, once read here as the cost of the bigger cell
