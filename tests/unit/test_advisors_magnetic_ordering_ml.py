@@ -13,7 +13,6 @@ import importlib.util
 import json
 import math
 import re
-import shutil
 import threading
 import time
 from importlib.machinery import ModuleSpec
@@ -655,7 +654,10 @@ def test_a_listing_above_the_atom_limit_comes_back_unranked_saying_why(
     _configure_checkpoint(monkeypatch, tmp_path)
     _report_mace_installed(monkeypatch)
     monkeypatch.setenv(MAX_ATOMS_ENV, "1")
-    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        "goldilocks_core.advisors.magnetic_config.enumerate_orderings",
+        lambda *_args, **_kwargs: (),
+    )
 
     monkeypatch.setattr(magnetic_ordering_ml, "WorkerProcess", _no_worker)
 
@@ -774,7 +776,7 @@ def test_rank_orderings_ranks_antiferromagnetic_nio_below_ferromagnetic(
     # rocksalt Ni sublattice, oxygen unsigned -- the same shape
     # ``magnetic_config.enumerate_magnetic_orderings`` lists for a real
     # enumerator candidate, built here directly since this test does not
-    # need enumlib.
+    # need the enumeration.
     ni_up, ni_down = Species("Ni", spin=1), Species("Ni", spin=-1)
     nio_afm = Structure(
         nio_fm.lattice,

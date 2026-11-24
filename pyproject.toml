@@ -42,6 +42,10 @@ dependencies = [
     # the cell is written in (pw_symmetry.py: get_symmetry_dataset,
     # get_stabilized_reciprocal_mesh); the floor is pymatgen-core's own.
     "spglib>=2.5",
+    # Magnetic orderings: spin-symmetry-adapted structures of spin space
+    # groups (Nomoto, Shinohara, Watanabe & Arita, Phys. Rev. X 16, 041052
+    # (2026)), pure Python, replacing the external enumlib programs (#308).
+    "spinforge>=1,<2",
 ]
 
 [project.optional-dependencies]

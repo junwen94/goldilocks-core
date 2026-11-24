@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import shutil
-
 import numpy as np
 import pytest
 from pymatgen.core import Lattice, Species, Structure
@@ -11,7 +9,7 @@ from goldilocks_core.advisors.magnetic_config import (
     MagneticConfigHumanInput,
     magnetic_cell,
 )
-from goldilocks_core.advisors.magnetic_enumeration import enumlib_installed
+from goldilocks_core.advisors.magnetic_enumeration import EnumeratedOrdering
 from goldilocks_core.advisors.magnetic_ordering_ml import (
     MagneticOrderingMlUnavailable,
     OrderingCandidate,
@@ -45,11 +43,11 @@ def test_default_listing_is_unranked_and_never_touches_mmace(monkeypatch) -> Non
         raise AssertionError("rank_orderings must not be called unless requested")
 
     monkeypatch.setattr(magnetic_orderings_module, "rank_orderings", fail)
-    # Deterministic regardless of this machine's real PATH (#87): forces
-    # AFM enumeration itself unavailable, so the resulting warning is
-    # pinned rather than depending on whether enum.x happens to be
-    # installed here.
-    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    # An enumeration that finds no antiferromagnetic ordering, so the
+    # resulting warning is pinned (#87).
+    monkeypatch.setattr(
+        magnetic_config_module, "enumerate_orderings", lambda *_args, **_kwargs: ()
+    )
 
     report = list_magnetic_orderings(_ROCK_SALT_FEO)
 
@@ -59,17 +57,18 @@ def test_default_listing_is_unranked_and_never_touches_mmace(monkeypatch) -> Non
     assert report.candidates[0].is_recommended is False
     [warning] = report.warnings
     assert warning.code == "magnetic.afm_ordering_unavailable"
-    assert "enumlib" in warning.message
+    assert warning.message == (
+        "no antiferromagnetic ordering was found; kept ferromagnetic order."
+    )
 
 
 def test_ranked_listing_marks_the_lowest_energy_candidate_as_recommended(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
         magnetic_config_module,
         "enumerate_orderings",
-        lambda *_args, **_kwargs: ((_ROCK_SALT_FEO.copy(), "afm"),),
+        lambda *_args, **_kwargs: (EnumeratedOrdering(_ROCK_SALT_FEO.copy(), "afm"),),
     )
 
     def fake_rank_orderings(candidates, **_):
@@ -113,11 +112,12 @@ def test_every_candidate_is_generated_by_its_label_on_the_listed_structure(
     one magnetic step writes it, spin-polarized -- the fm candidate too,
     whose label alone used to leave a structure classified non-magnetic
     unpolarized once the Workbench dropped the draft's own spin request."""
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
         magnetic_config_module,
         "enumerate_orderings",
-        lambda *_args, **_kwargs: ((_SPIN_SPLIT_AFM_FEO.copy(), "afm"),),
+        lambda *_args, **_kwargs: (
+            EnumeratedOrdering(_SPIN_SPLIT_AFM_FEO.copy(), "afm"),
+        ),
     )
 
     report = list_magnetic_orderings(_ROCK_SALT_FEO)
@@ -145,9 +145,11 @@ def test_ranking_unavailable_falls_back_to_unranked_with_a_warning(monkeypatch) 
     monkeypatch.setattr(
         magnetic_orderings_module, "rank_orderings", fake_rank_orderings
     )
-    # Deterministic regardless of this machine's real PATH (#87) -- see
+    # No antiferromagnetic ordering found (#87) -- see
     # test_default_listing_is_unranked_and_never_touches_mmace above.
-    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        magnetic_config_module, "enumerate_orderings", lambda *_args, **_kwargs: ()
+    )
 
     report = list_magnetic_orderings(_ROCK_SALT_FEO, rank_with_mmace=True)
 
@@ -209,7 +211,6 @@ def _spins(cell: Structure, element: str) -> set[float]:
 
 
 def _never_enumerating(monkeypatch) -> None:
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
         magnetic_config_module,
         "enumerate_orderings",
@@ -217,13 +218,6 @@ def _never_enumerating(monkeypatch) -> None:
     )
 
 
-_needs_enumlib = pytest.mark.skipif(
-    not enumlib_installed(),
-    reason="needs the enumlib executables (enum.x, makeStr.py) on PATH",
-)
-
-
-@_needs_enumlib
 def test_every_listed_la2cuo4_candidate_compensates_cu_and_leaves_la_unspun() -> None:
     """#143: with 4f0 La3+ seeded too, 5 of 16 listed 'AFM' candidates kept
     both Cu parallel and compensated on La alone."""
@@ -237,7 +231,6 @@ def test_every_listed_la2cuo4_candidate_compensates_cu_and_leaves_la_unspun() ->
     assert report.warnings == ()
 
 
-@_needs_enumlib
 def test_no_listed_fept_candidate_is_the_two_site_fe_against_pt_cell() -> None:
     """#143: Fe up / Pt down on the unchanged 2-site cell was listed (and
     applied) as antiferromagnetic; it is ferromagnetic on the Fe sites."""
@@ -286,7 +279,7 @@ def test_listing_a_closed_shell_structure_is_fm_alone_without_a_warning(
     monkeypatch,
 ) -> None:
     """Nothing in diamond Si could order, so 'fm' alone needs no
-    explanation -- and enumlib is never asked."""
+    explanation -- and the enumeration is never asked."""
     _never_enumerating(monkeypatch)
 
     report = list_magnetic_orderings(_DIAMOND_SILICON)
@@ -305,7 +298,6 @@ def _gdi2_monolayer() -> Structure:
     )
 
 
-@_needs_enumlib
 def test_a_monolayer_is_listed_with_the_cells_its_labels_write() -> None:
     """#144: the listing and a run keep the same orderings of the
     monolayer, those that keep its vacuum vector c, and number them alike:
@@ -315,7 +307,7 @@ def test_a_monolayer_is_listed_with_the_cells_its_labels_write() -> None:
     report = list_magnetic_orderings(gdi2)
 
     afm = [candidate for candidate in report.candidates if candidate.label != "fm"]
-    assert [candidate.natoms for candidate in afm] == [6, 12, 12]
+    assert [candidate.natoms for candidate in afm] == [6]
     assert report.warnings == ()
     for candidate in afm:
         written = magnetic_cell(
@@ -338,11 +330,10 @@ def test_a_monolayer_whose_orderings_all_cross_its_vacuum_lists_fm_with_why(
         [*gdi2.cart_coords, *(gdi2.cart_coords + c)],
         coords_are_cartesian=True,
     )
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
         magnetic_config_module,
         "enumerate_orderings",
-        lambda *_args, **_kwargs: ((doubled, "afm"),),
+        lambda *_args, **_kwargs: (EnumeratedOrdering(doubled, "afm"),),
     )
 
     report = list_magnetic_orderings(gdi2)

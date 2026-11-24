@@ -2,7 +2,8 @@
 
 New (v2, #87). ``magnetic_config.py``'s ``enumerate_magnetic_orderings``
 lists candidate magnetic orderings (a plain ferromagnetic guess, plus
-whatever compensated antiferromagnetic candidates enumlib finds) but never
+the antiferromagnetic and ferrimagnetic candidates spinforge's spin space
+groups give, #308) but never
 picks a winner by energy -- finding the true ground state needs comparing
 total energies, which that module's own docstring assigns to "an
 agent-level job" rather than its stateless heuristic tier. This module is

@@ -3,28 +3,28 @@ revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'linux' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
-    "python_full_version == '3.13.*' and sys_platform == 'linux' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
-    "python_full_version < '3.13' and sys_platform == 'linux' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
     "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
     "python_full_version >= '3.14' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
-    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
-    "python_full_version < '3.13' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
-    "python_full_version == '3.13.*' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
-    "python_full_version < '3.13' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
     "python_full_version >= '3.14' and sys_platform == 'win32' and extra == 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
     "python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'win32' and extra == 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
-    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra == 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
-    "python_full_version < '3.13' and sys_platform == 'win32' and extra == 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
-    "python_full_version == '3.13.*' and sys_platform != 'darwin' and sys_platform != 'win32' and extra == 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
-    "python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'win32' and extra == 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
     "python_full_version >= '3.14' and sys_platform == 'darwin' and extra == 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
-    "python_full_version == '3.13.*' and sys_platform == 'darwin' and extra == 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
-    "python_full_version < '3.13' and sys_platform == 'darwin' and extra == 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
     "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
     "python_full_version >= '3.14' and sys_platform != 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
+    "python_full_version == '3.13.*' and sys_platform == 'linux' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
+    "python_full_version == '3.13.*' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra == 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
+    "python_full_version == '3.13.*' and sys_platform != 'darwin' and sys_platform != 'win32' and extra == 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
+    "python_full_version == '3.13.*' and sys_platform == 'darwin' and extra == 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
     "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
-    "python_full_version < '3.13' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
     "python_full_version == '3.13.*' and sys_platform != 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
+    "python_full_version < '3.13' and sys_platform == 'linux' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
+    "python_full_version < '3.13' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
+    "python_full_version < '3.13' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
+    "python_full_version < '3.13' and sys_platform == 'win32' and extra == 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
+    "python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'win32' and extra == 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
+    "python_full_version < '3.13' and sys_platform == 'darwin' and extra == 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
+    "python_full_version < '3.13' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
     "python_full_version < '3.13' and sys_platform != 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
 ]
 conflicts = [[
@@ -1034,6 +1034,7 @@ dependencies = [
     { name = "pymatgen" },
     { name = "requests" },
     { name = "spglib" },
+    { name = "spinforge" },
 ]
 
 [package.optional-dependencies]
@@ -1077,6 +1078,7 @@ requires-dist = [
     { name = "pymatgen", specifier = ">=2026.3.23" },
     { name = "requests", specifier = ">=2.32" },
     { name = "spglib", specifier = ">=2.5" },
+    { name = "spinforge", specifier = ">=1,<2" },
     { name = "uvicorn", marker = "extra == 'http'" },
 ]
 provides-extras = ["http", "mcp"]
@@ -1172,6 +1174,22 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/41/8c/bbe98f813722b4873818a8db3e15aa3e625b59278566905ac439725e8070/h5py-3.16.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:346df559a0f7dcb31cf8e44805319e2ab24b8957c45e7708ce503b2ec79ba725", size = 5300253, upload-time = "2026-03-06T13:49:02.033Z" },
     { url = "https://files.pythonhosted.org/packages/32/9e/87e6705b4d6890e7cecdf876e2a7d3e40654a2ae37482d79a6f1b87f7b92/h5py-3.16.0-cp314-cp314t-win_amd64.whl", hash = "sha256:4c6ab014ab704b4feaa719ae783b86522ed0bf1f82184704ed3c9e4e3228796e", size = 3381671, upload-time = "2026-03-06T13:49:04.351Z" },
     { url = "https://files.pythonhosted.org/packages/96/91/9fad90cfc5f9b2489c7c26ad897157bce82f0e9534a986a221b99760b23b/h5py-3.16.0-cp314-cp314t-win_arm64.whl", hash = "sha256:faca8fb4e4319c09d83337adc80b2ca7d5c5a343c2d6f1b6388f32cfecca13c1", size = 2740706, upload-time = "2026-03-06T13:49:06.347Z" },
+]
+
+[[package]]
+name = "hsnf"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "scipy" },
+    { name = "setuptools" },
+    { name = "setuptools-scm" },
+    { name = "wheel" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b8/f5/b7c2a7dc01101f60d994a2cbd99580428de20753902e7b778951f466b419/hsnf-0.4.0.tar.gz", hash = "sha256:e12875c4ed431637530987ff96b1e02d748ad09a648ec12489e0176e52f8f4d9", size = 129120, upload-time = "2026-03-31T11:53:18.016Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a2/0c/d85b53a499bb62050a38acafb5f901468cffddb42f99049a8d7efe9437e0/hsnf-0.4.0-py3-none-any.whl", hash = "sha256:db370524771e6d412ef9f5397a3d64f7e698d97133770fcea01516cfc8054ba4", size = 18097, upload-time = "2026-03-31T11:53:17.078Z" },
 ]
 
 [[package]]
@@ -1502,6 +1520,19 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ce/44/2a5534a120e6a0805bd470a22b1ac5210b22597ae0236cdf3f46e4b54945/lmdb-3.0.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3e7b803b40ea4c3cb0fa4bc331cf8c44c7d79f91c27e92609a8e90d2bd2f25f6", size = 571903, upload-time = "2026-10-02T20:03:23.184Z" },
     { url = "https://files.pythonhosted.org/packages/f2/d3/f45b08dfa48415b98482c5f98b21c46a60f6d76796cb14659533686fec4c/lmdb-3.0.0-cp314-cp314-win_amd64.whl", hash = "sha256:d34876ba920b8f2c7b30af2cd8de94133070242fa0b42dfbd26d508044681220", size = 191371, upload-time = "2026-10-02T20:03:24.733Z" },
     { url = "https://files.pythonhosted.org/packages/9a/ca/7b9329a2129b4ceec5210686d49338a1388b82befc8a1c63b152dcd6b4d7/lmdb-3.0.0-cp314-cp314-win_arm64.whl", hash = "sha256:9feccf2fe5d7826dd745618350f58f675093093da7187b976c2fa6942a23297a", size = 191434, upload-time = "2026-10-02T20:03:25.954Z" },
+]
+
+[[package]]
+name = "loguru"
+version = "0.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130')" },
+    { name = "win32-setctime", marker = "sys_platform == 'win32' or (extra == 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/61/ce/b5bb93d4d9fc7a067f69140b3bb3782f6ad6360bc76e99b6e3d386cb1320/loguru-0.8.0.tar.gz", hash = "sha256:fb3e4623288e37700a0577f6e0ce776cc1860b5d95c657d67f07a2476b304867", size = 71232, upload-time = "2026-11-11T18:50:26.248Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c8/00/9ee7c8da7342b1a5524bca9d036f89e7d1d1e5a6345c9623763eeeac941f/loguru-0.8.0-py3-none-any.whl", hash = "sha256:e0fba09d6f76ba2d2f4bd1757122942f5a670c702e988b5efaeab99dacba0069", size = 69409, upload-time = "2026-11-11T18:50:24.148Z" },
 ]
 
 [[package]]
@@ -1958,15 +1989,28 @@ wheels = [
 
 [[package]]
 name = "monty"
-version = "2026.2.18"
+version = "2026.10.21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "ruamel-yaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/82/e2/e8ada0dbe679e4af4587e1d29b46e6c1febf2e861cb71ba09b2a6b3aed1a/monty-2026.2.18.tar.gz", hash = "sha256:e34e77abe7454ab84a9eeab7d909dbb500e3fa114c1849352ecd4570feb72be0", size = 191585, upload-time = "2026-02-18T01:19:02.858Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2c/f1/4de1afef798eb51c5de7e7628670de462e556f90e4339c16d29b2d1a3f48/monty-2026.10.21.tar.gz", hash = "sha256:9580d17c63a45d02105d9f3ab19c463a08a768a844ef09a61e6fa92cad6eedd5", size = 257947, upload-time = "2026-10-20T23:57:35.241Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/af/d46382eef9338e01a9f6424884a127e1fbf9a13818b962edfa8a231830bb/monty-2026.2.18-py3-none-any.whl", hash = "sha256:fee3580ccc77431a4714455dc705a0bd6196c4350f4fca3771e5fa61638274ea", size = 52670, upload-time = "2026-02-18T01:19:01.079Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/8f/e3666ee61653ad455b1416fbc3ba7ba66169329abaee6c283ffa751c9e5a/monty-2026.10.21-py3-none-any.whl", hash = "sha256:6b83891666ea9eb0d81fa1ebde17bfbd12056018aac231a7d7dd372224170bb5", size = 63233, upload-time = "2026-10-20T23:57:32.641Z" },
+]
+
+[[package]]
+name = "moyopy"
+version = "0.22.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/61/f5/2e6f05e0cc475c5457584f40bcd3034f087d10780efcdd9392c002dcfe3f/moyopy-0.22.1.tar.gz", hash = "sha256:9ade292f26d6413988da78aab5c08520282dd0b29a303ea734a4c4d18e815225", size = 520096, upload-time = "2026-11-24T10:16:31.192Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/59/12/afac43f4f4d2d98bb2b0bb6c23038e9a6f94c4e84fc76922d960df49df67/moyopy-0.22.1-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:e63662936941889f38759fc5223931f50038a0b15a0cf59ffa44e5d4797bb49b", size = 1079736, upload-time = "2026-11-24T10:16:24.711Z" },
+    { url = "https://files.pythonhosted.org/packages/f8/8a/92d9dda8186623379857093f57a974ea91ad832f4e968bc8491b5ac872a0/moyopy-0.22.1-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:f5443974668df9213f65a70d4af26cc0f68f0573b14347f07ac6b0049ec04300", size = 1070936, upload-time = "2026-11-24T10:16:26.004Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/d1/bc958e1d6dc635697231b564c8a6b973a0e32f7be8b8c442a0739b65d6e8/moyopy-0.22.1-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:26b257fa89c49ec2bca19e27e5c7842fb2e4852bcaf05c176533268f2c94442d", size = 1287269, upload-time = "2026-11-24T10:16:27.586Z" },
+    { url = "https://files.pythonhosted.org/packages/21/d1/50ca6b5e785e00a4a3e9bf9dfd16799fa6ea9a9d3eb5b38ded6787f0b459/moyopy-0.22.1-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:04b7b98b1179815306d2148e21b5795bde44fd70373e5e14674f7abda5785d44", size = 1210819, upload-time = "2026-11-24T10:16:28.968Z" },
+    { url = "https://files.pythonhosted.org/packages/50/25/d05edcceb5e9f0546bd5fa2d5d55bb8b3e1030f01c958a37925aa38893bb/moyopy-0.22.1-cp311-abi3-win_amd64.whl", hash = "sha256:fb5e96c66e02e5df95e248bbea1ebde9cf49341d917259a7f8db773d4b86b9b4", size = 938169, upload-time = "2026-11-24T10:16:29.996Z" },
 ]
 
 [[package]]
@@ -2998,7 +3042,7 @@ wheels = [
 
 [[package]]
 name = "pymatgen-core"
-version = "2026.4.16"
+version = "2026.10.31"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bibtexparser" },
@@ -3020,23 +3064,23 @@ dependencies = [
     { name = "tqdm" },
     { name = "uncertainties" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/75/74/64e3b140394de86baf743426d77c3d9e37701ce25a0c00d4267723003bcc/pymatgen_core-2026.4.16.tar.gz", hash = "sha256:7b5f00ce7c6ae6d77eb79ab1d7f71609a639dbd9639d299cc3a9e1fac65adaf6", size = 2527245, upload-time = "2026-04-16T01:04:24.612Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3a/43/93181005bf5fa814644737dd18868489fe1fa522c997b0477993be0a7b2b/pymatgen_core-2026.10.31.tar.gz", hash = "sha256:b37da51a77dd00b2b8babd2649933b70a9d5e066871581468bde982586d50916", size = 2666174, upload-time = "2026-10-31T06:29:45.371Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c8/2f/fb85f7c3f27f9bc455656e9dddbf74d0562d7fa5ac9d93184d7f3f3dbac9/pymatgen_core-2026.4.16-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:6e861357ef60755ea3be2a430b93038468dee346dba671c0b66042e57682947b", size = 2882980, upload-time = "2026-04-16T01:30:50.383Z" },
-    { url = "https://files.pythonhosted.org/packages/43/51/0da63dd3e50bead08b87490303aef720e1a79492cf04cd16c428a6eb2ff9/pymatgen_core-2026.4.16-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:25f9acab9cb2ff4a232ed4915e6063d604958604760e57c5c462343b0a500322", size = 3901165, upload-time = "2026-04-16T01:30:52.07Z" },
-    { url = "https://files.pythonhosted.org/packages/15/30/8f0f0db8b335421b6c45aa0e3339f7ec3bafe237617c024c96197434d37a/pymatgen_core-2026.4.16-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:75a8f164806386546e263a464cfba10e5c513aadec9b538b58a523f9c3e7deea", size = 3940640, upload-time = "2026-04-16T01:30:54.916Z" },
-    { url = "https://files.pythonhosted.org/packages/8e/2d/113d8bed22fe52c9a38d779ade8b22d4d6528495af0ef07ede02abf819cf/pymatgen_core-2026.4.16-cp312-cp312-win32.whl", hash = "sha256:9345c32a11c57409bd404388333f4e9ed4c32e47ad379c6af34db92700d695ad", size = 2835894, upload-time = "2026-04-16T01:30:56.742Z" },
-    { url = "https://files.pythonhosted.org/packages/17/8c/10cb89a2262dd53ec4ec370f7a25fc6ad6ea9acd50b44bfe62ebf597a941/pymatgen_core-2026.4.16-cp312-cp312-win_amd64.whl", hash = "sha256:3c9839f9c175830cce5c13c704888d8aad4981b8988c425c1ca0f2563bf38208", size = 2866605, upload-time = "2026-04-16T01:30:58.794Z" },
-    { url = "https://files.pythonhosted.org/packages/b6/f0/c4bac8bb205ded6af21d7ec42108cd99795f393b6b4518123d7598a5ac3c/pymatgen_core-2026.4.16-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:b04742e9a2b14a074ce4a1a573e68eeb0142dfe3a98ce278297c76a64f675ae9", size = 2881601, upload-time = "2026-04-16T01:31:00.576Z" },
-    { url = "https://files.pythonhosted.org/packages/75/cc/dd8740c5eaa24cdcc9ecb70f022c57f877df4d66f841532f6dba28dd6660/pymatgen_core-2026.4.16-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:45837bd4e5e760b3e346df0dfa408c4948b11f86c5d1478f3ef3f90bce2e54b0", size = 3892512, upload-time = "2026-04-16T01:31:02.068Z" },
-    { url = "https://files.pythonhosted.org/packages/09/e5/2bf7ce92c6918d010c20096c5c3c75efd1b6adc284e9443b6df307013b69/pymatgen_core-2026.4.16-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3fdd047766096ab0bbdee9ebd0338286ebc2b0780fa39d603b407cd67d992997", size = 3930890, upload-time = "2026-04-16T01:31:03.781Z" },
-    { url = "https://files.pythonhosted.org/packages/cc/cc/97e6d1644f82ae9c0d6e4ae4709c75f248d580d9dab2a8af819e741008a8/pymatgen_core-2026.4.16-cp313-cp313-win32.whl", hash = "sha256:0ab43a7ee12e843f9eb8957f6b2dd9558e513daeb2d2be45ecfae963fd0e6b95", size = 2835716, upload-time = "2026-04-16T01:31:05.584Z" },
-    { url = "https://files.pythonhosted.org/packages/eb/5d/d0dd9c8913686b0ed4b64f21c45730cc437d151d0fd6de2e7e666cffe5b8/pymatgen_core-2026.4.16-cp313-cp313-win_amd64.whl", hash = "sha256:149c1b4f8daa4d387f5f641bda606db7ef9dcb960e76e16d429bb3dd263c76ef", size = 2866166, upload-time = "2026-04-16T01:31:07.473Z" },
-    { url = "https://files.pythonhosted.org/packages/85/52/5547cbeb845fa31061b70057f2dd75d2881d44273c2d27d0eda7caa7f3f2/pymatgen_core-2026.4.16-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:98738152da9bf8150435975c4ef79bad3a1c88fe81711ca02cb9ea74d29b1e2c", size = 2883130, upload-time = "2026-04-16T01:31:09.421Z" },
-    { url = "https://files.pythonhosted.org/packages/5b/97/3ad93d5b0d7a4a773a79f5d2bdf72fc55a9fe29f7fdbc6e8e5de1c9be549/pymatgen_core-2026.4.16-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d74dcb66871c73beb7f1c4aa5a8dda016514408cf8a7bf1194a9d71869ab5cb1", size = 3889851, upload-time = "2026-04-16T01:31:10.989Z" },
-    { url = "https://files.pythonhosted.org/packages/57/bf/558f74b69f6023818c985bc991dfbf11a195ef0b0940749383fde63f8ebf/pymatgen_core-2026.4.16-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:700435b88ec6e590170487a72c09aa6407dcdb28c77fca5e3d532f83b418f307", size = 3920993, upload-time = "2026-04-16T01:31:13.019Z" },
-    { url = "https://files.pythonhosted.org/packages/0d/c5/15a7c30453dcc5e2aa924e1d4283222d3f46db5a177fece4586a6debb833/pymatgen_core-2026.4.16-cp314-cp314-win32.whl", hash = "sha256:694e4fb035d6712b23c43f022d18b739805885e26c7fd0cc7de2df4821b52a40", size = 2813481, upload-time = "2026-04-16T01:31:14.963Z" },
-    { url = "https://files.pythonhosted.org/packages/67/8f/9320145f0eed0a5559d95cf8c9dadd15329d4b2127d2f769e658bcca19ae/pymatgen_core-2026.4.16-cp314-cp314-win_amd64.whl", hash = "sha256:0f9ef6f5cbe9acf7fae748ffc511518f543b1390d1cbd18fecbb14d72a879440", size = 2844999, upload-time = "2026-04-16T01:31:16.482Z" },
+    { url = "https://files.pythonhosted.org/packages/87/25/77743841e8f24d17c42e3878177fdee8bf69680e290003b7d585e1a2153e/pymatgen_core-2026.10.31-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:86a96b32c189036347da2fde1668dac98416e209a67a62273db9ec2807039164", size = 3022857, upload-time = "2026-10-31T06:29:15.383Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/b3/ef106e662dce899eced9c18ec8cf8af62a2e0904f0ec881ee53e6940a248/pymatgen_core-2026.10.31-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:655d115412ba834b4255e47f7faab7bf3c87aa09019d41d6a0b0f018b9a78a3a", size = 4636588, upload-time = "2026-10-31T06:29:17.249Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/88/01991e5197bf687ea35186c9898a50fc6744859e409d4f2381c8e60552f3/pymatgen_core-2026.10.31-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0431d216850a118903a0ab62ca788752567f4f0e8f037b7c87f351f73365d477", size = 4683898, upload-time = "2026-10-31T06:29:19.365Z" },
+    { url = "https://files.pythonhosted.org/packages/90/96/5de0557d91fb1cd3d2ffc84ce51a8990289c17a71fbeb5323b3701f2a25a/pymatgen_core-2026.10.31-cp312-cp312-win32.whl", hash = "sha256:d66310100d90380c96eb7969ca66b57f32d2c950dde750ef3fc9e7c49fd0076b", size = 2932908, upload-time = "2026-10-31T06:29:21.226Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/0c/affdf435181983604c331398a4520c2a48139c4895e036462d112a194d6d/pymatgen_core-2026.10.31-cp312-cp312-win_amd64.whl", hash = "sha256:134d5ec84db6683dc98dbd66fb5811fb04f24c2676c56d9cd5aefd7517ceb5ed", size = 2974183, upload-time = "2026-10-31T06:29:23.146Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/dd/8717ef294df66f2ee2255056c66883e8ce22a768804d0ee5333c3c773849/pymatgen_core-2026.10.31-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:e2bd67689c696c22b9aeba920cdbab1529633d7368b1076afdace92e9a4f7bce", size = 3021281, upload-time = "2026-10-31T06:29:25.25Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/72/4f51650e31fb2de23a717ae397561a0f92da9f9647d3f7992d61faa715d6/pymatgen_core-2026.10.31-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e4ccc8173e979560c5c1ead8fb738059e4c76afa46f85b827b80f553541bcdeb", size = 4618965, upload-time = "2026-10-31T06:29:27.383Z" },
+    { url = "https://files.pythonhosted.org/packages/30/7d/b23d2700bb5f8e40f0758b99e6ebf285ce70d54c874ea49589613034574c/pymatgen_core-2026.10.31-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:be3cfbd2bdaa6a2c38321159347a7a5be6da8377ef8145b06af0ddbf70bce6d6", size = 4674398, upload-time = "2026-10-31T06:29:29.637Z" },
+    { url = "https://files.pythonhosted.org/packages/90/20/6bbb8c53bae61ad37d84e98779922f74dd7d7cd95481545a33510dc652a3/pymatgen_core-2026.10.31-cp313-cp313-win32.whl", hash = "sha256:ac42d303bfa536de9d4a045b4361c24556d56a6a0a68a27fd15cd26f6b332b79", size = 2932611, upload-time = "2026-10-31T06:29:31.48Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/90/66ca360c3822d2f87c8b66f59f2e4c85d239dd744e9a5485a25102b6a6cc/pymatgen_core-2026.10.31-cp313-cp313-win_amd64.whl", hash = "sha256:99fd1a1b2df4dd7e3b7aadc6d24b73c7ec8d38372a61c45c791c5ff9a9b4a032", size = 2973359, upload-time = "2026-10-31T06:29:33.242Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/77/3a34286349f030a3ac1ae2dfe9db55255093416b543e1bd0b2ef5d66cbec/pymatgen_core-2026.10.31-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:aefde8d9c17dd070eae608d3dbbe489e4bcfd4f97cef0b563dab079db46f9b2c", size = 3023291, upload-time = "2026-10-31T06:29:34.982Z" },
+    { url = "https://files.pythonhosted.org/packages/57/c5/0025088a72c4d924d9b48b8228c451233a06406008a527ab8b2d1fc7ea27/pymatgen_core-2026.10.31-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d88f10c61ce1c3fb5aca3889e0db6e5129ced529b29c45939c2b0900cdfa5326", size = 4613299, upload-time = "2026-10-31T06:29:37.416Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/5f/d52a6ffd1e6bc0516674c85fbbe2ec9e646ff0fcd443e9b54b49e2866cfc/pymatgen_core-2026.10.31-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:bc7d3a566004af8f869c9b1d8a9ccda15461b498ef67b97dea85e563bfd04d2d", size = 4652736, upload-time = "2026-10-31T06:29:39.392Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/84/bb593f6fa08d46e50285858e7dd49b5ed7f4596d2f31f1022191a6ea5cdc/pymatgen_core-2026.10.31-cp314-cp314-win32.whl", hash = "sha256:5958cabb6c4a52ad8101500d4ee5d780dcc13bba072c822e80898a2ab214e077", size = 2920946, upload-time = "2026-10-31T06:29:41.414Z" },
+    { url = "https://files.pythonhosted.org/packages/de/33/571e4cd5e4e552d7153457e58d8b6678039c7863b9c3a133ac205f399e87/pymatgen_core-2026.10.31-cp314-cp314-win_amd64.whl", hash = "sha256:378f2b974d1b2c014202ae0341a751b4576185038f47c1dcde2f7fcd7a69966e", size = 2961711, upload-time = "2026-10-31T06:29:43.203Z" },
 ]
 
 [[package]]
@@ -3635,6 +3679,20 @@ wheels = [
 ]
 
 [[package]]
+name = "setuptools-scm"
+version = "10.3.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+    { name = "setuptools" },
+    { name = "vcs-versioning" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/85/d8/fc143f88819ccf10ba2388ba86732ee2de193e578234e25a783f6cc14bf7/setuptools_scm-10.3.4.tar.gz", hash = "sha256:a69f28bfc245608781205e912faae437c2b2165773afa4e7b979d77447a69dd2", size = 78410, upload-time = "2026-09-23T19:21:42.95Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/da/f5/54538a1f17ea753c42b0928dc2e62986d463f8c393340b9a1e602f2d4dd9/setuptools_scm-10.3.4-py3-none-any.whl", hash = "sha256:82f34c3e3084fc2b57d397200637cc13f2338004052d2fee47baa5f0e902464e", size = 33366, upload-time = "2026-09-23T19:21:41.607Z" },
+]
+
+[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3737,6 +3795,20 @@ wheels = [
 ]
 
 [[package]]
+name = "spgrep"
+version = "0.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "hsnf" },
+    { name = "numpy" },
+    { name = "spglib" },
+    { name = "typing-extensions" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8a/6f/3859dbd87354d2303142fb1c0786f5611cf78928bd4fee83f7605274960f/spgrep-0.8.0-py3-none-any.whl", hash = "sha256:a1ca14677dc48b0bada029a2af053e51a32641001c25a2707bceecf3ba824e3a", size = 47363, upload-time = "2026-10-12T09:15:42.859Z" },
+]
+
+[[package]]
 name = "sphericart-torch"
 version = "2.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -3752,6 +3824,44 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/39/7a/3a9d071a67c160435edcb21b87db6e4be2c67e0fb51867d7a0a249003e76/sphericart_torch-2.0.4-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3d0b72915c2d734988c531aca8d5804224d02163dcae9dc7401810f247de252c", size = 3335181, upload-time = "2026-09-14T14:21:27.947Z" },
     { url = "https://files.pythonhosted.org/packages/e2/c5/d88a57176f27020b3f66b1faba2b6089891b023d2b7fc8f6cdff232be9ab/sphericart_torch-2.0.4-py3-none-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e4f9ba314b2e3b46c63ddc17c5b3fbdeeaaa3d6bb8dd1034b47b563e5ff41291", size = 2425914, upload-time = "2026-09-14T14:21:26.338Z" },
     { url = "https://files.pythonhosted.org/packages/2e/58/0e7f7e47f01328695d9a2846feb996b17cb22579275e321998602d8f10fd/sphericart_torch-2.0.4-py3-none-win_amd64.whl", hash = "sha256:21539b5fecef80896e2ca644a0da4f7596e1705b042d3a2c246df083e147504b", size = 2446408, upload-time = "2026-09-14T14:21:29.469Z" },
+]
+
+[[package]]
+name = "spinforge"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ase" },
+    { name = "hsnf" },
+    { name = "loguru" },
+    { name = "moyopy" },
+    { name = "pymatgen-core" },
+    { name = "scipy" },
+    { name = "spgrep" },
+    { name = "spinspg" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/25/3f/5059998c34f26daa36e07b0cafbb3a6cd4f64ac0fa792b7c0fd26cef81e2/spinforge-1.0.0.tar.gz", hash = "sha256:5457adccfc89db4ffee8f0757bbe4a8b3a2348eb51bf139028668a8a936ea85a", size = 292926, upload-time = "2026-09-06T01:40:28.36Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/aa/53/873d45e41b2a7d4c30b2cb823a0b3cc360963e14c2c670350b2dce2c2bbe/spinforge-1.0.0-py3-none-any.whl", hash = "sha256:370affd94a8e6c7a446d6bed557538849acc3288f2ce74937f3f69f5e52c0527", size = 102882, upload-time = "2026-09-06T01:40:26.943Z" },
+]
+
+[[package]]
+name = "spinspg"
+version = "0.3.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "hsnf" },
+    { name = "moyopy" },
+    { name = "numpy" },
+    { name = "setuptools" },
+    { name = "setuptools-scm" },
+    { name = "spglib" },
+    { name = "spgrep" },
+    { name = "typing-extensions" },
+    { name = "wheel" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cb/1a/f2d524e7c5b4f3b3f8fc8d9340f3d09e8fa2ba8f50922164c81bae691551/spinspg-0.3.2-py3-none-any.whl", hash = "sha256:b2206b3b0b4f2f6d5eca18ec3f0452decfbf227589b5e631a4fa2b481dcae414", size = 25146, upload-time = "2025-10-29T01:02:23.182Z" },
 ]
 
 [[package]]
@@ -3859,15 +3969,15 @@ source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
     "python_full_version >= '3.14' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
-    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
-    "python_full_version < '3.13' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
-    "python_full_version == '3.13.*' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
-    "python_full_version < '3.13' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
     "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
     "python_full_version >= '3.14' and sys_platform != 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
+    "python_full_version == '3.13.*' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
     "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
-    "python_full_version < '3.13' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
     "python_full_version == '3.13.*' and sys_platform != 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
+    "python_full_version < '3.13' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
+    "python_full_version < '3.13' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra == 'group-15-goldilocks-core-cu130'",
+    "python_full_version < '3.13' and sys_platform == 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
     "python_full_version < '3.13' and sys_platform != 'win32' and extra != 'group-15-goldilocks-core-cpu' and extra != 'group-15-goldilocks-core-cu130'",
 ]
 dependencies = [
@@ -3913,8 +4023,8 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version < '3.13' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform != 'darwin' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
     "python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'win32'",
 ]
 dependencies = [
@@ -4155,6 +4265,18 @@ wheels = [
 ]
 
 [[package]]
+name = "vcs-versioning"
+version = "2.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ad/e7/2a691db7d076b75d099fdba1a14cd966931f2aeb591e77f6d22f15097326/vcs_versioning-2.6.0.tar.gz", hash = "sha256:22e9159288e2d8bca2fa6f6c31c34c9c66aec157f60e9e526f5d160d2516d60f", size = 166800, upload-time = "2026-10-06T22:21:55.024Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/73/1d/ad4064bf12f4503bf61e65d74c93c523672776d25ee0a06aaf42ae09ef3f/vcs_versioning-2.6.0-py3-none-any.whl", hash = "sha256:f8bebd1302ebc12e67ceb30fc7dd698ec969414b6fa43b30c3f14ac9b1e72c41", size = 123154, upload-time = "2026-10-06T22:21:53.267Z" },
+]
+
+[[package]]
 name = "virtualenv"
 version = "21.14.13"
 source = { registry = "https://pypi.org/simple" }
@@ -4228,6 +4350,27 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/63/6f/b321f10c2298e7d16cffc1a5f05f3d7e5231b45f9e68af5ee378e23bb2e5/wcwidth-0.9.4-cp315-cp315t-win_amd64.whl", hash = "sha256:12786620375dc83fabf4b2b2aa52416fef2bc6094522ea29c8a53c75b0dfe9b6", size = 603485, upload-time = "2026-10-24T18:11:43.052Z" },
     { url = "https://files.pythonhosted.org/packages/4e/cc/7eeb28059186cae72a770df79e744f232ef068192a5a588b718473e35bb4/wcwidth-0.9.4-cp315-cp315t-win_arm64.whl", hash = "sha256:2cca7b5d0b9d0ae49068d3ce806e965326a987f555b62eaa322223396e10d01b", size = 605198, upload-time = "2026-10-24T18:11:33.75Z" },
     { url = "https://files.pythonhosted.org/packages/6f/0c/309b1813b230d1dbbd6f2c2ab2bb21ef68992358977605d9ef289bbfedcc/wcwidth-0.9.4-py3-none-any.whl", hash = "sha256:901eace6d2dd25ebb917d0ce5db18e5c537e1504c905cf32f0d006c12098b05d", size = 301806, upload-time = "2026-10-24T18:10:52.651Z" },
+]
+
+[[package]]
+name = "wheel"
+version = "0.48.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d0/20/50ed6bdf27dec98b568a8ae25dc599f35baa3d9709f9e83fd1edb56b9a90/wheel-0.48.0.tar.gz", hash = "sha256:94800765601e9171bf5d58d066e640662842bcedcbab982b2c90787a2c987322", size = 66471, upload-time = "2026-08-11T22:02:27.327Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/29/69cfbb602cd91690c55d38ba9fe53e6a7e76a6fa647bf38f19c138d25449/wheel-0.48.0-py3-none-any.whl", hash = "sha256:3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab", size = 33320, upload-time = "2026-08-11T22:02:26.1Z" },
+]
+
+[[package]]
+name = "win32-setctime"
+version = "1.2.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1a/e4/f0f252c65f9bf7c4042b1f707ef338d49f799da582234e1d3e6e2cfca291/win32_setctime-1.2.1.tar.gz", hash = "sha256:077b35471bf1ff1d71e165c919ddc0cecf51b8e1802f5d820d33a96e2f6717dd", size = 4983, upload-time = "2026-10-25T18:21:32.318Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bd/df/5593480bc1e932eeae28e4fa182ab68174edd0d77409ced3b6491d02d1d5/win32_setctime-1.2.1-py3-none-any.whl", hash = "sha256:a9edc685b35414bec69392c866ed82456ad125ac4a6a4b703ec1d8b462d4f477", size = 4215, upload-time = "2026-10-25T18:21:30.939Z" },
 ]
 
 [[package]]

@@ -17,8 +17,8 @@ this is the first layer of.
 
 Enumeration never needs mMACE (it is
 ``advisors/magnetic_config.enumerate_magnetic_orderings``, the same
-enumlib-backed path the existing heuristic tier already uses, run on a
-worker process in a private directory, #136, over the sites
+spinforge-backed path the existing heuristic tier already uses (#308), run
+on a worker process, over the sites
 ``analysis/local_moments.py`` says carry a local moment, #143, keeping only
 the orderings that keep a slab's, wire's or boxed molecule's vacuum
 vectors, #144) and returns
@@ -162,11 +162,12 @@ def list_magnetic_orderings(
     Also warns (rather than silently listing "fm" alone, indistinguishable
     from "this structure genuinely has no AFM candidates") whenever
     ``structure`` has local moments but no AFM candidate came back: AFM
-    enumeration could not run or find one (the common real case being
-    enumlib not installed), no site carries a local d or f moment to order
-    (a radical such as solid O2, #143), or which sites carry one could not
-    be determined. A closed-shell structure (Si) lists "fm" alone silently.
-    Raises ``StructureInputError`` for a disordered ``structure``
+    enumeration could not run or find one (more magnetic sites than the
+    enumeration ceiling, or no compensated ordering), no site carries a
+    local d or f moment to order (a radical such as solid O2, #143), or
+    which sites carry one could not be determined. A closed-shell
+    structure (Si) lists "fm" alone silently. Raises
+    ``StructureInputError`` for a disordered ``structure``
     (``inputs.structure.require_ordered``).
     """
     require_ordered(structure)

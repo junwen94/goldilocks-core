@@ -200,8 +200,8 @@ Inside `advise()` itself, the three phases are:
   and `service/_pseudo.py`. It starts with the simulated cell
   (`service/_magnetic.py`): `magnetic_config.magnetic_cell` resolves spin
   polarization, spin-orbit coupling and a magnetic spin-orbit run's moment
-  direction, and applies the requested magnetic ordering, the only enumlib
-  call, which can replace the input with a different cell;
+  direction, and applies the requested magnetic ordering, the only
+  enumeration call, which can replace the input with a different cell;
   `magnetic_config.framed_cell` then writes that cell in the frame where pw.x
   keeps the most of its point group (`pw_symmetry.pw_frame`). Table selection
   then reads the cell's spin-orbit switch, and
@@ -528,10 +528,10 @@ across requests within one running process.
 
 Requests run concurrently on threads (FastAPI's threadpool, MCP's
 `asyncio.to_thread`), so no request may change process-wide state such as the
-working directory. pymatgen's enumlib caller `chdir`s the whole process, so
-magnetic-ordering enumeration runs on one long-lived worker process
-(`worker_process.py`), one call at a time, in a private temporary directory
-(`advisors/magnetic_enumeration.py`). mace sets torch's default dtype for the
+working directory. Magnetic-ordering enumeration (spinforge) runs on one
+long-lived worker process (`worker_process.py`), one call at a time
+(`advisors/magnetic_enumeration.py`), so its group-theory stack stays out of
+the server and CLI processes. mace sets torch's default dtype for the
 whole process, which breaks float32 models built on other threads, so the
 server and CLI processes never import it: `is_magnetic` predictions run on a
 second long-lived worker (`ml/mace_process.py`), which is replaced by a fresh,

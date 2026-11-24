@@ -8,7 +8,7 @@ These decisions depend on one another in a fixed order:
    decision (a U on an odd d or f count needs a spin-polarized run,
    #147), spin-orbit coupling, and the requested magnetic ordering applied
    to the structure,
-   which is the calculation's only enumlib call, split into one species per
+   which is the calculation's only enumeration call, split into one species per
    element and starting-magnetization class (#170) -- ending with
    ``framed_cell``, which writes that cell in the frame where pw.x keeps
    the most of its point group: idealized, and turned or shifted when that

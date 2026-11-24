@@ -346,11 +346,12 @@ goldilocks magnetic-orderings structure.cif --json
 goldilocks magnetic-orderings structure.cif --rank-with-mmace
 ```
 
-Lists a ferromagnetic guess plus any antiferromagnetic
-candidates `enumlib` finds (see [Check magnetism and spin-orbit
-coupling](science.md#check-magnetism-and-spin-orbit-coupling)) for a
-human or agent to choose among before generating any input file. Each
-candidate is named by its label (`fm`, `afm-1`, `afm-2`, ...), and its
+Lists a ferromagnetic guess plus the antiferromagnetic and ferrimagnetic
+candidates in up to twice the primitive cell (see [Check magnetism and
+spin-orbit coupling](science.md#check-magnetism-and-spin-orbit-coupling))
+for a human or agent to choose among before generating any input file. Each
+candidate is named by its label (`fm`, `afm-1`, `afm-2`, ..., `fim-1`, ...),
+and its
 `--json` `overrides` generate it, spin-polarized, from the same structure
 file:
 
