@@ -2,11 +2,22 @@ import { Group, Loader, Paper, Stack, Text, Title } from "@mantine/core";
 import { Atom } from "lucide-react";
 
 import { CalculationContextControls } from "../controls/CalculationForm";
-import { StructureSourceControls } from "../controls/StructureSourceControls";
+import {
+  type StructureChoices,
+  StructureSourceControls,
+} from "../controls/StructureSourceControls";
 import { StructureViewport } from "../viewer/StructureViewport";
 import { useWorkspace, useWorkspaceSnapshot } from "../workspace/useWorkspace";
 
-export function StructureCard({ kicker }: { readonly kicker: string }) {
+/** `structureChoices`: an embedding host's structures, offered next to
+ * Browse files (`StructureSourceControls`). */
+export function StructureCard({
+  kicker,
+  structureChoices,
+}: {
+  readonly kicker: string;
+  readonly structureChoices?: StructureChoices | undefined;
+}) {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
 
@@ -30,6 +41,7 @@ export function StructureCard({ kicker }: { readonly kicker: string }) {
           inspection={snapshot.inspection}
           inspecting={snapshot.operation === "inspect"}
           onOpen={(input) => workspace.dispatch({ type: "source.open", input })}
+          choices={structureChoices}
         />
         <CalculationContextControls />
         <div className="structure-stage">

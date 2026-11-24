@@ -9,7 +9,10 @@ import {
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 
-import { App } from "../../src/App";
+import { MantineProvider } from "@mantine/core";
+
+import { App, WorkbenchContent } from "../../src/App";
+import { workbenchTheme } from "../../src/theme";
 import type {
   ArchiveDownload,
   BlockingFinding,
@@ -2119,6 +2122,52 @@ describe("Goldilocks Workbench", () => {
     ]);
     // Relax-only settings stay hidden for the default scf_single_point task.
     expect(screen.queryByText("Relax")).not.toBeInTheDocument();
+  });
+
+  it("opens a structure the embedding host offers, as an opened file, and shows it selected", async () => {
+    // #306: goldilocks-agent's full-page Workbench passes the chat's
+    // structures; choosing one inspects it like an uploaded file.
+    const user = userEvent.setup();
+    const core = new CoreStub(Promise.resolve(capabilities));
+    core.inspectionResults = [Promise.resolve(inspection)];
+    render(
+      <MantineProvider theme={workbenchTheme} env="test">
+        <WorkspaceProvider workspace={createWorkspace(core, vi.fn())}>
+          <WorkbenchContent
+            structureChoices={{
+              label: "From this chat",
+              items: [{ name: "Si.cif", content: "data_Si" }],
+            }}
+          />
+        </WorkspaceProvider>
+      </MantineProvider>,
+    );
+    const select = await screen.findByRole<HTMLSelectElement>("combobox", {
+      name: "From this chat",
+    });
+    expect(
+      screen.getByRole("option", { name: "Choose a structure" }),
+    ).toBeInTheDocument();
+
+    await user.selectOptions(select, "Si.cif");
+
+    expect(await screen.findByText("1 site · parsed")).toBeInTheDocument();
+    expect(core.inspectedInputs).toEqual([
+      {
+        structure_content: "data_Si",
+        structure_name: "Si.cif",
+        structure_format: "cif",
+      },
+    ]);
+    expect(select.selectedOptions[0]?.text).toBe("Si.cif");
+  });
+
+  it("offers no host structures in the standalone app", async () => {
+    renderApp(new CoreStub(Promise.resolve(capabilities)));
+    await screen.findByRole("button", { name: "Browse files" });
+    expect(
+      screen.queryByRole("option", { name: "Choose a structure" }),
+    ).not.toBeInTheDocument();
   });
 
   it("reveals relax-only settings once the relax task is selected", async () => {

@@ -74,3 +74,9 @@ export type {
 // still reusing the real calculation-context controls verbatim, not a
 // reimplementation of them.
 export { CalculationContextControls } from "./controls/CalculationForm";
+// The structures an embedder offers in WorkbenchContent's Structure card,
+// next to Browse files: `<WorkbenchContent structureChoices={...} />`.
+export type {
+  StructureChoice,
+  StructureChoices,
+} from "./controls/StructureSourceControls";

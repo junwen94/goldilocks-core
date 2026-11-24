@@ -13,6 +13,7 @@ import { AnalysisCard } from "./cards/AnalysisCard";
 import { BundleCard } from "./cards/BundleCard";
 import { MagneticOrderingsCard } from "./cards/MagneticOrderingsCard";
 import { StructureCard } from "./cards/StructureCard";
+import type { StructureChoices } from "./controls/StructureSourceControls";
 import { AppHeader } from "./layout/AppHeader";
 import { FailureBanner } from "./status/FailureBanner";
 import { OperationStatus } from "./status/OperationStatus";
@@ -40,8 +41,14 @@ export function App() {
 // build for that purpose. Kept in sync with `Workbench` below by
 // construction (one calls the other), not by duplicating this JSX a
 // second time. It fills its container's height (App.css,
-// `.workbench-content`).
-export function WorkbenchContent() {
+// `.workbench-content`). `structureChoices` lets the embedder offer its own
+// structures in the Structure card, next to Browse files (#306); the
+// standalone app passes none.
+export function WorkbenchContent({
+  structureChoices,
+}: {
+  readonly structureChoices?: StructureChoices;
+}) {
   const workspace = useWorkspace();
   const snapshot = useWorkspaceSnapshot();
   useAutoCompute(workspace, snapshot);
@@ -106,7 +113,7 @@ export function WorkbenchContent() {
         <VisuallyHidden>
           <h1 id="workbench-title">Goldilocks SCF setup</h1>
         </VisuallyHidden>
-        <StructureCard kicker="01" />
+        <StructureCard kicker="01" structureChoices={structureChoices} />
         <AnalysisCard kicker="02" />
         <AdvisorsCard kicker="03" />
         {showMagneticOrderings ? <MagneticOrderingsCard kicker="04" /> : null}
