@@ -13,6 +13,9 @@ from pathlib import Path
 PACKAGE = "goldilocks_core"
 ROOT = Path(__file__).resolve().parents[1]
 LIMITS = {
+    # + advisors.magnetic_enumeration.site_signature: the candidates' canonical
+    #   order and the enumeration's pick of each class's member share it (#308)
+    "advisors.magnetic_config": (12, 25),
     # + advisors.k_path for the band path notices (#118)
     # + advisors.q_sampling and advisors.phonon for the phonon tasks' notices (#215)
     "advisors.warning_catalogue": (15, 24),

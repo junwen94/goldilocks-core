@@ -271,6 +271,7 @@ from goldilocks_core.advisors.hubbard_u import HubbardUDecision
 from goldilocks_core.advisors.magnetic_enumeration import (
     OrderingKind,
     enumerate_orderings,
+    site_signature,
 )
 from goldilocks_core.advisors.species_split import split_species
 from goldilocks_core.analysis.geometry import LATTICE_AXES, vacuum_axes
@@ -1767,10 +1768,10 @@ def _canonical_order(candidates: tuple[Structure, ...]) -> tuple[Structure, ...]
     operation count of the spin-decorated cell's space group in its
     conventional setting, then the space-group number, both descending --
     then by the spin-decorated sites of the Niggli-reduced cell
-    (``_site_signature``). The order depends on the cells alone, so the host
-    that lists the candidates and the one that generates one by its label
-    name the same cell ``afm-<n>`` or ``fim-<n>`` (#170), for one spinforge,
-    pymatgen-core and spglib version."""
+    (``magnetic_enumeration.site_signature``). The order depends on the
+    cells alone, so the host that lists the candidates and the one that
+    generates one by its label name the same cell ``afm-<n>`` or ``fim-<n>``
+    (#170), for one spinforge, pymatgen-core and spglib version."""
     return tuple(sorted(candidates, key=_canonical_key))
 
 
@@ -1779,24 +1780,7 @@ def _canonical_key(
 ) -> tuple[int, int, int, tuple[object, ...]]:
     _symbol, number = candidate.get_space_group_info()
     operations = len(SpaceGroup.from_int_number(number).symmetry_ops)
-    return (len(candidate), -operations, -number, _site_signature(candidate))
-
-
-def _site_signature(candidate: Structure) -> tuple[object, ...]:
-    """The Niggli-reduced cell of ``candidate``: its lattice vectors and
-    its sites as (element, spin sign, fractional coordinates in [0, 1)),
-    sorted, rounded to 1e-4."""
-    reduced = candidate.get_reduced_structure("niggli")
-    sites = sorted(
-        (
-            site.specie.symbol,
-            sign,
-            tuple(round(float(value) % 1.0, 4) % 1.0 for value in site.frac_coords),
-        )
-        for site, sign in zip(reduced, _spin_signs(reduced), strict=True)
-    )
-    lattice = tuple(round(float(value), 4) for value in reduced.lattice.matrix.flat)
-    return (lattice, tuple(sites))
+    return (len(candidate), -operations, -number, site_signature(candidate))
 
 
 def _without_moments(structure: Structure) -> Structure:

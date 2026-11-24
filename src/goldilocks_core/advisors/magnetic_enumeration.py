@@ -24,7 +24,11 @@ own ``fm``). The rest are reduced to their primitive magnetic cell and
 deduplicated: two orderings are the same when the crystal's symmetry or a
 global spin flip maps one onto the other. A ``k_index`` 2 enumeration
 repeats the ``k_index`` 1 orderings in a doubled cell, so the reduction is
-what keeps each once.
+what keeps each once. Of each class, the member or reversed member with
+the smallest ``site_signature`` among those with at least as many spin-up
+as spin-down sites is kept (``_representative``), so the result does not
+depend on the order or orientation spinforge yields them in, which can
+differ between platforms.
 
 An ordering is ``"afm"`` when some operation of its cell combined with time
 reversal maps every moment onto the reversed moment of a site of the same
@@ -88,6 +92,21 @@ def _enumerate(
     structure: Structure, sublattice: tuple[str, ...], symprec: float
 ) -> tuple[EnumeratedOrdering, ...]:
     """Worker side of ``enumerate_orderings``."""
+    raw = _raw_orderings(structure, sublattice, symprec)
+    return tuple(
+        EnumeratedOrdering(
+            ordering, "afm" if _compensated(ordering, symprec) else "fim"
+        )
+        for ordering in _distinct(raw, sublattice, symprec)
+    )
+
+
+def _raw_orderings(
+    structure: Structure, sublattice: tuple[str, ...], symprec: float
+) -> list[Structure]:
+    """Every collinear ordering of spinforge's SSA structures at ``_K_INDICES``
+    (``_orderings_of``), ferromagnetic ones and repeats included, in the
+    order spinforge yields them."""
     from loguru import logger
     from moyopy import MoyoDataset
     from moyopy.interface import MoyoAdapter
@@ -114,13 +133,7 @@ def _enumerate(
             spin_only_group_type=SpinOnlyGroupType.COLLINEAR, k_index=k_index
         ):
             orderings.extend(_orderings_of(adapted, sublattice))
-    distinct = _distinct(orderings, sublattice, symprec)
-    return tuple(
-        EnumeratedOrdering(
-            ordering, "afm" if _compensated(ordering, symprec) else "fim"
-        )
-        for ordering in distinct
-    )
+    return orderings
 
 
 def _orderings_of(
@@ -184,11 +197,12 @@ def _distinct(
 ) -> list[Structure]:
     """The non-ferromagnetic ``orderings``, each in its primitive magnetic
     cell, one per class of orderings the crystal's symmetry or a global spin
-    flip relate. Orderings are compared with each magnetic element's
-    spin-down sites as a stand-in element (``_coloured``): pymatgen's
-    ``SpinComparator`` only pairs opposite spins, so it never matches an
-    ordering in which an element has one spin only (B2 FeCo, Fe up and Co
-    down) with itself."""
+    flip relate (``_representative`` picks which).
+
+    Orderings are compared with each magnetic element's spin-down sites as a
+    stand-in element (``_coloured``): pymatgen's ``SpinComparator`` only
+    pairs opposite spins, so it never matches an ordering in which an element
+    has one spin only (B2 FeCo, Fe up and Co down) with itself."""
     from pymatgen.core.structure_matcher import StructureMatcher
 
     matcher = StructureMatcher(
@@ -202,7 +216,7 @@ def _distinct(
             strict=False,
         )
     )
-    kept: dict[int, list[tuple[Structure, Structure]]] = {}
+    classes: dict[int, list[tuple[Structure, list[Structure]]]] = {}
     for ordering in orderings:
         spins = {_spin(site) for site in ordering if site.specie.symbol in sublattice}
         if len(spins) < 2:
@@ -212,13 +226,62 @@ def _distinct(
         )
         coloured = _coloured(reduced, stand_ins, 1.0)
         flipped = _coloured(reduced, stand_ins, -1.0)
-        same_size = kept.setdefault(len(reduced), [])
-        if not any(
-            matcher.fit(coloured, other) or matcher.fit(flipped, other)
-            for _ordering, other in same_size
-        ):
-            same_size.append((reduced, coloured))
-    return [ordering for size in sorted(kept) for ordering, _coloured in kept[size]]
+        same_size = classes.setdefault(len(reduced), [])
+        members = next(
+            (
+                members
+                for other, members in same_size
+                if matcher.fit(coloured, other) or matcher.fit(flipped, other)
+            ),
+            None,
+        )
+        if members is None:
+            same_size.append((coloured, [reduced]))
+        else:
+            members.append(reduced)
+    return [
+        _representative(members, sublattice)
+        for size in sorted(classes)
+        for _coloured, members in classes[size]
+    ]
+
+
+def _representative(members: list[Structure], sublattice: tuple[str, ...]) -> Structure:
+    """Of a class's ``members`` and their reversals, the one with the
+    smallest ``site_signature`` among those with at least as many spin-up as
+    spin-down magnetic sites. The pick depends on the class alone, not on
+    which members spinforge yields first or in which orientation: those
+    follow the signs of its singular vectors, which the platform's LAPACK
+    picks."""
+    oriented = (
+        candidate
+        for member in members
+        for candidate in (member, _reversed(member))
+        if sum(_spin(site) for site in candidate if site.specie.symbol in sublattice)
+        >= 0
+    )
+    return min(oriented, key=site_signature)
+
+
+def _reversed(ordering: Structure) -> Structure:
+    return _decorated(ordering, tuple(-_spin(site) for site in ordering))
+
+
+def site_signature(ordering: Structure) -> tuple[object, ...]:
+    """The Niggli-reduced cell of a spin-decorated ``ordering``: its lattice
+    vectors and its sites as (element, spin sign, fractional coordinates in
+    [0, 1)), sorted, rounded to 1e-4."""
+    reduced = ordering.get_reduced_structure("niggli")
+    sites = sorted(
+        (
+            site.specie.symbol,
+            _spin(site),
+            tuple(round(float(value) % 1.0, 4) % 1.0 for value in site.frac_coords),
+        )
+        for site in reduced
+    )
+    lattice = tuple(round(float(value), 4) for value in reduced.lattice.matrix.flat)
+    return (lattice, tuple(sites))
 
 
 def _coloured(ordering: Structure, stand_ins: dict[str, str], up: float) -> Structure:

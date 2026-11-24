@@ -5,10 +5,18 @@ symmetry. Real enumerations, run through the worker process."""
 
 from __future__ import annotations
 
+import random
+
 import pytest
 from pymatgen.core import Lattice, Structure
 
-from goldilocks_core.advisors.magnetic_enumeration import enumerate_orderings
+from goldilocks_core.advisors.magnetic_enumeration import (
+    _distinct,
+    _raw_orderings,
+    _reversed,
+    enumerate_orderings,
+    site_signature,
+)
 from goldilocks_core.analysis.symmetry import SYMPREC
 
 
@@ -107,6 +115,32 @@ def test_spinel_orders_only_ferrimagnetically() -> None:
     assert {o.kind for o in orderings} == {"fim"}
     for ordering in orderings:
         assert set(_spins(ordering.structure, "Fe")) == {-1.0, 1.0}
+
+
+@pytest.mark.parametrize(
+    ("structure", "element"), [(_rutile_mnf2(), "Mn"), (_spinel_fe3o4(), "Fe")]
+)
+def test_the_kept_orderings_do_not_depend_on_spinforge_s_order_or_signs(
+    structure: Structure, element: str
+) -> None:
+    """spinforge's moment basis has the signs the platform's LAPACK gives its
+    singular vectors, so the same orderings can arrive in another order and
+    orientation on another platform. Shuffled, with some reversed, they reduce
+    to the same orderings, each with at least as many spin-up as spin-down
+    sites."""
+    raw = _raw_orderings(structure, (element,), SYMPREC)
+    kept = _distinct(raw, (element,), SYMPREC)
+    rng = random.Random(0)
+    perturbed = [
+        _reversed(ordering) if rng.random() < 0.5 else ordering
+        for ordering in rng.sample(raw, len(raw))
+    ]
+
+    assert sorted(map(site_signature, _distinct(perturbed, (element,), SYMPREC))) == (
+        sorted(map(site_signature, kept))
+    )
+    for ordering in kept:
+        assert sum(_spins(ordering, element)) >= 0
 
 
 def test_two_magnetic_elements_antiparallel_are_ferrimagnetic() -> None:
